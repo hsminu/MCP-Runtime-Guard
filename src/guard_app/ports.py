@@ -1,0 +1,208 @@
+"""B1 검토용 포트. 구현과 실제/Fake 계약 테스트는 각 담당과 C가 작성한다.
+
+메서드 추가 필드·반환형은 검토 전 초안이다. SDK·SQL·UI 타입을 의존하지 않는다.
+Store의 날짜와 ID는 호출자가 공급하며 포트에서 생성하지 않는다.
+"""
+
+from datetime import datetime
+from typing import Literal, Protocol
+
+from guard_app.domain.contracts import (
+    ApprovalRecord,
+    Conversation,
+    ModelTurn,
+    RawResult,
+    RegisteredServer,
+    ScanReport,
+    ToolView,
+    TrustedContext,
+)
+from guard_app.domain.enums import ApprovalStatus, Label, RegStatus, RequestStatus, TaskStatus
+from guard_app.domain.json_types import FrozenJsonObject
+from guard_app.domain.models import (
+    AccessResult,
+    PolicyDecision,
+    ResolvedRequest,
+    TaskState,
+    ToolSpec,
+)
+from guard_app.domain.reasons import Reason
+
+
+class Transport(Protocol):
+    """A 구현. Guard만 호출하며 서버별 worker가 세션을 소유한다(9장).
+
+    각 명령은 반드시 완료되거나 DispatchError로 종료된다. 메시지 원문은 예외에
+    넣지 않는다. 알려진 무자료 실패만 RawResult.failed이며 결과 변환 등 예상 밖
+    실패는 DispatchError다. 쓰기 자동 재전송과 late 결과 공개는 금지한다(I8).
+    """
+
+    async def call(self, req: ResolvedRequest) -> RawResult: ...
+
+
+class AccessChecker(Protocol):
+    """A 구현. 실행하지 않고 판정만 반환한다(10.3절).
+
+    거절·오류는 DENY의 입력이다. 형식 불명·예외·시간초과는 error=True로 번역하며
+    원문 오류 메시지를 reason에 넣지 않는다. ALLOW는 사람 승인을 대체하지 않는다.
+    """
+
+    async def check_access(self, req: ResolvedRequest, ctx: TrustedContext) -> AccessResult: ...
+
+
+class Scanner(Protocol):
+    """C 구현. 도구 정의 metadata만 입력한다(10.2절).
+
+    immutable tuple 입력은 list[dict] 골격 대신 택한 초안이다. 검사 완료·skip·failed와
+    지문을 보고한다. 업무 본문·인자·인증정보를 보내지 않으며 파싱 실패는 통과가 아니다.
+    """
+
+    async def scan_tool_definitions(
+        self, server_id: str, tools: tuple[FrozenJsonObject, ...]
+    ) -> ScanReport: ...
+
+
+class ModelClient(Protocol):
+    """A 구현. 새 Task의 대화·캐시·클라이언트 상태를 다른 Task와 분리한다(10.4절).
+
+    tools는 ACTIVE 등록 ToolView만 받는다. 모델 제안은 ProposedCall로만 반환한다.
+    conversation에는 ReleasedResult 또는 안전한 고정 상태 문구만 도구 결과로 둔다.
+    """
+
+    async def step(self, conversation: Conversation, tools: tuple[ToolView, ...]) -> ModelTurn: ...
+
+
+class Registry(Protocol):
+    """C 구현의 동기 조회. 원격 tools/list 대신 저장된 등록 레코드가 근거다.
+
+    미등록은 None이다. 서비스는 None을 fail-closed로 처리한 뒤 PolicyInput을 만든다.
+    지문 변경 시 PENDING 복귀와 기존 승인 무효화는 C의 변경 경로에서 보장한다(I10).
+    """
+
+    def registration(self, server_id: str) -> RegisteredServer | None: ...
+
+    def status(self, server_id: str) -> RegStatus | None: ...
+
+    def fingerprint(self, tool: ToolSpec) -> str | None: ...
+
+
+class Store(Protocol):
+    """C 구현. 단일 writer 소유, 명시적 트랜잭션과 감사 내구성 보장(8.3·11장).
+
+    I/O·감사·트랜잭션 실패는 원문 없는 StoreError로 전달한다. 상태 충돌은 성공으로
+    보이지 않아야 한다. record_decision 입력의 인자는 메모리에서만 사용하고 DB에는
+    arguments_digest 등 허용 메타데이터만 남긴다. 원문·snapshot은 저장하지 않는다.
+    날짜는 UTC-aware여야 하며 생성·wire 계수 구현은 이 포트의 책임이 아니다.
+    """
+
+    async def create_task(self, state: TaskState, *, created_at_utc: datetime) -> None: ...
+
+    async def load_task(self, task_id: str) -> TaskState:
+        """없는 Task는 StoreError(STATE_MISSING). 빈 초기 상태로 대체하지 않는다."""
+        ...
+
+    async def record_decision(
+        self,
+        req: ResolvedRequest,
+        decision: PolicyDecision,
+        *,
+        arguments_digest: str,
+        at_utc: datetime,
+    ) -> None:
+        """요청 메타데이터·판정·감사를 원자 기록. ID/Task 순번 중복은 실패한다."""
+        ...
+
+    async def reserve_dispatch(self, request_id: str, *, now_utc: datetime) -> None:
+        """ALLOW DECIDED 요청만 DISPATCHING으로 예약. 이미 예약됐으면 실패한다."""
+        ...
+
+    async def set_task_status(
+        self,
+        task_id: str,
+        status: TaskStatus,
+        *,
+        expected_row_revision: int,
+        at_utc: datetime,
+        reason: Reason,
+    ) -> TaskState:
+        """revision·허용 상태 전이를 검사한다. HALTED/UNKNOWN_OUTCOME 재개는 금지다."""
+        ...
+
+    async def create_approval(self, approval: ApprovalRecord) -> None:
+        """PENDING 승인·요청 WAITING_APPROVAL·감사를 원자 기록. 원문은 받지 않는다."""
+        ...
+
+    async def get_approval(self, approval_id: str) -> ApprovalRecord | None: ...
+
+    async def transition_approval(
+        self,
+        approval_id: str,
+        status: ApprovalStatus,
+        *,
+        expected_row_revision: int,
+        approver_id: str,
+        now_utc: datetime,
+        reason: Reason,
+    ) -> ApprovalRecord:
+        """8.2의 단방향 전이만 허용. CONSUMED는 consume_and_reserve 전용이다.
+
+        거절·만료 시 Task 재개 등 동반 전이는 C와 확정할 미정 항목이다.
+        """
+        ...
+
+    async def consume_and_reserve(
+        self,
+        *,
+        approval_id: str,
+        snapshot_hash: str,
+        request_id: str,
+        task_id: str,
+        expected_security_version: int,
+        now_utc: datetime,
+    ) -> bool:
+        """승인 CONSUMED·요청 DISPATCHING·Task RUNNING·감사를 단일 트랜잭션.
+
+        승인/요청/Task의 연결, APPROVED·WAITING 상태, 해시, 만료, security_version과
+        각 변경 행 수 1을 검사한다. 조건 충돌은 전부 rollback 후 False, 저장 실패는
+        StoreError다. True를 반환하기 전 내구성 커밋을 끝내며 raw 원문은 받지 않는다.
+        """
+        ...
+
+    async def commit_observation(
+        self,
+        req: ResolvedRequest,
+        label: Label | None,
+        *,
+        at_utc: datetime,
+    ) -> TaskState:
+        """READ 전용: 등급·security_version·승격 근거·감사·요청 상태를 원자 커밋.
+
+        label=None은 미분류이며 Task HALTED와 요청 WITHHELD를 함께 확정한다.
+        SEND나 미예약 요청을 거부한다. 커밋 성공 반환 이후에만 gate가 공개한다(I5).
+        """
+        ...
+
+    async def commit_send_outcome(self, req: ResolvedRequest, *, at_utc: datetime) -> None:
+        """SEND 전용: 성공 요청 상태·감사만 원자 커밋. READ 등급 병합을 호출하지 않는다."""
+        ...
+
+    async def commit_request_failure(
+        self,
+        req: ResolvedRequest,
+        *,
+        request_status: Literal[
+            RequestStatus.FAILED, RequestStatus.WITHHELD, RequestStatus.UNKNOWN_OUTCOME
+        ],
+        task_status: Literal[TaskStatus.RUNNING, TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME],
+        reason: Reason,
+        at_utc: datetime,
+        exception_type: str | None = None,
+    ) -> TaskState:
+        """예약 후 실패의 요청·Task 상태·감사를 원자 기록하는 초안(7.1·9.2절).
+
+        무자료 READ 알려진 실패는 FAILED/RUNNING, 예상 밖 READ 실패는 WITHHELD/HALTED,
+        SEND 불명은 UNKNOWN_OUTCOME/UNKNOWN_OUTCOME이다. 등급은 내리지 않는다.
+        상태 쌍을 검증하고 예외는 타입명만 기록한다. 이 기록도 실패하면 호출자가
+        global halt로 이후 판정을 차단한다. 상세 함수 분리는 C와 검토한다.
+        """
+        ...
