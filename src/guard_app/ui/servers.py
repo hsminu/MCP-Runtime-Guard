@@ -70,6 +70,8 @@ class ServerDetailDialog(QDialog):
             _detail_field("표시 이름", server.display_name or server.server_id)
         )
         layout.addWidget(_detail_field("서버 식별자 · server_id", server.server_id))
+        self.scan_status_card = ScanStatusCard()
+        layout.addWidget(self.scan_status_card)
         layout.addWidget(SecurityLabel(server.max_label))
         layout.addWidget(
             _detail_field("연결 방식 · transport", fixed(TRANSPORTS, server.transport))
@@ -83,8 +85,6 @@ class ServerDetailDialog(QDialog):
         layout.addWidget(
             _detail_field("세션 상태", fixed(SESSION_STATUSES, server.session_status))
         )
-        self.scan_status_card = ScanStatusCard()
-        layout.addWidget(self.scan_status_card)
         layout.addStretch(1)
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
