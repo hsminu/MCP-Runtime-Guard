@@ -168,4 +168,13 @@ class PlainDetailDialog(QDialog):
         target = self._return_focus
         self._return_focus = None
         if target is not None and shiboken6.isValid(target):
-            QTimer.singleShot(0, target.setFocus)
+
+            def restore_if_closed() -> None:
+                if (
+                    shiboken6.isValid(self)
+                    and not self.isVisible()
+                    and shiboken6.isValid(target)
+                ):
+                    target.setFocus()
+
+            QTimer.singleShot(0, restore_if_closed)

@@ -8,7 +8,8 @@ from datetime import UTC, datetime
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtWidgets import QApplication, QDialog
 
 from guard_app.domain.enums import ApprovalStatus
 from guard_app.ui.approvals import ApprovalPage, ApprovalSummary
@@ -112,4 +113,63 @@ def test_server_scan_reply_is_bound_to_current_detail_opening(
     detail = window.server_page._detail_dialog
     assert detail is not None
     detail.close()
+    window.close()
+
+
+def test_repeated_server_details_release_dialogs_and_reject_old_scan_reply(
+    app: QApplication,
+) -> None:
+    window = GuardWindow()
+    window.set_server_snapshot(
+        Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),))
+    )
+    requested: list[tuple[str, int]] = []
+    window.scan_snapshot_requested.connect(
+        lambda server_id, token: requested.append((server_id, token))
+    )
+    window.navigate("servers", "server-1")
+    window.show()
+    app.processEvents()
+    for _ in range(100):
+        window.server_page.detail_button.click()
+        detail = window.server_page._detail_dialog
+        assert detail is not None
+        detail.close()
+        app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert len({token for _, token in requested}) == 100
+    assert len(window.server_page.findChildren(QDialog)) == 1
+    window.server_page.detail_button.click()
+    assert window.server_page._detail_dialog is not None
+    snapshot = Surface(LoadState.READY, ScanStatusProjection(scan_state="completed"))
+    assert not window.set_scan_snapshot("server-1", requested[0][1], snapshot)
+    assert window.set_scan_snapshot("server-1", requested[-1][1], snapshot)
+    reused = window.server_page._detail_dialog
+    assert reused.scan_status_card.scan_state.text().startswith("검사 실행 완료")
+    reused.close()
+    window.set_server_snapshot(
+        Surface(
+            LoadState.READY,
+            (
+                ServerSummary("server-1", "합성 서버"),
+                ServerSummary("server-2", "새 서버", max_label="INTERNAL"),
+            ),
+        )
+    )
+    window.navigate("servers", "server-2")
+    window.server_page.detail_button.click()
+    assert window.server_page._detail_dialog is reused
+    assert reused.server_id == "server-2"
+    assert reused._display_value.text() == "새 서버"
+    assert "INTERNAL" in reused.max_label_badge.value.text()
+    assert reused.scan_status_card.scan_state.text() == "미제공"
+    assert not window.set_scan_snapshot("server-1", requested[-2][1], snapshot)
+    reused.close()
+    window.resize(360, 360)
+    app.processEvents()
+    window.server_page.detail_button.click()
+    assert window.server_page._detail_dialog is reused
+    assert reused.width() <= max(240, window.width() - 24)
+    assert reused.height() <= max(200, window.height() - 24)
+    reused.close()
     window.close()

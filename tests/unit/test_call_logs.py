@@ -10,9 +10,9 @@ from datetime import UTC, datetime, timedelta, timezone
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QBoxLayout
+from PySide6.QtWidgets import QApplication, QBoxLayout, QDialog
 
 from guard_app.ui.call_logs import (
     CallLogPage,
@@ -140,6 +140,68 @@ def test_reopened_same_call_ignores_previous_dialog_response(app) -> None:
     page.set_detail(second, Surface(LoadState.READY, PublicCallDetail(row)))
     assert "호출 ID: same-call" in dialog.body.toPlainText()
     dialog.close()
+
+
+def test_repeated_call_details_release_dialogs_and_keep_tokens(app) -> None:
+    page = CallLogPage()
+    row = PublicCallSummary("repeat")
+    page.set_calls(Surface(LoadState.READY, (row,)))
+    page.select_call("repeat")
+    requests: list[DetailRequest] = []
+    page.detail_requested.connect(requests.append)
+    for _ in range(100):
+        page.detail_button.click()
+        dialog = page._detail_dialog
+        assert dialog is not None
+        dialog.close()
+        app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert len({request.token for request in requests}) == 100
+    assert len(page.findChildren(QDialog)) == 1
+    page.detail_button.click()
+    current = page._detail_dialog
+    assert current is not None
+    page.set_detail(requests[0], Surface(LoadState.READY, PublicCallDetail(row)))
+    assert "불러오는 중" in current.body.toPlainText()
+    current.close()
+    page.close()
+
+
+def test_public_detail_shows_control_characters_without_forged_status_lines(
+    app,
+) -> None:
+    page = CallLogPage()
+    row = PublicCallSummary(
+        "call\n승인 상태: 승인됨",
+        request_id="request\r현재 실행 상태: 실행 완료",
+        server_id="server\u202e-reordered",
+        tool_name="lookup\n현재 실행 상태: 실행 완료\n승인 상태: 승인됨\t",
+        approval_status="PENDING",
+        current_status="UNKNOWN_OUTCOME",
+    )
+    page.set_calls(Surface(LoadState.READY, (row,)))
+    page.select_call(row.call_id)
+    requests: list[DetailRequest] = []
+    page.detail_requested.connect(requests.append)
+    page.detail_button.click()
+    dialog = page._detail_dialog
+    assert dialog is not None
+    page.set_detail(requests[-1], Surface(LoadState.READY, PublicCallDetail(row)))
+    shown = dialog.body.toPlainText()
+    assert "[U+000A]" in shown
+    assert "[U+000D]" in shown
+    assert "[U+0009]" in shown
+    assert "[U+202E]" in shown
+    assert shown.count("\n현재 실행 상태:") == 1
+    assert shown.count("\n승인 상태:") == 1
+    assert "현재 실행 상태: 결과 불명 · 수신측 확인 필요" in shown
+    assert "승인 상태: 승인 대기" in shown
+    assert "\n현재 실행 상태: 실행 완료" not in shown
+    assert "\n승인 상태: 승인됨" not in shown
+    assert "\n" not in dialog.windowTitle()
+    assert "\n" not in page.table.item(0, 2).text().split("\n", 1)[0]
+    dialog.close()
+    page.close()
 
 
 def test_csv_uses_only_public_fields_and_neutralizes_formula_prefixes(app) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shiboken6
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QHeaderView,
+    QLabel,
     QLineEdit,
     QScrollArea,
     QSizePolicy,
@@ -38,7 +40,7 @@ from .widgets import (
 )
 
 
-def _detail_field(title: str, value: str) -> QWidget:
+def _detail_field(title: str, value: str) -> tuple[QWidget, QLabel]:
     field = QWidget()
     field.setObjectName("infoField")
     layout = QVBoxLayout(field)
@@ -50,7 +52,7 @@ def _detail_field(title: str, value: str) -> QWidget:
     value_label.setMinimumWidth(0)
     value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     layout.addWidget(value_label)
-    return field
+    return field, value_label
 
 
 class ServerDetailDialog(QDialog):
@@ -77,23 +79,30 @@ class ServerDetailDialog(QDialog):
         layout.setSpacing(6)
         self.max_label_badge = SecurityLabel(server.max_label)
         layout.addWidget(self.max_label_badge)
-        self.registry_status_field = _detail_field(
+        self.registry_status_field, self._registry_status_value = _detail_field(
             "Registry 등록 상태", fixed(REGISTRY_STATUSES, server.registry_status)
         )
         layout.addWidget(self.registry_status_field)
-        self.session_status_field = _detail_field(
+        self.session_status_field, self._session_status_value = _detail_field(
             "세션 상태", fixed(SESSION_STATUSES, server.session_status)
         )
         layout.addWidget(self.session_status_field)
-        self.tier_field = _detail_field("신뢰 경계 · tier", fixed(TIERS, server.tier))
+        self.tier_field, self._tier_value = _detail_field(
+            "신뢰 경계 · tier", fixed(TIERS, server.tier)
+        )
         layout.addWidget(self.tier_field)
-        layout.addWidget(
-            _detail_field("표시 이름", server.display_name or server.server_id)
+        display_field, self._display_value = _detail_field(
+            "표시 이름", server.display_name or server.server_id
         )
-        layout.addWidget(_detail_field("서버 식별자 · server_id", server.server_id))
-        layout.addWidget(
-            _detail_field("연결 방식 · transport", fixed(TRANSPORTS, server.transport))
+        layout.addWidget(display_field)
+        server_id_field, self._server_id_value = _detail_field(
+            "서버 식별자 · server_id", server.server_id
         )
+        layout.addWidget(server_id_field)
+        transport_field, self._transport_value = _detail_field(
+            "연결 방식 · transport", fixed(TRANSPORTS, server.transport)
+        )
+        layout.addWidget(transport_field)
         self.scan_status_card = ScanStatusCard()
         self.scan_status_card.setMinimumWidth(0)
         self.scan_status_card.setSizePolicy(
@@ -106,6 +115,24 @@ class ServerDetailDialog(QDialog):
         close_button = KeyboardActionButton("닫기")
         close_button.clicked.connect(self.close)
         outer.addWidget(close_button, 0, Qt.AlignmentFlag.AlignRight)
+
+    def set_server(self, server: ServerSummary) -> None:
+        """Refresh reused dialog fields before requesting a new scan snapshot."""
+
+        self.server_id = server.server_id
+        self.setWindowTitle(f"MCP 서버 상세 · {server.server_id}")
+        self.max_label_badge.set_label(server.max_label)
+        self._registry_status_value.setText(
+            fixed(REGISTRY_STATUSES, server.registry_status)
+        )
+        self._session_status_value.setText(
+            fixed(SESSION_STATUSES, server.session_status)
+        )
+        self._tier_value.setText(fixed(TIERS, server.tier))
+        self._display_value.setText(server.display_name or server.server_id)
+        self._server_id_value.setText(server.server_id)
+        self._transport_value.setText(fixed(TRANSPORTS, server.transport))
+        self.scan_status_card.set_snapshot(Surface(LoadState.LOADING))
 
 
 class ServerListPage(QWidget):
@@ -122,6 +149,7 @@ class ServerListPage(QWidget):
         self._visible_servers: list[ServerSummary] = []
         self._state = LoadState.UNAVAILABLE
         self._detail_dialog: ServerDetailDialog | None = None
+        self._cached_detail_dialog: ServerDetailDialog | None = None
         self._detail_return_focus: QWidget | None = None
         self._scan_request_sequence = 0
         self._active_scan_token: int | None = None
@@ -405,11 +433,16 @@ class ServerListPage(QWidget):
                 if focused in (self.table, self.detail_button)
                 else self.detail_button
             )
-        dialog = ServerDetailDialog(self._visible_servers[row], self)
-        dialog.finished.connect(
-            lambda result, opened=dialog: self._detail_finished(opened, result)
-        )
+        dialog = self._cached_detail_dialog
+        if dialog is None:
+            dialog = ServerDetailDialog(self._visible_servers[row], self)
+            dialog.finished.connect(
+                lambda result, opened=dialog: self._detail_finished(opened, result)
+            )
+            self._cached_detail_dialog = dialog
+        dialog.set_server(self._visible_servers[row])
         self._detail_dialog = dialog
+        size_detail_for_viewport(dialog, 700, 560)
         dialog.open()
         self._scan_request_sequence += 1
         self._active_scan_token = self._scan_request_sequence
@@ -420,7 +453,9 @@ class ServerListPage(QWidget):
             return
         self._detail_dialog = None
         self._active_scan_token = None
-        QTimer.singleShot(0, self._restore_detail_focus)
+        QTimer.singleShot(
+            0, lambda: self._restore_detail_focus() if shiboken6.isValid(self) else None
+        )
 
     def _restore_detail_focus(self) -> None:
         if self._detail_dialog is not None or not self.isVisible():

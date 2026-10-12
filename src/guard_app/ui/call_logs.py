@@ -138,6 +138,19 @@ def _safe_csv_cell(value: str) -> str:
     return value
 
 
+def _public_display_text(value: str | None) -> str:
+    """Render public identifiers on one line, exposing invisible controls."""
+
+    if not value:
+        return MISSING
+    return "".join(
+        f"[U+{ord(char):04X}]"
+        if unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+        else char
+        for char in value
+    )
+
+
 def public_calls_csv(rows: Sequence[PublicCallSummary]) -> str:
     """Export only the closed public fields of the supplied, already queried rows."""
 
@@ -187,11 +200,11 @@ def public_calls_csv(rows: Sequence[PublicCallSummary]) -> str:
 def _detail_text(detail: PublicCallDetail) -> str:
     row = detail.summary
     lines = [
-        f"호출 ID: {row.call_id}",
-        f"요청 ID: {row.request_id or MISSING}",
-        f"Task ID: {row.task_id or MISSING}",
-        f"서버 ID: {row.server_id or MISSING}",
-        f"도구 이름: {row.tool_name or MISSING}",
+        f"호출 ID: {_public_display_text(row.call_id)}",
+        f"요청 ID: {_public_display_text(row.request_id)}",
+        f"Task ID: {_public_display_text(row.task_id)}",
+        f"서버 ID: {_public_display_text(row.server_id)}",
+        f"도구 이름: {_public_display_text(row.tool_name)}",
         f"종류: {fixed(_KINDS, row.kind)}",
         f"신뢰 경계: {fixed(TIERS, row.boundary_tier)}",
         f"발생 시각: {format_kst(row.occurred_at)}",
@@ -241,6 +254,7 @@ class CallLogPage(QWidget):
         self._visible_rows: list[PublicCallSummary] = []
         self._state = LoadState.UNAVAILABLE
         self._detail_dialog: PlainDetailDialog | None = None
+        self._cached_detail_dialog: PlainDetailDialog | None = None
         self._detail_request: DetailRequest | None = None
         self._detail_token = 0
         self._column_mode: str | None = None
@@ -519,8 +533,8 @@ class CallLogPage(QWidget):
             self.table.insertRow(index)
             columns = (
                 format_kst(row.occurred_at),
-                f"{row.tool_name or MISSING}\n{row.server_id or MISSING}",
-                f"{row.call_id}\n{row.request_id or MISSING}",
+                f"{_public_display_text(row.tool_name)}\n{_public_display_text(row.server_id)}",
+                f"{_public_display_text(row.call_id)}\n{_public_display_text(row.request_id)}",
                 fixed(_KINDS, row.kind),
                 fixed(DECISIONS, row.initial_decision),
                 fixed(_APPROVAL, row.approval_status),
@@ -567,16 +581,19 @@ class CallLogPage(QWidget):
             self._detail_dialog.close()
         sender = self.sender()
         return_focus = self.table if sender is self.table else self.detail_button
-        dialog = PlainDetailDialog(self)
-        dialog.finished.connect(
-            lambda result, opened=dialog: self._detail_closed(opened, result)
-        )
+        dialog = self._cached_detail_dialog
+        if dialog is None:
+            dialog = PlainDetailDialog(self)
+            dialog.finished.connect(
+                lambda result, opened=dialog: self._detail_closed(opened, result)
+            )
+            self._cached_detail_dialog = dialog
         self._detail_token += 1
         request = DetailRequest(call_id, self._detail_token)
         self._detail_dialog = dialog
         self._detail_request = request
         dialog.show_detail(
-            title=f"호출 상세 · {call_id}",
+            title=f"호출 상세 · {_public_display_text(call_id)}",
             text="호출 상세 불러오는 중…",
             return_focus=return_focus,
         )
