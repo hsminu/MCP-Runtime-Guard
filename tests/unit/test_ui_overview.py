@@ -56,14 +56,21 @@ def test_missing_counts_and_failed_query_never_look_like_zero(app) -> None:
     assert window.overview.metric_cards[2].value.text() == "0건"
 
 
-def test_overview_puts_attention_before_server_inventory_at_narrow_width(app) -> None:
+def test_overview_order_and_server_preview_adapt_to_window_width(app) -> None:
     window = GuardWindow()
     window.resize(320, 400)
     window.set_overview_snapshot(
         OverviewSnapshot(
             servers=Surface(
                 LoadState.READY,
-                (ServerSummary("server-alpha", "Alpha", session_status="connected"),),
+                tuple(
+                    ServerSummary(
+                        f"server-{index:02d}",
+                        f"Server {index}",
+                        session_status="connected",
+                    )
+                    for index in range(12)
+                ),
             ),
             flow=Surface(LoadState.READY, (FlowBucket(datetime.now(UTC), 3),)),
         )
@@ -72,13 +79,42 @@ def test_overview_puts_attention_before_server_inventory_at_narrow_width(app) ->
     app.processEvents()
     try:
         layout = window.overview.layout()
-        assert layout.indexOf(window.overview.attention_state) < layout.indexOf(
-            window.overview.servers_state
+        assert (
+            layout.indexOf(window.overview.metrics_state)
+            < layout.indexOf(window.overview.servers_state)
+            < layout.indexOf(window.overview.attention_state)
+            < layout.indexOf(window.overview.calls_state)
+            < layout.indexOf(window.overview.flow_state)
         )
         assert window.overview._metric_columns == 1
         assert window.overview._server_columns == 1
+        assert len(window.overview._server_cards) == 1
+        assert "12개 중 1개" in window.overview.server_preview_note.text()
+        assert window.overview.server_preview_note.isVisibleTo(window.overview)
+        assert window.overview.all_servers_button.isVisibleTo(window.overview)
         assert window.overview.attention_state.isVisibleTo(window.overview)
         assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
+
+        for width, height, expected_cards in (
+            (540, 580, 1),
+            (900, 700, 2),
+            (1100, 750, 2),
+        ):
+            window.resize(width, height)
+            app.processEvents()
+            assert len(window.overview._server_cards) == expected_cards
+            assert len(window.overview._server_cards) == window.overview._server_columns
+            assert (
+                f"12개 중 {expected_cards}개"
+                in window.overview.server_preview_note.text()
+            )
+            assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
+
+        window.resize(320, 400)
+        app.processEvents()
+        assert len(window.overview._server_cards) == 1
+        window.overview.all_servers_button.click()
+        assert window._page == "servers"
     finally:
         window.close()
 

@@ -248,6 +248,8 @@ class OverviewPage(QWidget):
         self._metric_columns = 0
         self._server_columns = 0
         self._server_cards: list[ServerCard] = []
+        self._server_surface: Surface[tuple[ServerSummary, ...]] = Surface()
+        self._server_card_limit = 0
         outer = QVBoxLayout(self)
         self._outer_layout = outer
         outer.setContentsMargins(26, 28, 26, 42)
@@ -259,17 +261,6 @@ class OverviewPage(QWidget):
                 "연결 상태와 지금 처리가 필요한 요청부터 확인해.", name="secondary"
             )
         )
-
-        outer.addWidget(
-            _section_header(
-                "지금 확인할 항목", "백엔드가 확인한 미해결 항목과 이동 대상을 보여줘."
-            )
-        )
-        self.attention_state = StateMessage()
-        outer.addWidget(self.attention_state)
-        self.attention_layout = QVBoxLayout()
-        self.attention_layout.setSpacing(10)
-        outer.addLayout(self.attention_layout)
 
         self.metrics_grid = QGridLayout()
         self.metrics_grid.setSpacing(12)
@@ -294,6 +285,25 @@ class OverviewPage(QWidget):
         self.servers_grid = QGridLayout()
         self.servers_grid.setSpacing(12)
         outer.addLayout(self.servers_grid)
+        self.server_preview_note = plain_label(name="secondary")
+        outer.addWidget(self.server_preview_note)
+        self.all_servers_button = KeyboardActionButton("서버 목록으로 이동 →")
+        self.all_servers_button.setObjectName("linkButton")
+        self.all_servers_button.clicked.connect(
+            lambda: self.navigate_requested.emit("servers", "")
+        )
+        outer.addWidget(self.all_servers_button, 0, Qt.AlignmentFlag.AlignLeft)
+
+        outer.addWidget(
+            _section_header(
+                "지금 확인할 항목", "백엔드가 확인한 미해결 항목과 이동 대상을 보여줘."
+            )
+        )
+        self.attention_state = StateMessage()
+        outer.addWidget(self.attention_state)
+        self.attention_layout = QVBoxLayout()
+        self.attention_layout.setSpacing(10)
+        outer.addLayout(self.attention_layout)
 
         outer.addWidget(
             _section_header("최근 도구 호출", "공개가 허용된 호출 메타데이터만 표시해.")
@@ -367,19 +377,40 @@ class OverviewPage(QWidget):
         self.metrics_state.setText(state_text)
 
     def _render_servers(self, surface: Surface[tuple[ServerSummary, ...]]) -> None:
+        self._server_surface = surface
         _clear(self.servers_grid)
         self._server_cards.clear()
+        self._server_card_limit = self._server_preview_limit()
         ready = (
             surface.state in (LoadState.READY, LoadState.STALE)
             and surface.value is not None
         )
+        connected = (
+            tuple(
+                sorted(
+                    (
+                        server
+                        for server in surface.value or ()
+                        if server.session_status == "connected"
+                    ),
+                    key=lambda server: server.server_id,
+                )
+            )
+            if ready
+            else ()
+        )
         if ready:
-            for server in surface.value or ():
-                if server.session_status != "connected":
-                    continue
+            for server in connected[: self._server_card_limit]:
                 card = ServerCard(server)
                 card.navigate_requested.connect(self.navigate_requested)
                 self._server_cards.append(card)
+        self.server_preview_note.setVisible(len(connected) > len(self._server_cards))
+        self.server_preview_note.setText(
+            f"현황 조회 결과: 연결된 서버 {len(connected)}개 중 {len(self._server_cards)}개 표시"
+            if len(connected) > len(self._server_cards)
+            else ""
+        )
+        self.all_servers_button.setVisible(ready and bool(connected))
         show_message = (
             not ready or not self._server_cards or surface.state == LoadState.STALE
         )
@@ -456,8 +487,17 @@ class OverviewPage(QWidget):
         super().resizeEvent(event)
         self._reflow()
 
+    def _server_preview_limit(self) -> int:
+        margin = 12 if self.width() < 500 else 26
+        content_width = self.width() - 2 * margin
+        return 4 if content_width >= 1180 else 2 if content_width >= 610 else 1
+
     def _reflow(self, *, force: bool = False) -> None:
         compact = self.width() < 500
+        server_rebuilt = False
+        if self._server_preview_limit() != self._server_card_limit:
+            self._render_servers(self._server_surface)
+            server_rebuilt = True
         margin = 12 if compact else 26
         self._outer_layout.setContentsMargins(
             margin, 20 if compact else 28, margin, 32 if compact else 42
@@ -471,7 +511,7 @@ class OverviewPage(QWidget):
                 self.metrics_grid.addWidget(
                     card, index // metric_columns, index % metric_columns
                 )
-        if force or server_columns != self._server_columns:
+        if force or server_rebuilt or server_columns != self._server_columns:
             self._server_columns = server_columns
             for index, server_card in enumerate(self._server_cards):
                 self.servers_grid.addWidget(
