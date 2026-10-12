@@ -491,7 +491,7 @@ def test_admission_error_settles_command_and_continues_drain(app, monkeypatch) -
 
         def fail_one(command) -> None:
             if command.command_id == "broken":
-                raise RuntimeError("private failure detail")
+                raise ValueError("private failure detail")
             original_admit(command)
 
         monkeypatch.setattr(bridge, "_admit", fail_one)

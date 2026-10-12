@@ -373,6 +373,7 @@ class BackendBridge(QObject):
                             break
                     if item is None:
                         return
+                completed = False
                 try:
                     if item.replay is not None:
                         with self._command_lock:
@@ -385,28 +386,31 @@ class BackendBridge(QObject):
                         )
                     else:
                         self._admit(item.command)
-                except Exception:  # noqa: BLE001 - no ingress callback may strand later commands
-                    self._loop_error.set()
-                    if item.replay is not None:
-                        self.command_changed.emit(
-                            CommandEvent(
-                                item.command.command_id,
-                                item.command.lane,
-                                item.command.action,
-                                item.command.target_id,
-                                CommandStage.UNCONFIRMED,
-                                "REPLAY_UNCONFIRMED",
-                            )
-                        )
-                    else:
-                        self._emit_command(
-                            item.command,
-                            CommandStage.UNCONFIRMED,
-                            "ADMISSION_UNCONFIRMED",
-                        )
+                    completed = True
                 finally:
-                    with self._ingress_lock:
-                        self._ingress_pending.pop(item.command.command_id, None)
+                    try:
+                        if not completed:
+                            self._loop_error.set()
+                            if item.replay is not None:
+                                self.command_changed.emit(
+                                    CommandEvent(
+                                        item.command.command_id,
+                                        item.command.lane,
+                                        item.command.action,
+                                        item.command.target_id,
+                                        CommandStage.UNCONFIRMED,
+                                        "REPLAY_UNCONFIRMED",
+                                    )
+                                )
+                            else:
+                                self._emit_command(
+                                    item.command,
+                                    CommandStage.UNCONFIRMED,
+                                    "ADMISSION_UNCONFIRMED",
+                                )
+                    finally:
+                        with self._ingress_lock:
+                            self._ingress_pending.pop(item.command.command_id, None)
         finally:
             with self._ingress_lock:
                 if any(self._ingress.values()):
