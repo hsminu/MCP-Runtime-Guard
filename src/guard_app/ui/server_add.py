@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -67,6 +69,8 @@ class ServerAddForm(QWidget):
         self._prepared = False
         self._boundary_adjusted = False
         self._errors: dict[str, QLabel] = {}
+        self._forms: list[QFormLayout] = []
+        self._compact_form: bool | None = None
 
         shell = QVBoxLayout(self)
         shell.setContentsMargins(0, 0, 0, 0)
@@ -74,7 +78,8 @@ class ServerAddForm(QWidget):
         scroll.setObjectName("serverAddScroll")
         scroll.setWidgetResizable(True)
         content = QWidget()
-        outer = QVBoxLayout(content)
+        self._outer = QVBoxLayout(content)
+        outer = self._outer
         outer.setContentsMargins(26, 28, 26, 28)
         outer.setSpacing(14)
         outer.addWidget(plain_label("MCP 서버 추가 초안", name="pageTitle"))
@@ -85,7 +90,7 @@ class ServerAddForm(QWidget):
             )
         )
 
-        common = QFormLayout()
+        common = self._new_form()
         self.server_id = QLineEdit()
         self.server_id.setObjectName("serverIdInput")
         self.server_id.setAccessibleName("서버 ID")
@@ -96,6 +101,9 @@ class ServerAddForm(QWidget):
         self._add_field(common, "표시 이름", self.display_name, "display_name")
 
         self.transport = QComboBox()
+        self.transport.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         self.transport.setObjectName("transportSelect")
         self.transport.setAccessibleName("연결 방식")
         self.transport.addItem("stdio", "stdio")
@@ -105,12 +113,16 @@ class ServerAddForm(QWidget):
 
         self.transport_fields = QStackedWidget()
         self.transport_fields.setObjectName("transportFields")
+        self.transport_fields.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         self.transport_fields.addWidget(self._stdio_fields())
         self.transport_fields.addWidget(self._http_fields())
         outer.addWidget(self.transport_fields)
 
-        boundary = QFormLayout()
+        boundary = self._new_form()
         self.tier = QComboBox()
+        self.tier.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.tier.setObjectName("tierSelect")
         self.tier.setAccessibleName("신뢰 경계")
         self.tier.addItem("신뢰 경계 선택", None)
@@ -119,6 +131,9 @@ class ServerAddForm(QWidget):
         self.tier.addItem("일반 외부 · general_external", "general_external")
         self._add_field(boundary, "신뢰 경계", self.tier, "tier")
         self.max_label = QComboBox()
+        self.max_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         self.max_label.setObjectName("maxLabelSelect")
         self.max_label.setAccessibleName("최대 수신 등급")
         self.max_label.addItem("최대 수신 등급 선택", None)
@@ -180,9 +195,34 @@ class ServerAddForm(QWidget):
         self._known_ids = frozenset(ids)
         self._input_changed()
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        compact = self.width() < 620
+        if compact == self._compact_form:
+            return
+        self._compact_form = compact
+        policy = (
+            QFormLayout.RowWrapPolicy.WrapAllRows
+            if compact
+            else QFormLayout.RowWrapPolicy.DontWrapRows
+        )
+        for form in self._forms:
+            form.setRowWrapPolicy(policy)
+        margin = 12 if compact else 26
+        self._outer.setContentsMargins(
+            margin, 16 if compact else 28, margin, 20 if compact else 28
+        )
+
+    def _new_form(self, parent: QWidget | None = None) -> QFormLayout:
+        form = QFormLayout(parent)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self._forms.append(form)
+        return form
+
     def _stdio_fields(self) -> QWidget:
         page = QWidget()
-        form = QFormLayout(page)
+        form = self._new_form(page)
         self.command = QLineEdit()
         self.command.setObjectName("commandInput")
         self.command.setAccessibleName("stdio 실행 파일 절대 경로")
@@ -209,7 +249,7 @@ class ServerAddForm(QWidget):
 
     def _http_fields(self) -> QWidget:
         page = QWidget()
-        form = QFormLayout(page)
+        form = self._new_form(page)
         self.url = QLineEdit()
         self.url.setObjectName("urlInput")
         self.url.setAccessibleName("전체 MCP endpoint URL")

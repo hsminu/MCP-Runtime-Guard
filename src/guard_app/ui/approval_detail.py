@@ -14,7 +14,7 @@ import shiboken6
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QDialog, QPlainTextEdit, QVBoxLayout, QWidget
 
-from .widgets import KeyboardActionButton, plain_label
+from .widgets import KeyboardActionButton, plain_label, size_detail_for_viewport
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -92,8 +92,8 @@ class ApprovalDetailDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setModal(True)
-        self.setMinimumSize(560, 420)
-        self.resize(900, 650)
+        self.setMinimumSize(240, 200)
+        size_detail_for_viewport(self, 900, 650)
         self.setWindowTitle("승인 대상 상세")
         self._return_focus: QWidget | None = None
 
@@ -149,6 +149,7 @@ class ApprovalDetailDialog(QDialog):
         self.destination_body.setPlainText(visible_review_text(destination))
         self.arguments_body.setPlainText(visible_review_text(arguments))
         self._return_focus = return_focus
+        size_detail_for_viewport(self, 900, 650)
         self.open()
         self.destination_body.setFocus()
 

@@ -8,6 +8,7 @@ import shiboken6
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -31,6 +32,22 @@ def plain_label(
     if name:
         label.setObjectName(name)
     return label
+
+
+def size_detail_for_viewport(dialog: QDialog, width: int, height: int) -> None:
+    """Choose an initial modal size that fits both its owner and the screen."""
+
+    screen = dialog.screen() or QApplication.primaryScreen()
+    if screen is not None:
+        area = screen.availableGeometry()
+        width = min(width, max(240, area.width() - 24))
+        height = min(height, max(200, area.height() - 24))
+    owner = dialog.parentWidget()
+    if owner is not None and owner.window().isVisible():
+        window = owner.window()
+        width = min(width, max(240, window.width() - 24))
+        height = min(height, max(200, window.height() - 24))
+    dialog.resize(width, height)
 
 
 class KeyboardActionButton(QPushButton):
@@ -118,8 +135,8 @@ class PlainDetailDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setModal(True)
-        self.setMinimumSize(560, 420)
-        self.resize(900, 650)
+        self.setMinimumSize(240, 200)
+        size_detail_for_viewport(self, 900, 650)
         self._return_focus: QWidget | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 20)
@@ -143,6 +160,7 @@ class PlainDetailDialog(QDialog):
         self.heading.setText(title)
         self.body.setPlainText(text)
         self._return_focus = return_focus
+        size_detail_for_viewport(self, 900, 650)
         self.open()
         self.body.setFocus()
 

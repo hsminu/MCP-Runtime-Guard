@@ -6,13 +6,14 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QBoxLayout,
     QComboBox,
     QDialog,
     QFrame,
-    QHBoxLayout,
     QHeaderView,
     QLineEdit,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -28,7 +29,13 @@ from .presentation import (
     fixed,
 )
 from .scan_status import ScanStatusCard, ScanStatusProjection
-from .widgets import KeyboardActionButton, SecurityLabel, StateMessage, plain_label
+from .widgets import (
+    KeyboardActionButton,
+    SecurityLabel,
+    StateMessage,
+    plain_label,
+    size_detail_for_viewport,
+)
 
 
 def _detail_field(title: str, value: str) -> QWidget:
@@ -39,6 +46,8 @@ def _detail_field(title: str, value: str) -> QWidget:
     layout.setSpacing(2)
     layout.addWidget(plain_label(title, name="secondary"))
     value_label = plain_label(value)
+    value_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    value_label.setMinimumWidth(0)
     value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     layout.addWidget(value_label)
     return field
@@ -52,8 +61,8 @@ class ServerDetailDialog(QDialog):
         self.server_id = server.server_id
         self.setWindowTitle(f"MCP 서버 상세 · {server.server_id}")
         self.setModal(True)
-        self.setMinimumSize(540, 450)
-        self.resize(700, 560)
+        self.setMinimumSize(240, 200)
+        size_detail_for_viewport(self, 700, 560)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 24, 24, 20)
         outer.setSpacing(14)
@@ -98,6 +107,8 @@ class ServerListPage(QWidget):
 
     scan_snapshot_requested = Signal(str, int)
     _FULL_TABLE_WIDTH = 970
+    _TINY_TABLE_WIDTH = 440
+    _STACK_FILTER_WIDTH = 480
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -109,8 +120,10 @@ class ServerListPage(QWidget):
         self._scan_request_sequence = 0
         self._active_scan_token: int | None = None
         self._target_id: str | None = None
-        self._compact_columns: bool | None = None
-        layout = QVBoxLayout(self)
+        self._compact_columns: tuple[bool, bool] | None = None
+        self._stacked_filters: bool | None = None
+        self._layout = QVBoxLayout(self)
+        layout = self._layout
         layout.setContentsMargins(26, 28, 26, 42)
         layout.setSpacing(16)
         layout.addWidget(plain_label("SERVER REGISTRY", name="eyebrow"))
@@ -131,24 +144,29 @@ class ServerListPage(QWidget):
         self.search.setAccessibleName("현재 조회 결과에서 서버 검색")
         self.search.textChanged.connect(self._apply_filters)
         filters.addWidget(self.search)
-        choices = QHBoxLayout()
-        choices.setSpacing(8)
+        self._choices = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self._choices.setSpacing(8)
         self.transport_filter = QComboBox()
+        self.transport_filter.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         self.transport_filter.addItem("전체 transport", None)
         self.transport_filter.addItem("stdio", "stdio")
         self.transport_filter.addItem("Streamable HTTP", "streamable_http")
         self.transport_filter.setAccessibleName("전송 방식 필터")
         self.transport_filter.currentIndexChanged.connect(self._apply_filters)
-        choices.addWidget(self.transport_filter)
+        self._choices.addWidget(self.transport_filter)
         self.status_filter = QComboBox()
+        self.status_filter.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
         self.status_filter.addItem("전체 등록 상태", None)
         for status in ("active", "pending", "blocked"):
             self.status_filter.addItem(REGISTRY_STATUSES[status], status)
         self.status_filter.setAccessibleName("등록 상태 필터")
         self.status_filter.currentIndexChanged.connect(self._apply_filters)
-        choices.addWidget(self.status_filter)
-        choices.addStretch(1)
-        filters.addLayout(choices)
+        self._choices.addWidget(self.status_filter)
+        filters.addLayout(self._choices)
         layout.addLayout(filters)
         layout.addWidget(
             plain_label(
@@ -175,6 +193,7 @@ class ServerListPage(QWidget):
             ]
         )
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setTabKeyNavigation(False)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -202,12 +221,27 @@ class ServerListPage(QWidget):
         QTimer.singleShot(0, self._update_table_columns)
 
     def _update_table_columns(self) -> None:
-        compact = self.table.width() < self._FULL_TABLE_WIDTH
-        if compact == self._compact_columns:
+        width = self.table.width()
+        compact = width < self._FULL_TABLE_WIDTH
+        tiny = width < self._TINY_TABLE_WIDTH
+        stacked = self.width() < self._STACK_FILTER_WIDTH
+        if stacked != self._stacked_filters:
+            self._stacked_filters = stacked
+            self._choices.setDirection(
+                QBoxLayout.Direction.TopToBottom
+                if stacked
+                else QBoxLayout.Direction.LeftToRight
+            )
+            margin = 12 if stacked else 26
+            self._layout.setContentsMargins(
+                margin, 16 if stacked else 28, margin, 24 if stacked else 42
+            )
+        if (compact, tiny) == self._compact_columns:
             return
-        self._compact_columns = compact
+        self._compact_columns = (compact, tiny)
         for column in (1, 2, 5):
             self.table.setColumnHidden(column, compact)
+        self.table.setColumnHidden(3, tiny)
         first_header = self.table.horizontalHeaderItem(0)
         if first_header is not None:
             first_header.setText("서버 ID" if compact else "서버 ID / 표시 이름")
@@ -217,6 +251,11 @@ class ServerListPage(QWidget):
         else:
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
             self.table.setColumnWidth(0, 250)
+        self.table_hint.setText(
+            "좁은 화면에서는 최대 수신 등급·연결 방식·신뢰 경계·세션을 서버 상세에서 확인해."
+            if tiny
+            else "좁은 화면에서는 연결 방식·신뢰 경계·세션을 서버 상세에서 확인해."
+        )
         self.table_hint.setVisible(compact)
 
     def set_servers(self, surface: Surface[tuple[ServerSummary, ...]]) -> None:
