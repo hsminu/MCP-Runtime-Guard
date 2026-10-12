@@ -339,6 +339,50 @@ async def test_cancelled_queue_waiter_is_skipped_but_active_call_is_not_retried(
 
 
 @pytest.mark.asyncio
+async def test_pending_limit_rejects_excess_without_wire_call_and_recovers_per_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, second = _Session(), _Session()
+    first.block_first = True
+    sessions = iter((first, second))
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: next(sessions)
+    )
+    transport = McpTransport(
+        {"first": _streams([]), "second": _streams([])}, max_pending_commands=1
+    )
+    await transport.start()
+
+    active = asyncio.create_task(
+        transport.call(_request("first", kind=ToolKind.SEND, seq=1))
+    )
+    await first.first_call.wait()
+    queued = asyncio.create_task(transport.call(_request("first", seq=2)))
+    await asyncio.sleep(0)  # Let the second request occupy the pending slot.
+
+    with pytest.raises(DispatchError) as saturated:
+        await asyncio.wait_for(
+            transport.call(_request("first", kind=ToolKind.SEND, seq=3)),
+            timeout=1,
+        )
+    assert saturated.value.exception_type == "WorkerQueueFull"
+    assert first.calls == [("tool", {"value": 1})]
+    assert (await transport.call(_request("second", seq=10))).payload is not None
+    assert second.calls == [("tool", {"value": 10})]
+
+    first.release_first.set()
+    assert (await active).payload is not None
+    assert (await queued).payload is not None
+    assert (await transport.call(_request("first", seq=4))).payload is not None
+    await transport.close()
+    assert first.calls == [
+        ("tool", {"value": 1}),
+        ("tool", {"value": 2}),
+        ("tool", {"value": 4}),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_close_rejects_waiting_call_and_finishes_active_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -347,7 +391,7 @@ async def test_close_rejects_waiting_call_and_finishes_active_one(
     monkeypatch.setattr(
         mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
     )
-    transport = McpTransport({"server": _streams([])})
+    transport = McpTransport({"server": _streams([])}, max_pending_commands=1)
     await transport.start()
     active = asyncio.create_task(transport.call(_request(seq=1)))
     await session.first_call.wait()
@@ -652,3 +696,11 @@ def test_result_copy_budget_rejects_invalid_configuration(
 ) -> None:
     with pytest.raises(ValueError, match="result copy budget"):
         McpTransport({}, max_result_copy_bytes=invalid_budget)
+
+
+@pytest.mark.parametrize("invalid_limit", (0, -1, True, 1025, 1.5))
+def test_pending_command_limit_rejects_invalid_configuration(
+    invalid_limit: object,
+) -> None:
+    with pytest.raises(ValueError, match="pending command limit"):
+        McpTransport({}, max_pending_commands=invalid_limit)

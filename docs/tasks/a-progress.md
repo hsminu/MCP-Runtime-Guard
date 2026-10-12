@@ -78,7 +78,7 @@
 | A07 | [stdio READ 실행 준비서](a-compatibility-runbook.md) 작성, 실제 왕복 증거 없음 | C 격리 합성 fixture/harness와 launcher 조건 필요 |
 | A08 | [HTTP SEND 실행 준비서](a-compatibility-runbook.md) 작성, 실제 왕복·수신 계수 없음 | C 격리 fixture, endpoint 검증, wire/effect 계수 필요 |
 | A09 | [서버별 SDK 세션 소유 worker](../../src/guard_app/adapters/mcp_transport.py)와 A 단위 테스트 구현. 소유 task·초기화·종료 구조 검증 | B 초안 포트 기준 단위 완료. 실제 C launcher/HTTP endpoint와 SDK 왕복은 A11/A12 대기 |
-| A10 | 같은 worker에 명령 future 정리, 대기/진행 취소 구분, 시작/호출/종료 timeout·close 처리 구현. 여러 서버 종료 중 다른 서버 신규 호출 수락 경합을 차단했다. MCP 결과는 `model_dump` 전 content 256개, 구조 4,096노드·깊이 64, 기본 복사 예산 512 KiB(설정 상한 8 MiB)로 검사한다 | 대역 단위 완료. SDK의 역직렬화 전 wire 상한, 실제 cancellation 및 세션 종료 경합은 C stream/fixture로 인수 필요 |
+| A10 | 같은 worker에 명령 future 정리, 대기/진행 취소 구분, 시작/호출/종료 timeout·close 처리 구현. 여러 서버 종료 중 다른 서버 신규 호출 수락 경합을 차단했다. 서버별 대기 명령을 기본 64건(설정 상한 1,024건)으로 제한하고 포화는 원격 호출 전에 `WorkerQueueFull`로 거절한다. MCP 결과는 `model_dump` 전 content 256개, 구조 4,096노드·깊이 64, 기본 복사 예산 512 KiB(설정 상한 8 MiB)로 검사한다 | 대역 단위 완료. SDK의 역직렬화 전 wire 상한, 실제 cancellation 및 세션 종료 경합은 C stream/fixture로 인수 필요 |
 | A11 | stdio 제품 연결 없음 | A07·A09·A10 및 C launcher 필요 |
 | A12 | HTTP 제품 연결·retry/redirect 시험 없음 | A08–A10 및 C endpoint 검증 필요 |
 | A13 | `RawResult` JSON 사본과 원문 없는 `DispatchError` 전달 구현. timeout은 무자료 확증이 없어 오류로 보수 처리 | 부분 완료. 실제 stdio/HTTP 단계별 실패와 SEND 결과 불명은 C fixture·B Guard 통합 검증 필요 |

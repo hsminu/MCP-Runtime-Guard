@@ -60,6 +60,8 @@ _MAX_RESULT_VALUE_NODES = 4096
 # the SDK envelope while bounding the copy that precedes its semantic checks.
 _MAX_RESULT_COPY_BYTES = 512 * 1024
 _MAX_CONFIGURED_RESULT_COPY_BYTES = 8 * 1024 * 1024
+_DEFAULT_PENDING_COMMANDS = 64
+_MAX_CONFIGURED_PENDING_COMMANDS = 1024
 
 
 class ResultTooLarge(ValueError):
@@ -218,6 +220,7 @@ class ServerWorker:
         startup_timeout_s: float,
         close_timeout_s: float,
         max_result_copy_bytes: int,
+        max_pending_commands: int = _DEFAULT_PENDING_COMMANDS,
     ) -> None:
         if not callable(session_factory):
             raise TypeError("session factory required")
@@ -234,12 +237,20 @@ class ServerWorker:
             or max_result_copy_bytes > _MAX_CONFIGURED_RESULT_COPY_BYTES
         ):
             raise ValueError("bounded positive result copy budget required")
+        if (
+            type(max_pending_commands) is not int
+            or max_pending_commands < 1
+            or max_pending_commands > _MAX_CONFIGURED_PENDING_COMMANDS
+        ):
+            raise ValueError("bounded positive pending command limit required")
         self._session_factory = session_factory
         self._call_timeout_s = float(call_timeout_s)
         self._startup_timeout_s = float(startup_timeout_s)
         self._close_timeout_s = float(close_timeout_s)
         self._max_result_copy_bytes = max_result_copy_bytes
-        self._queue: asyncio.Queue[_Command | object] = asyncio.Queue()
+        self._queue: asyncio.Queue[_Command | object] = asyncio.Queue(
+            maxsize=max_pending_commands
+        )
         self._state = _State.NEW
         self._owner: asyncio.Task[None] | None = None
         self._active: _Command | None = None
@@ -271,8 +282,14 @@ class ServerWorker:
             )
             raise DispatchError(name)
         future: asyncio.Future[RawResult] = asyncio.get_running_loop().create_future()
+        try:
+            self._queue.put_nowait(_Command(req=req, future=future))
+        except asyncio.QueueFull:
+            # No worker has received this command. Keep the queue bounded and
+            # never await capacity after the Guard has reserved a request.
+            future.cancel()
+            raise DispatchError("WorkerQueueFull") from None
         future.add_done_callback(self._consume_command_failure)
-        self._queue.put_nowait(_Command(req=req, future=future))
         try:
             return await asyncio.shield(future)
         except asyncio.CancelledError:
@@ -437,6 +454,7 @@ class McpTransport:
         startup_timeout_s: float = 10.0,
         close_timeout_s: float = 60.0,
         max_result_copy_bytes: int = _MAX_RESULT_COPY_BYTES,
+        max_pending_commands: int = _DEFAULT_PENDING_COMMANDS,
     ) -> None:
         if not isinstance(server_streams, Mapping):
             raise TypeError("server stream mapping required")
@@ -450,6 +468,12 @@ class McpTransport:
             or max_result_copy_bytes > _MAX_CONFIGURED_RESULT_COPY_BYTES
         ):
             raise ValueError("bounded positive result copy budget required")
+        if (
+            type(max_pending_commands) is not int
+            or max_pending_commands < 1
+            or max_pending_commands > _MAX_CONFIGURED_PENDING_COMMANDS
+        ):
+            raise ValueError("bounded positive pending command limit required")
         self._workers = {
             server_id: ServerWorker(
                 _sdk_session_factory(stream_factory),
@@ -457,6 +481,7 @@ class McpTransport:
                 startup_timeout_s=startup_timeout_s,
                 close_timeout_s=close_timeout_s,
                 max_result_copy_bytes=max_result_copy_bytes,
+                max_pending_commands=max_pending_commands,
             )
             for server_id, stream_factory in server_streams.items()
         }
