@@ -1,0 +1,6 @@
+# Local development environment
+.venv/
+.devtools/
+.cache/
+__pycache__/
+*.py[cod]
