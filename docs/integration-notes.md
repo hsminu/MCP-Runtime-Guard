@@ -192,3 +192,8 @@ AGT를 모의 연동으로 선택하면 불가능했던 실제 연결 조건과 
 
 - `McpTransport.start()`는 최대 4개 서버 worker의 준비를 동시에 기다린다. 느린 첫 서버가 뒤 서버의 세션 시작을 막지 않으며, 시작 중 실패·취소가 있으면 남은 시작 task를 회수하고 worker 전체를 닫는다. SDK 세션의 단일 소유 task 구조는 유지한다.
 - 5개 합성 서버에서 동시 시작 상한과 뒤 서버 진행, 초기화 실패와 시작 취소의 전체 정리를 포함해 A transport 단위 테스트 **30 passed**. 변경 파일 Ruff check·format check와 transport 소스 mypy가 통과했다. 실제 C launcher/HTTP endpoint와 MCP wire 왕복은 시험하지 않았다.
+
+## 2026-10-12 · A20 모델 completion 제한시간
+
+- 제공자 중립 모델 completion의 대기는 기본 60초, 설정 최대 300초로 제한한다. 제한시간 초과나 호출자 취소 때 하위 task에 취소를 요청하고 늦게 끝난 응답은 Runner에 전달하지 않는다. 합성 completion이 취소를 무시하고 뒤늦게 도구 호출을 제안하거나 오류를 내도 Runner는 `model_error`로 멈추고 Guard 제출은 **0건**이었다. 제공자 특유의 예외를 일괄 번역하지 않으며, 현재 알려진 timeout·OS 오류와 자체 취소만 고정 비민감 오류로 매핑한다.
+- 관련 모델·Runner 집중 단위 시험 **70 passed**, A09/A20/A34 변경 후 전체 Qt offscreen 단위 시험 **246 passed**. 변경 Python 파일 6개의 Ruff check·format check와 A20 소스 mypy가 통과했다. 실제 제공자 SDK의 네트워크 취소·인증 오류 매핑 및 취소 무시 I/O 잔존 제한은 제공자 선정 후 검증해야 한다.
