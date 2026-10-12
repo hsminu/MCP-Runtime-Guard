@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>MCP Runtime Guard · UI 시안</title>
+    <meta name="description" content="MCP 서버와 도구 호출을 중심으로 보는 Runtime Guard 인터랙티브 UI 시안" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="주 메뉴">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none"><path d="M16 3 27 8v8c0 7.2-4.5 11.2-11 13-6.5-1.8-11-5.8-11-13V8L16 3Z" stroke="currentColor" stroke-width="2"/><path d="m11 16 3.3 3.3L21.5 12" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="brand-copy"><strong>MCP Guard</strong><small>Runtime Console</small></span>
+        </div>
+
+        <button class="add-button" type="button" data-action="open-add"><span aria-hidden="true">＋</span> MCP 추가</button>
+
+        <nav class="nav-group" aria-label="운영">
+          <div class="nav-caption">운영</div>
+          <button class="nav-item" type="button" data-page="overview"><span class="nav-icon" data-icon="grid"></span><span>현황</span></button>
+          <button class="nav-item" type="button" data-page="logs"><span class="nav-icon" data-icon="list"></span><span>호출 로그</span></button>
+          <button class="nav-item" type="button" data-page="approvals"><span class="nav-icon" data-icon="check"></span><span>승인 대기</span><span class="nav-count" id="approval-count">2</span></button>
+          <button class="nav-item" type="button" data-page="servers"><span class="nav-icon" data-icon="server"></span><span>MCP 서버</span></button>
+        </nav>
+
+        <nav class="nav-group" aria-label="관리">
+          <div class="nav-caption">관리</div>
+          <button class="nav-item" type="button" data-page="policy"><span class="nav-icon" data-icon="shield"></span><span>정책 · 경계</span></button>
+          <button class="nav-item" type="button" data-page="audit"><span class="nav-icon" data-icon="file"></span><span>감사 기록</span></button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+        <nav class="nav-group nav-bottom" aria-label="기타">
+          <button class="nav-item" type="button" data-page="runs"><span class="nav-icon" data-icon="play"></span><span>에이전트 실행</span></button>
+          <button class="nav-item" type="button" data-page="settings"><span class="nav-icon" data-icon="settings"></span><span>설정</span></button>
+        </nav>
+        <div class="sidebar-footer"><span class="live-dot"></span><span>인터랙티브 시안</span><span class="sidebar-version">v0.1</span></div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="icon-button mobile-menu" type="button" data-action="toggle-menu" aria-label="메뉴 열기"><span data-icon="menu"></span></button>
+            <span class="breadcrumb-parent">Workspace</span><span class="breadcrumb-sep">/</span><strong id="breadcrumb-current">현황</strong>
+          </div>
+          <div class="topbar-right">
+            <span class="demo-pill"><span class="demo-pulse"></span> 데모 데이터</span>
+            <span class="topbar-divider"></span>
+            <span class="workspace-avatar" title="로컬 UI 시안">G</span>
+          </div>
+        </header>
+        <main id="main" class="main-content" tabindex="-1"></main>
+      </div>
+    </div>
+    <div id="modal-root"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js" defer></script>
+  </body>
+</html>
