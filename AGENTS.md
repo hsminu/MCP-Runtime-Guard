@@ -21,11 +21,11 @@
 
 ## 소유권과 계약
 
-- 모듈 소유권·리뷰는 개발문서 0.5절과 `docs/team-workflow.md`를 따른다.
+- 현행 모듈 소유권·리뷰는 `docs/team-workflow.md`를 따른다. 2026-10-12 사용자 결정으로 `storage/*`와 SQLite 구현·단위 테스트는 B, 저장소 리뷰·독립 계약·통합·결함 주입 검증은 C가 맡는다. 개발문서 원문 0.5·2.1절 등의 이전 SQLite 담당 표기보다 이 결정이 우선한다.
 - B가 `domain/*`와 `ports.py`를 정의한다. 계약 변경은 A·B·C 합의가 필요하다. 실제 기록된 동의나 사용자의 명시적 결정이 이미 있으면 반복해서 확인하지 않는다.
 - 다른 담당의 구현을 복제하거나 담당 밖의 API를 임의로 확정하지 않는다. 필요한 변경은 계약 문서와 리뷰에 반영한다.
 - A가 AGT 연결·번역을 구현하고, B가 판정 합성을 구현하며, C가 차단 계수로 검증한다.
-- `security/failclosed.py`, `security/digest.py`는 B 소유다. 나머지 위험 연산 모듈·SQLite·정적 강제 규칙은 C 소유다.
+- `security/failclosed.py`, `security/digest.py`, `storage/*`는 B 소유다. 나머지 위험 연산 모듈·Registry·Scanner·정적 강제 규칙은 C 소유다. SQL 실행은 지정 저장소 모듈로 제한하며, B의 SQLite 구현과 C의 강제 규칙을 함께 리뷰한다.
 
 ## 구현 시 지킬 보안 기준
 
