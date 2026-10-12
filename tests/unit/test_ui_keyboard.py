@@ -39,6 +39,49 @@ def test_default_window_frame_fits_available_screen(app: QApplication) -> None:
     window.close()
 
 
+def test_small_window_keeps_navigation_and_runtime_status_available(
+    app: QApplication,
+) -> None:
+    window = GuardWindow()
+    window.resize(320, 400)
+    window.show()
+    app.processEvents()
+    try:
+        assert window.width() == 320
+        assert not window.sidebar.isVisible()
+        assert window.menu_button.isVisible()
+        assert window.runtime_identity.isVisible()
+        assert window.runtime_identity.geometry().right() <= window.width()
+        assert set(window._menu_actions) == set(window._nav_buttons)
+
+        window.menu_button.setFocus()
+        QTest.keyClick(window.menu_button, Qt.Key.Key_Return)
+        app.processEvents()
+        assert window._nav_menu.isVisible()
+        window._nav_menu.setActiveAction(window._menu_actions["approvals"])
+        QTest.keyClick(window._nav_menu, Qt.Key.Key_Return)
+        app.processEvents()
+        assert window._page == "approvals"
+        assert window.width() == 320
+        assert window.breadcrumb.text() == "Workspace / 승인 대기"
+
+        window.resize(1100, 700)
+        app.processEvents()
+        assert window.sidebar.isVisible()
+        assert not window.menu_button.isVisible()
+        assert window._nav_buttons["approvals"].property("selected")
+        window.resize(320, 400)
+        app.processEvents()
+        assert window.width() == 320
+        assert window.menu_button.isVisible()
+        window.resize(1100, 360)
+        app.processEvents()
+        assert not window.sidebar.isVisible()
+        assert window.menu_button.isVisible()
+    finally:
+        window.close()
+
+
 @pytest.fixture
 def server_page(app: QApplication) -> ServerListPage:
     page = ServerListPage()

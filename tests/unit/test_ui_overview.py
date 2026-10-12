@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QPushButton
 from guard_app.domain.enums import TaskStatus
 from guard_app.ui import (
     AttentionItem,
+    FlowBucket,
     GuardWindow,
     LoadState,
     OverviewSnapshot,
@@ -53,6 +54,33 @@ def test_missing_counts_and_failed_query_never_look_like_zero(app) -> None:
     assert window.overview.metric_cards[0].value.text() == "0건"
     assert window.overview.metric_cards[1].value.text() == "0건"
     assert window.overview.metric_cards[2].value.text() == "0건"
+
+
+def test_overview_puts_attention_before_server_inventory_at_narrow_width(app) -> None:
+    window = GuardWindow()
+    window.resize(320, 400)
+    window.set_overview_snapshot(
+        OverviewSnapshot(
+            servers=Surface(
+                LoadState.READY,
+                (ServerSummary("server-alpha", "Alpha", session_status="connected"),),
+            ),
+            flow=Surface(LoadState.READY, (FlowBucket(datetime.now(UTC), 3),)),
+        )
+    )
+    window.show()
+    app.processEvents()
+    try:
+        layout = window.overview.layout()
+        assert layout.indexOf(window.overview.attention_state) < layout.indexOf(
+            window.overview.servers_state
+        )
+        assert window.overview._metric_columns == 1
+        assert window.overview._server_columns == 1
+        assert window.overview.attention_state.isVisibleTo(window.overview)
+        assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
+    finally:
+        window.close()
 
 
 def test_runtime_mode_is_unconfigured_until_trusted_bootstrap_sets_it(app) -> None:
@@ -171,7 +199,10 @@ def test_navigation_only_emits_a_read_only_target(app) -> None:
 
 def test_sidebar_navigation_accepts_return_key(app) -> None:
     window = GuardWindow()
+    window.resize(1100, 700)
     window.show()
+    app.processEvents()
+    assert window.sidebar.isVisible()
     button = window._nav_buttons["servers"]
     button.setFocus()
     QTest.keyClick(button, Qt.Key.Key_Return)

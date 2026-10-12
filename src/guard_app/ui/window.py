@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QAction, QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QMainWindow,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -67,25 +70,29 @@ class GuardWindow(QMainWindow):
     call_log_detail_requested = Signal(object)
     scan_snapshot_requested = Signal(str, int)
 
+    _COMPACT_NAV_WIDTH = 900
+    _COMPACT_NAV_HEIGHT = 700
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("MCP Runtime Guard")
-        self.setMinimumSize(780, 580)
+        self.setMinimumSize(320, 360)
         available = self.screen().availableGeometry()
         title_height = self.style().pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight)
         frame_allowance = 2 * self.style().pixelMetric(
             QStyle.PixelMetric.PM_MdiSubWindowFrameWidth
         )
+        usable_width = max(1, available.width() - frame_allowance)
+        usable_height = max(1, available.height() - title_height - frame_allowance)
         self.resize(
-            max(self.minimumWidth(), min(1260, available.width() - frame_allowance)),
-            max(
-                self.minimumHeight(),
-                min(820, available.height() - title_height - frame_allowance),
-            ),
+            min(1260, usable_width),
+            min(820, usable_height),
         )
         self._page = "overview"
         self._nav_buttons: dict[str, QPushButton] = {}
+        self._menu_actions: dict[str, QAction] = {}
         self._page_indices: dict[str, int] = {}
+        self._compact_navigation = False
 
         central = QWidget()
         root = QHBoxLayout(central)
@@ -93,10 +100,10 @@ class GuardWindow(QMainWindow):
         root.setSpacing(0)
         self.setCentralWidget(central)
 
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(224)
-        side = QVBoxLayout(sidebar)
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setFixedWidth(224)
+        side = QVBoxLayout(self.sidebar)
         side.setContentsMargins(14, 24, 14, 16)
         side.setSpacing(5)
         side.addWidget(plain_label("MCP Guard", name="sectionTitle"))
@@ -113,7 +120,10 @@ class GuardWindow(QMainWindow):
         for page in ("runs", "settings"):
             side.addWidget(self._nav_button(page))
         side.addWidget(plain_label("백엔드 확정 조회만 표시", name="secondary"))
-        root.addWidget(sidebar)
+        root.addWidget(self.sidebar)
+        # Start with the compact shell so a 320 px resize cannot be constrained
+        # by the sidebar before the first resize event has reflowed the layout.
+        self.sidebar.hide()
 
         workspace = QWidget()
         workspace.setSizePolicy(
@@ -124,14 +134,29 @@ class GuardWindow(QMainWindow):
         work.setSpacing(0)
         topbar = QFrame()
         topbar.setObjectName("topbar")
-        topbar.setFixedHeight(64)
-        top = QHBoxLayout(topbar)
-        top.setContentsMargins(26, 0, 26, 0)
+        top = QGridLayout(topbar)
+        top.setContentsMargins(26, 10, 26, 10)
+        top.setHorizontalSpacing(12)
+        top.setVerticalSpacing(4)
+        self._top_layout = top
+        self.menu_button = KeyboardActionButton("메뉴")
+        self.menu_button.setAccessibleName("화면 이동 메뉴")
+        self.menu_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
+        )
+        self._nav_menu = QMenu(self.menu_button)
+        for page in PAGES:
+            action = self._nav_menu.addAction(PAGES[page])
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, key=page: self.navigate(key))
+            self._menu_actions[page] = action
+        self.menu_button.setMenu(self._nav_menu)
+        self.menu_button.hide()
         self.breadcrumb = plain_label("Workspace / 현황", name="cardTitle", wrap=False)
-        top.addWidget(self.breadcrumb)
-        top.addStretch(1)
+        top.addWidget(self.breadcrumb, 0, 0)
         self.runtime_identity = plain_label(name="secondary", wrap=False)
-        top.addWidget(self.runtime_identity)
+        top.addWidget(self.runtime_identity, 0, 1)
+        top.setColumnStretch(0, 1)
         self.set_runtime_identity(RuntimeIdentity())
         work.addWidget(topbar)
 
@@ -185,7 +210,44 @@ class GuardWindow(QMainWindow):
         work.addWidget(self.stack, 1)
         root.addWidget(workspace, 1)
         apply_style(self)
+        self._update_shell_layout()
         self.navigate("overview", "")
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "menu_button"):
+            self._update_shell_layout()
+
+    def _update_shell_layout(self) -> None:
+        compact = (
+            self.width() < self._COMPACT_NAV_WIDTH
+            or self.height() < self._COMPACT_NAV_HEIGHT
+        )
+        if compact == self._compact_navigation and self.sidebar.isHidden() == compact:
+            return
+        self._compact_navigation = compact
+        self.sidebar.setVisible(not compact)
+        self.menu_button.setVisible(compact)
+        self._top_layout.removeWidget(self.breadcrumb)
+        self._top_layout.removeWidget(self.runtime_identity)
+        if compact:
+            self._top_layout.setContentsMargins(12, 8, 12, 8)
+            self._top_layout.addWidget(self.menu_button, 0, 0)
+            self._top_layout.addWidget(self.breadcrumb, 0, 1)
+            self._top_layout.addWidget(self.runtime_identity, 1, 0, 1, 2)
+            self._top_layout.setColumnStretch(0, 0)
+            self._top_layout.setColumnStretch(1, 1)
+            self.breadcrumb.setWordWrap(True)
+            self.runtime_identity.setWordWrap(True)
+        else:
+            self._top_layout.removeWidget(self.menu_button)
+            self._top_layout.setContentsMargins(26, 10, 26, 10)
+            self._top_layout.addWidget(self.breadcrumb, 0, 0)
+            self._top_layout.addWidget(self.runtime_identity, 0, 1)
+            self._top_layout.setColumnStretch(0, 1)
+            self._top_layout.setColumnStretch(1, 0)
+            self.breadcrumb.setWordWrap(False)
+            self.runtime_identity.setWordWrap(False)
 
     def _nav_button(self, page: str) -> QPushButton:
         button = KeyboardActionButton(PAGES[page])
@@ -264,4 +326,6 @@ class GuardWindow(QMainWindow):
             button.setProperty("selected", key == page)
             button.style().unpolish(button)
             button.style().polish(button)
+        for key, action in self._menu_actions.items():
+            action.setChecked(key == page)
         self.navigation_requested.emit(page, target_id)
