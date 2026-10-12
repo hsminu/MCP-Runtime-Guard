@@ -4,7 +4,7 @@
 
 ## 지금 재현한 사전 점검
 
-레포 루트에서 아래 읽기 전용 명령을 실행했다. 출력은 Python 경로 `C:\Project\sogaeding\MCP-Runtime-Guard\.venv\Scripts\python.exe`, CPython `3.12.15`, `mcp 1.29.0`, `httpx 0.28.1`이었다. 이는 **현재 클라이언트 환경**의 버전이며 C 서버의 버전이나 확정 lock은 아니다.
+레포 루트에서 아래 읽기 전용 명령을 실행했다. 출력은 레포 루트의 `.venv\Scripts\python.exe`, CPython `3.12.15`, `mcp 1.29.0`, `httpx 0.28.1`이었다. 이는 **현재 클라이언트 환경**의 버전이며 C 서버의 버전이나 확정 lock은 아니다.
 
 ```powershell
 & .\.venv\Scripts\python.exe -c "import sys, importlib.metadata as m; print(sys.executable); print(sys.version.split()[0]); print('mcp', m.version('mcp')); print('httpx', m.version('httpx'))"

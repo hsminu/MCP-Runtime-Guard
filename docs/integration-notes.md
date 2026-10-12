@@ -62,7 +62,7 @@ AGT를 모의 연동으로 선택하면 불가능했던 실제 연결 조건과 
 ## 2026-10-12 · A02 현재 개발환경과 설치 SDK API 재조사
 
 - 담당·범위: A, `feat/a-application` 작업 트리. `README.md`, `AGENTS.md`, `AGENT.md`, `docs/contracts.md`, 설계 9·12장/부록 A와 A02를 대조했다. 이 절은 설치 코드의 정적 조사이며, 제품 계약 합의나 I8·I9 검증 통과가 아니다. 설치·업그레이드·lock 생성·네트워크 요청은 하지 않았다.
-- 실제 실행 환경: `C:\Project\sogaeding\MCP-Runtime-Guard\.venv\Scripts\python.exe`, CPython 3.12.15, Windows AMD64/64-bit. `sys.prefix`는 `.venv`, `sys.base_prefix`는 `.devtools/python/cpython-3.12.15-windows-x86_64-none`; `pyvenv.cfg`는 system site-packages 비활성. 현재 import 및 metadata 확인: `mcp 1.29.0`, `httpx 0.28.1`, `pydantic 2.14.0`, `PySide6`/Qt·Addons·Essentials·`shiboken6 6.12.0`, `anyio 4.15.1`, `httpcore 1.0.9`, `uvicorn 0.54.0`, `pytest 9.1.1`, `pytest-asyncio 1.4.0`. 설치 배포판 106개에서 AGT/agent-governance-toolkit 및 MCP Scanner 이름의 후보는 없었다. 따라서 두 제품과 MCP SDK의 **조합 충돌은 아직 판정 불가**다.
+- 실제 실행 환경: 레포 루트의 `.venv\Scripts\python.exe`, CPython 3.12.15, Windows AMD64/64-bit. `sys.prefix`는 `.venv`, `sys.base_prefix`는 `.devtools/python/cpython-3.12.15-windows-x86_64-none`; `pyvenv.cfg`는 system site-packages 비활성. 현재 import 및 metadata 확인: `mcp 1.29.0`, `httpx 0.28.1`, `pydantic 2.14.0`, `PySide6`/Qt·Addons·Essentials·`shiboken6 6.12.0`, `anyio 4.15.1`, `httpcore 1.0.9`, `uvicorn 0.54.0`, `pytest 9.1.1`, `pytest-asyncio 1.4.0`. 설치 배포판 106개에서 AGT/agent-governance-toolkit 및 MCP Scanner 이름의 후보는 없었다. 따라서 두 제품과 MCP SDK의 **조합 충돌은 아직 판정 불가**다.
 - 의존성 검사: `.devtools/uv/bin/uv.exe pip check --python .venv/Scripts/python.exe` 결과 `Checked 106 packages`, `All installed packages are compatible`. 처음 샌드박스 실행은 uv의 사용자 임시 캐시 쓰기 권한 오류로 실패했고, 같은 읽기 목적의 검사를 승인된 실행에서 다시 돌려 성공했다. 이는 **현재 설치 배포판의 선언된 의존성**만 검사하며 stdio/HTTP 왕복·AGT/Scanner 설치 호환성은 보증하지 않는다.
 
 ### MCP 1.29.0의 설치 코드 근거
