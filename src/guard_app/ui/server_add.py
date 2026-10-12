@@ -193,6 +193,7 @@ class ServerAddForm(QWidget):
         self.args_json.setAccessibleName("JSON 문자열 인자 배열")
         self.args_json.setPlaceholderText('["-m", "server.module"]')
         self.args_json.setMaximumHeight(76)
+        self.args_json.setTabChangesFocus(True)
         self.args_json.setPlainText("[]")
         self._add_field(form, "인자 · JSON 문자열 배열", self.args_json, "args")
         self.env_allow = QPlainTextEdit()
@@ -200,6 +201,7 @@ class ServerAddForm(QWidget):
         self.env_allow.setAccessibleName("전달할 환경변수 이름 목록, 한 줄에 하나")
         self.env_allow.setPlaceholderText("LANG\nPATH")
         self.env_allow.setMaximumHeight(76)
+        self.env_allow.setTabChangesFocus(True)
         self._add_field(
             form, "env_allow · 한 줄에 이름 하나", self.env_allow, "env_allow"
         )

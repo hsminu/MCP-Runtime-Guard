@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -12,7 +14,12 @@ from PySide6.QtGui import QKeyEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from guard_app.domain.enums import ApprovalStatus
+from guard_app.ui.approval_detail import ApprovalDetailDialog, ApprovalDetailValue
+from guard_app.ui.approvals import ApprovalListPage, ApprovalPage, ApprovalSummary
+from guard_app.ui.call_logs import CallLogPage, PublicCallSummary
 from guard_app.ui.models import LoadState, ServerSummary, Surface
+from guard_app.ui.server_add import ServerAddForm
 from guard_app.ui.servers import ServerListPage
 from guard_app.ui.widgets import KeyboardActionButton, PlainDetailDialog
 from guard_app.ui.window import GuardWindow
@@ -249,3 +256,247 @@ def test_plain_detail_tab_reaches_close_and_return_closes(app: QApplication) -> 
     assert close_button.text() == "닫기"
     QTest.keyClick(close_button, Qt.Key.Key_Return)
     assert not detail.isVisible()
+
+
+def test_add_form_keyboard_reaches_fields_and_prepares_only_local_draft(
+    app: QApplication,
+) -> None:
+    form = ServerAddForm()
+    form.resize(780, 580)
+    form.show()
+    app.processEvents()
+    try:
+        form.server_id.setFocus()
+        QTest.keyClicks(form.server_id, "keyboard-server")
+        QTest.keyClick(form.server_id, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.display_name
+        QTest.keyClicks(form.display_name, "Keyboard Server")
+        QTest.keyClick(form.display_name, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.transport
+        QTest.keyClick(form.transport, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.command
+        QTest.keyClicks(form.command, str(Path.cwd() / "synthetic-server"))
+        QTest.keyClick(form.command, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.args_json
+        before = form.args_json.toPlainText()
+        QTest.keyClick(form.args_json, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.env_allow
+        assert form.args_json.toPlainText() == before
+        QTest.keyClick(form.env_allow, Qt.Key.Key_Backtab)
+        assert form.focusWidget() is form.args_json
+        QTest.keyClick(form.args_json, Qt.Key.Key_Tab)
+        QTest.keyClick(form.env_allow, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.tier
+        QTest.keyClick(form.tier, Qt.Key.Key_Down)
+        QTest.keyClick(form.tier, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.max_label
+        QTest.keyClick(form.max_label, Qt.Key.Key_Down)
+        assert form.prepare_button.isEnabled()
+        QTest.keyClick(form.max_label, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.preview
+        QTest.keyClick(form.preview, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.prepare_button
+        QTest.keyClick(form.prepare_button, Qt.Key.Key_Return)
+        assert form.validated_draft is not None
+        assert form.validated_draft.server_id == "keyboard-server"
+        assert not form.prepare_button.isEnabled()
+    finally:
+        form.close()
+
+
+def test_add_form_keyboard_switches_transport_and_reaches_http_url(
+    app: QApplication,
+) -> None:
+    form = ServerAddForm()
+    form.resize(780, 580)
+    form.show()
+    app.processEvents()
+    try:
+        form.transport.setFocus()
+        QTest.keyClick(form.transport, Qt.Key.Key_Down)
+        assert form.transport.currentData() == "streamable_http"
+        QTest.keyClick(form.transport, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.url
+        QTest.keyClick(form.url, Qt.Key.Key_Backtab)
+        assert form.focusWidget() is form.transport
+        QTest.keyClick(form.transport, Qt.Key.Key_Up)
+        assert form.transport.currentData() == "stdio"
+        QTest.keyClick(form.transport, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.command
+    finally:
+        form.close()
+
+
+def test_approval_keyboard_filters_selection_and_pager(app: QApplication) -> None:
+    page = ApprovalListPage()
+    page.resize(780, 580)
+    page.show()
+    app.processEvents()
+    now = datetime(2026, 10, 12, 5, 0, tzinfo=UTC)
+    rows = tuple(
+        ApprovalSummary(
+            f"approval-{number:03}",
+            f"task-{number:03}",
+            f"request-{number:03}",
+            "server-a",
+            "합성 대상",
+            ApprovalStatus.PENDING,
+            now - timedelta(minutes=number),
+        )
+        for number in range(6, 0, -1)
+    )
+    requests = []
+    page.query_requested.connect(requests.append)
+    try:
+        page.refresh()
+        assert page.set_page(ApprovalPage(requests[-1], rows, 7), display_now=now)
+        page.lane_tabs.setFocus()
+        QTest.keyClick(page.lane_tabs, Qt.Key.Key_Tab)
+        assert page.focusWidget() is page.search
+        QTest.keyClicks(page.search, "task")
+        QTest.keyClick(page.search, Qt.Key.Key_Tab)
+        assert page.focusWidget() is page.server_filter
+        assert requests[-1].search == "task"
+        assert requests[-1].page == 1
+        QTest.keyClicks(page.server_filter, "server-a")
+        QTest.keyClick(page.server_filter, Qt.Key.Key_Tab)
+        assert page.focusWidget() is page.sort
+        assert requests[-1].server_id == "server-a"
+        assert page.set_page(ApprovalPage(requests[-1], rows, 7), display_now=now)
+        QTest.keyClick(page.sort, Qt.Key.Key_Tab)
+        assert page.focusWidget() is page.table
+        page.table.setCurrentCell(0, 0)
+        QTest.keyClick(page.table, Qt.Key.Key_Down)
+        assert page.selected_summary is rows[1]
+        page.next_button.setFocus()
+        QTest.keyClick(page.next_button, Qt.Key.Key_Return)
+        assert requests[-1].page == 2
+        assert page.selected_summary is None
+        assert page.table.rowCount() == 0
+        assert not page.next_button.isEnabled()
+    finally:
+        page.close()
+
+
+def test_approval_keyboard_changes_lane_and_sort_without_action_buttons(
+    app: QApplication,
+) -> None:
+    page = ApprovalListPage()
+    page.resize(780, 580)
+    page.show()
+    app.processEvents()
+    requests = []
+    page.query_requested.connect(requests.append)
+    try:
+        page.lane_tabs.setFocus()
+        QTest.keyClick(page.lane_tabs, Qt.Key.Key_Right)
+        assert page.lane_tabs.currentIndex() == 1
+        assert requests[-1].lane.value == "history"
+        page.sort.setFocus()
+        QTest.keyClick(page.sort, Qt.Key.Key_Down)
+        assert page.sort.currentIndex() == 1
+        assert requests[-1].sort.value == "newest"
+        assert requests[-1].lane.value == "history"
+        button_texts = {
+            button.text() for button in page.findChildren(KeyboardActionButton)
+        }
+        assert "승인" not in button_texts
+        assert "거절" not in button_texts
+    finally:
+        page.close()
+
+
+def test_call_log_keyboard_row_detail_and_filter_focus(app: QApplication) -> None:
+    page = CallLogPage()
+    page.resize(780, 580)
+    page.show()
+    app.processEvents()
+    rows = (
+        PublicCallSummary("call-a", tool_name="alpha"),
+        PublicCallSummary("call-b", tool_name="beta"),
+    )
+    requests = []
+    page.detail_requested.connect(requests.append)
+    try:
+        page.set_calls(Surface(LoadState.READY, rows))
+        page.search.setFocus()
+        QTest.keyClick(page.search, Qt.Key.Key_Tab)
+        assert page.focusWidget() is page.table
+        page.table.setCurrentCell(0, 0)
+        QTest.keyClick(page.table, Qt.Key.Key_Down)
+        QTest.keyClick(page.table, Qt.Key.Key_Return)
+        assert requests[-1].call_id == "call-b"
+        detail = page._detail_dialog
+        app.processEvents()
+        assert detail is not None and detail.body.hasFocus()
+        QTest.keyClick(detail.body, Qt.Key.Key_Escape)
+        QTest.qWait(10)
+        assert page._detail_dialog is None
+        assert page.focusWidget() is page.table
+
+        page.detail_button.setFocus()
+        QTest.keyClick(page.detail_button, Qt.Key.Key_Space)
+        assert requests[-1].call_id == "call-b"
+        detail = page._detail_dialog
+        assert detail is not None
+        QTest.keyClick(detail.body, Qt.Key.Key_Escape)
+        QTest.qWait(10)
+        assert page.focusWidget() is page.detail_button
+
+        page.search.setFocus()
+        QTest.keyClicks(page.search, "alpha")
+        assert page.table.rowCount() == 1
+        assert not page.detail_button.isEnabled()
+        assert page._detail_dialog is None
+    finally:
+        page.close()
+
+
+def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(
+    app: QApplication,
+) -> None:
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    opener = QPushButton("합성 승인 상세")
+    layout.addWidget(opener)
+    host.show()
+    app.processEvents()
+    opener.setFocus()
+    dialog = ApprovalDetailDialog(host)
+    try:
+        dialog.show_value(
+            ApprovalDetailValue("https://example.invalid/synthetic", b'{"safe":true}'),
+            return_focus=opener,
+        )
+        app.processEvents()
+        assert dialog.destination_body.hasFocus()
+        QTest.keyClick(dialog.destination_body, Qt.Key.Key_Tab)
+        assert dialog.focusWidget() is dialog.arguments_body
+        QTest.keyClick(dialog.arguments_body, Qt.Key.Key_Backtab)
+        assert dialog.focusWidget() is dialog.destination_body
+        QTest.keyClick(dialog.destination_body, Qt.Key.Key_Tab)
+        QTest.keyClick(dialog.arguments_body, Qt.Key.Key_Tab)
+        close_button = dialog.focusWidget()
+        assert isinstance(close_button, KeyboardActionButton)
+        assert close_button.text() == "닫기"
+        assert [
+            button.text() for button in dialog.findChildren(KeyboardActionButton)
+        ] == ["닫기"]
+        repeated_press = QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_Return,
+            Qt.KeyboardModifier.NoModifier,
+            "",
+            True,
+        )
+        QApplication.sendEvent(close_button, repeated_press)
+        assert dialog.isVisible()
+        QTest.keyClick(close_button, Qt.Key.Key_Return)
+        QTest.qWait(10)
+        assert not dialog.isVisible()
+        assert host.focusWidget() is opener
+        assert dialog.destination_body.toPlainText() == ""
+        assert dialog.arguments_body.toPlainText() == ""
+    finally:
+        dialog.close()
+        host.close()

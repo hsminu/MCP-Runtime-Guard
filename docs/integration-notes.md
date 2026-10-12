@@ -126,3 +126,16 @@ AGT를 모의 연동으로 선택하면 불가능했던 실제 연결 조건과 
 - A33 `ui/approvals.py`는 B가 향후 제공할 공개 승인 요약의 6건 페이지 조회 의도를 내보낸다. 대기/이력, 검색·서버 필터·정렬·총건수, 오래된 응답·불완전 페이지·선택 소멸을 구분한다. 승인·거절 버튼이나 전체 인자 캐시는 없다. A35 `ui/call_logs.py`는 공개 DTO만으로 호출 목록·큰 일반 텍스트 상세·현재 표시 행 CSV 복사를 구성한다. 상세는 창별 토큰을 확인하며 CSV는 수식형 입력을 비활성화하고 offset 포함 ISO 시각을 쓴다. 실제 감사 조회·승인 사본·저장 계약은 없다.
 - Windows 네이티브 Qt `platformName=windows`, 1920×1080, devicePixelRatio 1.0에서 합성 자료를 사용해 780×580 창의 새 세 화면을 표시·캡처했다. 승인/호출 표의 핵심 상태가 가로 스크롤 뒤로 밀리는 것을 확인해 좁은 폭에서 각각 승인 ID·서버·상태와 발생 시각·호출 ID·현재 상태가 바로 보이도록 수정했다. 서버 상세에서는 Scanner 카드를 상단으로 옮겼다. 캡처는 무시된 `.cache/a32-scan-native.png`, `.cache/a33-approvals-native.png`, `.cache/a35-logs-native.png`이며 비밀·실서버 자료가 없다. A33/A35 컴포넌트 폭 시험은 Windows Qt와 offscreen에서 각각 통과했다. 다른 DPI는 미시험이다.
 - 전체 단위 검사: `$env:PYTHONPATH='src'; $env:QT_QPA_PLATFORM='offscreen'; .\.venv\Scripts\python.exe -m pytest -q -p no:_hypothesis_pytestplugin tests\unit` 결과 **142 passed**. 새/변경 UI 9개 파일의 Ruff check·format check, A UI 소스 5개 파일의 mypy가 통과했다. 실제 `approval_consumed / host_dispatch / wire_tools_call / receiver_effect` 계수, 외부 요청 0, C Scanner·감사 연결은 측정하지 못했다.
+
+## 2026-10-12 · A37 추가 키보드 확인
+
+- Windows Qt `platformName=windows`, 화면 1920×1080, 논리 DPI 96, devicePixelRatio 1.0에서 780×580 합성 화면을 띄우고 실제 QTest 키 이벤트를 보냈다. A31/A33/A35/A34 화면의 Tab·Shift+Tab·방향키·Enter·Space·Escape를 검사했다. 앞 절의 같은 환경 합성 캡처와 함께 화면·입력 근거로 사용한다.
+
+| 재현 단계 | 기대 / 관측 | 수정·재검증 |
+| --- | --- | --- |
+| A31 서버 ID부터 Tab으로 stdio 인자와 env 입력을 지난다 | 각 편집기에서 Tab은 다음 필드로 가야 하나 인자 편집기에 탭 문자가 들어가고 포커스가 남았다 | `args_json`과 `env_allow`에 `setTabChangesFocus(True)`를 적용했다. Tab·Shift+Tab이 인자↔env↔신뢰 경계로 이동하고 인자 문자열은 바뀌지 않았다. 방식 전환 후 HTTP URL·stdio 실행 파일도 키보드로 도달했다. |
+| A33 대기/이력 탭, 검색·서버 필터·정렬·6건 페이지를 키보드로 조작한다 | 방향키가 탭과 정렬을 바꾸고, Tab 이탈이 조회 의도를 새로 내며, 다음 페이지 요청 때 기존 선택은 사라져야 한다 | 관측대로 동작했다. 로딩 동안 다음 버튼이 비활성이고 승인·거절 버튼은 없다. |
+| A35 호출 표에서 아래 방향키·Enter로 두 번째 행 상세를 연 뒤 Escape, 버튼 Space로 다시 연 뒤 Escape를 누른다 | 요청은 선택한 호출 ID를 가리키고 닫으면 각각 표·버튼에 포커스가 돌아와야 한다 | 관측대로 동작했다. 네이티브 창 활성화 이벤트 처리 후 상세 본문에 포커스가 왔다. 검색으로 선택 행을 숨기면 상세 버튼이 비활성화됐다. |
+| A34 상세 수신처→인자→닫기를 Tab/Shift+Tab으로 오가고 반복 Return 후 일반 Return을 누른다 | 반복 키로 동작하면 안 되고 일반 Return은 창을 닫고 원래 버튼으로 포커스를 돌려야 한다 | 관측대로 동작했다. 이 독립 상세 창에는 닫기 버튼만 있으며 원문 Qt 텍스트 사본은 닫을 때 비워졌다. |
+
+- 수정 후 Windows 네이티브 Qt에서 `test_ui_keyboard.py` **16 passed**, 관련 5개 UI 테스트 파일 **58 passed**. `ruff check`, `ruff format --check`, A31 파일 mypy도 통과했다. 다른 DPI/모니터와 실제 B 승인 사본·C 감사 자료는 시험하지 않았다. 승인 실행 버튼과 실제 외부 요청 계수가 아직 없으므로 T18 전체 및 외부 요청 0은 인수하지 않았다.
