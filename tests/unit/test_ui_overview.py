@@ -155,7 +155,10 @@ def test_small_overview_exposes_attention_shortcut_and_prioritizes_related_serve
         header_top = window.overview.attention_header.mapTo(
             scroll.viewport(), QPoint(0, 0)
         ).y()
-        assert 0 <= header_top < scroll.viewport().height()
+        assert 0 <= header_top <= 20
+        first_card = window.overview.attention_layout.itemAt(0).widget()
+        card_top = first_card.mapTo(scroll.viewport(), QPoint(0, 0)).y()
+        assert 0 <= card_top < scroll.viewport().height()
     finally:
         window.close()
 

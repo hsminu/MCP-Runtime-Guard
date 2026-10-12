@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -443,7 +443,8 @@ class OverviewPage(QWidget):
     def _scroll_to_attention(self) -> None:
         scroll = self._scroll_host()
         if scroll is not None:
-            scroll.ensureWidgetVisible(self.attention_header, 0, 12)
+            top = self.attention_header.mapTo(self, QPoint(0, 0)).y()
+            scroll.verticalScrollBar().setValue(max(0, top - 12))
 
     def _make_pager(self, kind: str) -> QWidget:
         pager = QWidget()
