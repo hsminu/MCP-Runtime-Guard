@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 import shiboken6
-from PySide6.QtCore import QEvent, QObject, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -56,6 +56,30 @@ _STATUS_TEXT = {
     ApprovalStatus.CANCELLED: "취소됨",
     ApprovalStatus.INVALIDATED: "무효화됨",
 }
+_NARROW_STATUS_TEXT = {
+    ApprovalStatus.PENDING: "승인 대기",
+    ApprovalStatus.APPROVED: "승인됨",
+    ApprovalStatus.CONSUMED: "승인 소비됨",
+    ApprovalStatus.REJECTED: "거절됨",
+    ApprovalStatus.EXPIRED: "만료됨",
+    ApprovalStatus.CANCELLED: "취소됨",
+    ApprovalStatus.INVALIDATED: "무효화됨",
+}
+
+
+def _bounded_request_age(created_at: datetime, now: datetime) -> str | None:
+    """A display hint only; never infer an age from an invalid or skewed clock."""
+
+    if now.tzinfo is None or now.utcoffset() is None or now < created_at:
+        return None
+    elapsed_minutes = int((now - created_at).total_seconds() // 60)
+    if elapsed_minutes >= 7 * 24 * 60:
+        return "7일 이상"
+    if elapsed_minutes >= 24 * 60:
+        return f"{elapsed_minutes // (24 * 60)}일"
+    if elapsed_minutes >= 60:
+        return f"{elapsed_minutes // 60}시간"
+    return f"{elapsed_minutes}분"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +144,7 @@ class ApprovalListPage(QWidget):
         self._total_count = 0
         self._selected_id: str | None = None
         self._column_mode: str | None = None
+        self._display_now: datetime | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 28, 26, 42)
@@ -258,6 +283,10 @@ class ApprovalListPage(QWidget):
             )
             for column in range(6):
                 self.table.setColumnHidden(column, column not in visible)
+            status_header = self.table.horizontalHeaderItem(4)
+            if status_header is not None:
+                status_header.setText("상태 / 경과" if mode == "narrow" else "상태")
+            self._update_status_cells()
 
         available = viewport_width - 2
         if mode == "narrow":
@@ -283,6 +312,44 @@ class ApprovalListPage(QWidget):
             widths[5] = available - sum(widths.values())
         for column, width in widths.items():
             self.table.setColumnWidth(column, width)
+
+    def _update_status_cells(self) -> None:
+        for index, row in enumerate(self._rows):
+            item = self.table.item(index, 4)
+            if item is None:
+                continue
+            status = _STATUS_TEXT[row.status]
+            now = self._display_now
+            if (
+                self._query is not None
+                and self._query.lane is ApprovalLane.PENDING
+                and now is not None
+                and now.tzinfo is not None
+                and now.utcoffset() is not None
+                and now - row.created_at >= timedelta(minutes=30)
+            ):
+                status += " · 30분 이상 대기(참고)"
+            if self._column_mode == "narrow":
+                age = _bounded_request_age(row.created_at, now) if now else None
+                if row.status in (ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED):
+                    elapsed = "결과 별도 확인"
+                elif age is None:
+                    elapsed = "요청 시각 확인"
+                elif row.status is ApprovalStatus.PENDING:
+                    elapsed = f"{age} 대기"
+                else:
+                    elapsed = f"요청 {age} 전"
+                item.setText(f"{_NARROW_STATUS_TEXT[row.status]}\n{elapsed}")
+                self.table.setRowHeight(index, 42)
+            else:
+                item.setText(status)
+                self.table.setRowHeight(index, 64)
+            requested_at = format_kst(row.created_at)
+            item.setToolTip(f"상태: {status}\n요청 시각: {requested_at}")
+            item.setData(
+                Qt.ItemDataRole.AccessibleTextRole,
+                f"상태: {status}, 요청 시각: {requested_at}",
+            )
 
     @property
     def current_query(self) -> ApprovalQuery | None:
@@ -377,28 +444,22 @@ class ApprovalListPage(QWidget):
         self._state = LoadState.READY
         self.table.setRowCount(0)
         now = display_now if display_now is not None else datetime.now(UTC)
+        self._display_now = now
         for index, row in enumerate(page.rows):
             self.table.insertRow(index)
-            status = _STATUS_TEXT[row.status]
-            if (
-                page.query.lane is ApprovalLane.PENDING
-                and now.tzinfo is not None
-                and now - row.created_at >= timedelta(minutes=30)
-            ):
-                status += " · 30분 이상 대기(참고)"
             columns = (
                 row.approval_id,
                 row.server_id,
                 f"{row.task_id}\n{row.request_id}",
                 row.destination_summary or MISSING,
-                status,
+                "",
                 f"{format_kst(row.created_at)}\n{format_kst(row.resolved_at)}",
             )
             for column, value in enumerate(columns):
                 self.table.setItem(index, column, QTableWidgetItem(value))
-            self.table.setRowHeight(index, 64)
             if row.approval_id == previous_id:
                 self.table.selectRow(index)
+        self._update_status_cells()
         if previous_id is not None and self.selected_summary is None:
             self._selected_id = None
             self.summary_selected.emit(None)
@@ -429,6 +490,7 @@ class ApprovalListPage(QWidget):
         self.table.setRowCount(0)
         self._rows = ()
         self._total_count = 0
+        self._display_now = None
         self.selection_detail.clear()
         self.selection_detail.hide()
         if self._selected_id is not None:

@@ -404,3 +404,95 @@ def test_waiting_hint_does_not_expire_or_interpret_markup(app: QApplication) -> 
     assert "승인 대기" in view.table.item(0, 4).text()
     assert view.table.item(0, 3).text() == long_wait.destination_summary
     assert view.selected_summary is None
+
+
+def test_320_by_400_approval_row_shows_bounded_age_with_identity_and_status(
+    app: QApplication,
+) -> None:
+    view = ApprovalListPage()
+    host = QScrollArea()
+    host.setWidgetResizable(True)
+    host.setWidget(view)
+    host.resize(320, 400)
+    host.show()
+    try:
+        view.refresh()
+        row = summary(1, created_at=NOW - timedelta(minutes=31))
+        assert view.set_page(result(view, (row,), 1), display_now=NOW)
+        app.processEvents()
+        QTest.qWait(20)
+        app.processEvents()
+
+        assert host.width() == 320 and host.height() == 400
+        assert tuple(i for i in range(6) if not view.table.isColumnHidden(i)) == (
+            0,
+            1,
+            4,
+        )
+        assert view.table.item(0, 0).text() == row.approval_id
+        assert view.table.item(0, 1).text() == row.server_id
+        status = view.table.item(0, 4)
+        assert status.text() == "승인 대기\n31분 대기"
+        assert "요청 시각: 2026년 10월 12일 13:29:00 KST" in status.toolTip()
+        assert "요청 시각: 2026년 10월 12일 13:29:00 KST" in status.data(
+            Qt.ItemDataRole.AccessibleTextRole
+        )
+        metrics = view.table.fontMetrics()
+        assert view.table.viewport().height() >= 2 * metrics.lineSpacing() + 4
+        assert view.table.columnWidth(4) >= max(
+            metrics.horizontalAdvance(line) + 8 for line in status.text().splitlines()
+        )
+        assert view.table.horizontalScrollBar().maximum() == 0
+        assert host.horizontalScrollBar().maximum() == 0
+
+        host.resize(980, 700)
+        app.processEvents()
+        QTest.qWait(20)
+        app.processEvents()
+        assert "30분 이상 대기(참고)" in status.text()
+        assert "31분 대기" not in status.text()
+        assert view.table.horizontalScrollBar().maximum() == 0
+    finally:
+        host.close()
+
+
+def test_narrow_row_does_not_invent_elapsed_time_from_future_request(
+    app: QApplication,
+) -> None:
+    view = ApprovalListPage()
+    view.resize(320, 580)
+    view.show()
+    try:
+        view.refresh()
+        future = summary(1, created_at=NOW + timedelta(minutes=5))
+        assert view.set_page(result(view, (future,), 1), display_now=NOW)
+        app.processEvents()
+        status = view.table.item(0, 4)
+        assert status.text() == "승인 대기\n요청 시각 확인"
+        assert "2026년 10월 12일 14:05:00 KST" in status.toolTip()
+        assert view.table.horizontalScrollBar().maximum() == 0
+
+        view.refresh()
+        missing = replace(summary(1), created_at=None)
+        assert not view.set_page(result(view, (missing,), 1), display_now=NOW)
+        assert view.state is LoadState.ERROR
+        assert view.table.rowCount() == 0
+    finally:
+        view.close()
+
+
+def test_narrow_approved_row_does_not_imply_tool_execution(app: QApplication) -> None:
+    view = ApprovalListPage()
+    view.resize(320, 400)
+    view.show()
+    try:
+        view.lane_tabs.setCurrentIndex(1)
+        row = summary(1, status=ApprovalStatus.APPROVED)
+        assert view.set_page(result(view, (row,), 1), display_now=NOW)
+        app.processEvents()
+        status = view.table.item(0, 4)
+        assert status.text() == "승인됨\n결과 별도 확인"
+        assert "실행 결과 별도 확인" in status.toolTip()
+        assert view.table.horizontalScrollBar().maximum() == 0
+    finally:
+        view.close()
