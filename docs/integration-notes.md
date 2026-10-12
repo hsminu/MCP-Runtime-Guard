@@ -182,3 +182,8 @@ AGT를 모의 연동으로 선택하면 불가능했던 실제 연결 조건과 
 
 - Qt 요청을 `call_soon_threadsafe` 콜백마다 무제한 예약하던 경로를 lane별 bounded ingress와 단일 배치 drain으로 바꿨다. 실행·일반 제어·긴급 제어·중복 재전달 대기열에 각각 한도를 두고, 긴급 제어를 우선 접수한다. 포화는 `INGRESS_FULL`, 종료 중 미접수 명령은 `SHUTTING_DOWN`으로 확정한다.
 - backend 이벤트 루프 지연 중 폭주·중복 ID·긴급 우선순위, 이미 ingress에서 꺼낸 명령과 종료의 경합, drain 실패 뒤 후속 명령 회복을 포함한 bridge 단위 테스트 31개가 통과했다. 실제 C 통합의 T12/T20과 내구적 명령 ID 인수는 남아 있다.
+
+## 2026-10-12 · A34 승인 상세의 로컬 외부 요청 계수
+
+- 합성 승인 수신처와 JSON 인자에 `127.0.0.1`의 임시 HTTP 서버를 가리키는 이미지·링크 마크업을 넣고 실제 Qt 상세 창에 표시했다. 수신처와 인자의 URL 위치를 마우스로 클릭하고 Enter를 보낸 뒤 이벤트 루프를 기다렸으며, HTTP 서버의 GET 수신은 **0건**, Qt URL handler 호출도 **0건**이었다. 이는 A34 일반 텍스트 표시 컴포넌트의 관측 결과이며 C 제품 전송 계수가 아니다.
+- `PYTHONPATH=src`, `QT_QPA_PLATFORM=offscreen`에서 A34 단위 테스트 **6 passed**. 같은 파일을 Windows 네이티브 Qt(`QT_QPA_PLATFORM=windows`)에서 실행해 **6 passed**를 확인했다. B의 인증된 동일 승인 사본 조회·인가·digest·승인 소비와 C 통합 T18은 미구현이므로 T18 전체 인수는 남아 있다.
