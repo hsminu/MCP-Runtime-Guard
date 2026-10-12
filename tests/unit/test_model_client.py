@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from guard_app.adapters import model_client as model_client_module
 from guard_app.adapters.model_client import (
+    MAX_MODEL_ARGUMENT_CHARS,
+    MAX_MODEL_ARGUMENT_INTEGER_BITS,
+    MAX_MODEL_ARGUMENT_NODES,
+    MAX_MODEL_CALLS,
+    MAX_MODEL_COMPLETION_CHARS,
+    MAX_MODEL_TEXT_CHARS,
     ModelFormatError,
     ProviderNeutralModelClient,
     parse_model_turn,
@@ -102,6 +111,248 @@ def test_raw_content_is_not_in_format_error() -> None:
             (_view("alpha"),),
         )
     assert secret not in str(captured.value)
+
+
+def test_model_text_limit_preserves_boundary_and_rejects_oversize() -> None:
+    assert len(
+        parse_model_turn({"text": "x" * MAX_MODEL_TEXT_CHARS, "calls": []}, ()).text
+    ) == (MAX_MODEL_TEXT_CHARS)
+    with pytest.raises(ModelFormatError, match="모델 응답 형식"):
+        parse_model_turn({"text": "x" * (MAX_MODEL_TEXT_CHARS + 1), "calls": []}, ())
+
+
+def test_oversized_call_list_fails_before_schema_validation(monkeypatch) -> None:
+    def unexpected_validation(*args, **kwargs):
+        raise AssertionError("schema validation ran before the call count limit")
+
+    monkeypatch.setattr(
+        "guard_app.adapters.model_client.Draft202012Validator.check_schema",
+        unexpected_validation,
+    )
+    calls = [
+        {**_call(), "model_call_id": f"call-{index}"}
+        for index in range(MAX_MODEL_CALLS + 1)
+    ]
+    with pytest.raises(ModelFormatError):
+        parse_model_turn({"text": None, "calls": calls}, (_view("alpha"),))
+
+
+def test_maximum_number_of_valid_calls_remains_accepted() -> None:
+    calls = [
+        {**_call(), "model_call_id": f"call-{index}"}
+        for index in range(MAX_MODEL_CALLS)
+    ]
+    turn = parse_model_turn({"text": None, "calls": calls}, (_view("alpha"),))
+    assert len(turn.calls) == MAX_MODEL_CALLS
+
+
+def test_encoded_argument_length_is_checked_before_json_parse(monkeypatch) -> None:
+    def unexpected_parse(*args, **kwargs):
+        raise AssertionError("JSON parsing ran before the argument length limit")
+
+    monkeypatch.setattr("guard_app.adapters.model_client.json.loads", unexpected_parse)
+    with pytest.raises(ModelFormatError):
+        parse_model_turn(
+            {
+                "text": None,
+                "calls": [_call(arguments=" " * (MAX_MODEL_ARGUMENT_CHARS + 1))],
+            },
+            (_view("alpha"),),
+        )
+
+
+def test_encoded_argument_at_length_boundary_still_works() -> None:
+    prefix = '{"path":"'
+    suffix = '"}'
+    encoded = (
+        prefix + "x" * (MAX_MODEL_ARGUMENT_CHARS - len(prefix) - len(suffix)) + suffix
+    )
+    assert len(encoded) == MAX_MODEL_ARGUMENT_CHARS
+    turn = parse_model_turn(
+        {"text": None, "calls": [_call(arguments=encoded)]}, (_view("alpha"),)
+    )
+    assert len(turn.calls[0].arguments["path"]) == MAX_MODEL_ARGUMENT_CHARS - 11
+
+
+def test_raw_argument_size_is_checked_before_freezing(monkeypatch) -> None:
+    def unexpected_freeze(*args, **kwargs):
+        raise AssertionError("argument freezing ran before the raw object size limit")
+
+    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    with pytest.raises(ModelFormatError):
+        parse_model_turn(
+            {
+                "text": None,
+                "calls": [_call(arguments={"path": "x" * MAX_MODEL_ARGUMENT_CHARS})],
+            },
+            (_view("alpha"),),
+        )
+
+
+def test_encoded_argument_structure_is_bounded_before_json_parse(monkeypatch) -> None:
+    def unexpected_parse(*args, **kwargs):
+        raise AssertionError("JSON parsing ran before the structure limit")
+
+    monkeypatch.setattr("guard_app.adapters.model_client.json.loads", unexpected_parse)
+    encoded = (
+        '{"path":['
+        + ",".join("0" for _ in range(2 * MAX_MODEL_ARGUMENT_NODES + 1))
+        + "]}"
+    )
+    assert len(encoded) < MAX_MODEL_ARGUMENT_CHARS
+    with pytest.raises(ModelFormatError):
+        parse_model_turn(
+            {"text": None, "calls": [_call(arguments=encoded)]}, (_view("alpha"),)
+        )
+
+
+def test_decoded_argument_nodes_are_bounded_before_freezing(monkeypatch) -> None:
+    def unexpected_freeze(*args, **kwargs):
+        raise AssertionError("argument freezing ran before the node limit")
+
+    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    encoded = json.dumps(
+        {"path": [0] * (MAX_MODEL_ARGUMENT_NODES - 1)}, separators=(",", ":")
+    )
+    with pytest.raises(ModelFormatError):
+        parse_model_turn(
+            {"text": None, "calls": [_call(arguments=encoded)]}, (_view("alpha"),)
+        )
+
+
+def test_raw_argument_node_boundary_remains_accepted() -> None:
+    view = ToolView(
+        tool_ref="alpha__read",
+        input_schema=FrozenJsonObject(
+            {
+                "type": "object",
+                "properties": {"path": {"type": "array", "items": {"type": "integer"}}},
+                "required": ["path"],
+                "additionalProperties": False,
+            }
+        ),
+        description="",
+    )
+    values = [0] * (MAX_MODEL_ARGUMENT_NODES - 2)
+    turn = parse_model_turn(
+        {"text": None, "calls": [_call(arguments={"path": values})]}, (view,)
+    )
+    assert len(turn.calls[0].arguments["path"]) == len(values)
+
+
+def test_shared_raw_container_is_rejected_before_freezing(monkeypatch) -> None:
+    def unexpected_freeze(*args, **kwargs):
+        raise AssertionError("shared argument graph reached freezing")
+
+    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    shared: list[object] = []
+    with pytest.raises(ModelFormatError):
+        parse_model_turn(
+            {"text": None, "calls": [_call(arguments={"path": [shared, shared]})]},
+            (_view("alpha"),),
+        )
+
+
+def test_pending_node_budget_rejects_alias_amplification_before_freezing(
+    monkeypatch,
+) -> None:
+    def unexpected_freeze(*args, **kwargs):
+        raise AssertionError("amplified argument graph reached freezing")
+
+    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    shared = [None] * (MAX_MODEL_ARGUMENT_NODES - 1)
+    amplified = {"path": [shared] * (MAX_MODEL_ARGUMENT_NODES - 2)}
+    with pytest.raises(ModelFormatError):
+        parse_model_turn(
+            {"text": None, "calls": [_call(arguments=amplified)]},
+            (_view("alpha"),),
+        )
+
+
+def test_mutating_provider_response_after_budget_check_cannot_change_validated_turn(
+    monkeypatch,
+) -> None:
+    view = ToolView(
+        tool_ref="alpha__read",
+        input_schema=FrozenJsonObject(
+            {
+                "type": "object",
+                "properties": {"path": {"type": "array", "items": {"type": "integer"}}},
+                "required": ["path"],
+                "additionalProperties": False,
+            }
+        ),
+        description="",
+    )
+    values = [1]
+    calls = [_call(arguments={"path": values})]
+    original_check = model_client_module._check_completion_budget
+
+    def mutate_after_check(text, provider_calls):
+        prepared = original_check(text, provider_calls)
+        values.extend([0] * (MAX_MODEL_ARGUMENT_NODES + 1))
+        calls.extend(
+            {**_call(), "model_call_id": f"late-{index}"}
+            for index in range(MAX_MODEL_CALLS + 1)
+        )
+        return prepared
+
+    monkeypatch.setattr(
+        model_client_module, "_check_completion_budget", mutate_after_check
+    )
+    turn = parse_model_turn({"text": None, "calls": calls}, (view,))
+    assert len(turn.calls) == 1
+    assert turn.calls[0].arguments["path"] == (1,)
+
+
+def test_deep_encoded_arguments_are_rejected_before_json_parse(monkeypatch) -> None:
+    def unexpected_parse(*args, **kwargs):
+        raise AssertionError("JSON parsing ran before the depth limit")
+
+    monkeypatch.setattr("guard_app.adapters.model_client.json.loads", unexpected_parse)
+    encoded = '{"path":' + "[" * 65 + "0" + "]" * 65 + "}"
+    with pytest.raises(ModelFormatError):
+        parse_model_turn(
+            {"text": None, "calls": [_call(arguments=encoded)]}, (_view("alpha"),)
+        )
+
+
+def test_large_raw_integer_is_rejected_before_freezing(monkeypatch) -> None:
+    def unexpected_freeze(*args, **kwargs):
+        raise AssertionError("argument freezing ran before the integer size limit")
+
+    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    with pytest.raises(ModelFormatError):
+        parse_model_turn(
+            {
+                "text": None,
+                "calls": [
+                    _call(arguments={"path": 1 << MAX_MODEL_ARGUMENT_INTEGER_BITS})
+                ],
+            },
+            (_view("alpha"),),
+        )
+
+
+def test_total_completion_budget_rejects_multiple_individually_bounded_calls(
+    monkeypatch,
+) -> None:
+    def unexpected_validation(*args, **kwargs):
+        raise AssertionError("schema validation ran before the aggregate limit")
+
+    monkeypatch.setattr(
+        "guard_app.adapters.model_client.Draft202012Validator.check_schema",
+        unexpected_validation,
+    )
+    argument = '{"path":"' + "x" * 60_000 + '"}'
+    assert len(argument) < MAX_MODEL_ARGUMENT_CHARS
+    calls = [
+        {**_call(arguments=argument), "model_call_id": f"call-{index}"}
+        for index in range(5)
+    ]
+    assert sum(len(call["arguments"]) for call in calls) > MAX_MODEL_COMPLETION_CHARS
+    with pytest.raises(ModelFormatError):
+        parse_model_turn({"text": None, "calls": calls}, (_view("alpha"),))
 
 
 @pytest.mark.parametrize("status", list(RegStatus))
