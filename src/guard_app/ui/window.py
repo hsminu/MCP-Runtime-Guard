@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -70,7 +71,18 @@ class GuardWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("MCP Runtime Guard")
         self.setMinimumSize(780, 580)
-        self.resize(1260, 820)
+        available = self.screen().availableGeometry()
+        title_height = self.style().pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight)
+        frame_allowance = 2 * self.style().pixelMetric(
+            QStyle.PixelMetric.PM_MdiSubWindowFrameWidth
+        )
+        self.resize(
+            max(self.minimumWidth(), min(1260, available.width() - frame_allowance)),
+            max(
+                self.minimumHeight(),
+                min(820, available.height() - title_height - frame_allowance),
+            ),
+        )
         self._page = "overview"
         self._nav_buttons: dict[str, QPushButton] = {}
         self._page_indices: dict[str, int] = {}

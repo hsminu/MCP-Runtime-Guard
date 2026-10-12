@@ -31,6 +31,14 @@ def app() -> QApplication:
     return instance if instance is not None else QApplication([])
 
 
+def test_default_window_frame_fits_available_screen(app: QApplication) -> None:
+    window = GuardWindow()
+    window.show()
+    app.processEvents()
+    assert window.screen().availableGeometry().contains(window.frameGeometry())
+    window.close()
+
+
 @pytest.fixture
 def server_page(app: QApplication) -> ServerListPage:
     page = ServerListPage()
