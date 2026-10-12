@@ -1,6 +1,6 @@
 # A의 UI 명령·이벤트·조회 계약 제안
 
-기준: 2026-10-12. [A05](a-prompts/01-contracts.md#a05)의 **제안**이다. 근거는 [기술 설계 8.5·12장](../technical-design.md), [A의 B 계약 요구](a-port-review.md), [A의 C 연동 요구](a-platform-review.md), [HTML 시안](../../ui-preview/README.md)이다. `docs/contracts.md`에는 합의 기록이 없고 현재 작업 트리에는 실제 backend 타입이 없다. 아래 메시지 이름과 필드 묶음은 협의 대상이며 확정 API가 아니다.
+기준: 2026-10-12. [A05](a-prompts/01-contracts.md#a05)의 **제안**이다. 근거는 [기술 설계 8.5·12장](../technical-design.md), [A의 B 계약 요구](a-port-review.md), [A의 C 연동 요구](a-platform-review.md), [HTML 시안](../../ui-preview/README.md)이다. 작성 당시 UI용 backend 계약이 확정되지 않았다. 이후 B 포트와 A bridge 타입이 추가됐지만 아래 메시지 이름과 필드 묶음은 여전히 협의 대상이며 확정 API가 아니다. 구현·합의의 현재 상태는 [A 작업 현황](a-progress.md)을 따른다.
 
 ## 공통 경계
 

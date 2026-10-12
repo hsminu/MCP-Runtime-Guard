@@ -1,6 +1,6 @@
 # A07·A08 · 동일 SDK 합성 왕복 실행 준비서
 
-2026-10-12, `feat/a-application` 현재 체크아웃 기준. [A07·A08 지시](a-prompts/01-contracts.md#a07), [A02 설치 조사](../integration-notes.md#a02-현재-개발환경과-설치-sdk-api-재조사), [A04 C 인수 요구](a-platform-review.md), [설계](../technical-design.md) 9·14.2절/부록 A를 대조했다. **A07 stdio READ와 A08 Streamable HTTP SEND의 실제 왕복은 미실행**이다. 이 체크아웃에 C의 격리 합성 fixture/harness, 검증 완료 launcher/endpoint, 요청별 계수가 없다. `git ls-remote origin`에서 C HEAD `0f30f25`가 로컬 추적 ref와 일치함을 확인했고, 해당 ref의 트리에도 fixture/harness 파일이 없었다. 설치·import 및 API 시그니처 확인은 왕복 증거가 아니다.
+2026-10-12, `feat/a-application` 당시 체크아웃 기준. [A07·A08 지시](a-prompts/01-contracts.md#a07), [A02 설치 조사](../integration-notes.md), [A04 C 인수 요구](a-platform-review.md), [설계](../technical-design.md) 9·14.2절/부록 A를 대조했다. **A07 stdio READ와 A08 Streamable HTTP SEND의 실제 왕복은 미실행**이다. 당시 체크아웃에 C의 격리 합성 fixture/harness, 검증 완료 launcher/endpoint, 요청별 계수가 없었다. `git ls-remote origin`에서 C HEAD `0f30f25`가 로컬 추적 ref와 일치함을 확인했고, 해당 ref의 트리에도 fixture/harness 파일이 없었다. 설치·import 및 API 시그니처 확인은 왕복 증거가 아니다. 최신 인수 상태는 [A 작업 현황](a-progress.md)을 따른다.
 
 ## 지금 재현한 사전 점검
 
