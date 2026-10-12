@@ -4,15 +4,17 @@
 
 ## 소스 보안 검토
 
-Codex Security Standard Scan(`ecbf3668-f263-4cdb-850e-a4637305eb12`)은 `75a52c6`의 `src/guard_app` Python 파일 44개를 오프라인으로 검토했다. 전체 보고서는 로컬 스캔 산출물로 보관하며 저장소에 복사하지 않는다. 실제 C launcher, Store, Registry, fixture와 모델 제공자가 없어 실행 경로의 안전성까지 검증한 결과는 아니다.
+Codex Security Standard Scan(`ecbf3668-f263-4cdb-850e-a4637305eb12`)은 `75a52c6`의 `src/guard_app` Python 파일 44개를 오프라인으로 검토했다. 전체 보고서는 로컬 스캔 산출물로 보관하며 저장소에 복사하지 않는다. 보고서의 coverage는 MCP 결과 문제의 중복 후보 1건이 보류 항목으로 남아 `partial`이다. 실제 C launcher, Store, Registry, fixture와 모델 제공자가 없어 실행 경로의 안전성까지 검증한 결과도 아니다.
 
 | 발견 | 근거 | 소유·조치 |
 | --- | --- | --- |
-| 모델 응답의 무제한 텍스트·호출·인자 처리(CWE-400, medium) | `adapters/model_client.py`에서 provider 응답을 크기 검사 전에 파싱·동기 검증 | A: 응답 경계 예산과 단위 시험. 실제 provider의 수신 상한은 A20 결정 후 확인 |
-| MCP 결과의 크기 검사 전 전체 변환(CWE-400, medium) | `adapters/mcp_transport.py`의 `model_dump`·불변 사본이 `ResponseGate`보다 앞섬 | A: 변환 전 요소·바이트 예산. C: SDK 역직렬화 전 wire 상한이 필요한지 확인 |
+| 모델 응답의 무제한 텍스트·호출·인자 처리(CWE-400, medium) | `adapters/model_client.py`에서 provider 응답을 크기 검사 전에 파싱·동기 검증 | A: `54a82ff`에서 응답 예산·분리 사본과 단위 시험 적용. 실제 provider의 수신 상한은 A20 결정 후 확인 |
+| MCP 결과의 크기 검사 전 전체 변환(CWE-400, medium) | `adapters/mcp_transport.py`의 `model_dump`·불변 사본이 `ResponseGate`보다 앞섬 | A: `c0e07b9`에서 변환 전 요소·바이트 예산 적용. C: SDK 역직렬화 전 wire 상한 구현·검증 필요 |
 | 등록 스키마 정규식의 매칭 시간 상한 없음(CWE-1333, medium) | B `services/catalog_schema.py`는 `re.compile`로 문법만 검사하고 `jsonschema`가 동기 매칭 | B: B3의 `patternProperties` 지원 계약을 포함해 안전한 정규식 정책 또는 격리된 검증기를 결정. A: 모델 인자 수신 예산을 함께 적용하되 B 문제 해결로 표시하지 않음 |
 
 세 발견은 이 소스의 가용성 경로에 대한 것이다. 입력이 실제 제품에서 이 지점에 도달하려면 ACTIVE 등록, 실제 provider 또는 MCP stream 구성이 필요하다. 보고서의 조건부 위험을 통합 검증 성공이나 실제 침투 성공으로 읽지 않는다.
+
+두 A 패치 이후 `PYTHONPATH=src`, `QT_QPA_PLATFORM=offscreen`의 Python 3.12.15에서 단위 테스트 **188건 통과**를 확인했다. 스캔은 패치 전 리비전에 고정돼 있으므로, 보고서의 발견 수와 현재 코드의 보강 상태를 구분한다. B의 정규식 위험은 A의 인자 길이 상한만으로 해결되지 않는다.
 
 ## 아키텍처 완료 조건
 

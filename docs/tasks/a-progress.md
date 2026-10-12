@@ -39,6 +39,10 @@
 | A24 제한시간 | `c267a3f` | bridge 시작·종료 제한시간을 유한한 양수로 검증 |
 | A37 키보드 | `475ac2e` | A31 Tab 결함 수정과 A31/A33/A34/A35 Windows Qt 키보드 회귀 시험 |
 | A37 배율 | `de022b2` | 125%·150% Qt 배율 검증과 기본 창의 가용 화면 맞춤 |
+| A41 보안 검토 | `fd2a699` | 소스 스캔 결과·아키텍처 경계와 ARTEX 실행 조건, B 정규식 발견 기록 |
+| A04 수신 계약 | `8c65da7` | C의 MCP SDK 역직렬화 전 수신 상한·초과 계수 요구 |
+| A10 결과 예산 | `c0e07b9` | MCP 결과의 복사 전 요소·바이트·중첩 상한 |
+| A19 모델 예산 | `54a82ff` | 모델 응답 크기·호출 수 상한과 인자 분리 사본 |
 
 각 커밋의 실제 파일은 `git show --stat <커밋>`으로 확인할 수 있다. HTML 시안과 로컬 환경 설정은 제품 소스와 분리해 커밋했다.
 
@@ -52,7 +56,7 @@
 | 시안 검증 | 기존 기록의 JS 문법·최소 DOM 대역 검사 | 실제 화면 렌더링·키보드·반응형 및 T18 전체 검증은 미실행이다. |
 | 공통 계약 | 사용자의 B 활용 결정에 따라 `0c02b61`의 B 소유 `src/guard_app`를 가져왔고, B HEAD `f3c2d2b`에서 바뀐 Guard/approval 두 파일을 최신화했다. 2026-10-12 B ref를 다시 fetch해 같은 HEAD임을 확인하고 B의 `docs/contracts.md` 초안 및 B1–B5·인수 문서를 가져왔다. B 소스 사본의 파일 해시는 ref와 일치한다. 합의 표는 여전히 비어 있다 | A 구현은 이 실제 B 초안을 기준으로 한다. A·B·C 공동 계약 동결로 표시하지 않는다. |
 | B·C 제품/검증 소스 | 현재 트리에는 B 소스 사본과 A adapter/Runner/Qt UI·A 단위 테스트가 있다. B 최신 원격 `f3c2d2b`, C 원격 `0f30f25`를 확인했다. C ref는 여전히 문서만 있으며 Registry/launcher/fixture·SQLite 구현은 없다 | B 코드와 A 코드는 단위 경계까지 연결했다. C 구현, 공통 패키징/lock, CI는 확인되지 않았다. |
-| 실제 연동 | A 단위 테스트 165건과 Qt offscreen 표시·bridge 커널 시험, 현재 화면의 Windows 네이티브 Qt 렌더링·키보드 시험 및 125%·150% Qt 배율 시뮬레이션은 수행했다. MCP stdio/HTTP 왕복, 실제 AGT·모델·Scanner, C 계수, 앱 전체 구성과 lock 재설치는 미실행이다 | 대역·화면 결과를 실제 전송이나 전체 I/T/S 인수 통과로 취급하지 않는다. |
+| 실제 연동 | A 단위 테스트 188건과 Qt offscreen 표시·bridge 커널 시험, 현재 화면의 Windows 네이티브 Qt 렌더링·키보드 시험 및 125%·150% Qt 배율 시뮬레이션은 수행했다. MCP stdio/HTTP 왕복, 실제 AGT·모델·Scanner, C 계수, 앱 전체 구성과 lock 재설치는 미실행이다 | 대역·화면 결과를 실제 전송이나 전체 I/T/S 인수 통과로 취급하지 않는다. |
 
 기술 설계의 I1–I10과 T/S 번호는 인수 목표다. 현재 단위 검사와 화면 검증으로 그 전체 인수 조건을 통과한 것으로 표시하지 않는다.
 
@@ -71,7 +75,7 @@
 | A07 | [stdio READ 실행 준비서](a-compatibility-runbook.md) 작성, 실제 왕복 증거 없음 | C 격리 합성 fixture/harness와 launcher 조건 필요 |
 | A08 | [HTTP SEND 실행 준비서](a-compatibility-runbook.md) 작성, 실제 왕복·수신 계수 없음 | C 격리 fixture, endpoint 검증, wire/effect 계수 필요 |
 | A09 | [서버별 SDK 세션 소유 worker](../../src/guard_app/adapters/mcp_transport.py)와 A 단위 테스트 구현. 소유 task·초기화·종료 구조 검증 | B 초안 포트 기준 단위 완료. 실제 C launcher/HTTP endpoint와 SDK 왕복은 A11/A12 대기 |
-| A10 | 같은 worker에 명령 future 정리, 대기/진행 취소 구분, 시작/호출/종료 timeout·close 처리 구현. 여러 서버 종료 중 다른 서버 신규 호출 수락 경합을 차단하고 회귀 테스트 추가 | 대역 단위 완료. 실제 SDK cancellation 및 세션 종료 경합은 C fixture로 인수 필요 |
+| A10 | 같은 worker에 명령 future 정리, 대기/진행 취소 구분, 시작/호출/종료 timeout·close 처리 구현. 여러 서버 종료 중 다른 서버 신규 호출 수락 경합을 차단했다. MCP 결과는 `model_dump` 전 content 256개, 구조 4,096노드·깊이 64, 기본 복사 예산 512 KiB(설정 상한 8 MiB)로 검사한다 | 대역 단위 완료. SDK의 역직렬화 전 wire 상한, 실제 cancellation 및 세션 종료 경합은 C stream/fixture로 인수 필요 |
 | A11 | stdio 제품 연결 없음 | A07·A09·A10 및 C launcher 필요 |
 | A12 | HTTP 제품 연결·retry/redirect 시험 없음 | A08–A10 및 C endpoint 검증 필요 |
 | A13 | `RawResult` JSON 사본과 원문 없는 `DispatchError` 전달 구현. timeout은 무자료 확증이 없어 오류로 보수 처리 | 부분 완료. 실제 stdio/HTTP 단계별 실패와 SEND 결과 불명은 C fixture·B Guard 통합 검증 필요 |
@@ -80,11 +84,11 @@
 | A16 | transport/계수 인수 근거 없음 | A11–A15 및 C 계약·수신 계수 검증 필요 |
 | A17 | 사용자가 AGT 배포판을 아직 정하지 않았다고 답했다. 현재 설치 환경에도 AGT 후보 없음 | 실제 판정 전용 API/버전과 C Scanner 조합 자료가 정해져야 실제 호환성 검증 가능 |
 | A18 | 명시적 규칙 기반 [mock AccessChecker](../../src/guard_app/adapters/agt.py)와 단위 테스트 구현. 규칙 없음 deny, 신뢰 Task 불일치 error. Qt 상단은 신뢰 bootstrap에서 제공한 실제/mock 모드만 표시하고 기본값은 미설정 | mock·UI 표시 골격 부분 완료. 실제 AGT 번역, 안전 규칙 파일 로딩, bootstrap·감사의 mode 연결과 C dispatch 0 인수 대기 |
-| A19 | [provider 중립 제안 변환](../../src/guard_app/adapters/model_client.py) 구현. B Catalog ACTIVE ToolView의 닫힌 schema·이름·인자/추가 필드 검증 | B 초안 기반 단위 완료. 실제 제공자별 응답/API는 A20 대기 |
+| A19 | [provider 중립 제안 변환](../../src/guard_app/adapters/model_client.py) 구현. B Catalog ACTIVE ToolView의 닫힌 schema·이름·인자/추가 필드 검증. 정규화 모델 응답의 텍스트·호출·인자 노드/문자·전체 크기를 파싱 전 검사하고 가변 인자는 제한된 분리 사본으로 검증한다 | B 초안 기반 단위 완료. 실제 제공자 수신 상한·응답/API는 A20 대기. B 등록 스키마 정규식의 동기 매칭 위험은 별도 미해결 |
 | A20 | 실제 제공자·모델·허용 데이터/인증 환경이 아직 지정되지 않았다 | 실제 API·환경 승인/egress 검증 대기. 대역을 실모델 결과로 표시하지 않음 |
 | A21 | [TaskRunner](../../src/guard_app/services/runner.py)가 제안을 Guard.submit에만 내고 Released만 후속 대화에 삽입. Pending/Denied/Withheld/Unknown 구분. B의 비종결 `APPROVAL_RACE`에서 승인 대기와 후속 호출을 유지하고 확정 결과를 다시 받을 수 있게 수정 | B 결과 계약 기반 단위 완료. 사람 제어 이벤트·권위 있는 승인 재조회, 실제 C Store/전송 통합 대기 |
 | A22 | Runner별 대화/호출 ID와 생성 시 `model_client_factory` 분리, 지연 응답/Task epoch·정책 변화 단위 검증. 연속 호출 전 Task epoch를 재조회해 관측된 교체를 막음 | 부분 완료. 조회→Guard 제출 사이 경쟁은 B의 잠금 내부 expected_epoch 검증 필요. 실제 제공자 핸들·캐시 분리와 C Task 생성/통합 T21 인수 대기 |
-| A23 | [B Guard/Catalog 리뷰](a-b-review.md)는 `0c02b61` 기준 finding 0건·Catalog 단위 71건 통과, Guard 대상 테스트는 환경 시간초과로 미확인. 후속 B `f3c2d2b`의 승인 Task 결속 diff를 확인·반영 | A 관점 소스 검토 완료. 최신 B 전체 테스트·C Store/fixture 인수와 담당 리뷰는 남음 |
+| A23 | [B Guard/Catalog 리뷰](a-b-review.md)는 `0c02b61`의 당시 A 연결 관점 finding 0건·Catalog 단위 71건 통과, Guard 대상 테스트는 환경 시간초과로 미확인. 후속 B `f3c2d2b`의 승인 Task 결속 diff를 확인·반영했다. 별도 보안 스캔에서 B 스키마 정규식 가용성 발견 1건을 추가 기록했다 | A 관점 소스 검토 완료. B의 정규식 지원 계약 결정, 최신 B 전체 테스트·C Store/fixture 인수와 담당 리뷰는 남음 |
 | A24 | [PySide6/asyncio bridge 커널](../../src/guard_app/services/bridge.py) 구현. Qt/백엔드 스레드, 준비/실패/종료 고정 코드, 불변 신호, 비동기 명령 접수·offscreen 시험. 시작·종료 제한시간의 NaN/무한대를 거절해 bounded 대기를 유지한다 | 커널 부분 완료. 실제 앱 시작·Runner/Store/Registry 조립과 C 수명·UI 조회 계약 필요 |
 | A25 | bridge에 bounded 실행·일반 사람 제어·긴급 제어 큐, B `HumanControl` capability, 느린 승인 worker가 모두 바쁠 때 긴급 차단 전용 worker, bounded 완료 ID 캐시/포화 거절·미확정 결과 표시 구현 | 큐 기반 부분 완료. B/C 확정 상태 조회·이벤트·내구적 명령 ID/actor 계약과 C T12/T20 검증 필요 |
 | A26 | 확정 이벤트·snapshot 재동기화 없음 | A24·A25 및 합의된 이벤트/리비전 계약 필요 |
@@ -102,12 +106,13 @@
 | A38 | 정상/승인/차단 통합 인수 미실행 | A16·A18·A22·A27·A29–A36, B/C 구현·C 통합 테스트 필요 |
 | A39 | 장애/재전송/비공개 검증 미실행 | A38, C 공격·결함 주입 fixture/테스트 필요 |
 | A40 | 모델 격리·replay 실험 미실행 | A22·A38, C 실험/통합 테스트와 승인 모델 환경 필요 |
-| A41 | lock/재설치/CI 인수 미실행 | A07·A08·A17·A27, 합의된 lock 담당과 C CI 설정 필요 |
+| A41 | [A 보안 경계 검토](a-security-review.md)와 44개 Python 소스의 Codex Security Standard Scan 완료: medium 3건 중 A 소유 모델/MCP 경계 2건 보강, B 소유 정규식 1건 미해결. ARTEX 실행 조건 기록. lock/재설치/CI·실제 침투 인수는 미실행 | A07·A08·A17·A27, B 정규식 정책, C stream 수신 상한·격리 fixture와 합의된 lock/CI 담당 필요 |
 | A42 | 이 작업별 진행/재개 근거, [호환성 실행 준비](a-compatibility-runbook.md), [B/C 미전송 인계 초안](a-prompts/07-handoffs.md)을 갱신했다. 실제 담당 리뷰·제품 시작/시연 증거는 없다 | 부분 인계 자료 완료. A23·A37–A41의 실제 통합 결과와 B/C 리뷰 필요 |
 
 ## 이번 구현 검증과 다음 인수
 
-- 사용자의 B 브랜치 활용 결정 이후 B 소스 사본과 A 소유 모듈을 함께 두고 `.venv`의 Python 3.12.15에서 `PYTHONPATH=src`, `QT_QPA_PLATFORM=offscreen`으로 `pytest -q -p no:_hypothesis_pytestplugin tests/unit`: **165 passed**. 변경한 UI·bridge 파일의 `ruff check`·`ruff format --check`와 관련 UI 소스의 mypy가 통과했다. Windows Qt에서 새 화면 780×580 합성 렌더링·좁은/넓은 표 배치, 추가 키보드 시험 58건, Qt 125%·150% 시뮬레이션 관련 시험 각각 85건을 확인했다. 실제 전송이나 B/C 계약 인수를 대체하지 않는다.
+- 사용자의 B 브랜치 활용 결정 이후 B 소스 사본과 A 소유 모듈을 함께 두고 `.venv`의 Python 3.12.15에서 `PYTHONPATH=src`, `QT_QPA_PLATFORM=offscreen`으로 `pytest -q -p no:_hypothesis_pytestplugin tests/unit`: 당시 **165 passed**. 변경한 UI·bridge 파일의 `ruff check`·`ruff format --check`와 관련 UI 소스의 mypy가 통과했다. Windows Qt에서 새 화면 780×580 합성 렌더링·좁은/넓은 표 배치, 추가 키보드 시험 58건, Qt 125%·150% 시뮬레이션 관련 시험 각각 85건을 확인했다. 실제 전송이나 B/C 계약 인수를 대체하지 않는다.
+- 보안 경계 보강 뒤 같은 Python 3.12.15 환경에서 `PYTHONPATH=src`, `QT_QPA_PLATFORM=offscreen`, `python -m pytest -q -p no:cacheprovider tests/unit`: **188 passed**. MCP 결과 단위 21건과 모델·Runner 단위 49건을 별도로 다시 확인했다. [스캔](a-security-review.md)은 `75a52c6` 기준 소스 검토이며 수정 후의 실서버 침투 시험이 아니다. B 정규식, C 수신 예산·Store·launcher·fixture는 여전히 미검증이다.
 - A07/A08/A11/A12/A14–A16/A38–A41의 실제 전송·격리·계수는 C의 launcher/endpoint/Registry/Store/fixture와 공통 설정·lock/CI가 있어야 재개할 수 있다. A24/A25 커널은 구현했지만 A26/A27/A31–A36의 제품 연결에는 B/C 불변 UI 명령·이벤트, 승인 조회/사본, 등록·감사·Scanner 조회 계약이 필요하다. A31 로컬 초안·A32/A33/A35 읽기 화면·A34 표시·A36 읽기 화면은 그 계약 없이 가능한 범위다. A17 실제 AGT는 배포판/버전이 미정이고 A20 실제 모델 제공자/승인 환경도 미정이다.
 - B·C가 [포트 검토](a-port-review.md)·[플랫폼 요구](a-platform-review.md)·[UI 계약 제안](a-ui-contract-proposal.md)·[환경 결정표](a-environment-decisions.md)를 검토하고 필요한 산출물을 제공하면, A는 현재 모듈을 실제 서비스에 연결하고 C의 동일 계약·계수 테스트로 인수한다. 다른 담당에게 보낼 문안은 [전달용 초안](a-prompts/07-handoffs.md)에 있으며 실제 전송은 별도 요청이 필요하다.
 
