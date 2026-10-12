@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.ui import (
@@ -254,7 +254,61 @@ def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(
         refreshed = page.attention_layout.itemAt(0).widget()
         assert refreshed is not card
         assert refreshed.link.hasFocus()
-        assert page.attention_layout.count() == 2
+        assert page.attention_layout.count() == 5
+    finally:
+        window.close()
+
+
+def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
+    window = GuardWindow()
+    window.resize(320, 400)
+    old_items = tuple(
+        AttentionItem(
+            f"old-{index}",
+            "approval",
+            target_page="approvals",
+            action_available=True,
+        )
+        for index in range(12)
+    )
+    window.set_overview_snapshot(
+        OverviewSnapshot(attention=Surface(LoadState.READY, old_items))
+    )
+    window.show()
+    window.activateWindow()
+    app.processEvents()
+    try:
+        page = window.overview
+        page.attention_next.click()
+        page.attention_next.click()
+        assert "12개 중 11–12개" in page.attention_page_note.text()
+        page.attention_shortcut.setFocus()
+        urgent = AttentionItem(
+            "new-urgent", "outcome_unknown", server_id="urgent-server"
+        )
+        window.set_overview_snapshot(
+            OverviewSnapshot(attention=Surface(LoadState.READY, (urgent,) + old_items))
+        )
+        app.processEvents()
+        assert "13개 중 1–5개" in page.attention_page_note.text()
+        assert page.attention_layout.itemAt(0).widget().link.isEnabled() is False
+
+        page.attention_next.click()
+        page.attention_next.click()
+        assert "13개 중 11–13개" in page.attention_page_note.text()
+        page.attention_shortcut.click()
+        app.processEvents()
+        assert "13개 중 1–5개" in page.attention_page_note.text()
+        scroll = window.stack.currentWidget()
+        assert isinstance(scroll, QScrollArea)
+        first = page.attention_layout.itemAt(0).widget()
+        assert "MCP urgent-server" in (
+            label.text() for label in first.findChildren(QLabel)
+        )
+        assert first.findChildren(type(page.attention_shortcut))[0].isEnabled() is False
+        assert first.mapTo(scroll.viewport(), QPoint(0, 0)).y() < (
+            scroll.viewport().height()
+        )
     finally:
         window.close()
 

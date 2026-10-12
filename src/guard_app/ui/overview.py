@@ -362,6 +362,18 @@ class OverviewPage(QWidget):
         if self._snapshot == snapshot:
             return
         focused = self._focused_card_key()
+        previous_items = self._unresolved_attention(self._attention_surface)
+        previous_ids = {item.item_id for item in previous_items}
+        new_items = self._unresolved_attention(snapshot.attention)
+        changed_preview = (
+            new_items[: self._PREVIEW_PAGE_SIZE]
+            != previous_items[: self._PREVIEW_PAGE_SIZE]
+        )
+        has_new_item = any(item.item_id not in previous_ids for item in new_items)
+        if (focused is None or focused[0] != "attention") and (
+            changed_preview or has_new_item
+        ):
+            self._attention_page = 0
         self._snapshot = snapshot
         self._card_links.clear()
         self._priority_server_ids = (
@@ -374,9 +386,8 @@ class OverviewPage(QWidget):
             else set()
         )
         if focused is not None and focused[0] == "attention":
-            items = self._unresolved_attention(snapshot.attention)
             index = next(
-                (i for i, item in enumerate(items) if item.item_id == focused[1]),
+                (i for i, item in enumerate(new_items) if item.item_id == focused[1]),
                 None,
             )
             if index is not None:
@@ -441,6 +452,9 @@ class OverviewPage(QWidget):
         return None
 
     def _scroll_to_attention(self) -> None:
+        if self._attention_page != 0:
+            self._attention_page = 0
+            self._render_attention(self._attention_surface)
         scroll = self._scroll_host()
         if scroll is not None:
             top = self.attention_header.mapTo(self, QPoint(0, 0)).y()
