@@ -18,6 +18,12 @@ Codex Security Standard Scan(`ecbf3668-f263-4cdb-850e-a4637305eb12`)은 `75a52c6
 
 반응형 Qt 변경분은 별도로 수동 검토했다. 새 승인 선택 요약에 공개 문자열의 줄바꿈·제어·bidi 문자를 그대로 붙이면 가짜 `상태:` 줄을 만들 수 있어, 동적 값을 한 줄 코드포인트 표기로 바꾸고 합성 회귀 시험을 추가했다(`e427da1`). 표와 상세는 계속 일반 텍스트만 표시하고, 기존 공개 CSV 필드·승인 상세 닫기 시 텍스트 정리 경계를 유지한다. 이는 변경분 검토이며 위 고정 리비전의 정식 스캔 재실행이나 B/C 통합 보안 인수가 아니다.
 
+## 2026-10-12 · A29/A10/A21/A25 변경분 보안 스캔
+
+Codex Security Diff Scan(`91103c2f-93eb-41c7-9e9b-46c561b2c4f0`)은 변경 불가능한 `97e3c96..40786f5` 범위의 소스 5개(`adapters/model_client.py`, `adapters/mcp_transport.py`, `services/runner.py`, `services/bridge.py`, `ui/overview.py`)를 오프라인으로 검토했다. 변경 파일 5개 모두 coverage가 완료됐고 새 보안 취약점 발견은 **0건**이다. 이 결과는 해당 diff의 소스 검토에 한정되며, 기존 Standard Scan의 발견이나 C 통합·실제 전송의 안전성을 해소했다는 뜻은 아니다. 전체 보고서는 scan ID로 찾을 수 있는 로컬 스캔 산출물에 보관하고 저장소에 복사하지 않는다.
+
+스캔 기준 뒤 `f5dc095`에서 bridge ingress drain의 넓은 `except Exception`을 제거해 `AGENTS.md`의 예외 경계 규칙에 맞췄다. 따라서 이 후속 수정은 위 고정 diff 스캔 범위 밖이다. 후속 코드의 관련 bridge 단위 테스트 31건, 전체 단위 테스트 **218건**, Windows 네이티브 Qt의 A29 반응형 표적 테스트 1건이 통과했다. 이 시험은 C의 계수나 ARTEX 침투 검증을 대신하지 않는다.
+
 ## 아키텍처 완료 조건
 
 1. **단일 실행 입구:** C의 구성 루트는 관리 대상 `tools/call`을 B `GuardService.submit()`을 통해서만 호출하고 A의 transport를 UI·Runner·AGT에 직접 노출하지 않는다(I1, T08).
