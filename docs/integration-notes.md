@@ -187,3 +187,8 @@ AGT를 모의 연동으로 선택하면 불가능했던 실제 연결 조건과 
 
 - 합성 승인 수신처와 JSON 인자에 `127.0.0.1`의 임시 HTTP 서버를 가리키는 이미지·링크 마크업을 넣고 실제 Qt 상세 창에 표시했다. 수신처와 인자의 URL 위치를 마우스로 클릭하고 Enter를 보낸 뒤 이벤트 루프를 기다렸으며, HTTP 서버의 GET 수신은 **0건**, Qt URL handler 호출도 **0건**이었다. 이는 A34 일반 텍스트 표시 컴포넌트의 관측 결과이며 C 제품 전송 계수가 아니다.
 - `PYTHONPATH=src`, `QT_QPA_PLATFORM=offscreen`에서 A34 단위 테스트 **6 passed**. 같은 파일을 Windows 네이티브 Qt(`QT_QPA_PLATFORM=windows`)에서 실행해 **6 passed**를 확인했다. B의 인증된 동일 승인 사본 조회·인가·digest·승인 소비와 C 통합 T18은 미구현이므로 T18 전체 인수는 남아 있다.
+
+## 2026-10-12 · A09 서버별 시작 격리
+
+- `McpTransport.start()`는 최대 4개 서버 worker의 준비를 동시에 기다린다. 느린 첫 서버가 뒤 서버의 세션 시작을 막지 않으며, 시작 중 실패·취소가 있으면 남은 시작 task를 회수하고 worker 전체를 닫는다. SDK 세션의 단일 소유 task 구조는 유지한다.
+- 5개 합성 서버에서 동시 시작 상한과 뒤 서버 진행, 초기화 실패와 시작 취소의 전체 정리를 포함해 A transport 단위 테스트 **30 passed**. 변경 파일 Ruff check·format check와 transport 소스 mypy가 통과했다. 실제 C launcher/HTTP endpoint와 MCP wire 왕복은 시험하지 않았다.

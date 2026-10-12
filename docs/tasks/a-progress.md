@@ -59,6 +59,7 @@
 | A29 바로가기 정렬 | `b069c13` | 확인 항목 바로가기 후 제목과 첫 카드가 화면에 보이도록 스크롤 위치 보정 |
 | A29 새 확인 항목 노출 | `60958b5` | 페이지 열람 중 새 미해결 항목 도착 시 첫 페이지 복귀, 바로가기의 첫 페이지 고정 |
 | A34 로컬 요청 계수 | `1433bb0` | 합성 악성 승인 상세 표시·입력 후 loopback HTTP 요청 0건 검증 |
+| A09 병렬 시작 | `5b9280d` | 서버 시작 동시성을 4개로 제한하고 느린 서버와 다른 서버의 초기화 격리 |
 
 각 커밋의 실제 파일은 `git show --stat <커밋>`으로 확인할 수 있다. HTML 시안과 로컬 환경 설정은 제품 소스와 분리해 커밋했다.
 
@@ -90,7 +91,7 @@
 | A06 | [환경 결정표](a-environment-decisions.md) 작성. B `0c02b61`의 B 단독 lock과 A 후보 환경 구분 | A 제안 완료. 설정/패키징 담당·모델 승인 환경 공동 결정 필요 |
 | A07 | [stdio READ 실행 준비서](a-compatibility-runbook.md) 작성, 실제 왕복 증거 없음 | C 격리 합성 fixture/harness와 launcher 조건 필요 |
 | A08 | [HTTP SEND 실행 준비서](a-compatibility-runbook.md) 작성, 실제 왕복·수신 계수 없음 | C 격리 fixture, endpoint 검증, wire/effect 계수 필요 |
-| A09 | [서버별 SDK 세션 소유 worker](../../src/guard_app/adapters/mcp_transport.py)와 A 단위 테스트 구현. 소유 task·초기화·종료 구조 검증 | B 초안 포트 기준 단위 완료. 실제 C launcher/HTTP endpoint와 SDK 왕복은 A11/A12 대기 |
+| A09 | [서버별 SDK 세션 소유 worker](../../src/guard_app/adapters/mcp_transport.py)와 A 단위 테스트 구현. 소유 task·초기화·종료 구조 검증. transport 시작은 최대 4개 worker를 동시에 준비해 느린 서버가 다른 서버 초기화를 직렬로 막지 않으며 실패·취소 때 모든 worker를 닫는다 | B 초안 포트 기준 단위 완료. 실제 C launcher/HTTP endpoint와 SDK 왕복은 A11/A12 대기 |
 | A10 | 같은 worker에 명령 future 정리, 대기/진행 취소 구분, 시작/호출/종료 timeout·close 처리 구현. 여러 서버 종료 중 다른 서버 신규 호출 수락 경합을 차단했다. 서버별 대기 명령을 기본 64건(설정 상한 1,024건)으로 제한하고 포화는 원격 호출 전에 `WorkerQueueFull`로 거절한다. MCP 결과는 `model_dump` 전 content 256개, 구조 4,096노드·깊이 64, 기본 복사 예산 512 KiB(설정 상한 8 MiB)로 검사한다 | 대역 단위 완료. SDK의 역직렬화 전 wire 상한, 실제 cancellation 및 세션 종료 경합은 C stream/fixture로 인수 필요 |
 | A11 | stdio 제품 연결 없음 | A07·A09·A10 및 C launcher 필요 |
 | A12 | HTTP 제품 연결·retry/redirect 시험 없음 | A08–A10 및 C endpoint 검증 필요 |
