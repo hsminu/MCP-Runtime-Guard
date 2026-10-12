@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Self
 
 import pytest
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ResourceLink, TextContent
 
 from guard_app.adapters import mcp_transport
 from guard_app.adapters.mcp_transport import McpTransport
@@ -226,12 +226,17 @@ async def test_close_during_initialization_cancels_owner_and_rejects_start(
 async def test_command_error_and_conversion_error_do_not_kill_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class BadResult:
+    class BadResult(CallToolResult):
         def model_dump(self, **_kwargs: object) -> object:
             raise ValueError("SECRET raw result")
 
     session = _Session(
-        [_result("one"), ValueError("SECRET tool error"), BadResult(), _result("four")]
+        [
+            _result("one"),
+            ValueError("SECRET tool error"),
+            BadResult(content=[]),
+            _result("four"),
+        ]
     )
     monkeypatch.setattr(
         mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
@@ -480,3 +485,170 @@ async def test_sdk_error_payload_stays_raw_and_unknown_server_never_dispatches(
     assert raw.payload["content"][0]["text"] == "server text"
     await transport.close()
     assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_result_budget_rejects_many_empty_blocks_and_large_text_before_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dumps: list[str] = []
+
+    class ObservedResult(CallToolResult):
+        def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+            dumps.append("dump")
+            return super().model_dump(**kwargs)
+
+    monkeypatch.setattr(mcp_transport, "_MAX_RESULT_CONTENT_BLOCKS", 4)
+    session = _Session(
+        [
+            ObservedResult(
+                content=[TextContent(type="text", text="") for _ in range(5)]
+            ),
+            ObservedResult(content=[TextContent(type="text", text="S" * 257)]),
+            _result("next"),
+        ]
+    )
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
+    )
+    transport = McpTransport({"server": _streams([])}, max_result_copy_bytes=256)
+    await transport.start()
+
+    for request in (_request(seq=1), _request(kind=ToolKind.SEND, seq=2)):
+        with pytest.raises(DispatchError) as rejected:
+            await asyncio.wait_for(transport.call(request), timeout=1)
+        assert rejected.value.exception_type == "ResultTooLarge"
+    assert dumps == []  # Neither rejected result reached model_dump.
+    assert (await asyncio.wait_for(transport.call(_request(seq=3)), timeout=1)).payload[
+        "content"
+    ][0]["text"] == "next"
+    await transport.close()
+    assert len(session.calls) == 3  # SEND is never retried.
+
+
+@pytest.mark.asyncio
+async def test_result_budget_covers_structured_content_and_nested_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dumps: list[str] = []
+
+    class ObservedResult(CallToolResult):
+        def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+            dumps.append("dump")
+            return super().model_dump(**kwargs)
+
+    monkeypatch.setattr(mcp_transport, "_MAX_RESULT_VALUE_NODES", 64)
+    session = _Session(
+        [
+            ObservedResult(
+                content=[TextContent(type="text", text="")],
+                structuredContent={"payload": "X" * 257},
+            ),
+            ObservedResult(
+                content=[TextContent(type="text", text="")],
+                structuredContent={"items": [None] * 65},
+            ),
+            ObservedResult(
+                content=[TextContent(type="text", text="")],
+                _meta={"ignored_by_gate": "M" * 257},
+            ),
+            _result("ready"),
+        ]
+    )
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
+    )
+    transport = McpTransport({"server": _streams([])}, max_result_copy_bytes=256)
+    await transport.start()
+
+    for seq in (1, 2, 3):
+        with pytest.raises(DispatchError) as rejected:
+            await asyncio.wait_for(transport.call(_request(seq=seq)), timeout=1)
+        assert rejected.value.exception_type == "ResultTooLarge"
+    assert dumps == []
+    assert (await asyncio.wait_for(transport.call(_request(seq=4)), timeout=1)).payload[
+        "content"
+    ][0]["text"] == "ready"
+    await transport.close()
+    assert len(session.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_result_walk_yields_to_control_before_settling_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[bool] = []
+
+    def observe_control() -> None:
+        active = transport._workers["server"]._active
+        observed.append(active is not None and not active.future.done())
+
+    class ScheduledControlSession(_Session):
+        async def call_tool(self, name: str, arguments: dict[str, object]) -> object:
+            self.calls.append((name, arguments))
+            asyncio.get_running_loop().call_soon(observe_control)
+            return CallToolResult(
+                content=[TextContent(type="text", text="ok")],
+                structuredContent={"items": [None] * 200},
+            )
+
+    session = ScheduledControlSession()
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
+    )
+    transport = McpTransport({"server": _streams([])})
+    await transport.start()
+    raw = await asyncio.wait_for(transport.call(_request()), timeout=1)
+    assert raw.payload is not None
+    assert observed == [True]
+    await transport.close()
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_resource_url_is_rejected_without_dump_and_next_call_survives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dumps: list[str] = []
+
+    class ObservedResult(CallToolResult):
+        def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+            dumps.append("dump")
+            return super().model_dump(**kwargs)
+
+    session = _Session(
+        [
+            ObservedResult(
+                content=[
+                    ResourceLink(
+                        type="resource_link",
+                        uri="https://example.invalid/resource",
+                        name="unsupported",
+                    )
+                ]
+            ),
+            _result("next"),
+        ]
+    )
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
+    )
+    transport = McpTransport({"server": _streams([])})
+    await transport.start()
+    with pytest.raises(DispatchError) as rejected:
+        await transport.call(_request())
+    assert rejected.value.exception_type == "TypeError"
+    assert dumps == []
+    assert (await transport.call(_request(seq=2))).payload["content"][0][
+        "text"
+    ] == "next"
+    await transport.close()
+    assert len(session.calls) == 2
+
+
+@pytest.mark.parametrize("invalid_budget", (0, -1, True, 8 * 1024 * 1024 + 1))
+def test_result_copy_budget_rejects_invalid_configuration(
+    invalid_budget: object,
+) -> None:
+    with pytest.raises(ValueError, match="result copy budget"):
+        McpTransport({}, max_result_copy_bytes=invalid_budget)
