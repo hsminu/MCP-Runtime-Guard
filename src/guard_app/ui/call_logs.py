@@ -14,10 +14,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+import shiboken6
 from PySide6.QtCore import QEvent, QObject, QTimer, Signal
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QHBoxLayout,
+    QBoxLayout,
     QHeaderView,
     QLineEdit,
     QTableWidget,
@@ -109,6 +111,14 @@ def _iso_kst(value: datetime | None) -> str:
     if value is None or value.tzinfo is None or value.utcoffset() is None:
         return MISSING
     return value.astimezone(_KST).isoformat(timespec="seconds")
+
+
+def _short_time(value: datetime | None) -> str:
+    """Keep date, seconds, and timezone readable in a narrow column."""
+
+    if value is None or value.tzinfo is None or value.utcoffset() is None:
+        return MISSING
+    return value.astimezone(_KST).strftime("%Y-%m-%d\n%H:%M:%S\nKST")
 
 
 def _safe_csv_cell(value: str) -> str:
@@ -222,6 +232,8 @@ class CallLogPage(QWidget):
 
     detail_requested = Signal(object)
     _COMPACT_VIEWPORT_WIDTH = 760
+    _NARROW_VIEWPORT_WIDTH = 460
+    _STACK_ACTIONS_WIDTH = 580
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -231,7 +243,7 @@ class CallLogPage(QWidget):
         self._detail_dialog: PlainDetailDialog | None = None
         self._detail_request: DetailRequest | None = None
         self._detail_token = 0
-        self._compact_columns: bool | None = None
+        self._column_mode: str | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 28, 26, 42)
@@ -267,8 +279,10 @@ class CallLogPage(QWidget):
             )
         )
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setTabKeyNavigation(False)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.viewport().installEventFilter(self)
@@ -277,15 +291,15 @@ class CallLogPage(QWidget):
         self.table.itemSelectionChanged.connect(self._selection_changed)
         layout.addWidget(self.table, 1)
 
-        actions = QHBoxLayout()
+        self._actions_layout = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.detail_button = KeyboardActionButton("선택한 호출 상세 보기")
         self.detail_button.clicked.connect(self._open_selected)
-        actions.addWidget(self.detail_button)
+        self._actions_layout.addWidget(self.detail_button)
         self.csv_button = KeyboardActionButton("현재 표시 행 CSV 복사")
         self.csv_button.clicked.connect(self._copy_csv)
-        actions.addWidget(self.csv_button)
-        actions.addStretch(1)
-        layout.addLayout(actions)
+        self._actions_layout.addWidget(self.csv_button)
+        self._actions_layout.addStretch(1)
+        layout.addLayout(self._actions_layout)
         layout.addWidget(
             plain_label(
                 "CSV에는 현재 조회·필터 결과의 공개 메타데이터만 들어가. "
@@ -296,49 +310,105 @@ class CallLogPage(QWidget):
         self._set_controls_enabled(False)
         self._update_table_columns(force=True)
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        direction = (
+            QBoxLayout.Direction.TopToBottom
+            if self.width() < self._STACK_ACTIONS_WIDTH
+            else QBoxLayout.Direction.LeftToRight
+        )
+        if self._actions_layout.direction() != direction:
+            self._actions_layout.setDirection(direction)
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.table.viewport() and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self._update_table_columns)
         return super().eventFilter(watched, event)
 
     def _update_table_columns(self, *, force: bool = False) -> None:
-        """Keep timestamp, call ID, and outcome visible in a narrow viewport."""
+        """Keep time, call ID, and outcome visible; add server when it fits."""
 
-        compact = self.table.viewport().width() < self._COMPACT_VIEWPORT_WIDTH
-        if compact == self._compact_columns and not force:
+        if not shiboken6.isValid(self.table):
             return
-        self._compact_columns = compact
+        viewport_width = self.table.viewport().width()
+        if viewport_width < 100:
+            return
+        mode = (
+            "narrow"
+            if viewport_width < self._NARROW_VIEWPORT_WIDTH
+            else "medium"
+            if viewport_width < self._COMPACT_VIEWPORT_WIDTH
+            else "full"
+        )
+        mode_changed = mode != self._column_mode
+        self._column_mode = mode
         header = self.table.horizontalHeader()
-        for column in (1, 3, 4, 5):
-            self.table.setColumnHidden(column, compact)
-        id_header = self.table.horizontalHeaderItem(2)
-        if id_header is not None:
-            id_header.setText("호출 ID" if compact else "호출 / 요청")
-
-        for column in range(7):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
-        if compact:
-            self.table.setColumnWidth(0, 155)
-            self.table.setColumnWidth(6, 180)
-            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        if mode_changed:
+            visible = (
+                {0, 2, 6}
+                if mode == "narrow"
+                else {0, 1, 2, 6}
+                if mode == "medium"
+                else set(range(7))
+            )
+            for column in range(7):
+                self.table.setColumnHidden(column, column not in visible)
+            server_header = self.table.horizontalHeaderItem(1)
+            if server_header is not None:
+                server_header.setText("서버 ID" if mode == "narrow" else "도구 / 서버")
+            id_header = self.table.horizontalHeaderItem(2)
+            if id_header is not None:
+                id_header.setText("호출 ID" if mode != "full" else "호출 / 요청")
+            header.setMinimumSectionSize(20)
+            for column in range(7):
+                header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+        available = viewport_width - 2
+        if mode == "narrow":
+            first = available * 42 // 100
+            second = available * 20 // 100
+            widths = {0: first, 2: second, 6: available - first - second}
+        elif mode == "medium":
+            first = available * 21 // 100
+            second = available * 21 // 100
+            third = available * 31 // 100
+            widths = {
+                0: first,
+                1: second,
+                2: third,
+                6: available - first - second - third,
+            }
         else:
-            for column, width in ((0, 190), (3, 80), (4, 100), (5, 150), (6, 180)):
-                self.table.setColumnWidth(column, width)
-            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+            proportions = (16, 16, 20, 8, 11, 12)
+            widths = {
+                column: available * percent // 100
+                for column, percent in enumerate(proportions)
+            }
+            widths[6] = available - sum(widths.values())
+        for column, width in widths.items():
+            self.table.setColumnWidth(column, width)
 
+        if not (mode_changed or force):
+            return
         for index, row in enumerate(self._visible_rows):
+            self.table.setRowHeight(index, 72 if mode != "full" else 58)
             time_item = self.table.item(index, 0)
             if time_item is not None:
                 timestamp = format_kst(row.occurred_at)
                 time_item.setText(
-                    timestamp.replace("일 ", "일\n", 1) if compact else timestamp
+                    _short_time(row.occurred_at) if mode != "full" else timestamp
+                )
+            server_item = self.table.item(index, 1)
+            if server_item is not None:
+                server_item.setText(
+                    row.server_id or MISSING
+                    if mode == "narrow"
+                    else f"{row.tool_name or MISSING}\n{row.server_id or MISSING}"
                 )
             id_item = self.table.item(index, 2)
             if id_item is not None:
                 id_item.setText(
                     row.call_id
-                    if compact
+                    if mode != "full"
                     else f"{row.call_id}\n{row.request_id or MISSING}"
                 )
             status_item = self.table.item(index, 6)
@@ -346,7 +416,7 @@ class CallLogPage(QWidget):
                 status = fixed(REQUEST_STATUSES, row.current_status)
                 status_item.setText(
                     "결과 불명\n수신측 확인 필요"
-                    if compact and row.current_status == "UNKNOWN_OUTCOME"
+                    if mode != "full" and row.current_status == "UNKNOWN_OUTCOME"
                     else status
                 )
 

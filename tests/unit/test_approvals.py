@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QBoxLayout, QPushButton, QScrollArea
 
 from guard_app.domain.enums import ApprovalStatus
 from guard_app.ui.approvals import (
@@ -266,11 +268,23 @@ def test_filter_and_newest_sort_request_backend_wide_order(app: QApplication) ->
     assert view.current_query.page == 1
 
 
-def test_table_fits_actual_viewport_at_compact_and_full_width(
+@pytest.mark.parametrize(
+    ("width", "visible_columns", "stacked"),
+    [
+        (320, (0, 1, 4), True),
+        (540, (0, 1, 4), True),
+        (760, (0, 1, 4, 5), False),
+        (980, (0, 1, 2, 3, 4, 5), False),
+    ],
+)
+def test_table_and_controls_fit_viewport_at_multiple_widths(
     app: QApplication,
+    width: int,
+    visible_columns: tuple[int, ...],
+    stacked: bool,
 ) -> None:
     view = ApprovalListPage()
-    view.resize(500, 580)
+    view.resize(width, 580)
     view.show()
     try:
         view.refresh()
@@ -279,26 +293,102 @@ def test_table_fits_actual_viewport_at_compact_and_full_width(
         app.processEvents()
         QTest.qWait(20)
         app.processEvents()
-        assert view.table.viewport().width() < view._FULL_TABLE_WIDTH
-        assert [view.table.isColumnHidden(i) for i in range(6)] == [
-            False,
-            False,
-            True,
-            True,
-            False,
-            True,
-        ]
+        assert view.width() == width
+        assert (
+            tuple(i for i in range(6) if not view.table.isColumnHidden(i))
+            == visible_columns
+        )
         assert view.table.horizontalScrollBar().maximum() == 0
+        direction = (
+            QBoxLayout.Direction.TopToBottom
+            if stacked
+            else QBoxLayout.Direction.LeftToRight
+        )
+        assert view.filters.direction() == direction
+        assert view.pager.direction() == direction
+        for control in (
+            view.search,
+            view.server_filter,
+            view.sort,
+            view.previous_button,
+            view.next_button,
+            view.refresh_button,
+        ):
+            assert control.geometry().right() < width
+    finally:
+        view.close()
 
-        view.resize(980, 820)
+
+def test_narrow_keyboard_selection_shows_only_public_summary(app: QApplication) -> None:
+    view = ApprovalListPage()
+    view.resize(320, 580)
+    view.show()
+    try:
+        view.refresh()
+        row = summary(1)
+        assert view.set_page(result(view, (row,), 1), display_now=NOW)
+        view.table.setFocus()
+        QTest.keyClick(view.table, Qt.Key.Key_Down)
+        QTest.keyClick(view.table, Qt.Key.Key_Space)
+        assert view.selected_summary == row
+        assert view.selection_detail.isVisible()
+        detail = view.selection_detail.toPlainText()
+        assert row.approval_id in detail
+        assert row.task_id in detail
+        assert row.server_id in detail
+        assert "요청 시각" in detail
+        assert not hasattr(row, "arguments")
+        view.table.setFocus()
+        QTest.keyClick(view.table, Qt.Key.Key_Tab)
+        assert not view.table.hasFocus()
+    finally:
+        view.close()
+
+
+def test_public_summary_cannot_spoof_status_line(app: QApplication) -> None:
+    view = ApprovalListPage()
+    view.resize(320, 580)
+    view.show()
+    try:
+        view.refresh()
+        row = replace(
+            summary(1, destination="대상\n상태: 승인됨\u202e"),
+            server_id="server\r\n상태: 승인됨",
+        )
+        assert view.set_page(result(view, (row,), 1), display_now=NOW)
+        view.table.selectRow(0)
+        lines = view.selection_detail.toPlainText().splitlines()
+        assert len(lines) == 6
+        assert lines[1] == "상태: 승인 대기"
+        assert "\\u000A" in lines[0]
+        assert "\\u000A" in lines[3]
+        assert "\\u202E" in lines[3]
+        assert all(line != "상태: 승인됨" for line in lines)
+    finally:
+        view.close()
+
+
+def test_scroll_host_can_shrink_from_full_to_narrow_without_page_overflow(
+    app: QApplication,
+) -> None:
+    view = ApprovalListPage()
+    host = QScrollArea()
+    host.setWidgetResizable(True)
+    host.setWidget(view)
+    host.resize(1050, 650)
+    host.show()
+    try:
+        app.processEvents()
+        assert view.filters.direction() == QBoxLayout.Direction.LeftToRight
+        host.resize(320, 580)
         app.processEvents()
         QTest.qWait(20)
         app.processEvents()
-        assert view.table.viewport().width() >= view._FULL_TABLE_WIDTH
-        assert all(not view.table.isColumnHidden(i) for i in range(6))
+        assert view.filters.direction() == QBoxLayout.Direction.TopToBottom
+        assert host.horizontalScrollBar().maximum() == 0
         assert view.table.horizontalScrollBar().maximum() == 0
     finally:
-        view.close()
+        host.close()
 
 
 def test_waiting_hint_does_not_expire_or_interpret_markup(app: QApplication) -> None:

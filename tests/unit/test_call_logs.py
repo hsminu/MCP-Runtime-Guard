@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QBoxLayout
 
 from guard_app.ui.call_logs import (
     CallLogPage,
@@ -80,7 +80,8 @@ def test_row_click_opens_large_plain_detail_and_ignores_late_response(app) -> No
     assert requested[0].call_id == "call-1"
     dialog = page._detail_dialog
     assert dialog is not None
-    assert dialog.width() >= 900
+    assert dialog.width() <= dialog.screen().availableGeometry().width()
+    assert dialog.width() >= 320
     assert "불러오는 중" in dialog.body.toPlainText()
 
     page.set_detail(
@@ -199,7 +200,7 @@ def test_csv_button_copies_only_visible_query_rows(app) -> None:
     assert not page.csv_button.isEnabled()
 
 
-def test_compact_viewport_keeps_core_columns_without_horizontal_scroll(app) -> None:
+def test_narrow_medium_and_full_viewports_keep_important_columns(app) -> None:
     page = CallLogPage()
     page.set_calls(
         Surface(
@@ -208,6 +209,7 @@ def test_compact_viewport_keeps_core_columns_without_horizontal_scroll(app) -> N
                 PublicCallSummary(
                     "call-id-with-a-long-suffix",
                     request_id="request-id-with-a-long-suffix",
+                    server_id="server-a",
                     tool_name="very-long-tool-name-that-must-not-expand-the-table",
                     current_status="UNKNOWN_OUTCOME",
                     occurred_at=datetime(2026, 10, 11, 16, 30, tzinfo=UTC),
@@ -215,10 +217,10 @@ def test_compact_viewport_keeps_core_columns_without_horizontal_scroll(app) -> N
             ),
         )
     )
-    page.resize(540, 580)
+    page.resize(320, 580)
     page.show()
     app.processEvents()
-    assert page.table.viewport().width() < page._COMPACT_VIEWPORT_WIDTH
+    assert page.width() == 320
     assert [page.table.isColumnHidden(column) for column in range(7)] == [
         False,
         True,
@@ -229,13 +231,74 @@ def test_compact_viewport_keeps_core_columns_without_horizontal_scroll(app) -> N
         False,
     ]
     assert page.table.horizontalScrollBar().maximum() == 0
-    assert "2026년 10월 12일\n01:30:00 KST" == page.table.item(0, 0).text()
+    assert page.table.item(0, 0).text() == "2026-10-12\n01:30:00\nKST"
     assert page.table.item(0, 2).text() == "call-id-with-a-long-suffix"
     assert page.table.item(0, 6).text() == "결과 불명\n수신측 확인 필요"
+    assert page._actions_layout.direction() == QBoxLayout.Direction.TopToBottom
+    for control in (page.search, page.detail_button, page.csv_button):
+        assert control.geometry().right() < page.width()
+
+    page.resize(540, 580)
+    app.processEvents()
+    assert [page.table.isColumnHidden(column) for column in range(7)] == [
+        False,
+        False,
+        False,
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert page.table.item(0, 0).text() == "2026-10-12\n01:30:00\nKST"
+    assert "server-a" in page.table.item(0, 1).text()
+    assert page.table.horizontalScrollBar().maximum() == 0
 
     page.resize(1030, 700)
     app.processEvents()
     assert page.table.viewport().width() >= page._COMPACT_VIEWPORT_WIDTH
     assert not any(page.table.isColumnHidden(column) for column in range(7))
     assert "request-id-with-a-long-suffix" in page.table.item(0, 2).text()
+    assert page.table.horizontalScrollBar().maximum() == 0
+    assert page._actions_layout.direction() == QBoxLayout.Direction.LeftToRight
+    full_id_width = page.table.columnWidth(2)
+    page.resize(1200, 700)
+    app.processEvents()
+    assert page.table.columnWidth(2) > full_id_width
+    assert page.table.horizontalScrollBar().maximum() == 0
+    page.resize(320, 580)
+    app.processEvents()
+    assert page._actions_layout.direction() == QBoxLayout.Direction.TopToBottom
+    assert page.table.horizontalScrollBar().maximum() == 0
     page.close()
+
+
+def test_narrow_keyboard_selection_detail_and_csv_remain_reachable(app) -> None:
+    page = CallLogPage()
+    page.resize(320, 580)
+    page.show()
+    page.activateWindow()
+    app.processEvents()
+    try:
+        row = PublicCallSummary("call-1", server_id="server-a")
+        page.set_calls(Surface(LoadState.READY, (row,)))
+        requests: list[DetailRequest] = []
+        page.detail_requested.connect(requests.append)
+        page.table.setFocus()
+        app.processEvents()
+        QTest.keyClick(page.table, Qt.Key.Key_Down)
+        QTest.keyClick(page.table, Qt.Key.Key_Space)
+        assert page.detail_button.isEnabled()
+        QTest.keyClick(page.table, Qt.Key.Key_Tab)
+        assert page.detail_button.hasFocus()
+        page.detail_button.setFocus()
+        QTest.keyClick(page.detail_button, Qt.Key.Key_Return)
+        assert len(requests) == 1
+        assert requests[0].call_id == "call-1"
+        assert page._detail_dialog is not None
+        page._detail_dialog.close()
+        page.csv_button.setFocus()
+        QTest.keyClick(page.csv_button, Qt.Key.Key_Return)
+        assert "call-1" in QApplication.clipboard().text()
+        assert "server-a" in QApplication.clipboard().text()
+    finally:
+        page.close()

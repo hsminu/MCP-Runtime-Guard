@@ -7,17 +7,21 @@ and apply the requested global order and snapshot/continuation policy.
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
+import shiboken6
 from PySide6.QtCore import QEvent, QObject, QTimer, Signal
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QBoxLayout,
     QComboBox,
-    QHBoxLayout,
     QHeaderView,
     QLineEdit,
+    QPlainTextEdit,
     QTabBar,
     QTableWidget,
     QTableWidgetItem,
@@ -104,6 +108,8 @@ class ApprovalListPage(QWidget):
     query_requested = Signal(object)
     summary_selected = Signal(object)
     _FULL_TABLE_WIDTH = 850
+    _MEDIUM_TABLE_WIDTH = 560
+    _STACK_CONTROLS_WIDTH = 690
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -113,7 +119,7 @@ class ApprovalListPage(QWidget):
         self._state = LoadState.UNAVAILABLE
         self._total_count = 0
         self._selected_id: str | None = None
-        self._compact_columns: bool | None = None
+        self._column_mode: str | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 28, 26, 42)
@@ -134,24 +140,24 @@ class ApprovalListPage(QWidget):
         self.lane_tabs.currentChanged.connect(self._filters_changed)
         layout.addWidget(self.lane_tabs)
 
-        filters = QHBoxLayout()
+        self.filters = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.search = QLineEdit()
         self.search.setPlaceholderText("승인·Task·요청 ID 검색")
         self.search.setAccessibleName("승인 검색어")
         self.search.editingFinished.connect(self._filters_changed)
-        filters.addWidget(self.search, 2)
+        self.filters.addWidget(self.search, 2)
         self.server_filter = QLineEdit()
         self.server_filter.setPlaceholderText("MCP 서버 ID")
         self.server_filter.setAccessibleName("MCP 서버 ID 필터")
         self.server_filter.editingFinished.connect(self._filters_changed)
-        filters.addWidget(self.server_filter, 1)
+        self.filters.addWidget(self.server_filter, 1)
         self.sort = QComboBox()
         self.sort.addItem("오래된 순", ApprovalSort.OLDEST)
         self.sort.addItem("최신 순", ApprovalSort.NEWEST)
         self.sort.setAccessibleName("승인 목록 정렬")
         self.sort.currentIndexChanged.connect(self._filters_changed)
-        filters.addWidget(self.sort)
-        layout.addLayout(filters)
+        self.filters.addWidget(self.sort)
+        layout.addLayout(self.filters)
 
         self.state_message = StateMessage()
         layout.addWidget(self.state_message)
@@ -169,8 +175,10 @@ class ApprovalListPage(QWidget):
             ]
         )
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setTabKeyNavigation(False)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
@@ -178,26 +186,46 @@ class ApprovalListPage(QWidget):
         self.table.viewport().installEventFilter(self)
         layout.addWidget(self.table, 1)
 
-        pager = QHBoxLayout()
+        self.selection_detail = QPlainTextEdit()
+        self.selection_detail.setAccessibleName("선택한 승인 공개 요약")
+        self.selection_detail.setReadOnly(True)
+        self.selection_detail.setUndoRedoEnabled(False)
+        self.selection_detail.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.selection_detail.setFixedHeight(116)
+        self.selection_detail.hide()
+        layout.addWidget(self.selection_detail)
+
+        self.pager = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.count_label = plain_label(
             "총건수 미제공 · 현재 페이지 0건", name="secondary"
         )
-        pager.addWidget(self.count_label)
-        pager.addStretch(1)
+        self.pager.addWidget(self.count_label)
+        self.pager.addStretch(1)
         self.previous_button = KeyboardActionButton("이전")
         self.previous_button.clicked.connect(self.previous_page)
-        pager.addWidget(self.previous_button)
+        self.pager.addWidget(self.previous_button)
         self.page_label = plain_label("— / —", name="secondary", wrap=False)
-        pager.addWidget(self.page_label)
+        self.pager.addWidget(self.page_label)
         self.next_button = KeyboardActionButton("다음")
         self.next_button.clicked.connect(self.next_page)
-        pager.addWidget(self.next_button)
+        self.pager.addWidget(self.next_button)
         self.refresh_button = KeyboardActionButton("새로고침")
         self.refresh_button.clicked.connect(self.refresh)
-        pager.addWidget(self.refresh_button)
-        layout.addLayout(pager)
+        self.pager.addWidget(self.refresh_button)
+        layout.addLayout(self.pager)
         self._update_pager()
         self._update_table_columns()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        direction = (
+            QBoxLayout.Direction.TopToBottom
+            if self.width() < self._STACK_CONTROLS_WIDTH
+            else QBoxLayout.Direction.LeftToRight
+        )
+        if self.filters.direction() != direction:
+            self.filters.setDirection(direction)
+            self.pager.setDirection(direction)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.table.viewport() and event.type() is QEvent.Type.Resize:
@@ -207,20 +235,45 @@ class ApprovalListPage(QWidget):
     def _update_table_columns(self) -> None:
         """Fit visible columns to the real table viewport, including scrollbars."""
 
+        if not shiboken6.isValid(self.table):
+            return
         viewport_width = self.table.viewport().width()
         if viewport_width < 100:
             return
-        compact = viewport_width < self._FULL_TABLE_WIDTH
-        if compact != self._compact_columns:
-            self._compact_columns = compact
-            for column in (2, 3, 5):
-                self.table.setColumnHidden(column, compact)
+        mode = (
+            "narrow"
+            if viewport_width < self._MEDIUM_TABLE_WIDTH
+            else "medium"
+            if viewport_width < self._FULL_TABLE_WIDTH
+            else "full"
+        )
+        if mode != self._column_mode:
+            self._column_mode = mode
+            visible = (
+                {0, 1, 4}
+                if mode == "narrow"
+                else {0, 1, 4, 5}
+                if mode == "medium"
+                else set(range(6))
+            )
+            for column in range(6):
+                self.table.setColumnHidden(column, column not in visible)
 
         available = viewport_width - 2
-        if compact:
+        if mode == "narrow":
             first = available * 33 // 100
             second = available * 27 // 100
             widths = {0: first, 1: second, 4: available - first - second}
+        elif mode == "medium":
+            first = available * 20 // 100
+            second = available * 19 // 100
+            third = available * 35 // 100
+            widths = {
+                0: first,
+                1: second,
+                4: third,
+                5: available - first - second - third,
+            }
         else:
             fractions = (15, 13, 18, 16, 18)
             widths = {
@@ -376,6 +429,8 @@ class ApprovalListPage(QWidget):
         self.table.setRowCount(0)
         self._rows = ()
         self._total_count = 0
+        self.selection_detail.clear()
+        self.selection_detail.hide()
         if self._selected_id is not None:
             self._selected_id = None
             self.summary_selected.emit(None)
@@ -451,4 +506,41 @@ class ApprovalListPage(QWidget):
         new_id = summary.approval_id if summary is not None else None
         if new_id != self._selected_id:
             self._selected_id = new_id
+            self.selection_detail.setVisible(summary is not None)
+            self.selection_detail.setPlainText(
+                "" if summary is None else self._selected_detail_text(summary)
+            )
             self.summary_selected.emit(summary)
+
+    @staticmethod
+    def _selected_detail_text(row: ApprovalSummary) -> str:
+        def one_line(value: str) -> str:
+            parts = []
+            for char in value:
+                if char == "\\":
+                    parts.append("\\\\")
+                elif char != " " and (
+                    char.isspace()
+                    or unicodedata.category(char).startswith("C")
+                    or unicodedata.bidirectional(char) in {"R", "AL", "AN"}
+                ):
+                    codepoint = ord(char)
+                    parts.append(
+                        f"\\u{codepoint:04X}"
+                        if codepoint <= 0xFFFF
+                        else f"\\U{codepoint:08X}"
+                    )
+                else:
+                    parts.append(char)
+            return "".join(parts)
+
+        return "\n".join(
+            (
+                f"승인 ID: {one_line(row.approval_id)} · 서버 ID: {one_line(row.server_id)}",
+                f"상태: {_STATUS_TEXT[row.status]}",
+                f"Task ID: {one_line(row.task_id)} · 요청 ID: {one_line(row.request_id)}",
+                f"수신처 요약: {one_line(row.destination_summary) if row.destination_summary else MISSING}",
+                f"요청 시각: {format_kst(row.created_at)}",
+                f"처리 시각: {format_kst(row.resolved_at)}",
+            )
+        )
