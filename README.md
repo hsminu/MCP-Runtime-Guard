@@ -2,7 +2,7 @@
 
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-현재 B 브랜치에는 **B1 도메인·포트 계약 초안, B2 순수 정책·등급 누적, B3 Catalog, 해시·스냅샷·예외 처리, B4 Guard·응답 게이트, B5 승인 서비스와 단위·성질 테스트**가 있다. Python 3.12 가상환경에서 B 서비스를 검증했다. Catalog의 실제 C 안전 경로, A의 transport·AGT·Runner·제어 큐, C의 ID·순번·감사·SQLite 연결과 계약 합의·담당 리뷰·CI는 인수 대상이다. 아래 전체 시스템 동작은 구현 목표이며 실제 전송·DB·GUI 실행을 완료한 상태는 아니다.
+현재 B 브랜치에는 **B1 도메인·포트 계약 초안, B2 순수 정책·등급 누적, B3 Catalog, 해시·스냅샷·예외 처리, B4 Guard·응답 게이트, B5 승인 서비스와 단위·성질 테스트**가 있다. Python 3.12 가상환경에서 B 서비스를 검증했다. SQLite 구현은 B6로 이관됐으며 API 검토 단계다. Catalog의 실제 C 안전 경로·Registry, A의 transport·AGT·Runner·제어 큐와 B 저장소 연결, 공통 계약 합의·담당 리뷰·CI는 인수 대상이다. 아래 전체 시스템 동작은 구현 목표이며 실제 전송·DB·GUI 실행을 완료한 상태는 아니다.
 
 ## 개발 문서
 
@@ -25,10 +25,12 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | 담당 | 작업 브랜치 | 주요 책임 | 브랜치별 작업 문서 |
 | --- | --- | --- | --- |
 | A · 애플리케이션 | `feat/a-application` | MCP transport, AGT 연결, 모델·Runner, Qt↔asyncio bridge, GUI | `docs/tasks/a-application.md` |
-| B · 보안 코어 | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트 | `docs/tasks/b-security-core.md` |
-| C · 보안 기반·검증 | `feat/c-security-platform` | SQLite, 위험 연산 모듈, 서버 등록·Scanner, fixture·계수, 통합·공격·실험, CI | `docs/tasks/c-security-platform.md` |
+| B · 보안 코어·SQLite | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트, SQLite·스키마·복구·저장소 단위 테스트 | `docs/tasks/b-security-core.md`, [B6 · SQLite 인수](docs/tasks/b-sqlite-store.md) |
+| C · 보안 기반·검증 | `feat/c-security-platform` | 위험 연산 모듈, 서버 등록·Scanner, 저장소 리뷰·독립 검증, fixture·계수, 통합·공격·실험, CI | `docs/tasks/c-security-platform.md` |
 
 브랜치 이름은 담당 범위를 나타낸다. 실제 담당자 이름은 아직 지정하지 않았다. `main`은 공통 기준 문서와 리뷰를 마친 변경을 모으는 브랜치다.
+
+2026-10-12 사용자 결정으로 SQLite 구현을 C에서 B로 이관했다. 현행 소유권과 리뷰는 [협업 규칙](docs/team-workflow.md)을 따른다. 기술 설계 원문은 보존하며, 이전 SQLite 담당 표기는 이 결정으로 대체한다. Store API의 세부 제안은 별도 검토 대상이다.
 
 ## 해결할 문제
 
@@ -83,7 +85,7 @@ flowchart LR
 | `services` | Guard·승인·응답 게이트(B), Runner·bridge(A), registry(C) | 역할별 분담 |
 | `adapters` | MCP·AGT·모델(A), Cisco Scanner(C) | 역할별 분담 |
 | `security` | 위험 연산(C), 예외 판정 변환·승인 해시(B) | 역할별 분담 |
-| `storage` | SQLite와 원자적 트랜잭션 | C |
+| `storage` | SQLite·스키마·복구·원자적 트랜잭션·단위 테스트 | B 구현, C 리뷰·독립 검증 |
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
 | `fixtures`, 테스트, CI | 실제 수신 계수로 집행을 검증 | C 주도 |
 

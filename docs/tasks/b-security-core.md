@@ -1,6 +1,6 @@
 # B · 보안 코어 작업 지침과 체크리스트
 
-작업 브랜치는 `feat/b-security-core`다. **호출을 보내도 되는지 결정하고, 승인·결과 공개·Task 상태를 일관되게 집행하는 코어**를 맡는다. B1 계약 초안과 B2–B5 담당 서비스·단위 테스트를 구현했다. 아래 구현 체크는 B 소유 코드 범위이며 A·C 계약 합의·실제 연결·인수 검증은 별도다.
+작업 브랜치는 `feat/b-security-core`다. **호출을 보내도 되는지 결정하고, 승인·결과 공개·Task 상태를 일관되게 집행하는 코어**를 맡는다. B1 계약 초안과 B2–B5 담당 서비스·단위 테스트를 구현했다. 2026-10-12 사용자 결정으로 SQLite 구현을 B6로 인수하며, 2026-10-13 공통 문서의 담당 변경을 이 문서에 반영했다. B6는 API 검토 단계이며 구현·독립 인수는 미완료다. 아래 구현 체크는 B 소유 코드 범위이며 A·C 계약 합의·실제 연결·인수 검증은 별도다.
 
 ## 담당 범위
 
@@ -13,10 +13,11 @@
 | `services/guard.py`, `services/catalog.py` | 유일 실행 입구·직렬화, 신뢰 설정 기반 요청 해석 | A |
 | `services/approvals.py`, `services/response_gate.py` | 재평가·원자적 소비 연계, 격리·커밋 후 공개 | C |
 | `security/failclosed.py`, `security/digest.py` | 예약 전후 예외 의미, 바이트 직렬화·SHA-256 | C |
+| `storage/*` | SQLite·스키마·마이그레이션·원자 연산·영속 순번·감사 저장·시작 복구 | C |
 | 담당 단위·성질 테스트 | 정책·모델·Catalog·승인 의미 검증 | 관련 리뷰 담당 |
 | `docs/contracts.md` | 계약 초안·미확정 항목·3인 합의 기록 | A·C |
 
-A의 transport·AGT 번역·Runner·GUI, C의 SQLite·Registry·Scanner·위험 연산을 구현하지 않는다. 필요한 연산을 `ports.py`로 계약하고 담당 구현을 사용한다. core의 외부 의존성을 추가하지 않는다.
+A의 transport·AGT 번역·Runner·GUI, C의 Registry·Scanner·위험 연산을 구현하지 않는다. SQLite·저장소 단위 테스트는 B가 구현하고 C가 리뷰·독립 계약·통합·결함 주입 검증을 맡는다. 현행 소유권은 [협업 규칙](../team-workflow.md), 추가 작업은 [B6 · SQLite 인수](b-sqlite-store.md)를 따른다. 필요한 연산은 공통 계약으로 검토하고 담당 구현을 사용한다. core의 외부 의존성을 추가하지 않는다.
 
 ## 먼저 읽을 설계
 
@@ -82,13 +83,34 @@ C 브랜치에 경로 함수가 없어 위 자원형 READ 항목에 계속 남�
 - [x] 사본 원문은 메모리에만 두고 Store에는 해시·메타데이터만 전달한다. 재시작 때 승인 원문·실행 권한을 복원하지 않는다.
 - [x] 사람 전용 제어 채널만 승인·거절·취소·긴급 차단 API를 호출하게 한다. AGT 허용은 사람 승인을 대체하지 않는다.
 - [x] 승인 시 현재 등록·지문·목적지·상태로 재해석하고 재평가한다. ASK와 snapshot 해시가 모두 일치해야 소비한다.
-- [x] C의 consume_and_reserve를 연계하며 정확한 True ACK 후에만 실행한다. 더블클릭·재전달의 서비스 단위 실행은 1회다.
+- [x] Store의 consume_and_reserve 초안을 연계하며 정확한 True ACK 후에만 실행한다. 더블클릭·재전달의 서비스 단위 실행은 1회다.
 - [x] 재평가부터 소비·dispatch·응답 커밋까지 submit과 같은 Task lock을 유지한다.
 - [x] monotonic deadline과 UTC 만료를 함께 검사한다. 소비 완료 후 전송 직전에도 검사하며 만료 시간은 설정값으로 관리한다.
 
 해시·예외·B4·B5의 구현·검증·미확정 계약은 [B4·B5 문서](../b4-b5-execution.md)에 있다.
-실제 C 승인 소비·실행 예약·Task RUNNING·감사의 단일 트랜잭션과 DB 시점의 UTC 만료,
+실제 B6 저장소의 승인 소비·실행 예약·Task RUNNING·감사 단일 트랜잭션과 DB 시점의 UTC 만료,
 A의 인증된 제어 큐 연결, 실제 wire/부작용 계수는 인수 검증에 계속 남아 있다.
+
+2026-10-12 `f3c2d2b`에서 승인 조회와 정지 경로의 Task ID·snapshot epoch 검증을 보강했다.
+B의 회귀 테스트 24개 추가 후 전체 864개 통과를 확인했고, C도 해당 커밋의 864개·Ruff·mypy를
+별도 환경에서 재현했다. 이는 대역 단위 검증이며 실제 SQLite 검증은 미완료다.
+근거는 [C의 B 검토·후속 수정 확인](c-b-review.md#후속-수정-f3c2d2b-확인)이다.
+
+### B6 · SQLite 저장소
+
+- [ ] 현재 Store 12개 메서드와 [C Store 요구](c-store-requirements.md)·[처리 제안 v1](c-store-proposal.md)을 대조해 API·DTO·상태·버전·오류·시간·감사 변경안을 제공한다.
+- [ ] A의 시작 실행 게이트·제어 큐·조회 요구와 C의 독립 인수 기준을 대조하고 실제 API 합의 근거를 공통 계약에 기록한다.
+- [ ] 합의된 계약으로 SQLite·원자 연산·영속 순번·감사·시작 복구와 저장소 단위 테스트를 구현한다.
+- [ ] C의 실제 Store/Fake 계약·결함 주입 검증을 받고, A 연결 후 요청별 소비·dispatch·wire·수신 부작용 계수를 확인한다.
+
+세부 체크·설정·인수 기준은 [B6 작업 문서](b-sqlite-store.md)를 따른다.
+C의 안전 ID·safe_path·Registry·Scanner 소유권은 유지하며 Registry 영속화는 B 저장소의
+단일 writer 계약으로 연결한다. 이 담당 변경으로 C 제안의 API까지 확정하지 않는다.
+
+A 브랜치 `5598009`에는 transport·AGT mock·모델·Runner·bridge·Qt UI 구현이 있으며 실제
+제품 연결은 미완료다. 일반 submit의 trusted `expected_epoch` 검사, 인증된 동일 메모리 승인
+사본 조회, 권위 있는 승인·Task 상태·revision 및 제어 적용 결과는
+[A 계약 요청](https://github.com/hsminu/MCP-Runtime-Guard/blob/55980091fc49871903d72e8ba1e657ab7682035b/docs/tasks/a-port-review.md#7-b-head-f3c2d2b-연동-중-드러난-호출제어-계약-질문)에 있는 미합의 사항이다.
 
 ## 검증과 인수
 
@@ -98,9 +120,10 @@ A의 인증된 제어 큐 연결, 실제 wire/부작용 계수는 인수 검증�
 | 승인 | 해시·만료·상태·버전 의미의 단위 테스트 | T02, T09–T12, T37의 실제 소비·dispatch 계수 |
 | 응답·예외 | READ/SEND 분리, 예약 전후 결과 의미 | T07, T19, T33, T35–T37, S05의 결함·유출 검증 |
 | 누적·비교 모드 | high-watermark 단조성·미분류 고정 | T23·T24·T28·T34의 동일 조건 replay |
+| SQLite 저장소 | 스키마·제약·상태/버전·원자 연산·S03 바인딩 SQL의 단위 부분 | 실제 Store/Fake 계약·통합·공격·결함 주입·복구 검증 |
 
 - [ ] A의 Guard·Catalog 리뷰와 C의 정책·승인·응답·예외·해시 리뷰를 받는다.
-- [ ] C의 저장소·보안 모듈·Registry·Scanner·CI 및 C 소유 테스트를 리뷰한다.
+- [ ] B6 저장소에 대한 C 리뷰·독립 검증을 받고, C의 보안 모듈·Registry·Scanner·CI 및 C 소유 테스트를 리뷰한다.
 - [ ] A·C에게 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 전달한다.
 - [ ] 구현자가 만든 Fake 테스트만으로 집행을 완료 처리하지 않는다. C의 실제 수신 계수 검증을 확인한다.
 
