@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -16,6 +17,8 @@ from guard_app.adapters.model_client import (
     MAX_MODEL_CONVERSATION_MESSAGES,
     MAX_MODEL_CONVERSATION_UTF8_BYTES,
     MAX_MODEL_TEXT_CHARS,
+    ModelCompletionError,
+    ModelDeadlineError,
     ModelFormatError,
     ProviderNeutralModelClient,
     parse_model_turn,
@@ -100,6 +103,123 @@ def test_provider_boundary_does_not_execute_tools() -> None:
     assert turn.text == "ok"
     assert len(observed) == 1
     assert observed[0][1][0].tool_ref == "alpha__read"
+
+
+@pytest.mark.parametrize(
+    "timeout_s", [0, -1, 301, 10**1000, float("nan"), float("inf"), True, "1"]
+)
+def test_completion_deadline_must_be_finite_and_positive(timeout_s: object) -> None:
+    async def complete(conversation, tools):
+        return {"text": "ok", "calls": []}
+
+    with pytest.raises(ValueError, match="유효한 모델 응답 제한 시간"):
+        ProviderNeutralModelClient(complete, timeout_s=timeout_s)
+
+
+@pytest.mark.parametrize(
+    "failure", [OSError("synthetic-private-marker"), asyncio.CancelledError()]
+)
+def test_provider_failure_has_fixed_content_free_error(failure: BaseException) -> None:
+    async def complete(conversation, tools):
+        raise failure
+
+    client = ProviderNeutralModelClient(complete)
+    with pytest.raises(ModelCompletionError) as captured:
+        asyncio.run(
+            client.step((ConversationMessage(role="user", content="read"),), ())
+        )
+    assert str(captured.value) == "모델 요청을 완료할 수 없다"
+    assert "synthetic-private-marker" not in str(captured.value)
+
+
+def test_provider_timeout_has_fixed_content_free_error() -> None:
+    async def complete(conversation, tools):
+        raise TimeoutError("synthetic-private-marker")
+
+    client = ProviderNeutralModelClient(complete)
+    with pytest.raises(ModelDeadlineError) as captured:
+        asyncio.run(
+            client.step((ConversationMessage(role="user", content="read"),), ())
+        )
+    assert str(captured.value) == "모델 응답 대기 시간이 초과됐다"
+    assert "synthetic-private-marker" not in str(captured.value)
+
+
+def test_completion_deadline_discards_late_result_after_ignored_cancellation() -> None:
+    release = asyncio.Event()
+    cancelled = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def complete(conversation, tools):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            try:
+                await release.wait()
+                return {"text": "late", "calls": [_call()]}
+            finally:
+                finished.set()
+
+    client = ProviderNeutralModelClient(complete, timeout_s=0.01)
+
+    async def run():
+        attempt = asyncio.create_task(
+            client.step(
+                (ConversationMessage(role="user", content="read"),), (_view("alpha"),)
+            )
+        )
+        done, _ = await asyncio.wait({attempt}, timeout=1)
+        try:
+            assert done == {attempt}
+            with pytest.raises(
+                ModelDeadlineError, match="모델 응답 대기 시간이 초과됐다"
+            ):
+                await attempt
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+        finally:
+            release.set()
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+
+
+def test_caller_cancellation_propagates_and_discards_late_completion() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def complete(conversation, tools):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            try:
+                await release.wait()
+                return {"text": "late", "calls": [_call()]}
+            finally:
+                finished.set()
+
+    client = ProviderNeutralModelClient(complete, timeout_s=1)
+
+    async def run():
+        attempt = asyncio.create_task(
+            client.step(
+                (ConversationMessage(role="user", content="read"),), (_view("alpha"),)
+            )
+        )
+        await entered.wait()
+        attempt.cancel()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await attempt
+        finally:
+            release.set()
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
 
 
 def test_conversation_utf8_boundary_is_checked_before_provider_egress() -> None:

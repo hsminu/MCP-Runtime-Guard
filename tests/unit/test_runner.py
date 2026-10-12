@@ -10,6 +10,7 @@ import pytest
 from guard_app.adapters.model_client import (
     MAX_MODEL_CONVERSATION_UTF8_BYTES,
     ModelFormatError,
+    ProviderNeutralModelClient,
 )
 from guard_app.domain.contracts import (
     Denied,
@@ -514,6 +515,61 @@ def test_invalid_model_output_stops_before_guard() -> None:
     runner.add_user_message("read")
     assert asyncio.run(runner.advance()).status == "model_error"
     assert guard.calls == []
+
+
+@pytest.mark.parametrize("late_failure", [False, True])
+def test_model_deadline_releases_runner_and_never_submits_late_call(
+    late_failure: bool,
+) -> None:
+    release = asyncio.Event()
+    cancelled = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def complete(conversation, tools):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            try:
+                await release.wait()
+                if late_failure:
+                    raise OSError("synthetic-private-marker")
+                return {
+                    "text": None,
+                    "calls": [
+                        {
+                            "tool_ref": "alpha__read",
+                            "arguments": {"path": "late"},
+                            "model_call_id": "call-late",
+                        }
+                    ],
+                }
+            finally:
+                finished.set()
+
+    guard = FakeGuard()
+    model = ProviderNeutralModelClient(complete, timeout_s=0.01)
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    async def run():
+        running = asyncio.create_task(runner.advance())
+        done, _ = await asyncio.wait({running}, timeout=1)
+        try:
+            assert done == {running}
+            assert (await running).status == "model_error"
+            with pytest.raises(RunnerStateError):
+                await runner.advance()
+            await asyncio.wait_for(cancelled.wait(), timeout=1)
+        finally:
+            release.set()
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+    assert guard.calls == []
+    with pytest.raises(RunnerStateError):
+        runner.add_user_message("retry")
 
 
 def test_oversized_user_input_stops_before_model_or_guard() -> None:

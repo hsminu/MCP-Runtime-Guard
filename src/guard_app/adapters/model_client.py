@@ -7,7 +7,9 @@ the B-owned ModelTurn/ProposedCall contracts. It never executes a tool.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 import re
 from collections.abc import Awaitable, Callable
 from typing import cast
@@ -36,7 +38,32 @@ class ModelFormatError(ValueError):
         super().__init__("모델 응답 형식이 유효하지 않다")
 
 
+class ModelDeadlineError(ModelFormatError):
+    """Fixed, content-free error for a model completion deadline."""
+
+    def __init__(self) -> None:
+        ValueError.__init__(self, "모델 응답 대기 시간이 초과됐다")
+
+
+class ModelCompletionError(ModelFormatError):
+    """Fixed, content-free error for an unsuccessful provider completion."""
+
+    def __init__(self) -> None:
+        ValueError.__init__(self, "모델 요청을 완료할 수 없다")
+
+
 type ModelCompletion = Callable[[Conversation, tuple[ToolView, ...]], Awaitable[object]]
+
+DEFAULT_MODEL_COMPLETION_TIMEOUT_S = 60.0
+MAX_MODEL_COMPLETION_TIMEOUT_S = 300.0
+
+
+def _discard_late_completion(task: asyncio.Task[object]) -> None:
+    """Retrieve a late failure without publishing its exception or response."""
+
+    if not task.cancelled():
+        task.exception()
+
 
 # Bounds on one normalized provider response. The completion remains untrusted
 # even when the provider transport has its own token or HTTP response limit.
@@ -416,10 +443,23 @@ class ProviderNeutralModelClient:
     provider handle. Real provider transport and environment policy are A20.
     """
 
-    def __init__(self, completion: ModelCompletion) -> None:
+    def __init__(
+        self,
+        completion: ModelCompletion,
+        *,
+        timeout_s: float = DEFAULT_MODEL_COMPLETION_TIMEOUT_S,
+    ) -> None:
         if not callable(completion):
             raise TypeError("모델 completion이 필요하다")
+        if (
+            type(timeout_s) not in (int, float)
+            or timeout_s <= 0
+            or timeout_s > MAX_MODEL_COMPLETION_TIMEOUT_S
+            or not math.isfinite(timeout_s)
+        ):
+            raise ValueError("유효한 모델 응답 제한 시간이 필요하다")
         self._completion = completion
+        self._timeout_s = float(timeout_s)
 
     async def step(
         self, conversation: Conversation, tools: tuple[ToolView, ...]
@@ -438,5 +478,29 @@ class ProviderNeutralModelClient:
         except ValidationError:
             raise ModelFormatError() from None
         validate_model_conversation_budget(safe_conversation)
-        raw = await self._completion(safe_conversation, safe_tools)
+
+        async def complete() -> object:
+            return await self._completion(safe_conversation, safe_tools)
+
+        # asyncio.wait returns at the deadline even if a provider coroutine
+        # suppresses cancellation. Never consume a completion after timeout.
+        completion_task = asyncio.create_task(complete())
+        try:
+            done, _ = await asyncio.wait({completion_task}, timeout=self._timeout_s)
+        except asyncio.CancelledError:
+            completion_task.add_done_callback(_discard_late_completion)
+            completion_task.cancel()
+            raise
+        if not done:
+            completion_task.add_done_callback(_discard_late_completion)
+            completion_task.cancel()
+            raise ModelDeadlineError()
+        if completion_task.cancelled():
+            raise ModelCompletionError() from None
+        try:
+            raw = completion_task.result()
+        except TimeoutError:
+            raise ModelDeadlineError() from None
+        except OSError:
+            raise ModelCompletionError() from None
         return parse_model_turn(raw, safe_tools)
