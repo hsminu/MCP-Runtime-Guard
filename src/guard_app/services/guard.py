@@ -157,22 +157,28 @@ class GuardService:
         """A의 인증된 제어 채널에만 전달한다. 모델 ToolView에 포함하지 않는다."""
         return self._approvals.human_channel(operator_id)
 
-    async def submit(self, task_id: str, call: ProposedCall) -> Outcome:
-        """I1·I4·I5: WAITING 중에는 반환하며 사람을 기다리는 lock은 없다."""
+    async def submit(
+        self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
+    ) -> Outcome:
+        """I1·I4·I5·I7: 신뢰 호출자의 epoch를 lock 안에서 확인한다."""
         return await fail_closed(
-            lambda: self._submit_locked(task_id, call),
+            lambda: self._submit_locked(task_id, call, expected_epoch=expected_epoch),
             lambda exc: self._pre_dispatch_failure(task_id, exc),
             on_containment_error=self._pre_failure_fallback,
         )
 
-    async def _submit_locked(self, task_id: str, call: ProposedCall) -> Outcome:
+    async def _submit_locked(
+        self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
+    ) -> Outcome:
         if type(task_id) is not str or not task_id:
+            raise ResolutionError(Reason.STATE_MISSING)
+        if expected_epoch is not None and (type(expected_epoch) is not int or expected_epoch < 0):
             raise ResolutionError(Reason.STATE_MISSING)
         if self._global_halt:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
         async with self._task_lock(task_id):
             decided = await fail_closed(
-                lambda: self._decide(task_id, call),
+                lambda: self._decide(task_id, call, expected_epoch=expected_epoch),
                 lambda exc: self._pre_dispatch_failure(task_id, exc),
                 on_containment_error=self._pre_failure_fallback,
             )
@@ -190,12 +196,16 @@ class GuardService:
             and state.policy_version == self._policy_version
         )
 
-    async def _decide(self, task_id: str, call: ProposedCall) -> _Allowed | Denied | Pending:
+    async def _decide(
+        self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
+    ) -> _Allowed | Denied | Pending:
         if self._global_halt:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
         state = TaskState.model_validate(await self._store.load_task(task_id))
         if state.task_id != task_id:
             raise StoreError(Reason.STATE_MISSING)
+        if expected_epoch is not None and state.epoch != expected_epoch:
+            return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
         if not self._policy_matches(state):
             await self._halt_task(task_id, Reason.POLICY_CHANGED)
             await self._approvals.invalidate_task(task_id, Reason.POLICY_CHANGED)

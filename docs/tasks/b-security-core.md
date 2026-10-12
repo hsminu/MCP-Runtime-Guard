@@ -98,7 +98,8 @@ B의 회귀 테스트 24개 추가 후 전체 864개 통과를 확인했고, C�
 
 ### B6 · SQLite 저장소
 
-- [ ] 현재 Store 12개 메서드와 [C Store 요구](c-store-requirements.md)·[처리 제안 v1](c-store-proposal.md)을 대조해 API·DTO·상태·버전·오류·시간·감사 변경안을 제공한다.
+- [x] 현재 Store 12개 메서드와 [C Store 요구](c-store-requirements.md)·[처리 제안 v1](c-store-proposal.md)을 대조해 [B6 계약 변경안](../b6-contract-proposal.md)을 제공했다. API·DTO·상태·버전·오류·시간·감사 선택은 공동 합의 전 제안이다.
+- [x] 사용자 결정인 A·C 검토 후 확정을 기록하고, 변경안 10절에 담당별 회신 항목을 정리했다. 실제 전달·동의는 미완료다.
 - [ ] A의 시작 실행 게이트·제어 큐·조회 요구와 C의 독립 인수 기준을 대조하고 실제 API 합의 근거를 공통 계약에 기록한다.
 - [ ] 합의된 계약으로 SQLite·원자 연산·영속 순번·감사·시작 복구와 저장소 단위 테스트를 구현한다.
 - [ ] C의 실제 Store/Fake 계약·결함 주입 검증을 받고, A 연결 후 요청별 소비·dispatch·wire·수신 부작용 계수를 확인한다.
@@ -113,6 +114,10 @@ A 브랜치 `5598009`에는 transport·AGT mock·모델·Runner·bridge·Qt UI �
 [A 계약 요청](https://github.com/hsminu/MCP-Runtime-Guard/blob/55980091fc49871903d72e8ba1e657ab7682035b/docs/tasks/a-port-review.md#7-b-head-f3c2d2b-연동-중-드러난-호출제어-계약-질문)에 있는 미합의 사항이다.
 
 ## 검증과 인수
+
+2026-10-13 정규식 후속은 기존 기능 유지·전체 검증 프로세스 실행을 B 방향으로 선택했다.
+[B3 연결안](../b-schema-validation-proposal.md)을 제공했으며 A 모델 변환과 C launcher의
+공동 비동기/실패 계약은 검토 대기다. 정규식 제품 수정·종료 검증은 미완료다.
 
 | 분류 | B가 작성할 검증 | C의 독립 검증 |
 | --- | --- | --- |

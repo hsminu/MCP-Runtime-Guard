@@ -320,6 +320,104 @@ def _call(name="read"):
     )
 
 
+@pytest.mark.parametrize("policy_version", ["v", "changed"])
+@pytest.mark.parametrize("status", list(TaskStatus))
+def test_submit_stale_caller_epoch_never_changes_replacement_t21(status, policy_version):
+    async def scenario():
+        h = _Harness()
+        replacement = h.store.states["task"].model_copy(
+            update={"epoch": 2, "status": status, "policy_version": policy_version}
+        )
+        h.store.states["task"] = replacement
+
+        result = await h.guard.submit("task", _call(), expected_epoch=1)
+
+        assert isinstance(result, Denied)
+        assert result.request_id is None
+        assert result.reasons == (Reason.TASK_NOT_RUNNING,)
+        assert h.store.states["task"] == replacement
+        assert h.store.trace == []
+        assert h.store.requests == {}
+        assert h.store.approvals == {}
+        assert h.store.consume_count == 0
+        assert h.access.calls == []
+        assert h.transport.calls == []
+        assert next(h.ids) == 1
+        assert next(h.sequences) == 1
+
+    asyncio.run(scenario())
+
+
+def test_submit_checks_caller_epoch_after_waiting_for_task_lock_t21():
+    async def scenario():
+        h = _Harness()
+        lock = h.guard._task_lock("task")
+        await lock.acquire()
+        queued = asyncio.create_task(h.guard.submit("task", _call(), expected_epoch=1))
+        await asyncio.sleep(0)
+        assert not queued.done()
+        replacement = h.store.states["task"].model_copy(update={"epoch": 2})
+        h.store.states["task"] = replacement
+        lock.release()
+
+        result = await queued
+
+        assert isinstance(result, Denied)
+        assert result.reasons == (Reason.TASK_NOT_RUNNING,)
+        assert h.store.states["task"] == replacement
+        assert h.store.trace == []
+        assert h.access.calls == []
+        assert h.transport.calls == []
+        assert not lock.locked()
+
+        current = await h.guard.submit("task", _call(), expected_epoch=2)
+        assert isinstance(current, Released)
+        assert len(h.transport.calls) == 1
+        assert h.transport.calls[0].epoch == 2
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("expected_epoch", [True, False, -1, 1.0, "1"])
+def test_submit_rejects_invalid_trusted_epoch_without_dispatch_t21(expected_epoch):
+    async def scenario():
+        h = _Harness()
+        state = h.store.states["task"]
+
+        result = await h.guard.submit("task", _call(), expected_epoch=expected_epoch)
+
+        assert isinstance(result, Denied)
+        assert result.reasons == (Reason.STATE_MISSING,)
+        assert h.store.states["task"] == state
+        assert h.store.trace == []
+        assert h.access.calls == []
+        assert h.transport.calls == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("epoch", [0, 1])
+@pytest.mark.parametrize(
+    ("label", "tool", "outcome"),
+    [
+        (Label.PUBLIC, "read", Released),
+        (Label.INTERNAL, "send", Pending),
+    ],
+)
+def test_submit_matching_epoch_preserves_allow_and_ask_t21(epoch, label, tool, outcome):
+    async def scenario():
+        h = _Harness(label=label)
+        h.store.states["task"] = h.store.states["task"].model_copy(update={"epoch": epoch})
+
+        result = await h.guard.submit("task", _call(tool), expected_epoch=epoch)
+
+        assert isinstance(result, outcome)
+        assert len(h.transport.calls) == int(outcome is Released)
+        assert len(h.store.approvals) == int(outcome is Pending)
+
+    asyncio.run(scenario())
+
+
 def test_read_commit_precedes_release_and_next_send_t05_t25():
     async def scenario():
         h = _Harness()

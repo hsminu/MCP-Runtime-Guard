@@ -27,7 +27,7 @@ A 브랜치 `5598009`에는 transport·AGT mock·모델·Runner·bridge·Qt UI �
 상세 근거는 [B1](b1-contract-draft.md), [B2](b2-policy-and-taint.md),
 [B3](b3-catalog.md), [B4·B5](b4-b5-execution.md), [B6](tasks/b-sqlite-store.md),
 [공통 계약](contracts.md), [C Store 요구](tasks/c-store-requirements.md),
-[C 처리 제안 v1](tasks/c-store-proposal.md)에 있다.
+[C 처리 제안 v1](tasks/c-store-proposal.md), [B6 계약 변경안](b6-contract-proposal.md)에 있다.
 
 ## A가 연결할 위치
 
@@ -218,9 +218,31 @@ Task ID·snapshot epoch를 검사하도록 보강했다. 다른 Task·교체된 
 
 ## 연결 후 인수 순서
 
+2026-10-13에는 일반 submit의 선택적 trusted `expected_epoch` 검사를 B 서비스에 추가했다.
+Task lock 획득 후 조회한 상태의 ID·epoch를 정책 변경 처리 전에 확인한다.
+불일치는 새 epoch Task 변경·요청/순번 발급·AGT·예약·전송 없이
+`Denied(TASK_NOT_RUNNING)`으로 반환한다. bool·음수·float·문자열은 `STATE_MISSING`으로 거부한다.
+현재 epoch의 ALLOW·ASK와 기존 생략 호출은 유지한다. A는 Runner에서 기대 epoch를 전달해야 한다.
+22개 회귀를 포함한 B 전체 **886개 통과**, Ruff·포맷·mypy·pip check 통과를 확인했다.
+이는 B 대역 단위 검증이며 A 제품 연결·C 실제 경합 검증·SQLite 인수를 뜻하지 않는다.
+
 1. B가 현재 Store와 C 요구·제안 및 A 조회·제어 요구를 대조해 API·DTO·상태/오류 변경안을 제공한다.
 2. A·C가 계약 영향을 리뷰하고 실제 합의 근거를 contracts.md에 기록한다.
 3. B가 합의된 계약으로 B6 SQLite와 저장소 단위 테스트를 구현하고 대상 커밋·설정·검증 결과를 전달한다.
 4. C가 실제 Store와 Fake에 동일 계약 테스트를 적용하고 저장소 리뷰·결함 주입을 수행한다.
 5. A 연결 후 ALLOW·DENY·ASK 승인 전·승인 후의 소비·dispatch·wire·부작용 계수를 확인한다.
 6. T07·T09–T12·T19–T20·T29·T33·T35–T37의 커밋 실패·경합·누출 방지와 C의 CI·공격·replay를 검증하고 실측 결과·한계를 기록한다.
+
+## 2026-10-13 · 검토 자료와 선택한 방향
+
+사용자는 B6 계약을 **A·C 검토를 받은 뒤 확정**하도록 결정했다.
+[B6 변경안 10절](b6-contract-proposal.md)에 A의 앱·조회·제어 영향과 C의 U1–U8·
+원자성·버전·오류·복구 회신 항목을 제공했다. 새 공유 계약·SQLite 구현은 검토 후 진행한다.
+
+정규식은 최종 기술설계와 GitHub 문서를 근거로 기존 기능을 유지하고 전체 검증을
+종료 가능한 프로세스로 옮기는 방향을 선택했다. [B3 검증 연결안](b-schema-validation-proposal.md)을
+A가 모델 입력·ToolView·비동기 호출 관점에서, C가 launcher·제한·종료/회수·Registry·
+독립 검증 관점에서 검토해야 한다. 예약 전 실패와 예약/승인 소비 후 실패를 구분한다.
+처리 방향 선택과 실제 수정은 별개이며, 현재 정규식 위험은 해결 전이다.
+
+이번 자료는 로컬 B 브랜치에서 준비했다. 원격 공유와 A/C 전달·리뷰·동의는 미완료다.
