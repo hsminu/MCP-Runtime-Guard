@@ -28,6 +28,7 @@
 | 검사·활성화·차단 | 사람 제어의 검사/재검토/차단 명령, 검사 대상 도구 metadata | Scanner에 본문·인증정보 없이 정의만 전달. 필수 분석기 완료·skipped·failed, 위험도, `fingerprint_set` 일치를 검사. 검사 성공 뒤에도 관리자 확인 없이는 `ACTIVE` 금지 | 등록 상태 `PENDING`/`ACTIVE`/`BLOCKED`, 검사 상태와 시각/버전/안전한 요약, 현재 지문과 일치 여부. **세션 연결 상태는 등록/검사 상태와 별도** |
 | 공개 조회·GUI | 서버 목록/상세·집계/감사 조회 요청 | Registry/Store 소유의 저장 상태와 권한·마스킹 정책으로 필드 공급. UI가 DB를 직접 읽지 않음 | ID·표시 이름·transport·마스킹된 endpoint/실행 설정·`tier`·`max_label`·등록/세션/검사/지문 상태를 출처·갱신 시각/리비전과 함께 전달. `tier`는 transport/localhost에서 추론하지 않음 |
 | 격리·로그 | A transport의 stdio `errlog`, SDK logging/progress/알림, 오류 타입; 세션 ID | C의 격리 저장 위치·수명·접근 통제 및 `security.redact`의 안전한 메타데이터 규칙. 원문을 일반 감사/CSV/UI/모델로 복사하지 않음. MCP SDK가 callback을 거치지 않고 root/named logger에 원문을 기록하므로 앱 전체 공개 handler의 allowlist 정책도 필요 | 격리 핸들 또는 수신 API, 앱 시작 전 공개 logging handler 정책, 마스킹된 상태/오류 코드만. 서버 로그는 신뢰할 수 없는 데이터로 취급 |
+| MCP 수신 예산 | A worker가 허용할 구조화 결과·content 블록 수와 B `ResponseGate`의 공개 크기 상한 | C stream factory에서 SDK의 `CallToolResult` 역직렬화 **전** stdio/HTTP 수신 바이트·메시지 수 제한을 적용하고, 초과를 원문 없는 오류로 전달. 전송 이후 초과는 READ 미공개/정지, SEND 결과 불명/재전송 금지로 처리 | 검증된 수신 상한 설정·초과 오류의 dispatch 전후 구분과 합성 대형 결과/빈 블록 다량 fixture. A의 객체 변환 전 검사는 wire 단계 상한을 대체하지 않음 |
 | DB 수명 | A backend 시작·부분 실패·종료 신호, 조회/명령의 완료 대기 | 백엔드 스레드 단일 writer가 연결·트랜잭션·WAL/foreign keys/synchronous FULL을 소유; 승인/요청/감사 원자성 유지 | 준비 완료/시작 실패, 안전한 종료 완료·미완료 신호와 호출 큐가 더는 접수하지 않는 시점. Qt 스레드에서 연결을 직접 닫거나 SQL 실행하지 않음 |
 
 설계 `registrations` 예시 스키마에는 표시 이름·transport 설정·세션 상태가 보이지 않는다. **어느 저장 모델/조회 모델이 이를 공급하는지 미확정**이다. `tier`·`max_label`은 등록된 신뢰 계약의 값이어야 하며 서버가 주장한 값, UI 시안 입력, 접속 방식만으로 확정하면 안 된다. 등록 권한, 외부 서버의 `max_label` 상한, 지문 계산의 정규화 방식과 동시 변경 리비전은 B·C와 합의가 필요하다. `status()`·`fingerprint()`는 설계상 이름일 뿐 실제 시그니처·오류 타입은 미제공이다.
@@ -74,6 +75,7 @@ T36의 dispatch 이후 변환 예외/McpError에서는 `host_dispatch=1`이어�
 | --- | --- | --- |
 | 등록·검사·차단·지문 불일치·세션 상태의 실제 명령/조회/이벤트 타입, 공개 필드, 리비전·오류 타입. 등록 설정과 표시 이름의 저장 위치 | C 제안, B의 Registry/도메인 계약 확인, A UI 검토 | A05·A15·A30–A32: UI가 저장 상태를 재현하고 지문 변경 시 `PENDING`·승인 무효가 관측됨(I10, T17) |
 | launcher 검증 완료 설정 생성/사용 수명, Windows/Linux 절대경로·인자·최소 환경 규칙; endpoint 정규화·redirect 방어; stderr 격리 핸들 및 SDK/root/httpx 공개 logging handler 정책 | C 구현/테스트, A transport 사용, B 리뷰 | A11–A14: S01·S02·S04, T16·T19의 입력 거부와 비공개를 실제 계수/로그로 확인(I8·I9) |
+| stdio/HTTP stream의 SDK 역직렬화 전 수신 상한과 대형 결과/빈 content 블록 다량 주입, 초과 시 요청별 계수·READ 미공개/SEND 결과 불명 판정 | C stream/fixture 구현, A transport 객체 단계 제한, B Guard 결과 검토 | A13·A16·A39: SDK 단계 메모리 상한과 전송 후 오류 의미를 실제 계수로 검증(I5·I8, T36) |
 | 동일 SDK 합성 stdio/HTTP fixture의 실행 명령·주입 방법·정리 절차, 요청 ID 대응과 READ 관측 정의 | C fixture/계약 테스트, A 리뷰 | A07·A08·A16: 정상 왕복·초기화/종료·request별 정확한 계수·오류 시 미공개가 재현됨(T16·T36) |
 | DB writer 준비/종료·부분 실패 계약, 마스킹된 서버/감사 조회 | C Store, B 포트·원자성 계약, A bridge 검토 | A05·A27·A35: UI 직접 DB 접근 없이 안전한 스냅샷/이벤트와 종료 완료 신호 사용 |
 
