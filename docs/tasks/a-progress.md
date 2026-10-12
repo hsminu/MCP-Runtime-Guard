@@ -61,6 +61,7 @@
 | A34 로컬 요청 계수 | `1433bb0` | 합성 악성 승인 상세 표시·입력 후 loopback HTTP 요청 0건 검증 |
 | A09 병렬 시작 | `5b9280d` | 서버 시작 동시성을 4개로 제한하고 느린 서버와 다른 서버의 초기화 격리 |
 | A20 완료 대기 제한 | `87afe20` | 모델 completion의 유한 제한시간·취소·늦은 응답 폐기 |
+| A41 후속 보안 스캔 | `64d5c01` | A09/A20 변경 제품 소스 2개에 대한 고정 diff 검토·새 발견 0건 기록 |
 
 각 커밋의 실제 파일은 `git show --stat <커밋>`으로 확인할 수 있다. HTML 시안과 로컬 환경 설정은 제품 소스와 분리해 커밋했다.
 
@@ -124,7 +125,7 @@
 | A38 | 정상/승인/차단 통합 인수 미실행 | A16·A18·A22·A27·A29–A36, B/C 구현·C 통합 테스트 필요 |
 | A39 | 장애/재전송/비공개 검증 미실행 | A38, C 공격·결함 주입 fixture/테스트 필요 |
 | A40 | 모델 격리·replay 실험 미실행 | A22·A38, C 실험/통합 테스트와 승인 모델 환경 필요 |
-| A41 | [A 보안 경계 검토](a-security-review.md)와 44개 Python 소스의 Codex Security Standard Scan 완료: medium 3건 중 A 소유 모델/MCP 경계 2건 보강, B 소유 정규식 1건 미해결. `97e3c96..40786f5` 변경 소스 5개 Codex Security Diff Scan coverage 완료·새 취약점 0건. `f5dc095`는 그 고정 diff 뒤의 넓은 예외 처리 규칙 수정이다. 반응형 UI의 공개 승인 요약 상태 사칭을 별도 수동 검토·수정했고 ARTEX 실행 조건을 기록했다. lock/재설치/CI·실제 침투 인수는 미실행 | A07·A08·A17·A27, B 정규식 정책, C stream 수신 상한·격리 fixture와 합의된 lock/CI 담당 필요 |
+| A41 | [A 보안 경계 검토](a-security-review.md)와 44개 Python 소스의 Codex Security Standard Scan 완료: medium 3건 중 A 소유 모델/MCP 경계 2건 보강, B 소유 정규식 1건 미해결. `97e3c96..40786f5` 변경 소스 5개 Diff Scan과 `e7af7fa..186a318`의 A09/A20 변경 소스 2개 Diff Scan coverage 완료·각 새 취약점 0건. 후자의 A34 변경은 테스트·문서뿐이다. `f5dc095`는 첫 고정 diff 뒤의 넓은 예외 처리 규칙 수정이다. 반응형 UI의 공개 승인 요약 상태 사칭을 별도 수동 검토·수정했고 ARTEX 실행 조건을 기록했다. lock/재설치/CI·실제 침투 인수는 미실행 | A07·A08·A17·A27, B 정규식 정책, C stream 수신 상한·격리 fixture와 합의된 lock/CI 담당 필요 |
 | A42 | 이 작업별 진행/재개 근거, [호환성 실행 준비](a-compatibility-runbook.md), [B/C 미전송 인계 초안](a-prompts/07-handoffs.md)을 갱신했다. 실제 담당 리뷰·제품 시작/시연 증거는 없다 | 부분 인계 자료 완료. A23·A37–A41의 실제 통합 결과와 B/C 리뷰 필요 |
 
 ## 이번 구현 검증과 다음 인수
