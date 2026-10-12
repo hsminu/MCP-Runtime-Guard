@@ -165,6 +165,7 @@ class BackendBridge(QObject):
         self._shutdown_timeout = shutdown_timeout
         self._state_lock = threading.Lock()
         self._state = BridgeState.NEW
+        self._cleanup_unconfirmed = False
         self._stop_requested = threading.Event()
         self._thread_done = threading.Event()
         self._loop_error = threading.Event()
@@ -258,19 +259,22 @@ class BackendBridge(QObject):
 
         self._require_qt_thread()
         emit_closed = False
+        closed_code = "CLOSED"
         with self._state_lock:
             state = self._state
             if state in (BridgeState.CLOSING, BridgeState.CLOSED):
                 return
             if state is BridgeState.NEW or self._thread_done.is_set():
                 self._state = BridgeState.CLOSED
+                if self._cleanup_unconfirmed:
+                    closed_code = "CLEANUP_UNCONFIRMED"
                 self._thread_done.set()
                 emit_closed = True
             else:
                 self._state = BridgeState.CLOSING
                 loop, stop_async = self._loop, self._stop_async
         if emit_closed:
-            self.lifecycle_changed.emit(LifecycleEvent(BridgeState.CLOSED, "CLOSED"))
+            self.lifecycle_changed.emit(LifecycleEvent(BridgeState.CLOSED, closed_code))
             return
         self._stop_requested.set()
         self.lifecycle_changed.emit(LifecycleEvent(BridgeState.CLOSING, "CLOSING"))
@@ -304,6 +308,10 @@ class BackendBridge(QObject):
         with self._state_lock:
             if self._state is BridgeState.CLOSING and state is BridgeState.READY:
                 return
+            if code.endswith("CLEANUP_UNCONFIRMED"):
+                self._cleanup_unconfirmed = True
+            elif self._cleanup_unconfirmed and state is BridgeState.CLOSED:
+                code = "CLEANUP_UNCONFIRMED"
             self._state = state
         self.lifecycle_changed.emit(LifecycleEvent(state, code))
 
@@ -578,24 +586,41 @@ class BackendBridge(QObject):
             return_when=asyncio.FIRST_COMPLETED,
         )
         if boot not in done or boot.cancelled() or boot.exception() is not None:
-            boot.cancel()
-            if not self._stop_requested.is_set():
-                self._set_state(BridgeState.FAILED, "STARTUP_FAILED")
+            cleaned = await self._discard_bootstrap(boot)
+            if self._stop_requested.is_set():
+                self._set_state(
+                    BridgeState.CLOSED,
+                    "CLOSED" if cleaned else "CLEANUP_UNCONFIRMED",
+                )
             else:
-                self._set_state(BridgeState.CLOSED, "CLOSED")
+                self._set_state(
+                    BridgeState.FAILED,
+                    "STARTUP_FAILED" if cleaned else "STARTUP_CLEANUP_UNCONFIRMED",
+                )
             stop.cancel()
             return
-        bindings = boot.result()
+        adopted = self._adopt_bootstrap_result(boot)
+        bindings = self._bindings
         if (
-            type(bindings) is not BackendBindings
+            not adopted
+            or bindings is None
             or not callable(bindings.runner_for_task)
             or not isinstance(bindings.human_control, HumanControl)
             or (bindings.close is not None and not callable(bindings.close))
         ):
-            self._set_state(BridgeState.FAILED, "STARTUP_FAILED")
+            cleaned = await self._cleanup_bindings() if adopted else False
+            if self._stop_requested.is_set():
+                self._set_state(
+                    BridgeState.CLOSED,
+                    "CLOSED" if cleaned else "CLEANUP_UNCONFIRMED",
+                )
+            else:
+                self._set_state(
+                    BridgeState.FAILED,
+                    "STARTUP_FAILED" if cleaned else "STARTUP_CLEANUP_UNCONFIRMED",
+                )
             stop.cancel()
             return
-        self._bindings = bindings
         if self._stop_requested.is_set() or stop in done:
             self._set_state(BridgeState.CLOSING, "CLOSING")
             cleaned = await self._cleanup_bindings()
@@ -643,13 +668,50 @@ class BackendBridge(QObject):
             "CLOSED" if cleaned and not unfinished else "CLEANUP_UNCONFIRMED",
         )
 
-    async def _cleanup_bindings(self) -> bool:
+    def _adopt_bootstrap_result(self, boot: asyncio.Task[BackendBindings]) -> bool:
+        """Claim a completed result before any path can close its resources."""
+
+        bindings = boot.result()
+        if type(bindings) is not BackendBindings:
+            return False
+        self._bindings = bindings
+        return True
+
+    async def _discard_bootstrap(self, boot: asyncio.Task[BackendBindings]) -> bool:
+        """Reclaim a late success within the bounded startup cleanup window."""
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._shutdown_timeout
+        if not boot.done():
+            boot.cancel()
+            await asyncio.wait({boot}, timeout=self._shutdown_timeout)
+        if not boot.done():
+            # The bootstrap still owns anything it created. Its own finally
+            # must clean partial resources; this bridge cannot confirm that.
+            return False
+        if boot.cancelled() or boot.exception() is not None:
+            return True
+        if not self._adopt_bootstrap_result(boot):
+            return False
+        return await self._cleanup_bindings(timeout=max(0.0, deadline - loop.time()))
+
+    async def _cleanup_bindings(self, *, timeout: float | None = None) -> bool:
         bindings = self._bindings
+        self._bindings = None
         if bindings is None or bindings.close is None:
             return True
-        cleanup = asyncio.ensure_future(bindings.close())
+        if not callable(bindings.close):
+            return False
+
+        async def invoke_close() -> None:
+            assert bindings.close is not None
+            await bindings.close()
+
+        cleanup = asyncio.create_task(invoke_close())
         cleanup.add_done_callback(self._consume_task)
-        done, _ = await asyncio.wait({cleanup}, timeout=self._shutdown_timeout)
+        done, _ = await asyncio.wait(
+            {cleanup}, timeout=self._shutdown_timeout if timeout is None else timeout
+        )
         if cleanup not in done:
             cleanup.cancel()
             return False

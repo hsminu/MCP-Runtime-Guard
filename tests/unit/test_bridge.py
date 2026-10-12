@@ -794,6 +794,127 @@ def test_startup_failure_is_fixed_code_and_shutdown_refuses_work(app) -> None:
     assert receiver.stages(late)[-1].code == "CLOSING"
 
 
+@pytest.mark.parametrize("late_delay", (0.0, 0.03))
+def test_startup_timeout_reclaims_late_bindings_once(app, late_delay: float) -> None:
+    returned = threading.Event()
+    cleanup_threads: list[int] = []
+
+    async def close_resources() -> None:
+        cleanup_threads.append(threading.get_ident())
+
+    async def bootstrap() -> BackendBindings:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            # Covers both immediate cancellation response and a bootstrap
+            # that briefly ignores cancellation before handing back ownership.
+            if late_delay:
+                await asyncio.sleep(late_delay)
+            returned.set()
+            return BackendBindings(lambda task_id: None, FakeControl(), close_resources)
+
+    bridge = BackendBridge(bootstrap, startup_timeout=0.01, shutdown_timeout=0.2)
+    receiver = attach(bridge)
+    bridge.start()
+    pump_until(app, lambda: bridge.thread_done)
+    app.processEvents()
+    assert returned.is_set()
+    assert receiver.states[-1] == LifecycleEvent(BridgeState.FAILED, "STARTUP_FAILED")
+    assert len(cleanup_threads) == 1
+    assert cleanup_threads[0] != threading.get_ident()
+    assert bridge._bindings is None
+    bridge.close()
+    assert len(cleanup_threads) == 1
+
+
+def test_close_during_startup_reclaims_cancelled_bootstrap_result(app) -> None:
+    started = threading.Event()
+    cleaned = threading.Event()
+    cleanup_calls = 0
+
+    async def close_resources() -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        cleaned.set()
+
+    async def bootstrap() -> BackendBindings:
+        started.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            return BackendBindings(lambda task_id: None, FakeControl(), close_resources)
+
+    bridge = BackendBridge(bootstrap, shutdown_timeout=0.2)
+    receiver = attach(bridge)
+    bridge.start()
+    pump_until(app, started.is_set)
+    bridge.close()
+    pump_until(app, lambda: bridge.thread_done)
+    app.processEvents()
+    assert cleaned.is_set()
+    assert cleanup_calls == 1
+    assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLOSED")
+    assert BridgeState.READY not in [event.state for event in receiver.states]
+    assert bridge._bindings is None
+    bridge.close()
+    assert cleanup_calls == 1
+
+
+def test_late_bootstrap_close_error_is_fixed_unconfirmed_code(app) -> None:
+    cleanup_calls = 0
+
+    async def close_resources() -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+        raise RuntimeError("secret cleanup details")
+
+    async def bootstrap() -> BackendBindings:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            return BackendBindings(lambda task_id: None, FakeControl(), close_resources)
+
+    bridge = BackendBridge(bootstrap, startup_timeout=0.01, shutdown_timeout=0.2)
+    receiver = attach(bridge)
+    bridge.start()
+    pump_until(app, lambda: bridge.thread_done)
+    app.processEvents()
+    assert cleanup_calls == 1
+    assert receiver.states[-1] == LifecycleEvent(
+        BridgeState.FAILED, "STARTUP_CLEANUP_UNCONFIRMED"
+    )
+    assert "secret" not in repr(receiver.states)
+    assert bridge._bindings is None
+    bridge.close()
+    assert cleanup_calls == 1
+    assert receiver.states[-1] == LifecycleEvent(
+        BridgeState.CLOSED, "CLEANUP_UNCONFIRMED"
+    )
+
+
+def test_completed_bootstrap_bindings_have_single_close_owner(app) -> None:
+    cleanup_calls = 0
+
+    async def close_resources() -> None:
+        nonlocal cleanup_calls
+        cleanup_calls += 1
+
+    async def bootstrap() -> BackendBindings:
+        return BackendBindings(lambda task_id: None, FakeControl(), close_resources)
+
+    bridge = BackendBridge(bootstrap)
+    receiver = attach(bridge)
+    bridge.start()
+    pump_until(app, lambda: bridge.state is BridgeState.READY)
+    assert cleanup_calls == 0
+    close_bridge(app, bridge)
+    assert cleanup_calls == 1
+    assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLOSED")
+    assert bridge._bindings is None
+    bridge.close()
+    assert cleanup_calls == 1
+
+
 def test_startup_timeout_reports_unfinished_cleanup_without_raw_error(app) -> None:
     async def stubborn_bootstrap() -> BackendBindings:
         deadline = time.monotonic() + 0.5
@@ -807,7 +928,9 @@ def test_startup_timeout_reports_unfinished_cleanup_without_raw_error(app) -> No
             FakeControl(),
         )
 
-    bridge = BackendBridge(stubborn_bootstrap, startup_timeout=0.01)
+    bridge = BackendBridge(
+        stubborn_bootstrap, startup_timeout=0.01, shutdown_timeout=0.05
+    )
     receiver = attach(bridge)
     bridge.start()
     pump_until(app, lambda: bridge.thread_done)
@@ -816,6 +939,7 @@ def test_startup_timeout_reports_unfinished_cleanup_without_raw_error(app) -> No
     assert receiver.states[-1].code == "STARTUP_CLEANUP_UNCONFIRMED"
     assert "stubborn_bootstrap" not in repr(receiver.states)
     close_bridge(app, bridge)
+    assert receiver.states[-1].code == "CLEANUP_UNCONFIRMED"
 
 
 def test_shutdown_marks_processing_control_unconfirmed(app) -> None:
