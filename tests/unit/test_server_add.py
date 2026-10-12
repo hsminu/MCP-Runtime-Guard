@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -119,6 +120,32 @@ def test_invalid_json_and_non_string_args_block_local_preparation(
     assert form.validated_draft is None
     assert message in form._errors["args"].text()
     assert "unshown-value" not in form.preview.toPlainText()
+
+
+@pytest.mark.parametrize(
+    "args_text, message",
+    [
+        ("[" * 10_000 + "]" * 10_000, "JSON 문자열 배열"),
+        (" " * 65_537, "65536자"),
+        (json.dumps(["ok"] * 257), "256개"),
+    ],
+    ids=("deep-json", "too-large", "too-many"),
+)
+def test_bounded_args_failure_clears_prepared_draft_and_preview(
+    form: ServerAddForm, args_text: str, message: str
+) -> None:
+    _valid_stdio(form)
+    form.prepare_button.click()
+    assert form.validated_draft is not None
+    assert "2개" in form.preview.toPlainText()
+
+    form.args_json.setPlainText(args_text)
+
+    assert form.validated_draft is None
+    assert not form.prepare_button.isEnabled()
+    assert message in form._errors["args"].text()
+    assert "2개" not in form.preview.toPlainText()
+    assert "입력 오류" in form.preview.toPlainText()
 
 
 def test_relative_executable_path_is_a_visible_local_error(form: ServerAddForm) -> None:

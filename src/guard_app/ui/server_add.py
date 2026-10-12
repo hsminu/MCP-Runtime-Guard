@@ -32,6 +32,26 @@ from PySide6.QtWidgets import (
 from .widgets import KeyboardActionButton, plain_label
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_MAX_ARGS_JSON_CHARS = 65_536
+_MAX_ARGS_COUNT = 256
+
+
+def _parse_stdio_args(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
+    """Bound the local preview parser and require a flat string array."""
+
+    if len(raw) > _MAX_ARGS_JSON_CHARS:
+        return None, "인자 JSON은 65536자 이하로 입력해."
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None, "JSON 문자열 배열 형식으로 입력해."
+    if not isinstance(parsed, list) or not all(
+        isinstance(value, str) for value in parsed
+    ):
+        return None, "인자는 문자열만 담은 JSON 배열이어야 해."
+    if len(parsed) > _MAX_ARGS_COUNT:
+        return None, "인자는 256개 이하로 입력해."
+    return tuple(parsed), None
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,17 +349,9 @@ class ServerAddForm(QWidget):
                 errors["command"] = "실행 파일 절대 경로를 입력해."
             elif not Path(command).is_absolute():
                 errors["command"] = "실행 파일은 절대 경로여야 해."
-            try:
-                parsed_args = json.loads(self.args_json.toPlainText())
-            except (TypeError, ValueError):
-                errors["args"] = "JSON 문자열 배열 형식으로 입력해."
-            else:
-                if not isinstance(parsed_args, list) or not all(
-                    isinstance(value, str) for value in parsed_args
-                ):
-                    errors["args"] = "인자는 문자열만 담은 JSON 배열이어야 해."
-                else:
-                    args = tuple(parsed_args)
+            args, args_error = _parse_stdio_args(self.args_json.toPlainText())
+            if args_error is not None:
+                errors["args"] = args_error
             names = tuple(
                 line.strip()
                 for line in self.env_allow.toPlainText().splitlines()
