@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
 
 from guard_app.domain.enums import TaskStatus
 
+from .approvals import ApprovalListPage, ApprovalPage, ApprovalQuery
+from .call_logs import CallLogPage, DetailRequest, PublicCallDetail, PublicCallSummary
 from .models import (
     OverviewSnapshot,
     RuntimeIdentity,
@@ -26,6 +28,7 @@ from .models import (
 )
 from .overview import OverviewPage
 from .presentation import PAGES
+from .scan_status import ScanStatusProjection
 from .server_add import ServerAddForm
 from .servers import ServerListPage
 from .style import apply_style
@@ -59,6 +62,9 @@ class GuardWindow(QMainWindow):
     """Provides view navigation; backend commands belong to the bridge."""
 
     navigation_requested = Signal(str, str)
+    approval_query_requested = Signal(object)
+    call_log_detail_requested = Signal(object)
+    scan_snapshot_requested = Signal(str, int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -124,8 +130,19 @@ class GuardWindow(QMainWindow):
             _scroll_page(self.overview)
         )
         self.server_page = ServerListPage()
+        self.server_page.scan_snapshot_requested.connect(
+            self.scan_snapshot_requested.emit
+        )
         self._page_indices["servers"] = self.stack.addWidget(
             _scroll_page(self.server_page)
+        )
+        self.log_page = CallLogPage()
+        self.log_page.detail_requested.connect(self.call_log_detail_requested.emit)
+        self._page_indices["logs"] = self.stack.addWidget(_scroll_page(self.log_page))
+        self.approval_page = ApprovalListPage()
+        self.approval_page.query_requested.connect(self.approval_query_requested.emit)
+        self._page_indices["approvals"] = self.stack.addWidget(
+            _scroll_page(self.approval_page)
         )
         self.server_add_form = ServerAddForm()
         self._page_indices["server_add"] = self.stack.addWidget(self.server_add_form)
@@ -142,7 +159,14 @@ class GuardWindow(QMainWindow):
         task_layout.addStretch(1)
         self._page_indices["runs"] = self.stack.addWidget(_scroll_page(task_page))
         for page in PAGES:
-            if page not in ("overview", "servers", "server_add", "runs"):
+            if page not in (
+                "overview",
+                "servers",
+                "logs",
+                "approvals",
+                "server_add",
+                "runs",
+            ):
                 self._page_indices[page] = self.stack.addWidget(
                     _scroll_page(_placeholder_page(page))
                 )
@@ -169,6 +193,31 @@ class GuardWindow(QMainWindow):
 
         self.server_page.set_servers(snapshot)
 
+    def set_scan_snapshot(
+        self, server_id: str, token: int, snapshot: Surface[ScanStatusProjection]
+    ) -> bool:
+        """Show only the current server detail's confirmed public scan query."""
+
+        return self.server_page.set_scan_snapshot(server_id, token, snapshot)
+
+    def set_approval_page(self, page: ApprovalPage) -> bool:
+        """Accept only the current approval query response."""
+
+        return self.approval_page.set_page(page)
+
+    def set_approval_error(self, query: ApprovalQuery) -> bool:
+        return self.approval_page.set_error(query)
+
+    def set_call_log_snapshot(
+        self, snapshot: Surface[tuple[PublicCallSummary, ...]]
+    ) -> None:
+        self.log_page.set_calls(snapshot)
+
+    def set_call_log_detail(
+        self, request: DetailRequest, snapshot: Surface[PublicCallDetail]
+    ) -> None:
+        self.log_page.set_detail(request, snapshot)
+
     def set_runtime_identity(self, identity: RuntimeIdentity) -> None:
         """Show only modes explicitly confirmed by trusted app bootstrap."""
 
@@ -194,6 +243,10 @@ class GuardWindow(QMainWindow):
         self.stack.setCurrentIndex(self._page_indices[page])
         if page == "servers" and target_id:
             self.server_page.select_server(target_id)
+        elif page == "logs" and target_id:
+            self.log_page.select_call(target_id)
+        elif page == "approvals" and target_id:
+            self.approval_page.select_approval(target_id)
         self.breadcrumb.setText(f"Workspace / {PAGES[page]}")
         for key, button in self._nav_buttons.items():
             button.setProperty("selected", key == page)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -27,6 +27,7 @@ from .presentation import (
     TRANSPORTS,
     fixed,
 )
+from .scan_status import ScanStatusCard, ScanStatusProjection
 from .widgets import KeyboardActionButton, SecurityLabel, StateMessage, plain_label
 
 
@@ -48,6 +49,7 @@ class ServerDetailDialog(QDialog):
 
     def __init__(self, server: ServerSummary, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.server_id = server.server_id
         self.setWindowTitle(f"MCP 서버 상세 · {server.server_id}")
         self.setModal(True)
         self.setMinimumSize(540, 450)
@@ -81,11 +83,8 @@ class ServerDetailDialog(QDialog):
         layout.addWidget(
             _detail_field("세션 상태", fixed(SESSION_STATUSES, server.session_status))
         )
-        layout.addWidget(
-            _detail_field(
-                "Scanner · 도구 지문", "조회 계약 미제공 · 검증 상태를 추정하지 않아"
-            )
-        )
+        self.scan_status_card = ScanStatusCard()
+        layout.addWidget(self.scan_status_card)
         layout.addStretch(1)
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
@@ -97,6 +96,7 @@ class ServerDetailDialog(QDialog):
 class ServerListPage(QWidget):
     """Filters only rows in the supplied Registry query result."""
 
+    scan_snapshot_requested = Signal(str, int)
     _FULL_TABLE_WIDTH = 970
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -106,6 +106,8 @@ class ServerListPage(QWidget):
         self._state = LoadState.UNAVAILABLE
         self._detail_dialog: ServerDetailDialog | None = None
         self._detail_return_focus: QWidget | None = None
+        self._scan_request_sequence = 0
+        self._active_scan_token: int | None = None
         self._target_id: str | None = None
         self._compact_columns: bool | None = None
         layout = QVBoxLayout(self)
@@ -223,6 +225,7 @@ class ServerListPage(QWidget):
         if self._detail_dialog is not None:
             self._detail_dialog.close()
             self._detail_dialog = None
+            self._active_scan_token = None
         self._state = surface.state
         ready = (
             surface.state in (LoadState.READY, LoadState.STALE)
@@ -311,6 +314,21 @@ class ServerListPage(QWidget):
         self._target_id = server_id
         self._select_visible(server_id)
 
+    def set_scan_snapshot(
+        self, server_id: str, token: int, surface: Surface[ScanStatusProjection]
+    ) -> bool:
+        """Apply only the reply for the currently open server detail query."""
+
+        dialog = self._detail_dialog
+        if (
+            dialog is None
+            or dialog.server_id != server_id
+            or self._active_scan_token != token
+        ):
+            return False
+        dialog.scan_status_card.set_snapshot(surface)
+        return True
+
     def _select_visible(self, server_id: str) -> None:
         for row, server in enumerate(self._visible_servers):
             if server.server_id == server_id:
@@ -328,6 +346,8 @@ class ServerListPage(QWidget):
         row = selected_rows[0].row()
         if not (0 <= row < len(self._visible_servers)):
             return
+        if self._detail_dialog is not None:
+            self._detail_dialog.close()
         sender = self.sender()
         if sender is self.table:
             self._detail_return_focus = self.table
@@ -341,12 +361,20 @@ class ServerListPage(QWidget):
                 else self.detail_button
             )
         dialog = ServerDetailDialog(self._visible_servers[row], self)
-        dialog.finished.connect(self._detail_finished)
+        dialog.finished.connect(
+            lambda result, opened=dialog: self._detail_finished(opened, result)
+        )
         self._detail_dialog = dialog
         dialog.open()
+        self._scan_request_sequence += 1
+        self._active_scan_token = self._scan_request_sequence
+        self.scan_snapshot_requested.emit(dialog.server_id, self._active_scan_token)
 
-    def _detail_finished(self, _result: int) -> None:
+    def _detail_finished(self, dialog: ServerDetailDialog, _result: int) -> None:
+        if self._detail_dialog is not dialog:
+            return
         self._detail_dialog = None
+        self._active_scan_token = None
         QTimer.singleShot(0, self._restore_detail_focus)
 
     def _restore_detail_focus(self) -> None:
