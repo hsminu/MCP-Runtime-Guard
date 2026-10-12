@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QProgressBar,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -146,6 +148,7 @@ class ServerCard(QFrame):
         )
         layout.addWidget(_field("연결 방식", fixed(TRANSPORTS, server.transport)))
         link = KeyboardActionButton("서버 상세 보기 →")
+        self.link = link
         link.setObjectName("linkButton")
         link.setAccessibleName(f"{server.server_id} 서버 상세 보기")
         link.clicked.connect(
@@ -181,6 +184,7 @@ class AttentionCard(QFrame):
         layout.addWidget(_field("대기 시작", format_kst(item.waiting_since)))
         actionable = item.action_available and item.target_page in PAGES
         link = KeyboardActionButton("상세 보기 →" if actionable else "대상 확인 필요")
+        self.link = link
         link.setObjectName("linkButton")
         link.setEnabled(actionable)
         if actionable:
@@ -209,6 +213,7 @@ class RecentCallCard(QFrame):
             _field("현재 상태", fixed(REQUEST_STATUSES, call.current_status))
         )
         link = KeyboardActionButton("호출 상세 보기 →")
+        self.link = link
         link.setObjectName("linkButton")
         link.clicked.connect(lambda: self.navigate_requested.emit("logs", call.call_id))
         layout.addWidget(link, 0, Qt.AlignmentFlag.AlignLeft)
@@ -241,6 +246,7 @@ class OverviewPage(QWidget):
     """One-way rendering of a bridge projection; emits navigation only."""
 
     navigate_requested = Signal(str, str)
+    _PREVIEW_PAGE_SIZE = 5
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -250,6 +256,14 @@ class OverviewPage(QWidget):
         self._server_cards: list[ServerCard] = []
         self._server_surface: Surface[tuple[ServerSummary, ...]] = Surface()
         self._server_card_limit = 0
+        self._attention_surface: Surface[tuple[AttentionItem, ...]] = Surface()
+        self._calls_surface: Surface[tuple[RecentCall, ...]] = Surface()
+        self._attention_page = 0
+        self._calls_page = 0
+        self._priority_server_ids: set[str] = set()
+        self._card_links: dict[KeyboardActionButton, tuple[str, str]] = {}
+        self._focus_restore_serial = 0
+        self._snapshot: OverviewSnapshot | None = None
         outer = QVBoxLayout(self)
         self._outer_layout = outer
         outer.setContentsMargins(26, 28, 26, 42)
@@ -261,6 +275,20 @@ class OverviewPage(QWidget):
                 "연결 상태와 지금 처리가 필요한 요청부터 확인해.", name="secondary"
             )
         )
+        shortcut = QFrame()
+        shortcut.setObjectName("attentionCard")
+        shortcut_layout = QHBoxLayout(shortcut)
+        shortcut_layout.setContentsMargins(12, 8, 12, 8)
+        self.attention_shortcut_summary = plain_label(name="secondary")
+        self.attention_shortcut_summary.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        shortcut_layout.addWidget(self.attention_shortcut_summary, 1)
+        self.attention_shortcut = KeyboardActionButton("확인 항목으로 이동 ↓")
+        self.attention_shortcut.setObjectName("linkButton")
+        self.attention_shortcut.clicked.connect(self._scroll_to_attention)
+        shortcut_layout.addWidget(self.attention_shortcut)
+        outer.addWidget(shortcut)
 
         self.metrics_grid = QGridLayout()
         self.metrics_grid.setSpacing(12)
@@ -294,16 +322,17 @@ class OverviewPage(QWidget):
         )
         outer.addWidget(self.all_servers_button, 0, Qt.AlignmentFlag.AlignLeft)
 
-        outer.addWidget(
-            _section_header(
-                "지금 확인할 항목", "백엔드가 확인한 미해결 항목과 이동 대상을 보여줘."
-            )
+        self.attention_header = _section_header(
+            "지금 확인할 항목", "백엔드가 확인한 미해결 항목과 이동 대상을 보여줘."
         )
+        outer.addWidget(self.attention_header)
         self.attention_state = StateMessage()
         outer.addWidget(self.attention_state)
         self.attention_layout = QVBoxLayout()
         self.attention_layout.setSpacing(10)
         outer.addLayout(self.attention_layout)
+        self.attention_pager = self._make_pager("attention")
+        outer.addWidget(self.attention_pager)
 
         outer.addWidget(
             _section_header("최근 도구 호출", "공개가 허용된 호출 메타데이터만 표시해.")
@@ -313,6 +342,8 @@ class OverviewPage(QWidget):
         self.calls_layout = QVBoxLayout()
         self.calls_layout.setSpacing(10)
         outer.addLayout(self.calls_layout)
+        self.calls_pager = self._make_pager("calls")
+        outer.addWidget(self.calls_pager)
 
         outer.addWidget(
             _section_header(
@@ -328,12 +359,145 @@ class OverviewPage(QWidget):
         self.set_snapshot(OverviewSnapshot())
 
     def set_snapshot(self, snapshot: OverviewSnapshot) -> None:
+        if self._snapshot == snapshot:
+            return
+        focused = self._focused_card_key()
+        self._snapshot = snapshot
+        self._card_links.clear()
+        self._priority_server_ids = (
+            {
+                item.server_id
+                for item in snapshot.attention.value or ()
+                if not item.resolved and item.server_id
+            }
+            if snapshot.attention.state == LoadState.READY
+            else set()
+        )
+        if focused is not None and focused[0] == "attention":
+            items = self._unresolved_attention(snapshot.attention)
+            index = next(
+                (i for i, item in enumerate(items) if item.item_id == focused[1]),
+                None,
+            )
+            if index is not None:
+                self._attention_page = index // self._PREVIEW_PAGE_SIZE
+        if focused is not None and focused[0] == "calls":
+            calls = snapshot.recent_calls.value or ()
+            index = next(
+                (i for i, call in enumerate(calls) if call.call_id == focused[1]),
+                None,
+            )
+            if index is not None:
+                self._calls_page = index // self._PREVIEW_PAGE_SIZE
         self._render_totals(snapshot.totals)
         self._render_servers(snapshot.servers)
         self._render_attention(snapshot.attention)
         self._render_calls(snapshot.recent_calls)
         self._render_flow(snapshot.flow)
         self._reflow(force=True)
+        self._schedule_card_focus_restore(focused)
+
+    def _focused_card_key(self) -> tuple[str, str] | None:
+        focused = QApplication.focusWidget()
+        return (
+            self._card_links.get(focused)
+            if isinstance(focused, KeyboardActionButton)
+            else None
+        )
+
+    def _restore_card_focus(self, key: tuple[str, str]) -> None:
+        for link, candidate in self._card_links.items():
+            if candidate == key and link.isEnabled() and self.isVisible():
+                link.setFocus(Qt.FocusReason.OtherFocusReason)
+                return
+
+    def _schedule_card_focus_restore(self, key: tuple[str, str] | None) -> None:
+        self._focus_restore_serial += 1
+        if key is None:
+            return
+        serial = self._focus_restore_serial
+
+        def restore() -> None:
+            if serial != self._focus_restore_serial or not self.isVisible():
+                return
+            focused = QApplication.focusWidget()
+            scroll = self._scroll_host()
+            if focused is None or focused is scroll or self._focused_card_key() == key:
+                self._restore_card_focus(key)
+
+        QTimer.singleShot(0, restore)
+
+    def _remove_card_links(self, kind: str) -> None:
+        self._card_links = {
+            link: key for link, key in self._card_links.items() if key[0] != kind
+        }
+
+    def _scroll_host(self) -> QScrollArea | None:
+        parent = self.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                return parent
+            parent = parent.parentWidget()
+        return None
+
+    def _scroll_to_attention(self) -> None:
+        scroll = self._scroll_host()
+        if scroll is not None:
+            scroll.ensureWidgetVisible(self.attention_header, 0, 12)
+
+    def _make_pager(self, kind: str) -> QWidget:
+        pager = QWidget()
+        layout = QHBoxLayout(pager)
+        layout.setContentsMargins(0, 0, 0, 0)
+        previous = KeyboardActionButton("이전")
+        next_button = KeyboardActionButton("다음")
+        note = plain_label(name="secondary")
+        layout.addWidget(previous)
+        layout.addWidget(note, 1)
+        layout.addWidget(next_button)
+        previous.clicked.connect(lambda: self._change_page(kind, -1))
+        next_button.clicked.connect(lambda: self._change_page(kind, 1))
+        setattr(self, f"{kind}_previous", previous)
+        setattr(self, f"{kind}_next", next_button)
+        setattr(self, f"{kind}_page_note", note)
+        return pager
+
+    def _change_page(self, kind: str, delta: int) -> None:
+        if kind == "attention":
+            self._attention_page += delta
+            self._render_attention(self._attention_surface)
+        else:
+            self._calls_page += delta
+            self._render_calls(self._calls_surface)
+
+    @staticmethod
+    def _unresolved_attention(
+        surface: Surface[tuple[AttentionItem, ...]],
+    ) -> tuple[AttentionItem, ...]:
+        if surface.state not in (LoadState.READY, LoadState.STALE):
+            return ()
+        seen: set[str] = set()
+        items: list[AttentionItem] = []
+        for item in surface.value or ():
+            if not item.resolved and item.item_id not in seen:
+                seen.add(item.item_id)
+                items.append(item)
+        return tuple(items)
+
+    def _set_pager(self, kind: str, count: int, page: int) -> int:
+        last = max(0, (count - 1) // self._PREVIEW_PAGE_SIZE)
+        page = max(0, min(page, last))
+        pager = getattr(self, f"{kind}_pager")
+        pager.setVisible(count > self._PREVIEW_PAGE_SIZE)
+        if count > self._PREVIEW_PAGE_SIZE:
+            start = page * self._PREVIEW_PAGE_SIZE + 1
+            end = min(count, start + self._PREVIEW_PAGE_SIZE - 1)
+            getattr(self, f"{kind}_page_note").setText(
+                f"{count}개 중 {start}–{end}개 표시"
+            )
+        getattr(self, f"{kind}_previous").setEnabled(page > 0)
+        getattr(self, f"{kind}_next").setEnabled(page < last)
+        return page
 
     def _render_totals(self, surface: Surface[OverviewTotals]) -> None:
         ready = (
@@ -378,6 +542,7 @@ class OverviewPage(QWidget):
 
     def _render_servers(self, surface: Surface[tuple[ServerSummary, ...]]) -> None:
         self._server_surface = surface
+        self._remove_card_links("servers")
         _clear(self.servers_grid)
         self._server_cards.clear()
         self._server_card_limit = self._server_preview_limit()
@@ -387,23 +552,30 @@ class OverviewPage(QWidget):
         )
         connected = (
             tuple(
-                sorted(
-                    (
-                        server
-                        for server in surface.value or ()
-                        if server.session_status == "connected"
-                    ),
-                    key=lambda server: server.server_id,
-                )
+                server
+                for server in surface.value or ()
+                if server.session_status == "connected"
             )
             if ready
             else ()
+        )
+        # Keep the backend's ordering within each group. A related unresolved
+        # item makes that server more useful than an unrelated ID-first preview.
+        connected = tuple(
+            server
+            for server in connected
+            if server.server_id in self._priority_server_ids
+        ) + tuple(
+            server
+            for server in connected
+            if server.server_id not in self._priority_server_ids
         )
         if ready:
             for server in connected[: self._server_card_limit]:
                 card = ServerCard(server)
                 card.navigate_requested.connect(self.navigate_requested)
                 self._server_cards.append(card)
+                self._card_links[card.link] = ("servers", server.server_id)
         self.server_preview_note.setVisible(len(connected) > len(self._server_cards))
         self.server_preview_note.setText(
             f"현황 조회 결과: 연결된 서버 {len(connected)}개 중 {len(self._server_cards)}개 표시"
@@ -422,45 +594,59 @@ class OverviewPage(QWidget):
                 self.servers_state.set_state(surface.state, as_of=surface.as_of)
 
     def _render_attention(self, surface: Surface[tuple[AttentionItem, ...]]) -> None:
+        self._attention_surface = surface
+        self._remove_card_links("attention")
         _clear(self.attention_layout)
         ready = (
             surface.state in (LoadState.READY, LoadState.STALE)
             and surface.value is not None
         )
-        shown = 0
-        seen: set[str] = set()
-        if ready:
-            for item in surface.value or ():
-                if item.resolved or item.item_id in seen:
-                    continue
-                seen.add(item.item_id)
-                card = AttentionCard(item)
-                card.navigate_requested.connect(self.navigate_requested)
-                self.attention_layout.addWidget(card)
-                shown += 1
-        self.attention_state.setVisible(
-            not ready or not shown or surface.state == LoadState.STALE
+        items = self._unresolved_attention(surface) if ready else ()
+        self._attention_page = self._set_pager(
+            "attention", len(items), self._attention_page
         )
-        if shown == 0 and ready and surface.state == LoadState.READY:
+        first = self._attention_page * self._PREVIEW_PAGE_SIZE
+        for item in items[first : first + self._PREVIEW_PAGE_SIZE]:
+            card = AttentionCard(item)
+            card.navigate_requested.connect(self.navigate_requested)
+            self.attention_layout.addWidget(card)
+            self._card_links[card.link] = ("attention", item.item_id)
+        if ready:
+            qualifier = "이전 조회 · " if surface.state == LoadState.STALE else ""
+            self.attention_shortcut_summary.setText(
+                f"{qualifier}지금 확인할 미해결 항목 {len(items)}개"
+            )
+        else:
+            self.attention_shortcut_summary.setText(
+                f"확인 항목: {StateMessage._MESSAGES.get(surface.state, '상태 확인 필요')}"
+            )
+        self.attention_shortcut.setEnabled(ready)
+        self.attention_state.setVisible(
+            not ready or not items or surface.state == LoadState.STALE
+        )
+        if not items and ready and surface.state == LoadState.READY:
             self.attention_state.set_message("지금 확인할 미해결 항목이 없어")
         else:
             self.attention_state.set_state(surface.state, as_of=surface.as_of)
 
     def _render_calls(self, surface: Surface[tuple[RecentCall, ...]]) -> None:
+        self._calls_surface = surface
+        self._remove_card_links("calls")
         _clear(self.calls_layout)
         ready = (
             surface.state in (LoadState.READY, LoadState.STALE)
             and surface.value is not None
         )
-        shown = 0
-        if ready:
-            for call in surface.value or ():
-                card = RecentCallCard(call)
-                card.navigate_requested.connect(self.navigate_requested)
-                self.calls_layout.addWidget(card)
-                shown += 1
+        calls = tuple(surface.value or ()) if ready else ()
+        self._calls_page = self._set_pager("calls", len(calls), self._calls_page)
+        first = self._calls_page * self._PREVIEW_PAGE_SIZE
+        for call in calls[first : first + self._PREVIEW_PAGE_SIZE]:
+            card = RecentCallCard(call)
+            card.navigate_requested.connect(self.navigate_requested)
+            self.calls_layout.addWidget(card)
+            self._card_links[card.link] = ("calls", call.call_id)
         self.calls_state.setVisible(
-            not ready or not shown or surface.state == LoadState.STALE
+            not ready or not calls or surface.state == LoadState.STALE
         )
         self.calls_state.set_state(surface.state, as_of=surface.as_of)
 
@@ -496,8 +682,10 @@ class OverviewPage(QWidget):
         compact = self.width() < 500
         server_rebuilt = False
         if self._server_preview_limit() != self._server_card_limit:
+            focused = self._focused_card_key()
             self._render_servers(self._server_surface)
             server_rebuilt = True
+            self._schedule_card_focus_restore(focused)
         margin = 12 if compact else 26
         self._outer_layout.setContentsMargins(
             margin, 20 if compact else 28, margin, 32 if compact else 42

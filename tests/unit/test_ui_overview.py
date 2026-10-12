@@ -8,9 +8,9 @@ from datetime import UTC, datetime
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.ui import (
@@ -20,6 +20,7 @@ from guard_app.ui import (
     LoadState,
     OverviewSnapshot,
     OverviewTotals,
+    RecentCall,
     RuntimeIdentity,
     RuntimeMode,
     ServerSummary,
@@ -115,6 +116,142 @@ def test_overview_order_and_server_preview_adapt_to_window_width(app) -> None:
         assert len(window.overview._server_cards) == 1
         window.overview.all_servers_button.click()
         assert window._page == "servers"
+    finally:
+        window.close()
+
+
+def test_small_overview_exposes_attention_shortcut_and_prioritizes_related_server(
+    app,
+) -> None:
+    window = GuardWindow()
+    window.resize(320, 360)
+    window.set_overview_snapshot(
+        OverviewSnapshot(
+            servers=Surface(
+                LoadState.READY,
+                (
+                    ServerSummary("alpha", "Alpha", session_status="connected"),
+                    ServerSummary("zeta", "Zeta", session_status="connected"),
+                ),
+            ),
+            attention=Surface(
+                LoadState.READY,
+                (AttentionItem("urgent-zeta", "outcome_unknown", server_id="zeta"),),
+            ),
+        )
+    )
+    window.show()
+    app.processEvents()
+    try:
+        scroll = window.stack.currentWidget()
+        assert isinstance(scroll, QScrollArea)
+        assert window.overview.attention_shortcut.isVisibleTo(window)
+        assert "1개" in window.overview.attention_shortcut_summary.text()
+        assert window.overview._server_cards[0].link.accessibleName().startswith("zeta")
+        assert scroll.horizontalScrollBar().maximum() == 0
+        window.overview.attention_shortcut.click()
+        app.processEvents()
+        assert scroll.verticalScrollBar().value() > 0
+        header_top = window.overview.attention_header.mapTo(
+            scroll.viewport(), QPoint(0, 0)
+        ).y()
+        assert 0 <= header_top < scroll.viewport().height()
+    finally:
+        window.close()
+
+
+def test_server_preview_keeps_keyboard_focus_when_columns_collapse(app) -> None:
+    window = GuardWindow()
+    window.resize(900, 700)
+    window.set_overview_snapshot(
+        OverviewSnapshot(
+            servers=Surface(
+                LoadState.READY,
+                (
+                    ServerSummary("alpha", "Alpha", session_status="connected"),
+                    ServerSummary("beta", "Beta", session_status="connected"),
+                ),
+            )
+        )
+    )
+    window.show()
+    window.activateWindow()
+    app.processEvents()
+    try:
+        before = window.overview._server_cards[0]
+        before.link.setFocus()
+        assert before.link.hasFocus()
+        window.resize(320, 400)
+        app.processEvents()
+        after = window.overview._server_cards[0]
+        assert after is not before
+        assert after.link.hasFocus()
+        assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
+    finally:
+        window.close()
+
+
+def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(
+    app,
+) -> None:
+    window = GuardWindow()
+    window.resize(320, 400)
+    attention = tuple(
+        AttentionItem(
+            f"attention-{index}",
+            "approval",
+            target_page="approvals",
+            target_id=f"attention-{index}",
+            action_available=True,
+        )
+        for index in range(12)
+    )
+    calls = tuple(RecentCall(f"call-{index}", "server", "tool") for index in range(11))
+    snapshot = OverviewSnapshot(
+        attention=Surface(LoadState.READY, attention),
+        recent_calls=Surface(LoadState.READY, calls),
+    )
+    window.set_overview_snapshot(snapshot)
+    window.show()
+    app.processEvents()
+    try:
+        page = window.overview
+        assert page.attention_layout.count() == 5
+        assert page.calls_layout.count() == 5
+        assert "12개 중 1–5개" in page.attention_page_note.text()
+        page.attention_next.click()
+        assert "12개 중 6–10개" in page.attention_page_note.text()
+        page.attention_next.click()
+        assert page.attention_layout.count() == 2
+        assert "12개 중 11–12개" in page.attention_page_note.text()
+        page.calls_next.click()
+        assert "11개 중 6–10개" in page.calls_page_note.text()
+
+        page.attention_shortcut.click()
+        app.processEvents()
+        card = page.attention_layout.itemAt(0).widget()
+        scroll = window.stack.currentWidget()
+        assert isinstance(scroll, QScrollArea)
+        scroll.ensureWidgetVisible(card.link)
+        window.activateWindow()
+        app.processEvents()
+        card.link.setFocus()
+        app.processEvents()
+        assert card.link.hasFocus()
+        window.set_overview_snapshot(snapshot)
+        assert card.link.hasFocus()
+        window.set_overview_snapshot(
+            OverviewSnapshot(
+                totals=Surface(LoadState.READY, OverviewTotals(1, 2, 3)),
+                attention=snapshot.attention,
+                recent_calls=snapshot.recent_calls,
+            )
+        )
+        app.processEvents()
+        refreshed = page.attention_layout.itemAt(0).widget()
+        assert refreshed is not card
+        assert refreshed.link.hasFocus()
+        assert page.attention_layout.count() == 2
     finally:
         window.close()
 
