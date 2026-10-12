@@ -34,3 +34,9 @@
 ## 후속 B 변경 확인
 
 사용자의 B 브랜치 활용 결정 뒤 원격 HEAD가 `f3c2d2bc225e0406c50731c9b63779a3d890cd70`으로 전진했다. `git diff 0c02b61 f3c2d2b`로 변경 범위를 확인했다. B의 공개 `domain/*`·`ports.py`·Catalog·ResponseGate는 바뀌지 않았고, `guard.py`와 `approvals.py`에 승인 사본의 Task ID/epoch와 실제 Store 행의 연결을 검사하는 수정이 들어왔다. 현재 A 작업 트리의 두 파일은 이 최신 B 커밋에서 가져왔다. 위 표의 A23 정적 리뷰·71개 Catalog 테스트 결과는 여전히 **이전 `0c02b61` 기준**이며, 새 승인 테스트와 전체 Guard suite를 A에서 통과로 주장하지 않는다. A adapter/Runner가 사용하는 공개 포트 변경은 확인되지 않았다.
+
+## 후속 보안 검토 발견
+
+2026-10-12 A 브랜치 `75a52c6`에서 별도 Codex Security 소스 스캔이 B 소유 `catalog_schema.py`의 정규식 가용성 문제(CWE-1333, medium)를 발견했다. 위 A23의 finding 0건은 당시 Guard/Catalog 연결 관점 리뷰 결과이고, 이 후속 발견을 부정하는 보안 감사 판정이 아니다. `_check_pattern`은 `pattern`·`patternProperties`를 `re.compile`로 문법만 검사한다. `ArgumentSchema.validate`와 A 모델 변환은 등록 패턴을 긴 인자에 대해 동기 매칭할 수 있다. 실제 ACTIVE 등록·모델 입력 경로는 C 구성 전이므로 공격 도달성은 아직 조건부다.
+
+B3 문서는 `patternProperties` 지원을 명시한다. 등록 단계에서 두 정규식 키워드를 모두 거부하면 가용성 위험은 줄지만 B3 기능 계약이 바뀐다. 단순 문자열 길이 상한이나 위험 패턴 휴리스틱은 보장을 주지 못한다. B가 지원 범위 변경 또는 검증기 전체의 제한된 실행 방식을 결정하고, C가 ACTIVE 등록·긴 인자·제어 응답성 테스트를 제공해야 한다. A는 모델 응답/인자 수신 예산을 별도로 강화하되 이 B 문제를 해결했다고 표시하지 않는다. 상세한 경계·ARTEX 실행 조건은 [A 보안 검토](a-security-review.md)에 있다.
