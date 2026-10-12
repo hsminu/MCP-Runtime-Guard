@@ -62,6 +62,7 @@ _MAX_RESULT_COPY_BYTES = 512 * 1024
 _MAX_CONFIGURED_RESULT_COPY_BYTES = 8 * 1024 * 1024
 _DEFAULT_PENDING_COMMANDS = 64
 _MAX_CONFIGURED_PENDING_COMMANDS = 1024
+_MAX_CONCURRENT_STARTS = 4
 
 
 class ResultTooLarge(ValueError):
@@ -492,14 +493,47 @@ class McpTransport:
         if self._started or self._closed:
             raise RuntimeError("transport already started or closed")
         self._started = True
+        workers = tuple(self._workers.values())
+        starting: dict[asyncio.Task[None], int] = {}
+        next_index = 0
+        ready = False
         try:
-            for worker in self._workers.values():
+            while next_index < len(workers) or starting:
                 if self._closed:
                     raise DispatchError("WorkerClosed")
-                await worker.start()
-        except (DispatchError, asyncio.CancelledError):
-            await self.close()
-            raise
+                # Keep both live startups and pending asyncio tasks bounded.
+                # Each worker still owns its own session in its owner task.
+                while (
+                    next_index < len(workers) and len(starting) < _MAX_CONCURRENT_STARTS
+                ):
+                    task = asyncio.create_task(
+                        workers[next_index].start(), name="mcp-server-start"
+                    )
+                    starting[task] = next_index
+                    next_index += 1
+                completed, _ = await asyncio.wait(
+                    starting, return_when=asyncio.FIRST_COMPLETED
+                )
+                # If several startups settle together, select a failure in
+                # registration order and do not launch the next window first.
+                for task in sorted(completed, key=starting.__getitem__):
+                    del starting[task]
+                    try:
+                        await task
+                    except RuntimeError:
+                        if self._closed:
+                            raise DispatchError("WorkerClosed") from None
+                        raise
+            if self._closed:
+                raise DispatchError("WorkerClosed")
+            ready = True
+        finally:
+            if not ready:
+                for task in starting:
+                    task.cancel()
+                if starting:
+                    await asyncio.gather(*starting, return_exceptions=True)
+                await self.close()
 
     async def call(self, req: ResolvedRequest) -> RawResult:
         # close() marks the transport closed before awaiting each worker.  A

@@ -92,12 +92,14 @@ class _Session:
         return action
 
 
-def _streams(events: list[tuple[str, asyncio.Task[Any] | None]]) -> Callable:
+def _streams(
+    events: list[tuple[str, asyncio.Task[Any] | None]], *, reader: object | None = None
+) -> Callable:
     @asynccontextmanager
     async def open_streams():
         events.append(("streams-enter", asyncio.current_task()))
         yield (
-            object(),
+            reader if reader is not None else object(),
             object(),
             object(),
         )  # HTTP's optional third value is not a stream.
@@ -137,6 +139,123 @@ async def test_server_session_lifetime_is_owned_by_one_task_per_server(
     assert first.events[0][1] is not second.events[0][1]
     assert first.calls == [("tool", {"value": 1})]
     assert second.calls == [("tool", {"value": 2})]
+
+
+@pytest.mark.asyncio
+async def test_startup_is_bounded_and_later_server_starts_while_first_is_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sessions = {object(): _Session() for _ in range(5)}
+    for session in sessions.values():
+        session.initialize_release = asyncio.Event()
+    readers = list(sessions)
+    ordered = [sessions[reader] for reader in readers]
+    monkeypatch.setattr(
+        mcp_transport,
+        "ClientSession",
+        lambda reader, *_args, **_kwargs: sessions[reader],
+    )
+    transport = McpTransport(
+        {
+            str(index): _streams([], reader=reader)
+            for index, reader in enumerate(readers)
+        },
+        startup_timeout_s=1,
+    )
+
+    starting = asyncio.create_task(transport.start())
+    await asyncio.gather(*(session.entered.wait() for session in ordered[:4]))
+    await asyncio.sleep(0)
+    assert not ordered[4].entered.is_set()  # At most four startups are scheduled.
+    assert not starting.done()
+
+    assert ordered[1].initialize_release is not None
+    ordered[1].initialize_release.set()
+    await asyncio.wait_for(ordered[4].entered.wait(), timeout=1)
+    assert not ordered[0].initialize_release.is_set()
+    assert not starting.done()
+
+    for session in ordered:
+        assert session.initialize_release is not None
+        session.initialize_release.set()
+    await asyncio.wait_for(starting, timeout=1)
+    await transport.close()
+    assert all(
+        [name for name, _ in session.events] == ["enter", "initialize", "exit"]
+        for session in ordered
+    )
+
+
+@pytest.mark.asyncio
+async def test_startup_failure_cancels_other_initializers_and_closes_every_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, second = _Session(), _Session()
+    first.initialize_release = asyncio.Event()
+    second.initialize_release = asyncio.Event()
+    second.initialize_error = ValueError("SECRET from server")
+    first_reader, second_reader = object(), object()
+    sessions = {first_reader: first, second_reader: second}
+    monkeypatch.setattr(
+        mcp_transport,
+        "ClientSession",
+        lambda reader, *_args, **_kwargs: sessions[reader],
+    )
+    transport = McpTransport(
+        {
+            "first": _streams([], reader=first_reader),
+            "second": _streams([], reader=second_reader),
+        },
+        startup_timeout_s=1,
+    )
+
+    starting = asyncio.create_task(transport.start())
+    await asyncio.gather(first.entered.wait(), second.entered.wait())
+    second.initialize_release.set()
+    with pytest.raises(DispatchError) as failed:
+        await asyncio.wait_for(starting, timeout=1)
+    assert failed.value.exception_type == "SessionStartFailed"
+    assert "SECRET" not in str(failed.value)
+    assert first.calls == second.calls == []
+    assert [name for name, _ in first.events] == ["enter", "initialize", "exit"]
+    assert [name for name, _ in second.events] == ["enter", "initialize", "exit"]
+    assert all(worker._stopped.is_set() for worker in transport._workers.values())
+    await transport.close()  # Idempotent after failed startup.
+
+
+@pytest.mark.asyncio
+async def test_cancelled_start_closes_all_started_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, second = _Session(), _Session()
+    first.initialize_release = asyncio.Event()
+    second.initialize_release = asyncio.Event()
+    first_reader, second_reader = object(), object()
+    sessions = {first_reader: first, second_reader: second}
+    monkeypatch.setattr(
+        mcp_transport,
+        "ClientSession",
+        lambda reader, *_args, **_kwargs: sessions[reader],
+    )
+    transport = McpTransport(
+        {
+            "first": _streams([], reader=first_reader),
+            "second": _streams([], reader=second_reader),
+        },
+        startup_timeout_s=1,
+    )
+
+    starting = asyncio.create_task(transport.start())
+    await asyncio.gather(first.entered.wait(), second.entered.wait())
+    starting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(starting, timeout=1)
+    assert [name for name, _ in first.events] == ["enter", "initialize", "exit"]
+    assert [name for name, _ in second.events] == ["enter", "initialize", "exit"]
+    assert all(worker._stopped.is_set() for worker in transport._workers.values())
+    with pytest.raises(DispatchError) as closed:
+        await transport.call(_request("first"))
+    assert closed.value.exception_type == "WorkerClosed"
 
 
 @pytest.mark.asyncio
