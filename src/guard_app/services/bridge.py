@@ -9,6 +9,7 @@ Only frozen, public lifecycle/command metadata crosses into Qt signals.
 from __future__ import annotations
 
 import asyncio
+import math
 import threading
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -134,7 +135,17 @@ class BackendBridge(QObject):
                 max_command_ids,
             )
         ) or any(
-            type(value) not in (int, float) or value <= 0
+            type(value) not in (int, float)
+            for value in (startup_timeout, shutdown_timeout)
+        ):
+            raise ValueError("Bridge limits are invalid")
+        try:
+            startup_timeout = float(startup_timeout)
+            shutdown_timeout = float(shutdown_timeout)
+        except OverflowError:
+            raise ValueError("Bridge limits are invalid") from None
+        if any(
+            not math.isfinite(value) or value <= 0
             for value in (startup_timeout, shutdown_timeout)
         ):
             raise ValueError("Bridge limits are invalid")
@@ -144,8 +155,8 @@ class BackendBridge(QObject):
         self._control_queue_size = control_queue_size
         self._control_workers = control_workers
         self._max_command_ids = max_command_ids
-        self._startup_timeout = float(startup_timeout)
-        self._shutdown_timeout = float(shutdown_timeout)
+        self._startup_timeout = startup_timeout
+        self._shutdown_timeout = shutdown_timeout
         self._state_lock = threading.Lock()
         self._state = BridgeState.NEW
         self._stop_requested = threading.Event()

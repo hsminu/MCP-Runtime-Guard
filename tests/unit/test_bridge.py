@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import threading
 import time
@@ -138,6 +139,21 @@ def close_bridge(app: QApplication, bridge: BackendBridge) -> None:
     pump_until(app, lambda: bridge.thread_done)
     app.processEvents()
     assert bridge.state is BridgeState.CLOSED
+
+
+@pytest.mark.parametrize("timeout_name", ("startup_timeout", "shutdown_timeout"))
+@pytest.mark.parametrize(
+    "invalid_timeout",
+    (math.nan, math.inf, -math.inf, 0, -0.1, True, "1", 10**400),
+)
+def test_bridge_rejects_invalid_timeouts(
+    app: QApplication, timeout_name: str, invalid_timeout: object
+) -> None:
+    async def bootstrap() -> BackendBindings:
+        raise AssertionError("must not run")
+
+    with pytest.raises(ValueError, match="Bridge limits are invalid"):
+        BackendBridge(bootstrap, **{timeout_name: invalid_timeout})
 
 
 def test_qt_remains_responsive_and_receives_frozen_backend_events(app) -> None:
