@@ -12,7 +12,16 @@ from dataclasses import dataclass
 
 import shiboken6
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QDialog, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtGui import QResizeEvent
+from PySide6.QtWidgets import (
+    QDialog,
+    QFrame,
+    QPlainTextEdit,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .widgets import KeyboardActionButton, plain_label, size_detail_for_viewport
 
@@ -97,28 +106,41 @@ class ApprovalDetailDialog(QDialog):
         self.setWindowTitle("승인 대상 상세")
         self._return_focus: QWidget | None = None
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 20)
-        layout.setSpacing(10)
-        layout.addWidget(plain_label("승인 대상 상세", name="pageTitle"))
-        layout.addWidget(
-            plain_label(
-                "비가시 문자와 혼동 가능한 문자는 코드포인트로 표시해. "
-                "표시만 바뀌며 승인 사본은 수정되지 않아."
-            )
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(24, 24, 24, 20)
+        self._layout.setSpacing(10)
+        self._layout.addWidget(plain_label("승인 대상 상세", name="pageTitle"))
+        explanation = (
+            "비가시 문자와 혼동 가능한 문자는 코드포인트로 표시해. "
+            "표시만 바뀌며 승인 사본은 수정되지 않아."
         )
+        self.description = plain_label(explanation)
+        self._layout.addWidget(self.description)
 
-        layout.addWidget(plain_label("전체 수신처"))
+        self._detail_scroll = QScrollArea()
+        self._detail_scroll.setObjectName("approvalDetailScroll")
+        self._detail_scroll.setWidgetResizable(True)
+        self._detail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._detail_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        content = QWidget()
+        fields = QVBoxLayout(content)
+        fields.setContentsMargins(0, 0, 8, 0)
+        fields.setSpacing(8)
+        fields.addWidget(plain_label("전체 수신처"))
         self.destination_body = self._plain_body("승인 대상 전체 수신처")
-        layout.addWidget(self.destination_body, 1)
+        self.destination_body.setAccessibleDescription(explanation)
+        fields.addWidget(self.destination_body, 1)
 
-        layout.addWidget(plain_label("전체 인자 · 승인 사본의 UTF-8 바이트"))
+        fields.addWidget(plain_label("전체 인자 · 승인 사본의 UTF-8 바이트"))
         self.arguments_body = self._plain_body("승인 대상 전체 인자")
-        layout.addWidget(self.arguments_body, 3)
+        self.arguments_body.setAccessibleDescription(explanation)
+        fields.addWidget(self.arguments_body, 3)
+        self._detail_scroll.setWidget(content)
+        self._layout.addWidget(self._detail_scroll, 1)
 
         close_button = KeyboardActionButton("닫기")
         close_button.clicked.connect(self.close)
-        layout.addWidget(close_button, 0, Qt.AlignmentFlag.AlignRight)
+        self._layout.addWidget(close_button, 0, Qt.AlignmentFlag.AlignRight)
         self.finished.connect(self._on_finished)
 
     @staticmethod
@@ -128,7 +150,21 @@ class ApprovalDetailDialog(QDialog):
         body.setReadOnly(True)
         body.setUndoRedoEnabled(False)
         body.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        body.setMinimumHeight(128)
+        body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         return body
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        compact = self.height() <= 350
+        self.description.setVisible(not compact)
+        self._layout.setContentsMargins(
+            12 if compact else 24,
+            10 if compact else 24,
+            12 if compact else 24,
+            10 if compact else 20,
+        )
+        self._layout.setSpacing(6 if compact else 10)
 
     def show_value(
         self, value: ApprovalDetailValue, *, return_focus: QWidget | None = None

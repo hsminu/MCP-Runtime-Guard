@@ -7,13 +7,14 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QObject, Qt, QUrl, Slot
+from PySide6.QtCore import QObject, QPoint, Qt, QUrl, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -152,3 +153,43 @@ def test_invalid_utf8_never_leaves_stale_detail_visible(app: QApplication) -> No
         assert dialog.arguments_body.toPlainText() == ""
     finally:
         dialog.close()
+
+
+def test_short_owner_scrolls_both_complete_plain_fields(app: QApplication) -> None:
+    owner = QWidget()
+    owner.resize(320, 240)
+    owner.show()
+    destination = "https://review.invalid/" + "d" * 512 + "/destination-end"
+    arguments = ("synthetic-line:" + "a" * 160 + "\n") * 60 + "args-end"
+    detail = ApprovalDetailDialog(owner)
+    try:
+        detail.show_value(ApprovalDetailValue(destination, arguments.encode("utf-8")))
+        app.processEvents()
+        scroll = detail.findChild(QScrollArea, "approvalDetailScroll")
+        assert scroll is not None
+        assert detail.width() <= owner.width()
+        assert detail.height() <= owner.height()
+        assert scroll.horizontalScrollBar().maximum() == 0
+        assert scroll.verticalScrollBar().maximum() > 0
+        assert detail.destination_body.height() >= 128
+        assert detail.arguments_body.height() >= 128
+        assert detail.destination_body.toPlainText() == destination
+        assert detail.arguments_body.toPlainText() == visible_review_text(arguments)
+        assert detail.destination_body.horizontalScrollBar().maximum() > 0
+        assert detail.arguments_body.verticalScrollBar().maximum() > 0
+
+        QTest.keyClick(detail.destination_body, Qt.Key.Key_Tab)
+        app.processEvents()
+        assert detail.arguments_body.hasFocus()
+        arguments_top = detail.arguments_body.mapTo(scroll.viewport(), QPoint(0, 0)).y()
+        assert arguments_top < scroll.viewport().height()
+        assert arguments_top + detail.arguments_body.height() > 0
+        QTest.keyClick(detail.arguments_body, Qt.Key.Key_Backtab)
+        app.processEvents()
+        assert detail.destination_body.hasFocus()
+        detail.close()
+        assert detail.destination_body.toPlainText() == ""
+        assert detail.arguments_body.toPlainText() == ""
+    finally:
+        detail.close()
+        owner.close()
