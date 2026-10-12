@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum, auto
+from types import TracebackType
 from typing import Any, Protocol, cast
 
 import anyio
@@ -51,6 +52,32 @@ class _State(Enum):
 class _Command:
     req: ResolvedRequest
     future: asyncio.Future[RawResult]
+
+
+class _SessionExitTracker:
+    """Observe successful context exit even when the owner was cancelled."""
+
+    def __init__(self, context: AbstractAsyncContextManager[_ToolSession]) -> None:
+        self._context = context
+        self.entered = False
+        self.exit_attempted = False
+        self.exited = False
+
+    async def __aenter__(self) -> _ToolSession:
+        session = await self._context.__aenter__()
+        self.entered = True
+        return session
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
+        self.exit_attempted = True
+        suppressed = await self._context.__aexit__(exc_type, exc, tb)
+        self.exited = True
+        return suppressed
 
 
 _STOP = object()
@@ -258,6 +285,12 @@ class ServerWorker:
         self._ready = asyncio.Event()
         self._stopped = asyncio.Event()
         self._unhealthy = False
+        self._initialized = False
+        self._session_entered = False
+        self._session_exit_attempted = False
+        self._session_exited = False
+        self._owner_cancel_expected = False
+        self._close_failed = False
 
     async def start(self) -> None:
         if self._state is not _State.NEW:
@@ -300,6 +333,11 @@ class ServerWorker:
             raise
 
     async def close(self) -> None:
+        self.request_close()
+        await self.wait_closed()
+
+    def request_close(self) -> None:
+        """Stop admission and reject pending commands without awaiting I/O."""
         if self._state is _State.NEW:
             self._state = _State.CLOSED
             self._ready.set()
@@ -312,21 +350,55 @@ class ServerWorker:
             self._queue.put_nowait(_STOP)
             if starting and self._owner is not None:
                 self._owner.cancel()
+
+    async def wait_closed(self) -> None:
+        """Confirm that the session owner finished, including its context exit."""
+        if self._owner is None:
+            return
         try:
-            await asyncio.wait_for(self._stopped.wait(), timeout=self._close_timeout_s)
+            # _stopped is set in _run's finally, before the owner task has
+            # published its final result. Collect that result without leaking
+            # an SDK exception or cancelling it on the first close timeout.
+            outcome = await asyncio.wait_for(
+                asyncio.shield(asyncio.gather(self._owner, return_exceptions=True)),
+                timeout=self._close_timeout_s,
+            )
         except TimeoutError:
             # Even a cancellation-resistant SDK call cannot keep the Guard's
             # command future pending forever after shutdown has failed.
             if self._active is not None and not self._active.future.done():
                 self._active.future.set_exception(DispatchError("WorkerCloseTimeout"))
             if self._owner is not None:
+                self._owner_cancel_expected = True
                 self._owner.cancel()
             raise DispatchError("WorkerCloseTimeout") from None
+        owner_error = outcome[0]
+        owner_failed = isinstance(owner_error, BaseException) and (
+            not isinstance(owner_error, asyncio.CancelledError)
+            or not self._owner_cancel_expected
+        )
+        teardown_failed = self._session_exit_attempted and not self._session_exited
+        teardown_missing = self._session_entered and not self._session_exit_attempted
+        if teardown_failed or teardown_missing or (self._initialized and owner_failed):
+            self._close_failed = True
+        if self._close_failed:
+            self._state = _State.FAILED
+            name = (
+                "SessionCloseFailed"
+                if teardown_failed or teardown_missing
+                else "WorkerOwnerFailed"
+            )
+            raise DispatchError(name) from None
+        if self._state is _State.CLOSING:
+            self._state = _State.CLOSED
 
     async def _run(self) -> None:
+        tracker: _SessionExitTracker | None = None
         try:
-            async with self._session_factory() as session:
+            tracker = _SessionExitTracker(self._session_factory())
+            async with tracker as session:
                 await session.initialize()
+                self._initialized = True
                 if self._state is _State.STARTING:
                     self._state = _State.READY
                 self._ready.set()
@@ -347,10 +419,14 @@ class ServerWorker:
                             )
                         self._active = None
         finally:
+            if tracker is not None:
+                self._session_entered = tracker.entered
+                self._session_exit_attempted = tracker.exit_attempted
+                self._session_exited = tracker.exited
             self._state = (
                 _State.FAILED
                 if self._unhealthy or self._state in (_State.STARTING, _State.READY)
-                else _State.CLOSED
+                else self._state
             )
             self._ready.set()
             self._reject_queued("WorkerClosed")
@@ -414,6 +490,7 @@ class ServerWorker:
         if not cmd.future.done():
             cmd.future.set_exception(DispatchError("TimeoutError"))
         if self._owner is not None:
+            self._owner_cancel_expected = True
             self._owner.cancel()
 
     def _reject_queued(self, name: str) -> None:
@@ -548,12 +625,20 @@ class McpTransport:
 
     async def close(self) -> None:
         self._closed = True
+        # Quiesce every server before awaiting any one server's active call
+        # or context exit. In particular, a queued SEND on a later server
+        # cannot start while an earlier server is slow to close.
+        workers = tuple(self._workers.values())
+        for worker in workers:
+            worker.request_close()
+        outcomes = await asyncio.gather(
+            *(worker.wait_closed() for worker in workers), return_exceptions=True
+        )
         failure: DispatchError | None = None
-        for worker in self._workers.values():
-            try:
-                await worker.close()
-            except DispatchError as exc:
-                if failure is None:
-                    failure = exc
+        for outcome in outcomes:
+            if isinstance(outcome, DispatchError) and failure is None:
+                failure = outcome
+            elif isinstance(outcome, BaseException) and failure is None:
+                failure = DispatchError("WorkerCloseFailed")
         if failure is not None:
             raise failure

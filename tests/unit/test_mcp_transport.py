@@ -559,6 +559,183 @@ async def test_close_rejects_calls_to_other_server_while_first_drains(
 
 
 @pytest.mark.asyncio
+async def test_close_reports_session_exit_failure_without_disclosing_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExitFailureSession(_Session):
+        exit_count = 0
+
+        async def __aexit__(self, *_args: object) -> None:
+            self.exit_count += 1
+            await super().__aexit__(*_args)
+            raise RuntimeError("SECRET session teardown detail")
+
+    session = ExitFailureSession()
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
+    )
+    transport = McpTransport({"server": _streams([])})
+    await transport.start()
+
+    for _ in range(2):
+        with pytest.raises(DispatchError) as failure:
+            await transport.close()
+        assert failure.value.exception_type == "SessionCloseFailed"
+        assert "SECRET" not in str(failure.value)
+    assert session.exit_count == 1
+    assert transport._workers["server"]._state.name == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_close_reports_teardown_failure_after_initialize_failure() -> None:
+    class InitExitFailureSession(_Session):
+        async def __aexit__(self, *_args: object) -> None:
+            await super().__aexit__(*_args)
+            raise RuntimeError("SECRET teardown after initialize")
+
+    session = InitExitFailureSession()
+    session.initialize_error = ValueError("SECRET initialize")
+    worker = mcp_transport.ServerWorker(
+        lambda: session,
+        call_timeout_s=1,
+        startup_timeout_s=1,
+        close_timeout_s=1,
+        max_result_copy_bytes=512 * 1024,
+    )
+
+    with pytest.raises(DispatchError) as startup:
+        await worker.start()
+    assert startup.value.exception_type == "SessionStartFailed"
+    assert worker._session_entered
+    assert worker._session_exit_attempted
+    assert not worker._session_exited
+
+    for _ in range(2):
+        with pytest.raises(DispatchError) as shutdown:
+            await worker.close()
+        assert shutdown.value.exception_type == "SessionCloseFailed"
+        assert "SECRET" not in str(shutdown.value)
+    assert [name for name, _ in session.events] == ["enter", "initialize", "exit"]
+
+
+@pytest.mark.asyncio
+async def test_close_reports_owner_exit_failure_that_preceded_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExitFailureSession(_Session):
+        async def __aexit__(self, *_args: object) -> None:
+            await super().__aexit__(*_args)
+            raise RuntimeError("SECRET background teardown detail")
+
+    session = ExitFailureSession()
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
+    )
+    transport = McpTransport({"server": _streams([])})
+    await transport.start()
+    owner = transport._workers["server"]._owner
+    assert owner is not None
+    owner.cancel()
+    await transport._workers["server"]._stopped.wait()
+
+    with pytest.raises(DispatchError) as failure:
+        await transport.close()
+    assert failure.value.exception_type == "SessionCloseFailed"
+    assert "SECRET" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_close_reports_unexpected_owner_cancellation_after_clean_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _Session()
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
+    )
+    transport = McpTransport({"server": _streams([])})
+    await transport.start()
+    owner = transport._workers["server"]._owner
+    assert owner is not None
+    owner.cancel()
+    await transport._workers["server"]._stopped.wait()
+
+    with pytest.raises(DispatchError) as failure:
+        await transport.close()
+    assert failure.value.exception_type == "WorkerOwnerFailed"
+    assert [name for name, _ in session.events][-1] == "exit"
+
+
+@pytest.mark.asyncio
+async def test_close_quiesces_all_workers_before_waiting_for_any_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, second = _Session(), _Session()
+    first.block_first = second.block_first = True
+    sessions = iter((first, second))
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: next(sessions)
+    )
+    transport = McpTransport(
+        {"first": _streams([]), "second": _streams([])}, close_timeout_s=1
+    )
+    await transport.start()
+    active_first = asyncio.create_task(
+        transport.call(_request("first", kind=ToolKind.SEND, seq=1))
+    )
+    active_second = asyncio.create_task(transport.call(_request("second", seq=2)))
+    await asyncio.gather(first.first_call.wait(), second.first_call.wait())
+    queued_send = asyncio.create_task(
+        transport.call(_request("second", kind=ToolKind.SEND, seq=3))
+    )
+    await asyncio.sleep(0)
+
+    closing = asyncio.create_task(transport.close())
+    with pytest.raises(DispatchError) as rejected:
+        await asyncio.wait_for(queued_send, timeout=1)
+    assert rejected.value.exception_type == "WorkerClosed"
+    second.release_first.set()
+    assert (await active_second).payload is not None
+    assert len(second.calls) == 1  # The queued SEND never entered call_tool.
+    assert not closing.done()  # The first active SEND is still unresolved.
+
+    first.release_first.set()
+    assert (await active_first).payload is not None
+    await closing
+    await transport.close()  # Successful shutdown remains idempotent.
+    assert len(first.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_close_can_be_retried_after_owner_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _Session()
+    session.block_first = True
+    monkeypatch.setattr(
+        mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
+    )
+    transport = McpTransport({"server": _streams([])})
+    await transport.start()
+    active = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND, seq=1)))
+    await session.first_call.wait()
+
+    closing = asyncio.create_task(transport.close())
+    await asyncio.sleep(0)
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    with pytest.raises(DispatchError) as rejected:
+        await transport.call(_request(seq=2))
+    assert rejected.value.exception_type == "WorkerClosed"
+
+    session.release_first.set()
+    assert (await active).payload is not None
+    await transport.close()
+    assert [name for name, _ in session.events][-1] == "exit"
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_close_timeout_settles_active_command_without_waiting_for_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
