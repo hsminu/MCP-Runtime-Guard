@@ -2,7 +2,7 @@
 
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-현재 저장소는 **3인 개발을 위한 문서와 브랜치 준비 단계**다. 실행 소스, 기본 뼈대, 패키지 설정, 테스트 코드, CI 실행 설정은 아직 만들지 않았다. 아래 구성과 동작은 구현 목표이며, 설치·실행 명령은 구현 후 검증해서 추가한다.
+`feat/a-application`에는 B 보안 코어 초안 사본과 A의 transport·Runner·bridge·Qt 읽기 화면, 단위 테스트가 있다. 전체 앱을 시작하는 조립 경로와 C의 Registry·저장소·fixture·CI는 아직 연결되지 않았다. **작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/tasks/a-progress.md)**이다. 아래 설계 설명은 전체 제품의 목표이며, A 단위 구현을 제품 인수 완료로 해석하지 않는다.
 
 ## 개발 문서
 
@@ -12,6 +12,7 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | [3인 협업 규칙](docs/team-workflow.md) | 모듈 소유권, 리뷰 담당, 개발 순서, 브랜치 사용법 |
 | [공통 계약 체크리스트](docs/contracts.md) | B가 정의하고 A·C와 합의해야 하는 모델·포트·이벤트 계약 |
 | [공통 에이전트 지침](AGENTS.md) | 모든 브랜치에 적용하는 작업 지침 |
+| [A 작업 현황](docs/tasks/a-progress.md) | 현재 구현, 실제 검증, 미완료 조건과 커밋 추적 |
 
 각 작업 브랜치에는 루트 `AGENT.md`와 `docs/tasks/` 아래 담당별 작업 문서가 추가로 있다. `AGENTS.md`에서 `AGENT.md`를 읽도록 연결했다. 브랜치의 `AGENT.md`는 현재 브랜치 이름으로 담당 문서를 선택한다.
 
@@ -69,7 +70,7 @@ flowchart LR
 
 `ASK`는 요청 사본의 해시가 일치하고, 현재 상태로 재평가를 통과하며, 승인 1건을 원자적으로 소비했을 때 최대 1회 실행한다. 쓰기 호출의 결과가 불명이면 `UNKNOWN_OUTCOME`으로 작업을 잠그고 자동 재전송하지 않는다.
 
-## 구현할 구성
+## 구성과 담당
 
 | 구성 | 책임 | 담당 |
 | --- | --- | --- |
@@ -82,7 +83,7 @@ flowchart LR
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
 | `fixtures`, 테스트, CI | 실제 수신 계수로 집행을 검증 | C 주도 |
 
-위 경로는 예정된 모듈 목록이다. 실제 디렉터리와 파일은 담당 작업을 구현할 때 만든다. 전체 예정 구조는 개발문서 2.1절에 있다.
+표는 전체 제품의 소유권이다. 현재 존재하는 모듈과 미구현 항목은 [A 작업 현황](docs/tasks/a-progress.md)에서 구분한다. 전체 예정 구조는 개발문서 2.1절에 있다.
 
 ## 보안 불변식
 
@@ -103,7 +104,15 @@ flowchart LR
 
 ## 개발 환경과 진행 순서
 
-설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. 정확한 의존성 버전과 외부 API 시그니처는 아직 확정하지 않았다. 개발문서 부록 A의 실제 stdio·HTTP 왕복과 AGT·Scanner 호환 검증을 거친 조합만 고정한다.
+설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. 현재 A 개발 환경의 설치 버전은 [연동 기록](docs/integration-notes.md)에 있다. 전체 제품의 의존성 조합과 lock은 실제 stdio·HTTP 왕복 및 AGT·Scanner 호환 검증 뒤 확정한다.
+
+현재 A 작업 디렉터리에 준비된 `.venv`로 단위 테스트를 실행하는 명령은 다음과 같다. 이 검사는 합성 대역을 포함하며 실제 MCP 왕복이나 C 수신 계수를 대신하지 않는다.
+
+```powershell
+$env:PYTHONPATH='src'
+$env:QT_QPA_PLATFORM='offscreen'
+.\.venv\Scripts\python.exe -m pytest tests -q
+```
 
 1. 세 사람이 공통 문서와 각자의 `AGENT.md`·작업 문서를 읽는다.
 2. B가 모델·포트·명령·이벤트 계약을 제안하고 A·C와 확정한다.
