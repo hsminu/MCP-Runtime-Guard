@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from guard_app.domain.enums import ApprovalStatus
@@ -263,6 +264,41 @@ def test_filter_and_newest_sort_request_backend_wide_order(app: QApplication) ->
     assert view.table.item(0, 0).text() == "approval-002"
     assert view.current_query is not None
     assert view.current_query.page == 1
+
+
+def test_table_fits_actual_viewport_at_compact_and_full_width(
+    app: QApplication,
+) -> None:
+    view = ApprovalListPage()
+    view.resize(500, 580)
+    view.show()
+    try:
+        view.refresh()
+        rows = tuple(summary(number) for number in range(6, 0, -1))
+        assert view.set_page(result(view, rows, 6), display_now=NOW)
+        app.processEvents()
+        QTest.qWait(20)
+        app.processEvents()
+        assert view.table.viewport().width() < view._FULL_TABLE_WIDTH
+        assert [view.table.isColumnHidden(i) for i in range(6)] == [
+            False,
+            False,
+            True,
+            True,
+            False,
+            True,
+        ]
+        assert view.table.horizontalScrollBar().maximum() == 0
+
+        view.resize(980, 820)
+        app.processEvents()
+        QTest.qWait(20)
+        app.processEvents()
+        assert view.table.viewport().width() >= view._FULL_TABLE_WIDTH
+        assert all(not view.table.isColumnHidden(i) for i in range(6))
+        assert view.table.horizontalScrollBar().maximum() == 0
+    finally:
+        view.close()
 
 
 def test_waiting_hint_does_not_expire_or_interpret_markup(app: QApplication) -> None:

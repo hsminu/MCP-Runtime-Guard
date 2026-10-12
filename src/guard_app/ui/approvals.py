@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QEvent, QObject, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -103,6 +103,7 @@ class ApprovalListPage(QWidget):
 
     query_requested = Signal(object)
     summary_selected = Signal(object)
+    _FULL_TABLE_WIDTH = 850
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -112,6 +113,7 @@ class ApprovalListPage(QWidget):
         self._state = LoadState.UNAVAILABLE
         self._total_count = 0
         self._selected_id: str | None = None
+        self._compact_columns: bool | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 28, 26, 42)
@@ -171,13 +173,9 @@ class ApprovalListPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.Stretch
-        )
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.itemSelectionChanged.connect(self._selection_changed)
+        self.table.viewport().installEventFilter(self)
         layout.addWidget(self.table, 1)
 
         pager = QHBoxLayout()
@@ -199,6 +197,39 @@ class ApprovalListPage(QWidget):
         pager.addWidget(self.refresh_button)
         layout.addLayout(pager)
         self._update_pager()
+        self._update_table_columns()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.table.viewport() and event.type() is QEvent.Type.Resize:
+            QTimer.singleShot(0, self._update_table_columns)
+        return super().eventFilter(watched, event)
+
+    def _update_table_columns(self) -> None:
+        """Fit visible columns to the real table viewport, including scrollbars."""
+
+        viewport_width = self.table.viewport().width()
+        if viewport_width < 100:
+            return
+        compact = viewport_width < self._FULL_TABLE_WIDTH
+        if compact != self._compact_columns:
+            self._compact_columns = compact
+            for column in (2, 3, 5):
+                self.table.setColumnHidden(column, compact)
+
+        available = viewport_width - 2
+        if compact:
+            first = available * 33 // 100
+            second = available * 27 // 100
+            widths = {0: first, 1: second, 4: available - first - second}
+        else:
+            fractions = (15, 13, 18, 16, 18)
+            widths = {
+                column: available * percent // 100
+                for column, percent in enumerate(fractions)
+            }
+            widths[5] = available - sum(widths.values())
+        for column, width in widths.items():
+            self.table.setColumnWidth(column, width)
 
     @property
     def current_query(self) -> ApprovalQuery | None:
