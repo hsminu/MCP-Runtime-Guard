@@ -7,7 +7,10 @@ from collections import deque
 
 import pytest
 
-from guard_app.adapters.model_client import ModelFormatError
+from guard_app.adapters.model_client import (
+    MAX_MODEL_CONVERSATION_UTF8_BYTES,
+    ModelFormatError,
+)
 from guard_app.domain.contracts import (
     Denied,
     ModelTurn,
@@ -511,6 +514,81 @@ def test_invalid_model_output_stops_before_guard() -> None:
     runner.add_user_message("read")
     assert asyncio.run(runner.advance()).status == "model_error"
     assert guard.calls == []
+
+
+def test_oversized_user_input_stops_before_model_or_guard() -> None:
+    model = FakeModel(ModelTurn(text="must not run"))
+    guard = FakeGuard()
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3 + 1))
+
+    assert asyncio.run(runner.advance()).status == "model_error"
+    assert model.seen == []
+    assert guard.calls == []
+    with pytest.raises(RunnerStateError):
+        runner.add_user_message("retry")
+
+
+def test_oversized_released_result_cannot_leave_for_next_model_turn() -> None:
+    model = FakeModel(ModelTurn(calls=(_call(),)), ModelTurn(text="must not run"))
+    guard = FakeGuard(
+        Released(
+            request_id="request-1",
+            result=ReleasedResult(
+                text="한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3 + 1)
+            ),
+            label=Label.INTERNAL,
+        )
+    )
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    async def run():
+        assert (await runner.advance()).status == "continue"
+        return await runner.advance()
+
+    assert asyncio.run(run()).status == "model_error"
+    assert len(model.seen) == 1
+    assert [call.model_call_id for _, call in guard.calls] == ["call-1"]
+
+
+def test_oversized_approved_result_preserves_pending_then_stops_egress() -> None:
+    model = FakeModel(ModelTurn(calls=(_call(),)), ModelTurn(text="must not run"))
+    guard = FakeGuard(
+        Pending(
+            request_id="request-1",
+            approval_id="approval-1",
+            reasons=(Reason.INTERNAL_TO_EXTERNAL,),
+        )
+    )
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    async def run():
+        pending = await runner.advance()
+        with pytest.raises(RunnerStateError):
+            await runner.advance()
+        resumed = await runner.resume_approval(
+            "task-1",
+            1,
+            "approval-1",
+            Released(
+                request_id="request-1",
+                result=ReleasedResult(
+                    text="한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3 + 1)
+                ),
+                label=Label.INTERNAL,
+            ),
+        )
+        failed = await runner.advance()
+        return pending, resumed, failed
+
+    pending, resumed, failed = asyncio.run(run())
+    assert pending.status == "pending"
+    assert resumed.status == "continue"
+    assert failed.status == "model_error"
+    assert len(model.seen) == 1
+    assert [call.model_call_id for _, call in guard.calls] == ["call-1"]
 
 
 def test_policy_change_during_model_step_discards_late_calls() -> None:

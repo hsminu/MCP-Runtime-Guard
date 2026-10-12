@@ -25,7 +25,7 @@ from guard_app.domain.contracts import (
     ModelTurn,
     ToolView,
 )
-from guard_app.domain.json_types import Arguments
+from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.models import ProposedCall
 
 
@@ -48,6 +48,85 @@ MAX_MODEL_ARGUMENT_DEPTH = 64
 MAX_MODEL_ARGUMENT_INTEGER_BITS = 4_096
 MAX_MODEL_COMPLETION_CHARS = 262_144
 _MAX_MODEL_JSON_STRUCTURE_TOKENS = 2 * MAX_MODEL_ARGUMENT_NODES
+
+# These apply to the complete conversation sent on each model step, including
+# committed tool results and prior call arguments. History is never truncated:
+# dropping a result or decision could alter the meaning of the next proposal.
+MAX_MODEL_CONVERSATION_MESSAGES = 128
+MAX_MODEL_CONVERSATION_UTF8_BYTES = 1_048_576
+
+
+def validate_model_conversation_budget(conversation: Conversation) -> None:
+    """Reject an oversized normalized request before any provider egress.
+
+    Count the UTF-8 bytes of compact JSON for every field the provider boundary
+    receives. Count frozen call arguments without first thawing a large tree.
+    The bound is local to one request; each turn includes all retained history.
+    """
+
+    if (
+        type(conversation) is not tuple
+        or len(conversation) > MAX_MODEL_CONVERSATION_MESSAGES
+    ):
+        raise ModelFormatError()
+    remaining = [MAX_MODEL_CONVERSATION_UTF8_BYTES]
+
+    def consume(size: int) -> None:
+        if size > remaining[0]:
+            raise ModelFormatError()
+        remaining[0] -= size
+
+    def walk(value: object) -> None:
+        if type(value) is str:
+            # UTF-8 uses at least one byte per code point. This check avoids
+            # allocating an oversized encoded copy or escaped JSON string.
+            if len(value) > remaining[0]:
+                raise ModelFormatError()
+            try:
+                consume(len(json.dumps(value, ensure_ascii=False).encode("utf-8")))
+            except UnicodeError:
+                raise ModelFormatError() from None
+        elif isinstance(value, (dict, FrozenJsonObject)):
+            consume(2 + max(0, len(value) - 1))
+            for key, child in value.items():
+                walk(key)
+                consume(1)  # colon
+                walk(child)
+        elif isinstance(value, (tuple, list)):
+            consume(2 + max(0, len(value) - 1))
+            for child in value:
+                walk(child)
+        elif type(value) is int:
+            if value.bit_length() > MAX_MODEL_ARGUMENT_INTEGER_BITS:
+                raise ModelFormatError()
+            consume(len(str(value)))
+        elif value is None or type(value) is bool:
+            consume(4 if value is None or value is True else 5)
+        else:
+            raise ModelFormatError()
+
+    consume(2 + max(0, len(conversation) - 1))
+    for message in conversation:
+        if (
+            not isinstance(message, ConversationMessage)
+            or len(message.calls) > MAX_MODEL_CALLS
+        ):
+            raise ModelFormatError()
+        walk(
+            {
+                "role": message.role,
+                "content": message.content,
+                "calls": tuple(
+                    {
+                        "tool_ref": call.tool_ref,
+                        "arguments": call.arguments,
+                        "model_call_id": call.model_call_id,
+                    }
+                    for call in message.calls
+                ),
+                "model_call_id": message.model_call_id,
+            }
+        )
 
 
 def _check_json_text_budget(value: str) -> int:
@@ -347,6 +426,8 @@ class ProviderNeutralModelClient:
     ) -> ModelTurn:
         if type(conversation) is not tuple or type(tools) is not tuple:
             raise ModelFormatError()
+        if len(conversation) > MAX_MODEL_CONVERSATION_MESSAGES:
+            raise ModelFormatError()
         # B contracts are frozen. Re-validation rejects adapter callers that
         # try to smuggle a mutable or malformed message into the backend.
         try:
@@ -356,5 +437,6 @@ class ProviderNeutralModelClient:
             safe_tools = tuple(ToolView.model_validate(tool) for tool in tools)
         except ValidationError:
             raise ModelFormatError() from None
+        validate_model_conversation_budget(safe_conversation)
         raw = await self._completion(safe_conversation, safe_tools)
         return parse_model_turn(raw, safe_tools)

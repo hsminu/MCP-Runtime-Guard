@@ -13,6 +13,8 @@ from guard_app.adapters.model_client import (
     MAX_MODEL_ARGUMENT_NODES,
     MAX_MODEL_CALLS,
     MAX_MODEL_COMPLETION_CHARS,
+    MAX_MODEL_CONVERSATION_MESSAGES,
+    MAX_MODEL_CONVERSATION_UTF8_BYTES,
     MAX_MODEL_TEXT_CHARS,
     ModelFormatError,
     ProviderNeutralModelClient,
@@ -20,8 +22,8 @@ from guard_app.adapters.model_client import (
 )
 from guard_app.domain.contracts import ConversationMessage, RegisteredServer, ToolView
 from guard_app.domain.enums import Label, RegStatus, ToolKind, TrustTier
-from guard_app.domain.json_types import FrozenJsonObject
-from guard_app.domain.models import Boundary, ToolSpec
+from guard_app.domain.json_types import Arguments, FrozenJsonObject
+from guard_app.domain.models import Boundary, ProposedCall, ToolSpec
 from guard_app.services.catalog import Catalog
 
 
@@ -98,6 +100,84 @@ def test_provider_boundary_does_not_execute_tools() -> None:
     assert turn.text == "ok"
     assert len(observed) == 1
     assert observed[0][1][0].tool_ref == "alpha__read"
+
+
+def test_conversation_utf8_boundary_is_checked_before_provider_egress() -> None:
+    import asyncio
+
+    observed = []
+
+    async def complete(conversation, tools):
+        observed.append(conversation)
+        return {"text": "ok", "calls": []}
+
+    client = ProviderNeutralModelClient(complete)
+    empty_message = ConversationMessage(role="user", content="")
+    fixed_size = len(
+        json.dumps(
+            [empty_message.model_dump(mode="json")],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    padding = MAX_MODEL_CONVERSATION_UTF8_BYTES - fixed_size
+    content = "한" * (padding // 3) + "x" * (padding % 3)
+    accepted = ConversationMessage(role="user", content=content)
+
+    async def run():
+        assert (await client.step((accepted,), ())).text == "ok"
+        with pytest.raises(ModelFormatError, match="모델 응답 형식"):
+            await client.step(
+                (ConversationMessage(role="user", content=content + "x"),), ()
+            )
+
+    asyncio.run(run())
+    assert len(observed) == 1
+    assert observed[0][0].content == content
+
+
+def test_conversation_message_count_is_checked_before_provider_egress() -> None:
+    import asyncio
+
+    observed = []
+
+    async def complete(conversation, tools):
+        observed.append(len(conversation))
+        return {"text": "ok", "calls": []}
+
+    client = ProviderNeutralModelClient(complete)
+    message = ConversationMessage(role="user", content="x")
+
+    async def run():
+        assert (
+            await client.step((message,) * MAX_MODEL_CONVERSATION_MESSAGES, ())
+        ).text == "ok"
+        with pytest.raises(ModelFormatError):
+            await client.step((message,) * (MAX_MODEL_CONVERSATION_MESSAGES + 1), ())
+
+    asyncio.run(run())
+    assert observed == [MAX_MODEL_CONVERSATION_MESSAGES]
+
+
+def test_conversation_budget_includes_prior_call_arguments() -> None:
+    import asyncio
+
+    observed = []
+
+    async def complete(conversation, tools):
+        observed.append(conversation)
+        return {"text": "ok", "calls": []}
+
+    client = ProviderNeutralModelClient(complete)
+    call = ProposedCall(
+        tool_ref="alpha__read",
+        arguments=Arguments({"path": "한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3)}),
+        model_call_id="call-1",
+    )
+    message = ConversationMessage(role="assistant", calls=(call,))
+    with pytest.raises(ModelFormatError):
+        asyncio.run(client.step((message,), (_view("alpha"),)))
+    assert observed == []
 
 
 def test_raw_content_is_not_in_format_error() -> None:

@@ -15,7 +15,10 @@ from typing import Literal
 
 from pydantic import ValidationError
 
-from guard_app.adapters.model_client import ModelFormatError
+from guard_app.adapters.model_client import (
+    ModelFormatError,
+    validate_model_conversation_budget,
+)
 from guard_app.domain.contracts import (
     ConversationMessage,
     Denied,
@@ -155,7 +158,9 @@ class TaskRunner:
                 self._stopped = True
                 return self._update("stopped")
             try:
-                turn = await self._model.step(tuple(self._conversation), views)
+                conversation = tuple(self._conversation)
+                validate_model_conversation_budget(conversation)
+                turn = await self._model.step(conversation, views)
             except ModelFormatError:
                 if self._closed:
                     return self._update("closed")
