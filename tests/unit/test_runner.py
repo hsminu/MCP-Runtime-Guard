@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
+from datetime import datetime
 
 import pytest
 
@@ -26,6 +28,7 @@ from guard_app.domain.enums import Label, TaskStatus
 from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.models import ProposedCall, TaskState
 from guard_app.domain.reasons import Reason
+from guard_app.services.guard import GuardService
 from guard_app.services.runner import RunnerStateError, TaskRunner
 
 
@@ -157,6 +160,117 @@ def test_denied_stops_remaining_calls_and_uses_fixed_text() -> None:
     assert model.seen[1][0][-3].content == "이 요청은 실행되지 않았습니다."
     assert model.seen[1][0][-2].content == "이 호출은 실행되지 않았습니다."
     assert "INTERNAL_TO_EXTERNAL" not in model.seen[1][0][-3].content
+
+
+def test_guard_policy_mismatch_halt_is_returned_without_new_user_turn() -> None:
+    """T29: the real Guard halts before returning Denied on policy change."""
+    state = _state()
+
+    class HaltingStore(FakeStore):
+        async def set_task_status(
+            self,
+            task_id: str,
+            status: TaskStatus,
+            *,
+            expected_row_revision: int,
+            at_utc: datetime,
+            reason: Reason,
+        ) -> TaskState:
+            assert task_id == state.task_id
+            assert status is TaskStatus.HALTED
+            assert reason is Reason.POLICY_CHANGED
+            assert expected_row_revision == self.state.row_revision
+            assert at_utc.tzinfo is not None
+            self.state = self.state.model_copy(
+                update={"status": status, "row_revision": expected_row_revision + 1}
+            )
+            return self.state
+
+    async def unused_next_call_seq(task_id: str) -> int:
+        raise AssertionError("policy mismatch must deny before resolving the call")
+
+    async def unused_failure_audit(event: object) -> None:
+        raise AssertionError("policy mismatch is an expected denial")
+
+    store = HaltingStore(state)
+    guard = GuardService(
+        store,
+        object(),
+        FakeCatalog(),
+        object(),
+        object(),
+        profile_id=state.profile_id,
+        policy_version="policy-2",
+        operator_id="operator-1",
+        request_id_factory=lambda: "request-1",
+        approval_id_factory=lambda: "approval-1",
+        next_call_seq=unused_next_call_seq,
+        failure_audit=unused_failure_audit,
+        monotonic=time.monotonic,
+    )
+    model = FakeModel(ModelTurn(calls=(_call(),)))
+    runner = _runner(state, model, guard, store)
+    runner.add_user_message("read")
+
+    update = asyncio.run(runner.advance())
+
+    assert store.state.status is TaskStatus.HALTED
+    assert update.status == "halted"
+    assert len(model.seen) == 1
+    with pytest.raises(RunnerStateError):
+        runner.add_user_message("another request")
+    with pytest.raises(RunnerStateError):
+        asyncio.run(runner.advance())
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [
+        ({"status": TaskStatus.HALTED}, "halted"),
+        ({"status": TaskStatus.UNKNOWN_OUTCOME}, "outcome_unknown"),
+        ({"status": TaskStatus.CLOSED}, "stopped"),
+        ({"epoch": 2}, "stopped"),
+        ({"policy_version": "policy-2"}, "stopped"),
+    ],
+)
+def test_denied_after_concurrent_task_change_rejects_new_input(
+    replacement: dict[str, object], expected: str
+) -> None:
+    """T20/T29: a control or policy change can land while Guard is busy."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    state = _state()
+    store = FakeStore(state)
+
+    class DelayedDeniedGuard:
+        calls = 0
+
+        async def submit(self, task_id: str, call: ProposedCall) -> Denied:
+            self.calls += 1
+            entered.set()
+            await release.wait()
+            return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
+
+    guard = DelayedDeniedGuard()
+    model = FakeModel(ModelTurn(calls=(_call(1), _call(2))))
+    runner = _runner(state, model, guard, store)
+    runner.add_user_message("read both")
+
+    async def run():
+        running = asyncio.create_task(runner.advance())
+        await entered.wait()
+        store.state = state.model_copy(update=replacement)
+        release.set()
+        update = await running
+        with pytest.raises(RunnerStateError):
+            runner.add_user_message("new input after cancellation")
+        with pytest.raises(RunnerStateError):
+            await runner.advance()
+        return update
+
+    assert asyncio.run(run()).status == expected
+    assert guard.calls == 1
+    assert len(model.seen) == 1
 
 
 def test_pending_requires_matching_backend_result_and_resumes_remaining_calls() -> None:
@@ -338,6 +452,51 @@ def test_approval_denial_after_policy_halt_does_not_offer_new_turn() -> None:
         return halted
 
     assert asyncio.run(run()).status == "halted"
+    assert len(model.seen) == 1
+    assert len(guard.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [
+        ({"status": TaskStatus.HALTED}, "halted"),
+        ({"status": TaskStatus.UNKNOWN_OUTCOME}, "outcome_unknown"),
+        ({"epoch": 2}, "stopped"),
+    ],
+)
+def test_approval_race_after_task_stop_is_not_reported_pending(
+    replacement: dict[str, object], expected: str
+) -> None:
+    """T20: APPROVAL_RACE cannot hide a concurrent cancel or stale Task."""
+    state = _state()
+    store = FakeStore(state)
+    guard = FakeGuard(
+        Pending(
+            request_id="request-1",
+            approval_id="approval-1",
+            reasons=(Reason.INTERNAL_TO_EXTERNAL,),
+        )
+    )
+    model = FakeModel(ModelTurn(calls=(_call(),)))
+    runner = _runner(state, model, guard, store)
+    runner.add_user_message("read")
+
+    async def run():
+        assert (await runner.advance()).status == "pending"
+        store.state = state.model_copy(update=replacement)
+        update = await runner.resume_approval(
+            state.task_id,
+            state.epoch,
+            "approval-1",
+            Denied(request_id="request-1", reasons=(Reason.APPROVAL_RACE,)),
+        )
+        with pytest.raises(RunnerStateError):
+            runner.add_user_message("new input")
+        with pytest.raises(RunnerStateError):
+            await runner.advance()
+        return update
+
+    assert asyncio.run(run()).status == expected
     assert len(model.seen) == 1
     assert len(guard.calls) == 1
 

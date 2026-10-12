@@ -215,22 +215,21 @@ class TaskRunner:
                 raise RunnerStateError()
             if self._pending_message_index is None or self._pending_call_id is None:
                 raise RunnerStateError()
-            if isinstance(outcome, Denied) and outcome.reasons == (
-                Reason.APPROVAL_RACE,
-            ):
-                # B also returns this result for a premature expire or a
-                # reject while approval is still live. It is not a confirmed
-                # decision on the pending request; retain the placeholder and
-                # wait for the actual control result.
-                return self._update("pending", approval_id=pending.approval_id)
             if isinstance(outcome, Denied):
-                # A policy/context failure can halt the Task instead of
-                # resuming it. Do not advertise a new user turn in that case.
-                task_status = await self._task_run_state()
+                approval_race = outcome.reasons == (Reason.APPROVAL_RACE,)
+                # A premature expiry can leave the Task waiting, but a
+                # concurrent cancel or policy change can stop it first.
+                task_status = await self._task_run_state(
+                    allow_waiting_approval=approval_race
+                )
                 if self._closed:
                     return self._update("closed")
-                if task_status != "running":
+                if task_status in ("halted", "outcome_unknown", "stopped"):
                     return self._update(task_status)
+                if approval_race:
+                    # This is not a confirmed decision. Keep the placeholder
+                    # until the actual human-control result arrives.
+                    return self._update("pending", approval_id=pending.approval_id)
             message_index = self._pending_message_index
             call_id = self._pending_call_id
             remaining = self._remaining
@@ -272,8 +271,8 @@ class TaskRunner:
         self._conversation.clear()
 
     async def _task_run_state(
-        self,
-    ) -> Literal["running", "halted", "outcome_unknown", "stopped"]:
+        self, *, allow_waiting_approval: bool = False
+    ) -> Literal["running", "pending", "halted", "outcome_unknown", "stopped"]:
         try:
             state = TaskState.model_validate(await self._store.load_task(self.task_id))
         except (StoreError, ValidationError):
@@ -288,6 +287,8 @@ class TaskRunner:
         ):
             self._stopped = True
             return "stopped"
+        if state.status is TaskStatus.WAITING_APPROVAL and allow_waiting_approval:
+            return "pending"
         if state.status is not TaskStatus.RUNNING:
             self._stopped = True
             if state.status is TaskStatus.HALTED:
@@ -346,6 +347,14 @@ class TaskRunner:
                 )
                 return self._update("pending", approval_id=outcome.approval_id)
             if isinstance(outcome, Denied):
+                # Guard can halt the Task while returning Denied (for example
+                # when its current policy version differs). Only a Task that
+                # is still RUNNING may accept another user turn.
+                task_status = await self._task_run_state()
+                if self._closed:
+                    return self._update("closed")
+                if task_status != "running":
+                    return self._update(task_status)
                 self._conversation.append(
                     ConversationMessage(
                         role="tool",
