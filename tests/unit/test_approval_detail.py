@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -102,6 +104,71 @@ def test_markup_links_and_remote_images_remain_literal_plain_text(
     finally:
         dialog.close()
         QDesktopServices.unsetUrlHandler("https")
+
+
+def test_markup_and_link_clicks_make_no_loopback_http_requests(
+    app: QApplication,
+) -> None:
+    requests: list[str] = []
+
+    class RequestHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            requests.append(self.path)
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, _format: str, *args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), RequestHandler)
+    server_thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    server_thread.start()
+    probe = UrlProbe()
+    QDesktopServices.setUrlHandler("http", probe, "capture(QUrl)")
+    dialog = ApprovalDetailDialog()
+    try:
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        destination = (
+            f'<img src="{base_url}/destination-image">'
+            f'<a href="{base_url}/destination-link">open</a>'
+        )
+        arguments = (
+            f'{{"html":"<img src=\\"{base_url}/arguments-image\\">'
+            f'<a href=\\"{base_url}/arguments-link\\">open</a>"}}'
+        ).encode()
+        dialog.show_value(ApprovalDetailValue(destination, arguments))
+        app.processEvents()
+        QTest.qWait(250)
+
+        for body in (dialog.destination_body, dialog.arguments_body):
+            assert isinstance(body, QPlainTextEdit)
+            assert base_url in body.toPlainText()
+            assert "&lt;img" in body.document().toHtml()
+            assert "&lt;a" in body.document().toHtml()
+            cursor = body.textCursor()
+            cursor.setPosition(body.toPlainText().find(base_url) + 7)
+            click_pos = body.cursorRect(cursor).center()
+            assert body.viewport().rect().contains(click_pos)
+            QTest.mouseClick(
+                body.viewport(),
+                Qt.MouseButton.LeftButton,
+                pos=click_pos,
+            )
+        QTest.keyClick(dialog.arguments_body, Qt.Key.Key_Return)
+
+        # Give Qt's event loop time to issue any deferred resource fetch.
+        QTest.qWait(250)
+    finally:
+        dialog.close()
+        app.processEvents()
+        QDesktopServices.unsetUrlHandler("http")
+        server.shutdown()
+        server_thread.join(timeout=1)
+        server.server_close()
+
+    assert not server_thread.is_alive()
+    assert requests == []
+    assert probe.opened == []
 
 
 def test_long_fields_are_complete_and_dialog_releases_its_copies(
