@@ -93,7 +93,7 @@
 | A22 | Runner별 대화/호출 ID와 생성 시 `model_client_factory` 분리, 지연 응답/Task epoch·정책 변화 단위 검증. 연속 호출 전 Task epoch를 재조회해 관측된 교체를 막음 | 부분 완료. 조회→Guard 제출 사이 경쟁은 B의 잠금 내부 expected_epoch 검증 필요. 실제 제공자 핸들·캐시 분리와 C Task 생성/통합 T21 인수 대기 |
 | A23 | [B Guard/Catalog 리뷰](a-b-review.md)는 `0c02b61`의 당시 A 연결 관점 finding 0건·Catalog 단위 71건 통과, Guard 대상 테스트는 환경 시간초과로 미확인. 후속 B `f3c2d2b`의 승인 Task 결속 diff를 확인·반영했다. 별도 보안 스캔에서 B 스키마 정규식 가용성 발견 1건을 추가 기록했다 | A 관점 소스 검토 완료. B의 정규식 지원 계약 결정, 최신 B 전체 테스트·C Store/fixture 인수와 담당 리뷰는 남음 |
 | A24 | [PySide6/asyncio bridge 커널](../../src/guard_app/services/bridge.py) 구현. Qt/백엔드 스레드, 준비/실패/종료 고정 코드, 불변 신호, 비동기 명령 접수·offscreen 시험. 시작·종료 제한시간의 NaN/무한대를 거절해 bounded 대기를 유지한다 | 커널 부분 완료. 실제 앱 시작·Runner/Store/Registry 조립과 C 수명·UI 조회 계약 필요 |
-| A25 | bridge에 bounded 실행·일반 사람 제어·긴급 제어 큐, B `HumanControl` capability, 느린 승인 worker가 모두 바쁠 때 긴급 차단 전용 worker, bounded 완료 ID 캐시/포화 거절·미확정 결과 표시 구현 | 큐 기반 부분 완료. B/C 확정 상태 조회·이벤트·내구적 명령 ID/actor 계약과 C T12/T20 검증 필요 |
+| A25 | bridge에 bounded 실행·일반 사람 제어·긴급 제어 큐, B `HumanControl` capability, 느린 승인 worker가 모두 바쁠 때 긴급 차단 전용 worker, bounded 완료 ID 캐시/포화 거절·미확정 결과 표시 구현. Qt→backend 예약도 lane별 bounded ingress와 단일 drain callback으로 제한해 일반 요청 폭주 중 긴급 제어 슬롯을 보존하고 종료 시 미접수 명령을 확정한다 | 큐 기반 부분 완료. B/C 확정 상태 조회·이벤트·내구적 명령 ID/actor 계약과 C T12/T20 검증 필요 |
 | A26 | 확정 이벤트·snapshot 재동기화 없음 | A24·A25 및 합의된 이벤트/리비전 계약 필요 |
 | A27 | 앱 시작·종료 경로 없음 | A10·A21·A24–A26 및 C DB 수명 계약 필요 |
 | A28 | [Qt 공통 UI](../../src/guard_app/ui/window.py), PlainText 상세, 큰 글꼴/등급 배지·빈/오류 상태 구현. 320×360 최소 창에서 폭 또는 높이가 부족하면 메뉴 탐색으로 전환하고 AGT·모델 상태를 별도 줄에 둔다 | 시각 골격 부분 완료. 실제 bridge와 실제 OS DPI·다중 모니터 종합 검증은 A24/A37 대기 |

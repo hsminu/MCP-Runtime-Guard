@@ -263,6 +263,309 @@ def test_run_queue_full_and_duplicate_command_cannot_reexecute(app) -> None:
         close_bridge(app, bridge)
 
 
+def test_ingress_flood_is_bounded_and_emergency_enters_first(app) -> None:
+    gate, entered = threading.Event(), threading.Event()
+    gate.set()
+    runner = FakeRunner("task-1", gate, entered)
+    control = FakeControl()
+
+    async def bootstrap() -> BackendBindings:
+        return BackendBindings(lambda task_id: runner, control)
+
+    bridge = BackendBridge(bootstrap, run_queue_size=2, control_queue_size=1)
+    receiver = attach(bridge)
+    bridge.start()
+    release = threading.Event()
+    replay_release = threading.Event()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY)
+        loop = bridge._loop
+        assert loop is not None
+        blocked = threading.Event()
+
+        def hold_backend() -> None:
+            blocked.set()
+            release.wait(timeout=2)
+
+        loop.call_soon_threadsafe(hold_backend)
+        assert blocked.wait(timeout=2)
+        run_ids = [
+            bridge.request_run("task-1", command_id=f"flood-{index}")
+            for index in range(24)
+        ]
+        assert len(bridge._ingress["run"]) == 2
+        assert all(not receiver.stages(command_id) for command_id in run_ids[:2])
+        assert all(
+            receiver.stages(command_id)[-1].code == "INGRESS_FULL"
+            for command_id in run_ids[2:]
+        )
+        bridge.request_run("task-1", command_id=run_ids[0])
+        assert not receiver.stages(run_ids[0])
+        bridge.request_run("other-task", command_id=run_ids[0])
+        assert receiver.stages(run_ids[0])[-1].code == "COMMAND_ID_CONFLICT"
+        normal_controls = [
+            bridge.request_control(
+                ControlAction.APPROVE,
+                f"approval-{index}",
+                command_id=f"approval-{index}",
+            )
+            for index in range(3)
+        ]
+        assert len(bridge._ingress["control"]) == 1
+        assert all(
+            receiver.stages(command_id)[-1].code == "INGRESS_FULL"
+            for command_id in normal_controls[1:]
+        )
+        urgent = bridge.request_control(ControlAction.EMERGENCY_HALT, "task-2")
+        assert len(bridge._ingress["urgent"]) == 1
+        release.set()
+        pump_until(
+            app,
+            lambda: any(
+                event.stage is CommandStage.BACKEND_RETURNED
+                for event in receiver.stages(urgent)
+            ),
+        )
+        pump_until(app, lambda: runner.calls == 2)
+        urgent_accept = next(
+            event
+            for event in receiver.stages(urgent)
+            if event.stage is CommandStage.ACCEPTED
+        )
+        run_accept = next(
+            event
+            for event in receiver.stages(run_ids[0])
+            if event.stage is CommandStage.ACCEPTED
+        )
+        control_accept = next(
+            event
+            for event in receiver.stages(normal_controls[0])
+            if event.stage is CommandStage.ACCEPTED
+        )
+        assert receiver.commands.index(urgent_accept) < receiver.commands.index(
+            run_accept
+        )
+        assert receiver.commands.index(urgent_accept) < receiver.commands.index(
+            control_accept
+        )
+
+        recovered = bridge.request_run("task-1")
+        pump_until(
+            app,
+            lambda: any(
+                event.stage is CommandStage.BACKEND_RETURNED
+                for event in receiver.stages(recovered)
+            ),
+        )
+        assert runner.calls == 3
+
+        replay_blocked = threading.Event()
+
+        def hold_for_replay() -> None:
+            replay_blocked.set()
+            replay_release.wait(timeout=2)
+
+        loop.call_soon_threadsafe(hold_for_replay)
+        assert replay_blocked.wait(timeout=2)
+        waiting = [
+            bridge.request_run("task-1", command_id=f"waiting-{index}")
+            for index in range(2)
+        ]
+        prior_count = len(receiver.stages(run_ids[0]))
+        bridge.request_run("task-1", command_id=run_ids[0])
+        assert len(bridge._ingress["run"]) == 2
+        assert len(bridge._ingress["replay"]) == 1
+        assert len(receiver.stages(run_ids[0])) == prior_count
+        replay_release.set()
+        pump_until(app, lambda: len(receiver.stages(run_ids[0])) == prior_count + 1)
+        assert receiver.stages(run_ids[0])[-1].stage is CommandStage.BACKEND_RETURNED
+        pump_until(
+            app,
+            lambda: all(
+                any(
+                    event.stage is CommandStage.BACKEND_RETURNED
+                    for event in receiver.stages(command_id)
+                )
+                for command_id in waiting
+            ),
+        )
+        assert runner.calls == 5
+    finally:
+        release.set()
+        replay_release.set()
+        close_bridge(app, bridge)
+
+
+def test_shutdown_rejects_commands_waiting_at_ingress(app) -> None:
+    runner = FakeRunner("task-1", threading.Event(), threading.Event())
+    control = FakeControl()
+
+    async def bootstrap() -> BackendBindings:
+        return BackendBindings(lambda task_id: runner, control)
+
+    bridge = BackendBridge(bootstrap, run_queue_size=1, control_queue_size=1)
+    receiver = attach(bridge)
+    bridge.start()
+    release = threading.Event()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY)
+        loop = bridge._loop
+        assert loop is not None
+        blocked = threading.Event()
+
+        def hold_backend() -> None:
+            blocked.set()
+            release.wait(timeout=2)
+
+        loop.call_soon_threadsafe(hold_backend)
+        assert blocked.wait(timeout=2)
+        run = bridge.request_run("task-1")
+        urgent = bridge.request_control(ControlAction.CANCEL, "task-1")
+        bridge.close()
+        assert receiver.stages(run)[-1].code == "SHUTTING_DOWN"
+        assert receiver.stages(urgent)[-1].code == "SHUTTING_DOWN"
+        assert all(not queue for queue in bridge._ingress.values())
+        release.set()
+        pump_until(app, lambda: bridge.thread_done)
+        assert runner.calls == 0
+        assert control.calls == []
+    finally:
+        release.set()
+        close_bridge(app, bridge)
+
+
+def test_shutdown_settles_command_already_removed_from_ingress(
+    app, monkeypatch
+) -> None:
+    runner = FakeRunner("task-1", threading.Event(), threading.Event())
+    control = FakeControl()
+
+    async def bootstrap() -> BackendBindings:
+        return BackendBindings(lambda task_id: runner, control)
+
+    bridge = BackendBridge(bootstrap)
+    receiver = attach(bridge)
+    bridge.start()
+    release = threading.Event()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY)
+        original_admit = bridge._admit
+        removed = threading.Event()
+
+        def held_admit(command) -> None:
+            removed.set()
+            release.wait(timeout=2)
+            original_admit(command)
+
+        monkeypatch.setattr(bridge, "_admit", held_admit)
+        command_id = bridge.request_run("task-1")
+        assert removed.wait(timeout=2)
+        assert not bridge._ingress["run"]
+        bridge.close()
+        release.set()
+        pump_until(app, lambda: bool(receiver.stages(command_id)))
+        assert receiver.stages(command_id)[-1].stage is CommandStage.REJECTED
+        assert receiver.stages(command_id)[-1].code == "CLOSING"
+        pump_until(app, lambda: bridge.thread_done)
+        assert runner.calls == 0
+    finally:
+        release.set()
+        close_bridge(app, bridge)
+
+
+def test_admission_error_settles_command_and_continues_drain(app, monkeypatch) -> None:
+    gate = threading.Event()
+    gate.set()
+    runner = FakeRunner("task-1", gate, threading.Event())
+    control = FakeControl()
+
+    async def bootstrap() -> BackendBindings:
+        return BackendBindings(lambda task_id: runner, control)
+
+    bridge = BackendBridge(bootstrap, run_queue_size=2)
+    receiver = attach(bridge)
+    bridge.start()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY)
+        original_admit = bridge._admit
+
+        def fail_one(command) -> None:
+            if command.command_id == "broken":
+                raise RuntimeError("private failure detail")
+            original_admit(command)
+
+        monkeypatch.setattr(bridge, "_admit", fail_one)
+        broken = bridge.request_run("task-1", command_id="broken")
+        healthy = bridge.request_run("task-1", command_id="healthy")
+        pump_until(
+            app,
+            lambda: (
+                bool(receiver.stages(broken))
+                and any(
+                    event.stage is CommandStage.BACKEND_RETURNED
+                    for event in receiver.stages(healthy)
+                )
+            ),
+        )
+        assert receiver.stages(broken)[-1].stage is CommandStage.UNCONFIRMED
+        assert receiver.stages(broken)[-1].code == "ADMISSION_UNCONFIRMED"
+        assert "private failure detail" not in repr(receiver.commands)
+        assert not bridge._ingress_scheduled
+        assert runner.calls == 1
+        prior_count = len(receiver.stages(broken))
+        bridge.request_run("task-1", command_id=broken)
+        pump_until(app, lambda: len(receiver.stages(broken)) == prior_count + 1)
+        assert receiver.stages(broken)[-1].code == "ADMISSION_UNCONFIRMED"
+        assert runner.calls == 1
+    finally:
+        close_bridge(app, bridge)
+
+
+def test_replay_error_does_not_lose_original_processing_record(
+    app, monkeypatch
+) -> None:
+    gate, entered = threading.Event(), threading.Event()
+    runner = FakeRunner("task-1", gate, entered)
+    control = FakeControl()
+
+    async def bootstrap() -> BackendBindings:
+        return BackendBindings(lambda task_id: runner, control)
+
+    bridge = BackendBridge(bootstrap)
+    receiver = attach(bridge)
+    bridge.start()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY)
+        command_id = bridge.request_run("task-1")
+        pump_until(app, lambda: entered.is_set())
+
+        def fail_replay(_command, _previous) -> None:
+            raise RuntimeError("private replay failure")
+
+        monkeypatch.setattr(bridge, "_replay_or_conflict", fail_replay)
+        bridge.request_run("task-1", command_id=command_id)
+        pump_until(
+            app,
+            lambda: any(
+                event.code == "REPLAY_UNCONFIRMED"
+                for event in receiver.stages(command_id)
+            ),
+        )
+        gate.set()
+        pump_until(
+            app,
+            lambda: any(
+                event.stage is CommandStage.BACKEND_RETURNED
+                for event in receiver.stages(command_id)
+            ),
+        )
+        assert runner.calls == 1
+        assert "private replay failure" not in repr(receiver.commands)
+    finally:
+        gate.set()
+        close_bridge(app, bridge)
+
+
 def test_slow_approval_does_not_starve_other_task_emergency(app) -> None:
     gate = threading.Event()
     control = FakeControl(gate)

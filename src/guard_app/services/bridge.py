@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import math
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -94,6 +94,12 @@ class _Command:
     target_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class _IngressItem:
+    command: _Command
+    replay: CommandEvent | None = None
+
+
 class BackendBridge(QObject):
     """Call public methods on the Qt thread; never wait there for backend work.
 
@@ -169,9 +175,28 @@ class BackendBridge(QObject):
         self._control_queue: asyncio.Queue[_Command] | None = None
         self._urgent_queue: asyncio.Queue[_Command] | None = None
         self._bindings: BackendBindings | None = None
+        self._command_lock = threading.Lock()
         self._records: dict[str, CommandEvent] = {}
         self._recent: OrderedDict[str, CommandEvent] = OrderedDict()
         self._operations: dict[str, asyncio.Task[object]] = {}
+        # Bound commands before they become asyncio ready callbacks. A normal
+        # command flood must leave an independent ingress slot for urgent work.
+        self._ingress_lock = threading.Lock()
+        self._ingress: dict[str, deque[_IngressItem]] = {
+            "run": deque(),
+            "control": deque(),
+            "urgent": deque(),
+            "replay": deque(),
+        }
+        self._ingress_limits = {
+            "run": run_queue_size,
+            "control": control_queue_size,
+            "urgent": control_queue_size,
+            "replay": max(run_queue_size, control_queue_size),
+        }
+        self._ingress_pending: dict[str, _Command] = {}
+        self._ingress_scheduled = False
+        self._ingress_closed = False
 
     @property
     def state(self) -> BridgeState:
@@ -249,6 +274,7 @@ class BackendBridge(QObject):
             return
         self._stop_requested.set()
         self.lifecycle_changed.emit(LifecycleEvent(BridgeState.CLOSING, "CLOSING"))
+        self._reject_ingress("SHUTTING_DOWN")
         if loop is not None and stop_async is not None:
             try:
                 loop.call_soon_threadsafe(stop_async.set)
@@ -290,72 +316,179 @@ class BackendBridge(QObject):
                 if state in (BridgeState.CLOSING, BridgeState.CLOSED)
                 else "NOT_READY"
             )
-            self.command_changed.emit(
-                CommandEvent(
-                    command.command_id,
-                    command.lane,
-                    command.action,
-                    command.target_id,
-                    CommandStage.REJECTED,
-                    code,
-                )
-            )
+            self._emit_untracked_rejection(command, code)
             return
+
+        rejection: str | None = None
+        with self._ingress_lock:
+            in_flight = self._ingress_pending.get(command.command_id)
+            if self._ingress_closed:
+                rejection = "CLOSING"
+            elif in_flight is not None:
+                if in_flight != command:
+                    rejection = "COMMAND_ID_CONFLICT"
+            else:
+                with self._command_lock:
+                    previous = self._records.get(
+                        command.command_id
+                    ) or self._recent.get(command.command_id)
+                lane = "replay" if previous is not None else self._ingress_lane(command)
+                pending = self._ingress[lane]
+                if len(pending) >= self._ingress_limits[lane]:
+                    rejection = "INGRESS_FULL"
+                else:
+                    pending.append(_IngressItem(command, previous))
+                    self._ingress_pending[command.command_id] = command
+                    if not self._ingress_scheduled:
+                        self._ingress_scheduled = True
+                        try:
+                            loop.call_soon_threadsafe(self._drain_ingress)
+                        except RuntimeError:
+                            pending.pop()
+                            self._ingress_pending.pop(command.command_id)
+                            self._ingress_scheduled = False
+                            rejection = "CLOSING"
+        if rejection is not None:
+            self._emit_untracked_rejection(command, rejection)
+
+    @staticmethod
+    def _ingress_lane(command: _Command) -> str:
+        if command.lane == "run":
+            return "run"
+        if command.action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
+            return "urgent"
+        return "control"
+
+    def _drain_ingress(self) -> None:
+        # Re-schedule after a small batch so stop/worker callbacks can run.
+        # Every batch selects urgent commands first, including ones received
+        # after a normal-command drain began.
         try:
-            loop.call_soon_threadsafe(self._admit, command)
-        except RuntimeError:
-            self.command_changed.emit(
-                CommandEvent(
-                    command.command_id,
-                    command.lane,
-                    command.action,
-                    command.target_id,
-                    CommandStage.REJECTED,
-                    "CLOSING",
-                )
+            for _ in range(8):
+                with self._ingress_lock:
+                    item = None
+                    for lane in ("urgent", "replay", "control", "run"):
+                        if self._ingress[lane]:
+                            item = self._ingress[lane].popleft()
+                            break
+                    if item is None:
+                        return
+                try:
+                    if item.replay is not None:
+                        with self._command_lock:
+                            current = self._records.get(
+                                item.command.command_id
+                            ) or self._recent.get(item.command.command_id)
+                        self._replay_or_conflict(
+                            item.command,
+                            current if current is not None else item.replay,
+                        )
+                    else:
+                        self._admit(item.command)
+                except Exception:  # noqa: BLE001 - no ingress callback may strand later commands
+                    self._loop_error.set()
+                    if item.replay is not None:
+                        self.command_changed.emit(
+                            CommandEvent(
+                                item.command.command_id,
+                                item.command.lane,
+                                item.command.action,
+                                item.command.target_id,
+                                CommandStage.UNCONFIRMED,
+                                "REPLAY_UNCONFIRMED",
+                            )
+                        )
+                    else:
+                        self._emit_command(
+                            item.command,
+                            CommandStage.UNCONFIRMED,
+                            "ADMISSION_UNCONFIRMED",
+                        )
+                finally:
+                    with self._ingress_lock:
+                        self._ingress_pending.pop(item.command.command_id, None)
+        finally:
+            with self._ingress_lock:
+                if any(self._ingress.values()):
+                    asyncio.get_running_loop().call_soon(self._drain_ingress)
+                else:
+                    self._ingress_scheduled = False
+
+    def _reject_ingress(self, code: str) -> None:
+        with self._ingress_lock:
+            self._ingress_closed = True
+            pending = [
+                item.command
+                for lane in ("urgent", "replay", "control", "run")
+                for item in self._ingress[lane]
+            ]
+            for queue in self._ingress.values():
+                queue.clear()
+            self._ingress_pending.clear()
+            self._ingress_scheduled = False
+        for command in pending:
+            self._emit_untracked_rejection(command, code)
+
+    def _emit_untracked_rejection(self, command: _Command, code: str) -> None:
+        self.command_changed.emit(
+            CommandEvent(
+                command.command_id,
+                command.lane,
+                command.action,
+                command.target_id,
+                CommandStage.REJECTED,
+                code,
             )
+        )
 
     def _admit(self, command: _Command) -> None:
-        previous = self._records.get(command.command_id) or self._recent.get(
-            command.command_id
-        )
+        with self._command_lock:
+            previous = self._records.get(command.command_id) or self._recent.get(
+                command.command_id
+            )
         if previous is not None:
-            if (
-                previous.lane,
-                previous.action,
-                previous.target_id,
-            ) == (command.lane, command.action, command.target_id):
-                self.command_changed.emit(previous)
-            else:
-                self.command_changed.emit(
-                    CommandEvent(
-                        command.command_id,
-                        command.lane,
-                        command.action,
-                        command.target_id,
-                        CommandStage.REJECTED,
-                        "COMMAND_ID_CONFLICT",
-                    )
-                )
+            self._replay_or_conflict(command, previous)
             return
-        with self._state_lock:
-            ready = self._state is BridgeState.READY
-        if not ready:
-            self._emit_command(command, CommandStage.REJECTED, "CLOSING")
-            return
-        if command.lane == "run":
+        lane = self._ingress_lane(command)
+        if lane == "run":
             queue = self._run_queue
-        elif command.action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
+        elif lane == "urgent":
             queue = self._urgent_queue
         else:
             queue = self._control_queue
         assert queue is not None
-        try:
-            queue.put_nowait(command)
-        except asyncio.QueueFull:
-            self._emit_command(command, CommandStage.REJECTED, "QUEUE_FULL")
-            return
-        self._emit_command(command, CommandStage.ACCEPTED, "QUEUED")
+        accepted: CommandEvent | None = None
+        rejection = "CLOSING"
+        with self._state_lock:
+            if self._state is BridgeState.READY:
+                try:
+                    queue.put_nowait(command)
+                except asyncio.QueueFull:
+                    rejection = "QUEUE_FULL"
+                else:
+                    accepted = CommandEvent(
+                        command.command_id,
+                        command.lane,
+                        command.action,
+                        command.target_id,
+                        CommandStage.ACCEPTED,
+                        "QUEUED",
+                    )
+                    self._record_command_event(accepted)
+        if accepted is None:
+            self._emit_command(command, CommandStage.REJECTED, rejection)
+        else:
+            self.command_changed.emit(accepted)
+
+    def _replay_or_conflict(self, command: _Command, previous: CommandEvent) -> None:
+        if (
+            previous.lane,
+            previous.action,
+            previous.target_id,
+        ) == (command.lane, command.action, command.target_id):
+            self.command_changed.emit(previous)
+        else:
+            self._emit_untracked_rejection(command, "COMMAND_ID_CONFLICT")
 
     def _emit_command(self, command: _Command, stage: CommandStage, code: str) -> None:
         event = CommandEvent(
@@ -366,14 +499,21 @@ class BackendBridge(QObject):
             stage,
             code,
         )
-        if stage in (CommandStage.ACCEPTED, CommandStage.PROCESSING):
-            self._records[command.command_id] = event
-        elif self._records.pop(command.command_id, None) is not None:
-            self._recent[command.command_id] = event
-            self._recent.move_to_end(command.command_id)
-            if len(self._recent) > self._max_command_ids:
-                self._recent.popitem(last=False)
+        self._record_command_event(event)
         self.command_changed.emit(event)
+
+    def _record_command_event(self, event: CommandEvent) -> None:
+        with self._command_lock:
+            if event.stage in (CommandStage.ACCEPTED, CommandStage.PROCESSING):
+                self._records[event.command_id] = event
+            elif (
+                self._records.pop(event.command_id, None) is not None
+                or event.stage is CommandStage.UNCONFIRMED
+            ):
+                self._recent[event.command_id] = event
+                self._recent.move_to_end(event.command_id)
+                if len(self._recent) > self._max_command_ids:
+                    self._recent.popitem(last=False)
 
     def _thread_main(self) -> None:
         loop = asyncio.new_event_loop()
@@ -391,6 +531,9 @@ class BackendBridge(QObject):
                 self._set_state(BridgeState.CLOSED, "CLEANUP_UNCONFIRMED")
             else:
                 self._set_state(BridgeState.FAILED, "BACKEND_FAILURE")
+        self._reject_ingress(
+            "SHUTTING_DOWN" if self._stop_requested.is_set() else "BACKEND_FAILURE"
+        )
         pending = asyncio.all_tasks(loop)
         for task in pending:
             task.cancel()
@@ -468,6 +611,7 @@ class BackendBridge(QObject):
         self._set_state(BridgeState.READY, "READY")
         await stop
         self._set_state(BridgeState.CLOSING, "CLOSING")
+        self._reject_ingress("SHUTTING_DOWN")
         for queue in (self._run_queue, self._control_queue, self._urgent_queue):
             while not queue.empty():
                 command = queue.get_nowait()
