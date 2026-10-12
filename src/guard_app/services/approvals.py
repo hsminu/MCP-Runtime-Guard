@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal, Protocol
 
+from pydantic import ValidationError
+
 from guard_app.core.snapshot import ApprovalSnapshot, make_snapshot
 from guard_app.domain.contracts import ApprovalRecord, Denied, Outcome
 from guard_app.domain.enums import ApprovalStatus, Decision, Label, TaskStatus
@@ -27,6 +29,10 @@ from guard_app.services.catalog import Catalog
 
 class ApprovalConfigError(ValueError):
     """설정 원문을 공개하지 않는 승인 설정 오류."""
+
+
+class _ApprovalTaskMismatchError(StoreError):
+    """승인 사본과 연결되지 않은 상태로 Task 행을 변경하지 않는다."""
 
 
 class ApprovalHost(Protocol):
@@ -55,7 +61,9 @@ class ApprovalHost(Protocol):
         monotonic_deadline: float | None = None,
     ) -> Outcome: ...
 
-    async def halt_task(self, task_id: str, reason: Reason) -> TaskState: ...
+    async def halt_task(
+        self, task_id: str, reason: Reason, *, expected_epoch: int | None = None
+    ) -> TaskState: ...
 
     def global_halt(self) -> None: ...
 
@@ -263,7 +271,7 @@ class ApprovalService:
             await self._finish(
                 record, snapshot, self._invalid_status(record), Reason.APPROVAL_CONTEXT_LOST
             )
-            await self._host.halt_task(snapshot.task_id, Reason.APPROVAL_CONTEXT_LOST)
+            await self._halt_snapshot_task(snapshot, Reason.APPROVAL_CONTEXT_LOST)
             return self._denied(record, Reason.APPROVAL_CONTEXT_LOST)
         if (
             record.request_id != snapshot.request.request_id
@@ -273,16 +281,16 @@ class ApprovalService:
             await self._finish(
                 record, snapshot, self._invalid_status(record), Reason.APPROVAL_STALE
             )
-            await self._host.halt_task(snapshot.task_id, Reason.APPROVAL_STALE)
+            await self._halt_snapshot_task(snapshot, Reason.APPROVAL_STALE)
             return self._denied(record, Reason.APPROVAL_STALE)
         if self._expired(snapshot):
             await self._finish(
                 record, snapshot, ApprovalStatus.EXPIRED, Reason.APPROVAL_STALE, resume=True
             )
             return self._denied(record, Reason.APPROVAL_STALE)
-        state = await self._store.load_task(snapshot.task_id)
+        state = await self._load_snapshot_task(snapshot)
         if not self._host.policy_matches(state):
-            await self._host.halt_task(state.task_id, Reason.POLICY_CHANGED)
+            await self._halt_snapshot_task(snapshot, Reason.POLICY_CHANGED)
             await self._finish(
                 record, snapshot, self._invalid_status(record), Reason.POLICY_CHANGED
             )
@@ -292,7 +300,7 @@ class ApprovalService:
                 record, snapshot, self._invalid_status(record), Reason.APPROVAL_STALE
             )
             if state.status is TaskStatus.WAITING_APPROVAL:
-                await self._host.halt_task(state.task_id, Reason.APPROVAL_STALE)
+                await self._halt_snapshot_task(snapshot, Reason.APPROVAL_STALE)
             return self._denied(record, Reason.APPROVAL_STALE)
         if record.status is ApprovalStatus.PENDING:
             record = await self._transition(record, ApprovalStatus.APPROVED, Reason.OK)
@@ -316,7 +324,7 @@ class ApprovalService:
             decision = await self._host.evaluate_request(req, state, phase="approval_recheck")
         except ResolutionError as exc:
             await self._finish(record, snapshot, ApprovalStatus.INVALIDATED, exc.reason)
-            await self._host.halt_task(state.task_id, exc.reason)
+            await self._halt_snapshot_task(snapshot, exc.reason)
             return self._denied(record, exc.reason)
         if decision.decision is not Decision.ASK:
             configuration_changed = any(reason in _CONFIG_REASONS for reason in decision.reasons)
@@ -328,11 +336,11 @@ class ApprovalService:
                 resume=not configuration_changed,
             )
             if configuration_changed:
-                await self._host.halt_task(state.task_id, Reason.APPROVAL_STALE)
+                await self._halt_snapshot_task(snapshot, Reason.APPROVAL_STALE)
             return self._denied(record, Reason.APPROVAL_STALE)
         if not self._host.policy_matches(state):
             await self._finish(record, snapshot, ApprovalStatus.INVALIDATED, Reason.POLICY_CHANGED)
-            await self._host.halt_task(state.task_id, Reason.POLICY_CHANGED)
+            await self._halt_snapshot_task(snapshot, Reason.POLICY_CHANGED)
             return self._denied(record, Reason.POLICY_CHANGED)
         current = make_snapshot(
             req,
@@ -399,7 +407,7 @@ class ApprovalService:
                     await self._finish(
                         record, snap, self._invalid_status(record), Reason.APPROVAL_CONTEXT_LOST
                     )
-                    await self._host.halt_task(snap.task_id, Reason.APPROVAL_CONTEXT_LOST)
+                    await self._halt_snapshot_task(snap, Reason.APPROVAL_CONTEXT_LOST)
                 else:
                     await self._transition(
                         record, self._invalid_status(record), Reason.APPROVAL_CONTEXT_LOST
@@ -416,7 +424,7 @@ class ApprovalService:
                 await self._finish(
                     record, snap, self._invalid_status(record), Reason.APPROVAL_STALE
                 )
-                await self._host.halt_task(snap.task_id, Reason.APPROVAL_STALE)
+                await self._halt_snapshot_task(snap, Reason.APPROVAL_STALE)
                 return self._denied(record, Reason.APPROVAL_STALE)
             if expire and not self._expired(snap):
                 return self._denied(record, Reason.APPROVAL_RACE)
@@ -464,9 +472,9 @@ class ApprovalService:
         self._memory_snapshots.pop(record.approval_id, None)
         await self._transition(record, status, reason)
         if resume:
-            state = await self._store.load_task(snapshot.task_id)
+            state = await self._load_snapshot_task(snapshot)
             if not self._host.policy_matches(state):
-                await self._host.halt_task(state.task_id, Reason.POLICY_CHANGED)
+                await self._halt_snapshot_task(snapshot, Reason.POLICY_CHANGED)
             elif self._task_matches(snapshot, state):
                 await self._store.set_task_status(
                     state.task_id,
@@ -495,7 +503,14 @@ class ApprovalService:
         approval_id: str | None,
         task_id: str | None,
     ) -> T | Denied:
+        snapshot = None if approval_id is None else self._memory_snapshots.get(approval_id)
+
         async def on_error(exc: BaseException) -> Denied:
+            identity_mismatch = isinstance(exc, _ApprovalTaskMismatchError) or (
+                approval_id is not None and snapshot is None
+            )
+            if identity_mismatch:
+                self._host.global_halt()
             if task_id is None:
                 if approval_id is not None:
                     self._memory_snapshots.pop(approval_id, None)
@@ -509,7 +524,11 @@ class ApprovalService:
                     await self._transition(
                         record, self._invalid_status(record), Reason.INTERNAL_ERROR
                     )
-            await self._host.halt_task(task_id, Reason.INTERNAL_ERROR)
+            if not identity_mismatch:
+                if snapshot is None:
+                    await self._host.halt_task(task_id, Reason.INTERNAL_ERROR)
+                else:
+                    await self._halt_snapshot_task(snapshot, Reason.INTERNAL_ERROR)
             return await self._host.pre_dispatch_failure(task_id, exc)
 
         def on_containment_error(exc: BaseException) -> Denied:
@@ -536,6 +555,18 @@ class ApprovalService:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
 
         return await fail_closed(acquire, on_error=on_error, on_containment_error=fallback)
+
+    async def _load_snapshot_task(self, snapshot: ApprovalSnapshot) -> TaskState:
+        try:
+            state = TaskState.model_validate(await self._store.load_task(snapshot.task_id))
+        except ValidationError:
+            raise _ApprovalTaskMismatchError() from None
+        if state.task_id != snapshot.task_id or state.epoch != snapshot.request.epoch:
+            raise _ApprovalTaskMismatchError()
+        return state
+
+    async def _halt_snapshot_task(self, snapshot: ApprovalSnapshot, reason: Reason) -> None:
+        await self._host.halt_task(snapshot.task_id, reason, expected_epoch=snapshot.request.epoch)
 
     def _expired(self, snapshot: ApprovalSnapshot) -> bool:
         now, mono = self._times()

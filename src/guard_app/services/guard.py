@@ -36,7 +36,7 @@ from guard_app.domain.reasons import Reason
 from guard_app.ports import AccessChecker, Registry, Store, Transport
 from guard_app.security.digest import json_digest
 from guard_app.security.failclosed import after_dispatch, fail_closed
-from guard_app.services.approvals import ApprovalService, HumanControl
+from guard_app.services.approvals import ApprovalService, HumanControl, _ApprovalTaskMismatchError
 from guard_app.services.catalog import Catalog
 from guard_app.services.response_gate import ResponseGate
 
@@ -354,10 +354,16 @@ class GuardService:
         raw = await self._transport.call(req)
         return await self._gate.handle(req, raw, expected_state=state)
 
-    async def _halt_task(self, task_id: str, reason: Reason) -> TaskState:
+    async def _halt_task(
+        self, task_id: str, reason: Reason, *, expected_epoch: int | None = None
+    ) -> TaskState:
         state = TaskState.model_validate(await self._store.load_task(task_id))
         if state.task_id != task_id:
+            if expected_epoch is not None:
+                raise _ApprovalTaskMismatchError()
             raise StoreError(Reason.STATE_MISSING)
+        if expected_epoch is not None and state.epoch != expected_epoch:
+            raise _ApprovalTaskMismatchError()
         if state.status in (TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME, TaskStatus.CLOSED):
             return state
         halted = TaskState.model_validate(
@@ -473,8 +479,10 @@ class _ApprovalHost:
             req, state, expires_at_utc=expires_at_utc, monotonic_deadline=monotonic_deadline
         )
 
-    async def halt_task(self, task_id: str, reason: Reason) -> TaskState:
-        return await self._guard._halt_task(task_id, reason)
+    async def halt_task(
+        self, task_id: str, reason: Reason, *, expected_epoch: int | None = None
+    ) -> TaskState:
+        return await self._guard._halt_task(task_id, reason, expected_epoch=expected_epoch)
 
     def global_halt(self) -> None:
         self._guard._halt_globally()

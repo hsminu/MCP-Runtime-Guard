@@ -254,7 +254,11 @@ class _Host:
             await self.dispatch_finish.wait()
         return Withheld(request_id=req.request_id, reasons=(Reason.POST_DISPATCH_ERROR,))
 
-    async def halt_task(self, task_id, reason):
+    async def halt_task(self, task_id, reason, *, expected_epoch=None):
+        if expected_epoch is not None and (
+            task_id != self.store.state.task_id or self.store.state.epoch != expected_epoch
+        ):
+            raise StoreError(Reason.APPROVAL_STALE)
         self.halted.append(reason)
         self.store.state = self.store.state.model_copy(
             update={

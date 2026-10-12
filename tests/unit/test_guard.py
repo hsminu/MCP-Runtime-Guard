@@ -649,6 +649,128 @@ def test_ask_unlocks_and_human_approval_executes_once(increment_security):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    "action", ["approve", "reject", "expire", "approve_expired", "approve_recheck_denied"]
+)
+@pytest.mark.parametrize("identity", ["task_id", "epoch"])
+@pytest.mark.parametrize(
+    ("policy_matches", "returned_status"),
+    [(False, TaskStatus.RUNNING), (True, TaskStatus.WAITING_APPROVAL)],
+)
+def test_approval_wrong_task_identity_never_changes_task_rows_t09_t11_t20(
+    action, identity, policy_matches, returned_status
+):
+    async def scenario():
+        h = _Harness(label=Label.INTERNAL)
+        pending = await h.guard.submit("task", _call("send"))
+        assert isinstance(pending, Pending)
+        snapshot_state = h.store.states["task"]
+        returned = snapshot_state.model_copy(
+            update={
+                "task_id": "foreign" if identity == "task_id" else "task",
+                "epoch": snapshot_state.epoch + int(identity == "epoch"),
+                "profile_id": "p" if policy_matches else "other-profile",
+                "status": returned_status,
+            }
+        )
+        h.store.states[returned.task_id] = returned
+        h.store.states["healthy"] = snapshot_state.model_copy(
+            update={"task_id": "healthy", "status": TaskStatus.RUNNING}
+        )
+        original_load = h.store.load_task
+        lookup_count = 0
+
+        async def wrong_lookup(task_id):
+            nonlocal lookup_count
+            if task_id == "task":
+                lookup_count += 1
+                if action == "approve_recheck_denied" and lookup_count == 1:
+                    return snapshot_state
+                return returned
+            return await original_load(task_id)
+
+        h.store.load_task = wrong_lookup
+        if action in ("expire", "approve_expired"):
+            h.monotonic += 300
+        if action == "approve_recheck_denied":
+            h.access.result = AccessResult(allowed=False, error=False, reason="")
+        states_before = dict(h.store.states)
+        trace_before = list(h.store.trace)
+        control = h.guard.human_control("operator")
+        command = "approve" if action.startswith("approve") else action
+        result = await getattr(control, command)(pending.approval_id)
+
+        assert h.store.states == states_before
+        assert h.store.trace == trace_before
+        assert isinstance(result, Denied)
+        assert result.reasons == (Reason.INTERNAL_ERROR,)
+        assert h.store.approvals[pending.approval_id].status not in (
+            ApprovalStatus.PENDING,
+            ApprovalStatus.APPROVED,
+        )
+        assert not h.guard._approvals._memory_snapshots
+        assert not h.guard._task_lock("task").locked()
+        assert h.store.consume_count == 0
+        assert not h.transport.calls
+        assert h.audit[-1].task_id == "task"
+        assert isinstance(await h.guard.submit("healthy", _call()), Denied)
+        assert not h.transport.calls
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("trigger", ["record_hash", "record_operator", "policy_halt", "load_error"])
+def test_approval_halt_paths_never_stop_replacement_epoch_t09_t20(trigger):
+    async def scenario():
+        h = _Harness(label=Label.INTERNAL)
+        pending = await h.guard.submit("task", _call("send"))
+        assert isinstance(pending, Pending)
+        snapshot_state = h.store.states["task"]
+        replacement = snapshot_state.model_copy(
+            update={"epoch": snapshot_state.epoch + 1, "status": TaskStatus.RUNNING}
+        )
+        h.store.states["task"] = replacement
+        record = h.store.approvals[pending.approval_id]
+        if trigger == "record_hash":
+            h.store.approvals[pending.approval_id] = record.model_copy(
+                update={"snapshot_hash": "b" * 64}
+            )
+        elif trigger == "record_operator":
+            h.store.approvals[pending.approval_id] = record.model_copy(
+                update={"approver_id": "different-operator"}
+            )
+        original_load = h.store.load_task
+        lookup_count = 0
+
+        async def rollover_lookup(task_id):
+            nonlocal lookup_count
+            lookup_count += 1
+            if lookup_count == 1:
+                if trigger == "policy_halt":
+                    return snapshot_state.model_copy(update={"profile_id": "other-profile"})
+                if trigger == "load_error":
+                    raise ValueError("SYNTHETIC_STORE_ERROR")
+            return await original_load(task_id)
+
+        h.store.load_task = rollover_lookup
+        trace_before = list(h.store.trace)
+        result = await h.guard.human_control("operator").approve(pending.approval_id)
+
+        assert h.store.states["task"] == replacement
+        assert h.store.trace == trace_before
+        assert isinstance(result, Denied)
+        assert result.reasons == (Reason.INTERNAL_ERROR,)
+        assert not h.guard._approvals._memory_snapshots
+        assert h.store.approvals[pending.approval_id].status is ApprovalStatus.CANCELLED
+        assert not h.guard._task_lock("task").locked()
+        assert h.store.consume_count == 0
+        assert not h.transport.calls
+        assert isinstance(await h.guard.submit("task", _call()), Denied)
+        assert not h.transport.calls
+
+    asyncio.run(scenario())
+
+
 def test_approved_external_read_holds_lock_through_commit_t37():
     async def scenario():
         h = _Harness(label=Label.INTERNAL)
