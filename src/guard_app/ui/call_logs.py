@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QEvent, QObject, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -221,6 +221,7 @@ class CallLogPage(QWidget):
     """Full-width log list and large plain-text dialog, without backend access."""
 
     detail_requested = Signal(object)
+    _COMPACT_VIEWPORT_WIDTH = 760
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -230,6 +231,7 @@ class CallLogPage(QWidget):
         self._detail_dialog: PlainDetailDialog | None = None
         self._detail_request: DetailRequest | None = None
         self._detail_token = 0
+        self._compact_columns: bool | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 28, 26, 42)
@@ -269,9 +271,7 @@ class CallLogPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.viewport().installEventFilter(self)
         self.table.itemClicked.connect(self._open_selected)
         self.table.itemActivated.connect(self._open_selected)
         self.table.itemSelectionChanged.connect(self._selection_changed)
@@ -294,6 +294,61 @@ class CallLogPage(QWidget):
             )
         )
         self._set_controls_enabled(False)
+        self._update_table_columns(force=True)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.table.viewport() and event.type() == QEvent.Type.Resize:
+            QTimer.singleShot(0, self._update_table_columns)
+        return super().eventFilter(watched, event)
+
+    def _update_table_columns(self, *, force: bool = False) -> None:
+        """Keep timestamp, call ID, and outcome visible in a narrow viewport."""
+
+        compact = self.table.viewport().width() < self._COMPACT_VIEWPORT_WIDTH
+        if compact == self._compact_columns and not force:
+            return
+        self._compact_columns = compact
+        header = self.table.horizontalHeader()
+        for column in (1, 3, 4, 5):
+            self.table.setColumnHidden(column, compact)
+        id_header = self.table.horizontalHeaderItem(2)
+        if id_header is not None:
+            id_header.setText("호출 ID" if compact else "호출 / 요청")
+
+        for column in range(7):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+        if compact:
+            self.table.setColumnWidth(0, 155)
+            self.table.setColumnWidth(6, 180)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        else:
+            for column, width in ((0, 190), (3, 80), (4, 100), (5, 150), (6, 180)):
+                self.table.setColumnWidth(column, width)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+
+        for index, row in enumerate(self._visible_rows):
+            time_item = self.table.item(index, 0)
+            if time_item is not None:
+                timestamp = format_kst(row.occurred_at)
+                time_item.setText(
+                    timestamp.replace("일 ", "일\n", 1) if compact else timestamp
+                )
+            id_item = self.table.item(index, 2)
+            if id_item is not None:
+                id_item.setText(
+                    row.call_id
+                    if compact
+                    else f"{row.call_id}\n{row.request_id or MISSING}"
+                )
+            status_item = self.table.item(index, 6)
+            if status_item is not None:
+                status = fixed(REQUEST_STATUSES, row.current_status)
+                status_item.setText(
+                    "결과 불명\n수신측 확인 필요"
+                    if compact and row.current_status == "UNKNOWN_OUTCOME"
+                    else status
+                )
 
     def set_calls(self, surface: Surface[tuple[PublicCallSummary, ...]]) -> None:
         """Replace only the supplied audit page; never invent totals or results."""
@@ -414,6 +469,7 @@ class CallLogPage(QWidget):
         self.state_message.setVisible(
             self._state != LoadState.READY or not self._visible_rows
         )
+        self._update_table_columns(force=True)
         self._selection_changed()
 
     def _selected_call_id(self) -> str | None:

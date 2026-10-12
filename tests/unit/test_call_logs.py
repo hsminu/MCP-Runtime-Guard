@@ -197,3 +197,45 @@ def test_csv_button_copies_only_visible_query_rows(app) -> None:
     assert "one" not in text
     page.set_calls(Surface(LoadState.STALE, (PublicCallSummary("old"),)))
     assert not page.csv_button.isEnabled()
+
+
+def test_compact_viewport_keeps_core_columns_without_horizontal_scroll(app) -> None:
+    page = CallLogPage()
+    page.set_calls(
+        Surface(
+            LoadState.READY,
+            (
+                PublicCallSummary(
+                    "call-id-with-a-long-suffix",
+                    request_id="request-id-with-a-long-suffix",
+                    tool_name="very-long-tool-name-that-must-not-expand-the-table",
+                    current_status="UNKNOWN_OUTCOME",
+                    occurred_at=datetime(2026, 10, 11, 16, 30, tzinfo=UTC),
+                ),
+            ),
+        )
+    )
+    page.resize(540, 580)
+    page.show()
+    app.processEvents()
+    assert page.table.viewport().width() < page._COMPACT_VIEWPORT_WIDTH
+    assert [page.table.isColumnHidden(column) for column in range(7)] == [
+        False,
+        True,
+        False,
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert page.table.horizontalScrollBar().maximum() == 0
+    assert "2026년 10월 12일\n01:30:00 KST" == page.table.item(0, 0).text()
+    assert page.table.item(0, 2).text() == "call-id-with-a-long-suffix"
+    assert page.table.item(0, 6).text() == "결과 불명\n수신측 확인 필요"
+
+    page.resize(1030, 700)
+    app.processEvents()
+    assert page.table.viewport().width() >= page._COMPACT_VIEWPORT_WIDTH
+    assert not any(page.table.isColumnHidden(column) for column in range(7))
+    assert "request-id-with-a-long-suffix" in page.table.item(0, 2).text()
+    page.close()
