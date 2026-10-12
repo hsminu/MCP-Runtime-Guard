@@ -74,26 +74,32 @@ class ServerDetailDialog(QDialog):
         body.setObjectName("detailBody")
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 8, 0)
-        layout.setSpacing(14)
+        layout.setSpacing(10)
+        self.max_label_badge = SecurityLabel(server.max_label)
+        layout.addWidget(self.max_label_badge)
+        self.registry_status_field = _detail_field(
+            "Registry 등록 상태", fixed(REGISTRY_STATUSES, server.registry_status)
+        )
+        layout.addWidget(self.registry_status_field)
+        self.session_status_field = _detail_field(
+            "세션 상태", fixed(SESSION_STATUSES, server.session_status)
+        )
+        layout.addWidget(self.session_status_field)
+        self.tier_field = _detail_field("신뢰 경계 · tier", fixed(TIERS, server.tier))
+        layout.addWidget(self.tier_field)
         layout.addWidget(
             _detail_field("표시 이름", server.display_name or server.server_id)
         )
         layout.addWidget(_detail_field("서버 식별자 · server_id", server.server_id))
-        self.scan_status_card = ScanStatusCard()
-        layout.addWidget(self.scan_status_card)
-        layout.addWidget(SecurityLabel(server.max_label))
         layout.addWidget(
             _detail_field("연결 방식 · transport", fixed(TRANSPORTS, server.transport))
         )
-        layout.addWidget(_detail_field("신뢰 경계 · tier", fixed(TIERS, server.tier)))
-        layout.addWidget(
-            _detail_field(
-                "Registry 등록 상태", fixed(REGISTRY_STATUSES, server.registry_status)
-            )
+        self.scan_status_card = ScanStatusCard()
+        self.scan_status_card.setMinimumWidth(0)
+        self.scan_status_card.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
-        layout.addWidget(
-            _detail_field("세션 상태", fixed(SESSION_STATUSES, server.session_status))
-        )
+        layout.addWidget(self.scan_status_card)
         layout.addStretch(1)
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)

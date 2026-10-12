@@ -7,7 +7,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -18,7 +18,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from guard_app.ui.approval_detail import ApprovalDetailDialog, ApprovalDetailValue
+from guard_app.ui.approval_detail import (
+    ApprovalDetailDialog,
+    ApprovalDetailValue,
+)
 from guard_app.ui.models import (
     AttentionItem,
     LoadState,
@@ -166,6 +169,56 @@ def test_detail_dialogs_fit_small_owner_and_keep_complete_values(
     assert server_id in (label.text() for label in server_scroll.findChildren(QLabel))
     server.close()
     owner.close()
+
+
+def test_server_detail_keeps_security_summary_above_scan_on_short_owner(
+    app: QApplication,
+) -> None:
+    owner = QWidget()
+    owner.resize(320, 360)
+    owner.show()
+    detail = ServerDetailDialog(
+        ServerSummary(
+            "synthetic-" + "s" * 100,
+            "d" * 100,
+            max_label="CONFIDENTIAL",
+            tier="internal",
+            registry_status="pending",
+            session_status="disconnected",
+        ),
+        owner,
+    )
+    try:
+        detail.open()
+        app.processEvents()
+        scroll = detail.findChild(QScrollArea)
+        assert scroll is not None
+        assert detail.width() <= owner.width()
+        assert detail.height() <= owner.height()
+        assert scroll.horizontalScrollBar().maximum() == 0
+        summary = (
+            detail.max_label_badge,
+            detail.registry_status_field,
+            detail.session_status_field,
+            detail.tier_field,
+        )
+        positions = [
+            widget.mapTo(scroll.viewport(), QPoint(0, 0)).y() for widget in summary
+        ]
+        assert positions == sorted(positions)
+        assert positions[0] >= 0
+        assert positions[-1] + summary[-1].height() <= scroll.viewport().height()
+        assert detail.scan_status_card.mapTo(scroll.viewport(), QPoint(0, 0)).y() > (
+            positions[-1] + summary[-1].height()
+        )
+        scroll.verticalScrollBar().setValue(detail.scan_status_card.y())
+        app.processEvents()
+        scan_top = detail.scan_status_card.mapTo(scroll.viewport(), QPoint(0, 0)).y()
+        assert scan_top <= 0
+        assert scan_top + detail.scan_status_card.height() > 0
+    finally:
+        detail.close()
+        owner.close()
 
 
 def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None:
