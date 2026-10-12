@@ -74,7 +74,7 @@ class ServerDetailDialog(QDialog):
         body.setObjectName("detailBody")
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 8, 0)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
         self.max_label_badge = SecurityLabel(server.max_label)
         layout.addWidget(self.max_label_badge)
         self.registry_status_field = _detail_field(
