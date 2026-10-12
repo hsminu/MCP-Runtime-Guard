@@ -2,7 +2,7 @@
 
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-현재 저장소는 **3인 개발을 위한 문서와 브랜치 준비 단계**다. 실행 소스, 기본 뼈대, 패키지 설정, 테스트 코드, CI 실행 설정은 아직 만들지 않았다. 아래 구성과 동작은 구현 목표이며, 설치·실행 명령은 구현 후 검증해서 추가한다.
+현재 역할 브랜치에서 개발을 진행 중이다. B의 보안 코어 구현 초안은 B 브랜치에 있으며, 실제 SQLite·MCP 연결과 통합 인수는 남아 있다. 아래 구성과 동작은 구현 목표이며, 설치·실행 명령은 전체 연결 후 검증해서 추가한다.
 
 ## 개발 문서
 
@@ -20,10 +20,12 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | 담당 | 작업 브랜치 | 주요 책임 | 브랜치별 작업 문서 |
 | --- | --- | --- | --- |
 | A · 애플리케이션 | `feat/a-application` | MCP transport, AGT 연결, 모델·Runner, Qt↔asyncio bridge, GUI | `docs/tasks/a-application.md` |
-| B · 보안 코어 | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트 | `docs/tasks/b-security-core.md` |
-| C · 보안 기반·검증 | `feat/c-security-platform` | SQLite, 위험 연산 모듈, 서버 등록·Scanner, fixture·계수, 통합·공격·실험, CI | `docs/tasks/c-security-platform.md` |
+| B · 보안 코어·SQLite | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트, SQLite·스키마·복구·저장소 단위 테스트 | `docs/tasks/b-security-core.md`, [B6 · SQLite 인수](docs/tasks/b-sqlite-store.md) |
+| C · 보안 기반·검증 | `feat/c-security-platform` | 위험 연산 모듈, 서버 등록·Scanner, 저장소 리뷰·독립 검증, fixture·계수, 통합·공격·실험, CI | `docs/tasks/c-security-platform.md` |
 
 브랜치 이름은 담당 범위를 나타낸다. 실제 담당자 이름은 아직 지정하지 않았다. `main`은 공통 기준 문서와 리뷰를 마친 변경을 모으는 브랜치다.
+
+2026-10-12 사용자 결정으로 SQLite 구현을 C에서 B로 이관했다. 현행 소유권과 리뷰는 [협업 규칙](docs/team-workflow.md)을 따른다. 기술 설계 원문은 보존하며, 이전 SQLite 담당 표기는 이 결정으로 대체한다. Store API의 세부 제안은 별도 검토 대상이다.
 
 ## 해결할 문제
 
@@ -78,7 +80,7 @@ flowchart LR
 | `services` | Guard·승인·응답 게이트(B), Runner·bridge(A), registry(C) | 역할별 분담 |
 | `adapters` | MCP·AGT·모델(A), Cisco Scanner(C) | 역할별 분담 |
 | `security` | 위험 연산(C), 예외 판정 변환·승인 해시(B) | 역할별 분담 |
-| `storage` | SQLite와 원자적 트랜잭션 | C |
+| `storage` | SQLite·스키마·복구·원자적 트랜잭션·단위 테스트 | B 구현, C 리뷰·독립 검증 |
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
 | `fixtures`, 테스트, CI | 실제 수신 계수로 집행을 검증 | C 주도 |
 
