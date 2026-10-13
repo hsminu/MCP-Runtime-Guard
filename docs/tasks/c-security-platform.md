@@ -1,10 +1,10 @@
 # C · 보안 기반·검증 작업 지침과 체크리스트
 
-작업 브랜치는 `feat/c-security-platform`이다. **안전한 위험 연산·Registry·Scanner를 만들고, B 저장소와 보안 판정이 실제 전송 경로에서 집행됐음을 독립 검증하는 역할**이다. 2026-10-12 사용자 결정으로 SQLite 구현은 B로 이관했다. 현재 C는 문서 준비 단계이며, 구현 지시 전에는 소스·fixture·테스트·CI 뼈대를 만들지 않는다.
+작업 브랜치는 `feat/c-security-platform`이다. **안전한 위험 연산·Registry·Scanner를 만들고, B 저장소와 보안 판정이 실제 전송 경로에서 집행됐음을 독립 검증하는 역할**이다. 2026-10-12 사용자 결정으로 SQLite 구현은 B로 이관했다. 초기 문서 준비 이후 2026-10-13 사용자의 후속 구현 지시로 Scanner 입력 부분을 구현했다. 다른 작업은 해당 구현 지시와 담당 범위에서 진행한다.
 
 ## 담당 범위
 
-제품 경로는 향후 `src/guard_app/` 기준이다.
+제품 경로는 `src/guard_app/` 기준이다. 현재 Cisco 입력 부분을 구현했고 나머지 경로는 각 담당의 구현 목표다.
 
 | 파일 / 영역 | 구현 책임 | 리뷰 |
 | --- | --- | --- |
@@ -33,8 +33,14 @@
 - [x] B `0c02b61` 검토·840개 테스트 재현·C-B-01 발견 후, 수정 커밋 `f3c2d2b`와 회귀 검증 확인. 최신 코드로 864개 테스트·Ruff·포맷·mypy 통과를 재현했다. [인수 검토 기록](c-b-review.md) 참조. 공통 계약 합의·실제 SQLite 인수는 남아 있다.
 - [x] [Store 계약 처리 제안 v1](c-store-proposal.md) 작성. 보안 버전·원자 승인·ACK/취소·DB 시점 만료·복구 규칙과 B 변경 계획을 제안했다. 새 계약·구현·검증의 합의는 미완료다.
 - [x] SQLite 구현의 B 이관과 C 독립 검증 배정을 [공통 계약](../contracts.md#담당-변경-기록)에 기록. API 세부 합의·원격 공유·B 착수 확인은 별도다.
+- [x] C1.4의 Cisco Scanner 설치·API/CLI·오프라인·실패 의미 조사. [4.8.6 확인 보고](c-cisco-scanner-spike.md)에 SDK 1.30.0·B lock 33개 호환, 864개 테스트 재실행, 완료 오판·생략·원문 출력과 네트워크 관측을 기록했다. 제품 어댑터·Registry 검증은 미실행이다.
+- [x] 2026-10-13 사용자 요청으로 [Scanner OpenAI 설정](c-openai-scanner-setup.md) 준비. `.env`·공유 템플릿·`.venv-scanner`와 HTTP 대역 검증 후, 사용자 키의 참조를 수정하고 Mini와 Luna로 실제 API를 확인했다. 두 모델 모두 정상 0건·악성 HIGH 2건, HTTP 200·JSON 파싱 성공. Luna 원형의 `max_tokens` HTTP 400과 임시 요청 보정도 기록했다. 통계 탐지 평가·제품 연결은 미실행이다.
+- [x] [Luna 확장 평가](c-luna-scanner-evaluation.md): 정상 12개·공격 16개와 표적 3개 재검사, 실제 API 59건. SDK 경로 공격 13/16·오탐 0/12, 전체 metadata 임시 경로 공격 16/16·오탐 0/12. C-CISCO-03 입력 누락을 확인했다. 독립 정답 리뷰·Mini 동일 세트 비교·제품 보정·통합 인수는 미완료다.
+- [x] 사용자 결정으로 Scanner LLM을 Luna low로 선택. `.env`·공유 템플릿 반영과 임시 보정 코드의 실제 API 두 건 확인. 기존 28개 평가는 none이며 low 전체 회귀는 미실행이다. [다음 Cisco 작업](c-cisco-next-steps.md)에 계약 → 어댑터 → 실제 tools/list → 오류/회귀 → Registry·Guard 인수 순서를 기록했다.
+- [x] 후속 구현 지시로 [Cisco 도구 정의 입력·호출 어댑터](c-cisco-metadata-implementation.md)를 제품 소스에 반영. 루트·중첩 schema·annotations·추가 필드 보존, 23개 테스트·Ruff·strict mypy와 B 실제 FrozenJsonObject 입력 확인. 당시 모델 요청 보정·ScanReport 집계·Registry 연결·B 리뷰는 미완료였다.
+- [x] 후속 "연결해 b scanreport는 연결하지마" 지시로 [Luna low 제품 연결](c-cisco-luna-connection.md)을 구현. 62개 오프라인 테스트·Ruff·4개 소스 strict mypy 통과, 실제 API 28건 모두 HTTP 200·전체 정의 전달. 공격 16/16 탐지·교육용 인용 B06 오탐 1/12. SDK import의 암묵적 dotenv 로딩 차단·키 환경 비복사 확인. B ScanReport는 미연결이며 Registry·실제 MCP·B 리뷰는 남아 있다.
 - [ ] C1.2–C1.4 요구 초안과 공통 API 계약 합의.
-- [ ] C2–C6 구현·테스트·스캔·실험. 모두 미착수·미실행이다.
+- [ ] C2–C6 전체 구현·테스트·스캔·실험. C4의 Scanner 입력·Luna 요청 부분과 C2의 Scanner 키·SDK 로그 제한 부분을 구현·검증했다. C2 나머지·C3·C5·C6과 공통 연결은 미착수다.
 
 Docker는 선택 도구다. 마지막 로컬 확인에서 CLI·Compose 설치와 서비스 실행은 확인했으나 소켓 접근 권한 오류가 있었고, 컨테이너 실행은 검증하지 않았다. 기본 가상환경 작업의 선행 조건으로 두지 않는다.
 
@@ -45,10 +51,10 @@ P0는 계약·환경 준비, P1은 담당 모듈 구현, P2는 연결된 실행 
 | 태스크 | 우선순위 / 현재 상태 | 선행 조건·협업 | 완료 기준·산출물 |
 | --- | --- | --- | --- |
 | C1 · 계약·관측 요구 | P0 / Store 요구 초안 작성, 나머지 미착수·미합의 | 공통 계약 정의는 B, 확정은 A·B·C | Store·Scanner·Registry·계수·오류 요구 초안, 계약 검토와 실제 합의 기록 |
-| 환경 후속 · 의존성 호환 검증 | P0 / 미착수 | 패키징·lock 편집 담당 합의. A의 MCP·AGT 연결 확인과 C의 Scanner 확인 | 동일 SDK로 stdio·HTTP 실제 왕복, AGT·Scanner 호환 근거, 검증된 버전 조합과 재설치 확인 |
-| C2 · 위험 연산·정적 강제 | P1 / 미착수 | 사용할 domain 모델·전용 오류 계약 확인. B의 failclosed·digest 경계와 규칙 검토 | 경로·URL·프로세스·ID·비밀값·로그 모듈, S01–S04, 플랫폼·TOCTOU 한계, 정적 규칙 검증 |
+| 환경 후속 · 의존성 호환 검증 | P0 / Scanner 4.8.6 조사·실험 완료, 전체 조합 미확정 | 패키징·lock 편집 담당 합의. A의 MCP·AGT 연결 확인과 C의 Scanner 확인 | 동일 SDK로 stdio·HTTP 실제 왕복, AGT·Scanner 호환 근거, 검증된 버전 조합과 재설치 확인 |
+| C2 · 위험 연산·정적 강제 | P1 / Scanner 키 로딩·SDK 로그 제한 부분 구현, 나머지 미착수 | 사용할 domain 모델·전용 오류 계약 확인. B의 failclosed·digest 경계와 규칙 검토 | 경로·URL·프로세스·ID·비밀값·로그 모듈, S01–S04, 플랫폼·TOCTOU 한계, 정적 규칙 검증 |
 | C3 · B SQLite 리뷰·독립 검증 | P1 / 미착수, 구현은 B 이관 | B6의 Store·스키마·원자 연산, 공통 API 계약 | 저장소 리뷰·계약·rollback·경쟁·감사 실패·복구 결함 주입. C 작성 테스트는 B 리뷰, T07·T12·T35·T37 |
-| C4 · Registry·Scanner | P1 / 미착수 | Scanner·Registry 및 B 저장소 영속화 계약, B의 digest, A의 도구 metadata·변경 알림 | 등록 상태 전이·지문 변경·필수 검사·관리자 활성화, T17 및 연결 후 T10, B 리뷰 |
+| C4 · Registry·Scanner | P1 / 입력 어댑터 구현·검증, 전체 연결 미완료 | Scanner·Registry 및 B 저장소 영속화 계약, B의 digest, A의 도구 metadata·변경 알림 | 등록 상태 전이·지문 변경·필수 검사·관리자 활성화, T17 및 연결 후 T10, B 리뷰 |
 | C5 · fixture·계수 | P1 / 미착수 | 공통 MCP SDK, C2 안전 경로, A의 host_dispatch 관측 방식 | 합성 stdio·HTTP 서버, 요청별 네 계수, 악성 변형, A 리뷰. 관찰 불가 경로는 명시 |
 | C6 · 통합·공격·결함 주입 | P2 / 미착수 | B6 저장소·C3 검증·C4–C5와 A transport·Runner, B Guard·승인·응답 게이트 연결 | 아래 C 담당 T/S 검증, dispatch·wire·부작용 및 미공개 증거, 모듈 담당 리뷰 |
 | C6 · replay·지연 | P2 / 미착수 | 공통 실행 경로, 사전 정답·기대 판정·동일 설정·시계 | T23·T24·T28·T34, 모드별 최소 10회 반복, 판정·제한·과잉 제한·완료율·p50/p95 원자료 |
@@ -60,6 +66,8 @@ P0는 계약·환경 준비, P1은 담당 모듈 구현, P2는 연결된 실행 
 - [ ] **C1.2 · Scanner·Registry 요구 초안:** metadata 입력 범위, 필수·완료·skip·failed 분석기, 위험도·지문 집합, 관리자 활성화, 지문 변경 시 승인 무효화를 정리한다. 관련 I7·I10, T10·T17.
 - [ ] **C1.3 · 관측 요구 초안:** `approval_consumed`, `host_dispatch`, `wire_post`/`wire_tools_call`, `receiver_effect`의 위치·요청별 연결·초기화·기대값을 정리한다. 프로토콜 메시지와 관찰 불가 경로를 명시한다. 관련 I1·I2·I3·I8, T01–T03·T08·T12·T14–T16.
 - [ ] **C1.4 · 환경·인수 요구 초안:** A와 맞출 SDK 왕복·관측 지점, C의 Scanner API/CLI·오프라인 분석기 확인, 패키징·lock 편집 담당, Fake·실제 어댑터 계약 테스트 인수 기준을 정리한다. 확인되지 않은 버전·시그니처·합의는 미확정으로 남긴다.
+
+C1.4 중 Cisco 조사는 [스파이크 보고](c-cisco-scanner-spike.md)에 완료했다. StaticAnalyzer/CLI의 완료·safe 표시는 필수 분석 실패를 숨길 수 있어 개별 공개 분석기 API와 C의 완료 집계를 권장한다. 필수 목록·Registry 활성화 의미·B ScanReport 번역·공통 SDK 조합은 C1.2–C1.4에서 구체화한다.
 
 먼저 C1.1–C1.4의 요구를 작성하고 B 계약 초안 검토와 A 연결 검토에 사용할 수 있게 만든다. 공통 계약에 대한 동의는 `docs/contracts.md`의 실제 합의 기록으로 구분하며, 이 작업 목록 작성 자체를 합의 완료로 표시하지 않는다.
 

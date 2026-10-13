@@ -1,0 +1,119 @@
+{
+  "started_at_utc": "2026-10-13T04:15:48.474175+00:00",
+  "input_scope": "Synthetic tool definitions only",
+  "managed_mcp_tools_called": false,
+  "real_openai_api_called": true,
+  "credential_logged": false,
+  "cases": [
+    {
+      "name": "benign",
+      "findings_count": 0,
+      "findings": [],
+      "responses": [
+        {
+          "case": "benign",
+          "completion_ms": 2741.6,
+          "response_model": "gpt-5.4-mini-2026-03-17",
+          "finish_reason": "stop",
+          "json_object_parsed": true,
+          "threat_schema_present": true,
+          "malicious_content_detected": false,
+          "recognized_primary_threats": [],
+          "usage": {
+            "prompt_tokens": 4499,
+            "completion_tokens": 32,
+            "total_tokens": 4531
+          }
+        }
+      ],
+      "api_response_valid": true
+    },
+    {
+      "name": "injection_exfiltration",
+      "findings_count": 2,
+      "findings": [
+        {
+          "severity": "HIGH",
+          "analyzer": "LLM",
+          "threat_category": "PROMPT INJECTION"
+        },
+        {
+          "severity": "HIGH",
+          "analyzer": "LLM",
+          "threat_category": "SUSPICIOUS CODE EXECUTION"
+        }
+      ],
+      "responses": [
+        {
+          "case": "injection_exfiltration",
+          "completion_ms": 2136.9,
+          "response_model": "gpt-5.4-mini-2026-03-17",
+          "finish_reason": "stop",
+          "json_object_parsed": true,
+          "threat_schema_present": true,
+          "malicious_content_detected": true,
+          "recognized_primary_threats": [
+            "PROMPT INJECTION",
+            "TOOL POISONING"
+          ],
+          "usage": {
+            "prompt_tokens": 4548,
+            "completion_tokens": 142,
+            "total_tokens": 4690
+          }
+        }
+      ],
+      "api_response_valid": true
+    }
+  ],
+  "http_requests": [
+    {
+      "case": "benign",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "gpt-5.4-mini-2026-03-17",
+      "max_completion_tokens": 4096,
+      "temperature": 1,
+      "http_status": 200,
+      "duration_ms": 2551.8
+    },
+    {
+      "case": "injection_exfiltration",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "gpt-5.4-mini-2026-03-17",
+      "max_completion_tokens": 4096,
+      "temperature": 1,
+      "http_status": 200,
+      "duration_ms": 2134.1
+    }
+  ],
+  "model": "openai/gpt-5.4-mini-2026-03-17",
+  "versions": {
+    "cisco-ai-mcp-scanner": "4.8.6",
+    "litellm": "1.93.2",
+    "mcp": "1.30.0",
+    "openai": "2.54.0",
+    "python-dotenv": "1.2.4"
+  },
+  "completed_at_utc": "2026-10-13T04:15:54.573194+00:00",
+  "http_request_count": 2,
+  "all_cases_completed": true,
+  "limits": [
+    "Only two synthetic examples; no statistical detection accuracy evaluation.",
+    "Registry/Guard integration not tested.",
+    "HTTP client request observation; no packet capture."
+  ],
+  "configuration_fix": {
+    "credential_alias_restored": true,
+    "original_openai_key_preserved": true,
+    "env_file_permissions": "0600",
+    "env_git_ignored": true
+  },
+  "retry_configuration": {
+    "scanner_llm_max_retries": 0,
+    "supplied_openai_client_max_retries": 0,
+    "litellm_num_retries": 0
+  },
+  "reproduction": "Load repository .env before Scanner import; real public LLMAnalyzer.analyze; native LiteLLM acompletion and supplied AsyncOpenAI client; observe and forward actual HTTPX sends; two synthetic tool definitions; suppress raw stdout/stderr; record only statuses, token counts, categories and timings."
+}

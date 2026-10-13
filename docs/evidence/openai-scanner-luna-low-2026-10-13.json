@@ -1,0 +1,139 @@
+{
+  "started_at_utc": "2026-10-13T05:22:49.623611+00:00",
+  "input_scope": "Synthetic tool definitions only",
+  "managed_mcp_tools_called": false,
+  "real_openai_api_called": true,
+  "credential_logged": false,
+  "cases": [
+    {
+      "name": "benign",
+      "findings_count": 0,
+      "findings": [],
+      "responses": [
+        {
+          "case": "benign",
+          "completion_ms": 2732.5,
+          "response_model": "gpt-6-luna",
+          "finish_reason": "stop",
+          "json_object_parsed": true,
+          "threat_schema_present": true,
+          "malicious_content_detected": false,
+          "recognized_primary_threats": [],
+          "reasoning_tokens": 22,
+          "usage": {
+            "prompt_tokens": 4557,
+            "completion_tokens": 60,
+            "total_tokens": 4617
+          }
+        }
+      ],
+      "api_response_valid": true
+    },
+    {
+      "name": "injection_exfiltration",
+      "findings_count": 2,
+      "findings": [
+        {
+          "severity": "HIGH",
+          "analyzer": "LLM",
+          "threat_category": "PROMPT INJECTION"
+        },
+        {
+          "severity": "HIGH",
+          "analyzer": "LLM",
+          "threat_category": "SUSPICIOUS CODE EXECUTION"
+        }
+      ],
+      "responses": [
+        {
+          "case": "injection_exfiltration",
+          "completion_ms": 5058.4,
+          "response_model": "gpt-6-luna",
+          "finish_reason": "stop",
+          "json_object_parsed": true,
+          "threat_schema_present": true,
+          "malicious_content_detected": true,
+          "recognized_primary_threats": [
+            "PROMPT INJECTION",
+            "TOOL POISONING"
+          ],
+          "reasoning_tokens": 225,
+          "usage": {
+            "prompt_tokens": 4568,
+            "completion_tokens": 336,
+            "total_tokens": 4904
+          }
+        }
+      ],
+      "api_response_valid": true
+    }
+  ],
+  "http_requests": [
+    {
+      "case": "benign",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "gpt-6-luna",
+      "max_completion_tokens": 4096,
+      "max_tokens": null,
+      "reasoning_effort": "low",
+      "temperature_present": false,
+      "temperature": null,
+      "http_status": 200,
+      "duration_ms": 2536.3
+    },
+    {
+      "case": "injection_exfiltration",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "model": "gpt-6-luna",
+      "max_completion_tokens": 4096,
+      "max_tokens": null,
+      "reasoning_effort": "low",
+      "temperature_present": false,
+      "temperature": null,
+      "http_status": 200,
+      "duration_ms": 5055.6
+    }
+  ],
+  "configured_model": "openai/gpt-6-luna",
+  "request_mode": "selected_env_luna_low_with_temporary_request_and_metadata_adapter",
+  "luna_adjustments": {
+    "max_tokens_replaced_by_max_completion_tokens": true,
+    "temperature_omitted": true,
+    "reasoning_effort_requested": "low",
+    "reasoning_effort_transport": "OpenAI extra_body passthrough because the installed LiteLLM generic GPT route lacks this parameter"
+  },
+  "reasoning_effort": "low",
+  "model": "openai/gpt-6-luna",
+  "versions": {
+    "cisco-ai-mcp-scanner": "4.8.6",
+    "litellm": "1.93.2",
+    "mcp": "1.30.0",
+    "openai": "2.54.0",
+    "python-dotenv": "1.2.4"
+  },
+  "completed_at_utc": "2026-10-13T05:22:58.623897+00:00",
+  "http_request_count": 2,
+  "all_cases_completed": true,
+  "limits": [
+    "Only two synthetic examples; no statistical detection accuracy evaluation.",
+    "Registry/Guard integration not tested.",
+    "HTTP client request observation; no packet capture."
+  ],
+  "selection_authority": "User decision on 2026-10-13: choose Luna low for Cisco Scanner LLM analysis.",
+  "configuration_update": {
+    "env_model_changed": true,
+    "env_reasoning_effort_added": true,
+    "temperature_setting_removed": true,
+    "original_credential_preserved": true,
+    "unrelated_settings_preserved": true,
+    "env_permissions": "0600"
+  },
+  "reasoning_effort_env_var": {
+    "name": "MCP_SCANNER_LLM_REASONING_EFFORT",
+    "scope": "Project adapter/probe setting; not a native Scanner 4.8.6 CLI setting"
+  },
+  "product_adapter_implemented": false,
+  "same_28_case_low_regression_run": false
+}

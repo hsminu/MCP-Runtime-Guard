@@ -10,6 +10,22 @@
 
 현행 소유권은 [협업 규칙](team-workflow.md), B의 작업은 [B6 · SQLite 인수](tasks/b-sqlite-store.md)를 따른다. C의 Registry·Scanner·위험 연산·정적 강제 규칙과 A의 시작 실행 게이트 배정은 해당 소유권 표를 따른다. 사용자 결정은 SQLite 담당 변경에 적용하며, 아래 API·DTO·상태·오류 제안 전체의 동의로 확대하지 않는다.
 
+## Scanner 모델 선택 기록
+
+| 날짜 | 근거 | 적용 범위 | 상태·남은 항목 |
+| --- | --- | --- | --- |
+| 2026-10-13 | 사용자 명시적 결정: "일단 luna low로 하는 걸로 가자" | C의 Cisco Scanner 선택 LLM에 `openai/gpt-6-luna`·`reasoning_effort=low` 사용 | `.env`·공유 템플릿·제품 연결 반영. low 실제 API 28개: 공격 16/16 탐지·정상 오탐 1/12. B ScanReport 연결 제외, 실제 MCP/Registry 인수는 남음 |
+
+이 결정은 A의 ModelClient·Runner 모델이나 `domain/*`·`ports.py`·필수 분석기·활성화 정책의 합의가 아니다. [설정과 호출 근거](tasks/c-openai-scanner-setup.md), [남은 작업](tasks/c-cisco-next-steps.md)을 따른다.
+
+## Scanner 입력 범위 구현 기록
+
+2026-10-13 사용자의 "반영해보" 지시로 C의 [도구 정의 입력 어댑터](tasks/c-cisco-metadata-implementation.md)를 구현했다. 네 기본 필드의 전체 중첩 구조와 추가 정의 필드를 보존하고, LLM SDK의 description에 전체 JSON을 넣는다. 실행 인자·결과·연결 설정을 입력에 합치지 않는다. 크기 상한은 호출자가 명시하며 값은 미확정이다. 기본 repr·입력 오류에는 원문을 노출하지 않는다.
+
+B의 `FrozenJsonObject.to_dict` 입력과 호환되며 domain·ports·digest는 변경하지 않았다. 추가 필드·float를 포함한 검사 범위와 지문 범위의 일치, ScanReport 번역·필수 분석기 집계·Registry 연결은 후속 계약 검토 대상이다. 이 기록은 C 입력 구현에 대한 사용자 지시와 실제 검증이며 A·B·C의 새 공통 API 합의 기록을 대신하지 않는다.
+
+후속 사용자 지시 "연결해 b scanreport는 연결하지마"로 [Luna low 요청 연결](tasks/c-cisco-luna-connection.md)을 구현했다. 환경·OpenAI 요청·고정 오류 처리는 C 내부 구현이며 B ScanReport·domain·ports는 연결하거나 변경하지 않았다. 이 제외 지시는 현재 작업 범위에 적용하며 새 공통 DTO·필수 분석기·등록 정책의 합의를 뜻하지 않는다.
+
 ## 합의할 계약
 
 | 계약 | 정의 담당 / 구현 담당 | 필수 의미 | 근거 |
@@ -38,6 +54,8 @@ C가 작성한 [Store 계약 요구 초안](tasks/c-store-requirements.md)은 �
 C의 [Store 계약 처리 제안 v1](tasks/c-store-proposal.md)은 정상 승인 상태 전이의 보안 버전 유지, 승인 생성·종결 원자 연산, 커밋 불명 오류·취소, DB 처리 시점의 만료·시작 정리 규칙을 구체적으로 제안한다. 새 API·DTO·오류 이름과 시계·스키마 변경은 B 검토·A·B·C 합의 대상이다. 제안 작성과 실제 구현·검증·합의를 구분한다.
 
 SQLite 이관 후에도 C 요구·제안 문서는 B의 설계 검토와 C의 독립 인수 기준으로 사용한다. Registry 상태·지문 영속화, 변경 시 승인 무효화와 단일 writer 사용 인터페이스는 B·C가 구체화하고 공통 계약 변경을 기록한다.
+
+[Cisco Scanner 4.8.6 확인 보고](tasks/c-cisco-scanner-spike.md)에서 개별 오프라인 API와 CLI를 실행했다. 정적 검사 경로의 실패 완료 오판·생략과 원문 출력 때문에 C가 도구별 필수 분석기 완료·실패를 직접 집계해야 한다. B ScanReport의 필수/완료/생략/실패·지문·severity로 번역하는 계약과 필수 분석기 목록은 후속 검토 대상이며, SDK 결과나 종료 코드만으로 ACTIVE를 확정하지 않는다. MCP 1.30.0·B lock과의 설치/단위 검증은 A의 실제 연결·AGT 호환 확정을 대신하지 않는다.
 
 ## 상태·승인·응답
 

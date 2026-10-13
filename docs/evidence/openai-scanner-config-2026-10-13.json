@@ -1,0 +1,54 @@
+{
+  "date_utc": "2026-10-13",
+  "versions": {
+    "cisco-ai-mcp-scanner": "4.8.6",
+    "litellm": "1.93.2",
+    "mcp": "1.30.0",
+    "openai": "2.54.0",
+    "python-dotenv": "1.2.4"
+  },
+  "environment_file_key_is_empty": true,
+  "dotenv_interpolation_verified": true,
+  "scanner_cli_config_verified": true,
+  "provider_http_mock_calls": 1,
+  "python_socket_connection_attempts": 0,
+  "mock_response_findings_count": 0,
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "model": "gpt-5.4-mini-2026-03-17",
+    "max_completion_tokens": 4096,
+    "temperature": 1,
+    "timeout_seconds": 60.0,
+    "credential_alias_verified": true,
+    "max_tokens_removed": true,
+    "tools_present": false,
+    "reasoning_effort_sent": null,
+    "payload_keys": [
+      "max_completion_tokens",
+      "messages",
+      "model",
+      "temperature"
+    ]
+  },
+  "real_openai_api_called": false,
+  "model_detection_accuracy_evaluated": false,
+  "limits": [
+    "Synthetic provider response; not an OpenAI service response.",
+    "Python socket hooks only; no packet capture.",
+    "Registry and Guard integration not implemented."
+  ],
+  "pip_check": {
+    "passed": true,
+    "output": "No broken requirements found."
+  },
+  "reproduction": "Synthetic .env key; load dotenv before Scanner import; real LLMAnalyzer.analyze, LiteLLM and OpenAI SDK; replace httpx.AsyncClient.send; block Python socket connect/connect_ex/create_connection.",
+  "installed_packages_matching_constraints": 103,
+  "dotenv_cli_help_exit_code": 0,
+  "git_ignore_verified": {
+    "env": true,
+    "scanner_venv": true,
+    "example_tracked_candidate": true
+  },
+  "local_env_permissions": "0600"
+}
