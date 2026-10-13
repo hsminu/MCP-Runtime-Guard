@@ -83,9 +83,14 @@ async def bootstrap(
             access = RuleBasedMockAccessChecker(
                 {(server, tool): allowed for (server, tool, _kind), allowed in rules.items()}
             )
+        call_timeout = 5.0
         if mcp_transport == "http":
             spike = await lifetime.enter_async_context(http_spike())
-            stream_factory = http_stream_factory(spike.endpoint, io_timeout_s=1.0)
+            # JSON-response mode sends headers only after the tool finishes. A read
+            # bound below the call bound would let a slow, healthy tool end the session.
+            stream_factory = http_stream_factory(
+                spike.endpoint, io_timeout_s=1.0, read_timeout_s=2 * call_timeout
+            )
 
             def read_counts():
                 return dict(spike.counts)
@@ -109,7 +114,7 @@ async def bootstrap(
         dispatches = []
         transport = McpTransport(
             {"docs": stream_factory},
-            call_timeout_s=5.0,
+            call_timeout_s=call_timeout,
             close_timeout_s=2.0,
             on_dispatch=dispatches.append,
         )
@@ -216,4 +221,5 @@ async def bootstrap(
             close=close,
             snapshot=snapshot,
             initial_task_id=state.task_id,
+            discard_queued=transport.discard_queued,
         )

@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import Enum, auto
 from types import TracebackType
 from typing import Any, Protocol, TextIO, cast
@@ -24,7 +25,14 @@ import httpx
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
-from mcp.types import CallToolResult
+from mcp.shared.session import ProgressFnT
+from mcp.types import (
+    CallToolRequest,
+    CallToolRequestParams,
+    CallToolResult,
+    ClientRequest,
+    RequestParams,
+)
 from pydantic import AnyUrl, BaseModel
 
 from guard_app.domain.contracts import RawResult
@@ -39,8 +47,58 @@ class _ToolSession(Protocol):
     async def call_tool(self, name: str, arguments: dict[str, object]) -> CallToolResult: ...
 
 
+class _UnvalidatedClientSession(ClientSession):
+    """Send tools/call without the SDK's server-schema validation.
+
+    mcp 1.29.0 ``ClientSession.call_tool`` lists tools and runs
+    ``jsonschema.validate`` with the server's ``outputSchema`` on the event loop.
+    A server ``$ref`` can make the Guard fetch arbitrary URLs outside the
+    restricted HTTP client, and a slow ref or pattern stalls cancel/halt. This
+    override mirrors the SDK request without that step. The result stays
+    untrusted and reaches B's ResponseGate unchanged; A never validates
+    structured content with a server-supplied schema.
+    """
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        read_timeout_seconds: timedelta | None = None,
+        progress_callback: ProgressFnT | None = None,
+        *,
+        meta: dict[str, Any] | None = None,
+    ) -> CallToolResult:
+        request_meta = None if meta is None else RequestParams.Meta(**meta)
+        return await self.send_request(
+            ClientRequest(
+                CallToolRequest(
+                    params=CallToolRequestParams(
+                        name=name, arguments=arguments, _meta=request_meta
+                    ),
+                )
+            ),
+            CallToolResult,
+            request_read_timeout_seconds=read_timeout_seconds,
+            progress_callback=progress_callback,
+        )
+
+
 type StreamFactory = Callable[[], AbstractAsyncContextManager[tuple[Any, ...]]]
 type SessionFactory = Callable[[], AbstractAsyncContextManager[_ToolSession]]
+
+
+class _HttpStreamFactory:
+    """Stream factory that exposes its HTTP read bound for McpTransport checks."""
+
+    __slots__ = ("_connect", "read_timeout_s")
+
+    def __init__(self, connect: StreamFactory, read_timeout_s: float) -> None:
+        self._connect = connect
+        self.read_timeout_s = read_timeout_s
+
+    def __call__(self) -> AbstractAsyncContextManager[tuple[Any, ...]]:
+        return self._connect()
+
 
 _SDK_LOG_SCOPE: ContextVar[bool] = ContextVar("guard_sdk_log_scope", default=False)
 
@@ -66,7 +124,7 @@ def _install_sdk_log_containment() -> None:
             record.stack_info = None
         return record
 
-    record_factory._guard_sdk_containment = True
+    record_factory._guard_sdk_containment = True  # type: ignore[attr-defined]
     logging.setLogRecordFactory(record_factory)
 
 
@@ -95,13 +153,31 @@ def stdio_stream_factory(server: StdioServerParameters, *, errlog: TextIO) -> St
     return connect
 
 
-def http_stream_factory(endpoint: str, *, io_timeout_s: float = 5.0) -> StreamFactory:
+def _valid_http_timeout(value: object) -> bool:
+    return (
+        type(value) in (int, float)
+        and 0 < cast("float", value) <= 300
+        and math.isfinite(cast("float", value))
+    )
+
+
+def http_stream_factory(
+    endpoint: str, *, io_timeout_s: float = 5.0, read_timeout_s: float = 60.0
+) -> StreamFactory:
     """Open a preapproved Streamable HTTP endpoint with no write replay.
 
     The composition root must supply C-validated endpoint/registration data.
     These checks only bound the supported URL shape: HTTPS, or literal loopback
     HTTP for a local server. DNS/IP policy and credential provisioning are not
     implemented here. This initial transport supports unauthenticated servers.
+
+    ``io_timeout_s`` bounds connect, write and pool waits. ``read_timeout_s``
+    bounds response reads separately: in JSON-response mode the server sends
+    headers only after the tool finishes, and an HTTPX read timeout there
+    escapes the SDK's request task and tears down the whole session. McpTransport
+    therefore requires it to be no shorter than its per-call timeout, which
+    remains the effective call bound. A server silent for longer than this read
+    bound still ends the session; later calls then fail closed.
     """
     if (
         type(endpoint) is not str
@@ -125,11 +201,7 @@ def http_stream_factory(endpoint: str, *, io_timeout_s: float = 5.0) -> StreamFa
         or (url.scheme == "http" and url.host not in {"127.0.0.1", "::1"})
     ):
         raise ValueError("Invalid HTTP MCP endpoint")
-    if (
-        type(io_timeout_s) not in (int, float)
-        or not 0 < io_timeout_s <= 300
-        or not math.isfinite(io_timeout_s)
-    ):
+    if not _valid_http_timeout(io_timeout_s) or not _valid_http_timeout(read_timeout_s):
         raise ValueError("Invalid HTTP MCP timeout")
     _install_sdk_log_containment()
 
@@ -163,7 +235,7 @@ def http_stream_factory(endpoint: str, *, io_timeout_s: float = 5.0) -> StreamFa
                         verify=True,
                         limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
                     ),
-                    timeout=httpx.Timeout(float(io_timeout_s)),
+                    timeout=httpx.Timeout(float(io_timeout_s), read=float(read_timeout_s)),
                     follow_redirects=False,
                     trust_env=False,
                     auth=None,
@@ -177,7 +249,7 @@ def http_stream_factory(endpoint: str, *, io_timeout_s: float = 5.0) -> StreamFa
         finally:
             _SDK_LOG_SCOPE.reset(token)
 
-    return connect
+    return _HttpStreamFactory(connect, float(read_timeout_s))
 
 
 class _State(Enum):
@@ -359,7 +431,7 @@ def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
             async with stream_factory() as streams:
                 if len(streams) < 2:
                     raise ValueError("MCP stream pair required")
-                async with ClientSession(
+                async with _UnvalidatedClientSession(
                     streams[0],
                     streams[1],
                     logging_callback=_discard_logging,
@@ -623,6 +695,33 @@ class ServerWorker:
             self._owner_cancel_expected = True
             self._owner.cancel()
 
+    def discard_queued(self, task_id: str) -> int:
+        """Settle one Task's not-yet-started commands without awaiting.
+
+        The Guard checks its stop record only before enqueueing. A human
+        cancel/emergency halt recorded later must still keep a queued SEND off
+        the wire. Matching commands leave the bounded queue, so their slots are
+        free again, and fail with a fixed pre-wire name. The active command has
+        already reached ``on_dispatch`` and is left to its bounded outcome.
+        """
+        if type(task_id) is not str:
+            raise TypeError("task ID string required")
+        kept: list[_Command | object] = []
+        discarded = 0
+        while not self._queue.empty():
+            item = self._queue.get_nowait()
+            if isinstance(item, _Command) and item.req.task_id == task_id:
+                if not item.future.done():
+                    item.future.set_exception(DispatchError("DispatchStopped"))
+                    discarded += 1
+                continue
+            kept.append(item)
+        # Only removed items were not re-queued, so this cannot exceed capacity.
+        # A getter woken by an earlier put rechecks emptiness before taking one.
+        for item in kept:
+            self._queue.put_nowait(item)
+        return discarded
+
     def _reject_queued(self, name: str) -> None:
         while not self._queue.empty():
             item = self._queue.get_nowait()
@@ -693,6 +792,14 @@ class McpTransport:
             )
             for server_id, stream_factory in server_streams.items()
         }
+        # Worker construction has validated the call timeout. An HTTP read
+        # bound below it lets a healthy slow JSON response end the session.
+        if any(
+            isinstance(stream_factory, _HttpStreamFactory)
+            and stream_factory.read_timeout_s < call_timeout_s
+            for stream_factory in server_streams.values()
+        ):
+            raise ValueError("HTTP read timeout must not be shorter than the call timeout")
         self._started = False
         self._closed = False
 
@@ -746,6 +853,17 @@ class McpTransport:
         if worker is None:
             raise DispatchError("UnknownServer")
         return await worker.call(req)
+
+    def discard_queued(self, task_id: str) -> int:
+        """Synchronously keep a stopped Task's queued commands off every server.
+
+        The composition root calls this right before awaiting a human cancel or
+        emergency halt. Returns how many waiting commands were settled with
+        ``DispatchError("DispatchStopped")``; active commands are unchanged.
+        """
+        if type(task_id) is not str:
+            raise TypeError("task ID string required")
+        return sum(worker.discard_queued(task_id) for worker in self._workers.values())
 
     async def close(self) -> None:
         self._closed = True

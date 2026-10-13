@@ -4,9 +4,12 @@ The protocol stub isolates client behavior; it is not C's acceptance fixture.
 """
 
 import asyncio
+import http.server
 import json
 import logging
-from contextlib import asynccontextmanager
+import threading
+import time
+from contextlib import asynccontextmanager, contextmanager
 
 import httpx
 import pytest
@@ -19,6 +22,7 @@ from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import DispatchError
 
 from .test_guard import _call, _Harness
+from .test_mcp_transport import _request
 
 
 class ProtocolProbe:
@@ -32,6 +36,10 @@ class ProtocolProbe:
         self.redirect_url = ""
         self.effect_done = asyncio.Event()
         self.release = asyncio.Event()
+        self.list_calls = 0
+        self.output_schema = None
+        self.delay = 0.0
+        self.responded = asyncio.Event()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "lifespan":
@@ -73,10 +81,12 @@ class ProtocolProbe:
                 (b"set-cookie", b"secret=RAW_COOKIE"),
             ]
         elif method == "tools/list":
+            self.list_calls += 1
+            schema = {} if self.output_schema is None else {"outputSchema": self.output_schema}
             result = {
                 "tools": [
-                    {"name": name, "inputSchema": {"type": "object", "properties": {}}}
-                    for name in ("read", "send")
+                    {"name": name, "inputSchema": {"type": "object", "properties": {}}, **schema}
+                    for name in ("read", "send", "tool")
                 ]
             }
         elif method == "tools/call":
@@ -90,6 +100,8 @@ class ProtocolProbe:
             self.effect_done.set()
             if self.mode == "timeout":
                 await self.release.wait()
+            if self.delay:
+                await asyncio.sleep(self.delay)
             if self.mode == "lost":
                 await self.respond(send, 200, b"RAW_RESPONSE_MARKER")
                 return
@@ -102,11 +114,15 @@ class ProtocolProbe:
                 )
                 return
             result = {"content": [{"type": "text", "text": "synthetic-result"}], "isError": False}
+            if self.output_schema is not None:
+                result["structuredContent"] = {"value": "synthetic-structured"}
         else:
             await self.respond(send, 202)
             return
         encoded = json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}).encode()
         await self.respond(send, 200, encoded, headers=extra)
+        if method == "tools/call":
+            self.responded.set()
 
     @staticmethod
     async def respond(send, status, body=b"", *, content_type=b"application/json", headers=()):
@@ -163,9 +179,18 @@ def test_endpoint_envelope_rejects_unsupported_urls_without_echo(endpoint):
 
 
 @pytest.mark.parametrize("timeout", [0, -1, True, "5", float("nan"), float("inf"), 301, 10**400])
-def test_http_timeouts_are_bounded(timeout):
+@pytest.mark.parametrize("name", ["io_timeout_s", "read_timeout_s"])
+def test_http_timeouts_are_bounded(timeout, name):
     with pytest.raises(ValueError):
-        http_stream_factory("https://example.test/mcp", io_timeout_s=timeout)
+        http_stream_factory("https://example.test/mcp", **{name: timeout})
+
+
+def test_http_read_timeout_cannot_be_shorter_than_call_timeout():
+    """Q12: a read bound below the call bound would let a healthy slow tool end the session."""
+    factory = http_stream_factory("https://example.test/mcp", io_timeout_s=1, read_timeout_s=4)
+    with pytest.raises(ValueError, match="read timeout"):
+        McpTransport({"docs": factory}, call_timeout_s=5)
+    McpTransport({"docs": factory}, call_timeout_s=4)
 
 
 @pytest.mark.asyncio
@@ -342,3 +367,127 @@ async def test_invalid_http_read_is_withheld_without_label_or_raw_release(caplog
         finally:
             await close_failed_channel(transport)
     assert "RAW_RESPONSE_MARKER" not in caplog.text
+
+
+@contextmanager
+def _counting_schema_server(delay):
+    """Thread-served $ref target: a fetch would block the backend loop for ``delay``."""
+    gets = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            gets.append(self.path)
+            time.sleep(delay)
+            body = b'{"type": "object"}'
+            self.send_response(200)
+            self.send_header("content-type", "application/schema+json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, name="schema-ref-target", daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/schema.json", gets
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_server_output_schema_ref_is_never_fetched_or_evaluated():
+    """Q02 (I1/I9, T14): no tools/list, no $ref GET, no backend-loop stall on tools/call."""
+    probe = ProtocolProbe()
+    with _counting_schema_server(delay=1.0) as (ref_url, gets):
+        probe.output_schema = {"$ref": ref_url}
+        async with serve_loopback(probe) as endpoint:
+            transport = McpTransport(
+                {"docs": http_stream_factory(endpoint, io_timeout_s=0.5)},
+                call_timeout_s=3,
+                close_timeout_s=2,
+            )
+            loop = asyncio.get_running_loop()
+            max_gap = 0.0
+            stop = asyncio.Event()
+
+            async def heartbeat():
+                nonlocal max_gap
+                last = loop.time()
+                while not stop.is_set():
+                    await asyncio.sleep(0.01)
+                    now = loop.time()
+                    max_gap, last = max(max_gap, now - last), now
+
+            beat = asyncio.create_task(heartbeat())
+            try:
+                await transport.start()
+                raw = await transport.call(_request("docs", seq=1))
+                assert raw.payload.to_dict()["structuredContent"] == {
+                    "value": "synthetic-structured"
+                }
+            finally:
+                stop.set()
+                await beat
+                await transport.close()
+    assert gets == [] and probe.list_calls == 0 and probe.wire_calls == 1
+    assert max_gap < 0.5
+
+
+@pytest.mark.asyncio
+async def test_json_tool_slower_than_io_timeout_succeeds_and_worker_stays_ready():
+    """Q12 (I8, T16): a healthy JSON-mode tool within the call bound keeps the session."""
+    probe = ProtocolProbe()
+    probe.delay = 0.6
+    async with serve_loopback(probe) as endpoint:
+        dispatches = []
+        transport = McpTransport(
+            {"docs": http_stream_factory(endpoint, io_timeout_s=0.2, read_timeout_s=3)},
+            call_timeout_s=2,
+            close_timeout_s=2,
+            on_dispatch=dispatches.append,
+        )
+        await transport.start()
+        worker = transport._workers["docs"]
+        try:
+            assert (await transport.call(_request("docs", seq=1))).payload is not None
+            assert worker._state is mcp_transport._State.READY
+            probe.delay = 0.0
+            assert (await transport.call(_request("docs", seq=2))).payload is not None
+        finally:
+            await transport.close()
+        assert len(dispatches) == probe.wire_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_json_tool_slower_than_call_timeout_times_out_and_worker_stays_usable():
+    """Q12 (I6/I8, T16): the per-call timeout reports TimeoutError; no session teardown."""
+    probe = ProtocolProbe()
+    probe.delay = 0.6
+    async with serve_loopback(probe) as endpoint:
+        dispatches = []
+        transport = McpTransport(
+            {"docs": http_stream_factory(endpoint, io_timeout_s=0.2, read_timeout_s=3)},
+            call_timeout_s=0.25,
+            close_timeout_s=2,
+            on_dispatch=dispatches.append,
+        )
+        await transport.start()
+        worker = transport._workers["docs"]
+        try:
+            with pytest.raises(DispatchError) as timeout:
+                await transport.call(_request("docs", seq=1))
+            assert timeout.value.exception_type == "TimeoutError"
+            # The late JSON response arrives for an abandoned request ID.
+            await asyncio.wait_for(probe.responded.wait(), 2)
+            await asyncio.sleep(0.05)
+            assert worker._state is mcp_transport._State.READY
+            probe.delay = 0.0
+            assert (await transport.call(_request("docs", seq=2))).payload is not None
+        finally:
+            await transport.close()
+        assert len(dispatches) == probe.wire_calls == 2

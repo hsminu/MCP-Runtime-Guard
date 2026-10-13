@@ -26,6 +26,15 @@ MCP stream의 진입·종료를 소유한다. endpoint는 신뢰 구성 루트�
   서버 cookie를 다음 요청에 실어 보내지 않는다.
 - 연결 상한 4개, keepalive 2개. I/O timeout은 유한한 양수·최대 300초다.
   worker의 전체 call/start/close 상한은 별도로 적용한다.
+- (2026-10-13 QA 2차) 응답 read timeout(`read_timeout_s`, 기본 60초)을 연결·쓰기 상한과 분리했다.
+  `McpTransport`는 read timeout이 call timeout보다 짧으면 생성을 거절한다. 전에는 JSON 응답 모드에서
+  I/O timeout보다 느린 정상 도구 한 번이 SDK task group을 취소해 그 서버 worker를 재시작 전까지
+  못 쓰게 만들었다. read timeout보다 오래 응답이 없는 서버는 여전히 세션이 끝나고 이후 호출은
+  차단 쪽으로 실패한다.
+- (2026-10-13 QA 2차) SDK `ClientSession.call_tool`은 서버 `outputSchema`로
+  `tools/list`와 `jsonschema.validate`를 이벤트 루프에서 실행해, 서버의 `$ref`가 Guard 프로세스의
+  임의 URL 요청이나 루프 정지를 일으킬 수 있었다. A transport는 이 검증 단계를 뺀 호출을 쓰며,
+  결과는 신뢰하지 않은 채 B ResponseGate로 간다. 서버 스키마로 structuredContent를 검증하지 않는다.
 - 정확히 같은 endpoint의 POST/GET/DELETE만 보낸다. 알림 GET은 한 번만 열고,
   이후 GET 재연결·`Last-Event-ID` 응답 재개는 HTTP 전송 전에 거절한다.
   SDK가 재개를 시도하더라도 새 wire 요청은 나가지 않는다. 잃어버린 SEND를
@@ -44,6 +53,8 @@ SDK의 HTTP task-group이 오류로 세션을 종료하면 worker는 예외를 �
 `SessionCloseFailed` 등으로 보고할 수 있다. 이를 정리 성공으로 바꾸지 않았다.
 검증에서는 해당 owner task가 끝났는지도 별도로 확인했다. 정상 종료는 HTTP client close와
 stateful 세션 DELETE를 확인했으며, DELETE의 성공이 원격 SEND 취소를 뜻하지 않는다.
+SDK task group이 오류로 취소된 실패 경로에서는 SDK의 `finally` DELETE도 함께 취소되어 원격 서버에
+세션이 남을 수 있다(MCP 1.29.0 동작). 이 경로의 정리는 미구현 한계로 둔다.
 
 ## 앱과 재현
 
