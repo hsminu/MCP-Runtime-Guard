@@ -1,5 +1,8 @@
 # B4·B5 실행·응답·승인 구현과 연동 조건
 
+현재 A 재검토 기준은 **`cd75bf9`**, B 문서 기준은 `3bf414c`(서비스 `29025e0`)다.
+아래 초기 구현·837/840/864개 검증은 각각 당시 기록이며 현재 연결 상태는 마지막 절을 따른다.
+
 기준은 최종 [기술설계서](technical-design.md)의 6·7·8·13장이다.
 2026-10-11 B 브랜치에서 해시·스냅샷·예외 경계, GuardService, ResponseGate,
 ApprovalService와 담당 단위·성질 테스트를 구현했다.
@@ -200,7 +203,8 @@ T07·T19·T36 등의 결함·유출 시나리오를 검증해야 한다.
 2026-10-12 `f3c2d2b`에서 승인 조회 직후 Task ID·snapshot epoch를 먼저 검사하고,
 승인에 따른 Task 정지 직전에도 기대 epoch를 대조하도록 보강했다. 조회가 다른 Task나
 교체된 epoch를 반환하면 해당 Task 행을 변경하지 않고 승인 종결·사본 폐기·global halt로
-처리한다. 일반 submit의 trusted caller 기대 epoch 요청은 이 승인 수정과 별도이며 미합의다.
+처리한다. 일반 submit의 trusted caller 기대 epoch 요청은 당시 승인 수정과 별도였다.
+현재 B에는 expected_epoch 비교가 구현돼 있고 최신 A Runner도 전달하며 C의 경합 인수는 남아 있다.
 
 24개 추가 회귀 케이스를 수정 전에 실패로 재현했다. 후속 수정 후 B의 전체 단위·성질
 테스트는 **864개 통과**했고 Ruff·mypy·pip check를 확인했다. C도 `f3c2d2b`의 864개·
@@ -209,10 +213,21 @@ Ruff·mypy를 별도 Ubuntu 환경에서 재현했다. 상세 근거는
 앞의 837·840개 결과는 각 시점의 기록으로 유지한다. 후속 결과도 대역 검증이며 실제
 SQLite·wire·receiver_effect의 검증을 뜻하지 않는다. 이번 문서 갱신에서 새 코드 시험은 실행하지 않았다.
 
-A 브랜치 `5598009`에는 transport·AGT mock·모델 어댑터·Runner·bridge·Qt UI 구현이 있고
-실제 제품 연결은 남아 있다. A는 일반 submit의 lock 내부 `expected_epoch` 비교,
-인증된 UI의 동일 메모리 승인 사본 조회, 권위 있는 승인·Task 상태와 revision·종결 여부,
-제어 명령 접수/적용 결과를 요청했다. 근거는
-[A 계약 검토](https://github.com/hsminu/MCP-Runtime-Guard/blob/55980091fc49871903d72e8ba1e657ab7682035b/docs/tasks/a-port-review.md#7-b-head-f3c2d2b-연동-중-드러난-호출제어-계약-질문)다.
-이 요구와 C의 승인 생성·종결 원자성·버전·ACK/커밋 불명·만료·복구 제안을
-B6 계약 변경안으로 대조하고, 실제 합의 후 구현·B 단위 검증·C 독립 검증·A 연결 순서로 진행한다.
+현재 A 대조 기준은 **`cd75bf9fa2a96a76f84fc1ce17a746705265ae53`**,
+B 문서는 `3bf414c`(서비스/971개 회귀 `29025e0`)다. A의 실제 로컬 AGT·HTTP loopback·
+Runner expected_epoch 전달은 구현돼 있으며 최신 QA는 대기/실행 16개·퇴역 worker 예산 2개·
+제한적 교체/실제 종료 확인과 한국어 UI 결과 표시를 추가했다. A `cd75bf9`는 B `3bf414c`를
+병합해 B 최신 서비스 보완을 반영했고 Guard·승인·domain·ports 소스는 B와 동일하다.
+실제 SQLite·C 서비스·독립 계수 인수와 공동 계약 합의는 미완료다.
+
+과거 A `5598009`의 포트 질문은 최신 A에도
+[역사 검토](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-port-review.md#7-b-head-f3c2d2b-연동-중-드러난-호출제어-계약-질문)로
+보존돼 있다. 현재 B의 동일 사본 review/expected_epoch 구현과 당시 미구현 요청을 구분한다.
+권위 조회·revision·제어 적용 결과, C의 승인 원자성·버전·ACK/커밋 불명·만료·복구와
+새 [AGT 역할 결정 요청](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-agt-role-decision.md)을
+[공동 검토 요청](ac-contract-review-request.md)과 [B6 변경안](b6-contract-proposal.md)에 대조했다.
+기존 포트의 독립 SQLite 구현은 가능하고 새 공유 계약은 실제 합의 후 변경한다.
+위 과거 837·840·864개 기록과 A `281cbae`의 1,298개는 당시 대상/주체를 보존한다.
+최신 [A 동기화 기록](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-b-sync-2026-10-13.md)은
+A lock 1,371개·별도 B lock의 B 소유 테스트 971개와 real/mock × stdio/HTTP 총 32경로
+통과를 보고했다. A 자체 결과이며 이번 문서 작업의 재실행이나 C 독립 인수로 사용하지 않는다.

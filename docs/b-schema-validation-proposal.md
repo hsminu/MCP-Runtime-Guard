@@ -1,6 +1,7 @@
 # B3 · 제한된 JSON Schema 검증 연결안
 
 기준일: **2026-10-13**. 상태는 **B 처리 방향 선택·A/C 연결 계약 검토 대기**다.
+현재 소스 대조 기준은 **A `cd75bf9`, B `3bf414c`(서비스 `29025e0`), C/main `4179f98`**다.
 사용자는 최종 기술설계서와 GitHub 문서를 근거로 B가 판단하도록 요청했다.
 B는 기존 `pattern`·`patternProperties` 기능을 유지하고, JSON Schema 작업 전체를
 종료 가능한 별도 프로세스에서 실행하는 방향을 선택했다. 이 문서는 연결 제안이며,
@@ -17,9 +18,12 @@ B는 기존 `pattern`·`patternProperties` 기능을 유지하고, JSON Schema �
   추가 속성 폐쇄를 요구한다. I6은 시간초과를 DENY 또는 Task 정지로 처리한다.
 - [B3 지원표](b3-catalog.md)는 `patternProperties`를 지원한다. 등록 원본·지문 보존,
   원본 전체와의 AND, 같은 최종 스키마의 인자 검증·ToolView 사용도 유지해야 한다.
-- A `5598009`의 [B 검토](https://github.com/hsminu/MCP-Runtime-Guard/blob/55980091fc49871903d72e8ba1e657ab7682035b/docs/tasks/a-b-review.md)와
-  [보안 검토](https://github.com/hsminu/MCP-Runtime-Guard/blob/55980091fc49871903d72e8ba1e657ab7682035b/docs/tasks/a-security-review.md)는
-  정규식 키워드 일괄 거부가 B3 기능 계약을 바꾸며, A의 길이 제한만으로 해결되지 않는다고 기록했다.
+- 정규식 위험의 최초 지적은 최신 A에도 보존된
+  [B 검토의 역사 기록](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-b-review.md)과
+  [보안 검토의 역사 기록](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-security-review.md)이다.
+  현재 `cd75bf9`의 model_client.py·catalog_schema.py에서도 직접 동기 Draft202012Validator
+  검사/검증 경로가 남아 있음을 소스로 확인했다. 정규식 키워드 일괄 거부나 AGT worker 교체로
+  이 전체 JSON Schema 검증 문제를 해결한 것으로 기록하지 않는다. 이번 작업은 정적 대조다.
 - [소유권](team-workflow.md)에 따라 검증 의미는 B, 모델 입력 호출은 A,
   프로세스 실행·종료는 C `security/launcher.py`가 맡는다. B 모듈에 subprocess를 추가하지 않는다.
 
