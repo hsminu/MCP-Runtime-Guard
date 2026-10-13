@@ -48,10 +48,12 @@ A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_
 | 담당 | 작업 브랜치 | 주요 책임 | 브랜치별 작업 문서 |
 | --- | --- | --- | --- |
 | A · 애플리케이션 | `feat/a-application` | MCP transport, AGT 연결, 모델·Runner, Qt↔asyncio bridge, GUI | `docs/tasks/a-application.md` |
-| B · 보안 코어 | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트·SQLite | `docs/tasks/b-security-core.md` |
-| C · 보안 기반·검증 | `feat/c-security-platform` | 위험 연산 모듈, 서버 등록·Scanner, fixture·계수, 통합·공격·실험, CI | `docs/tasks/c-security-platform.md` |
+| B · 보안 코어·SQLite | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트, SQLite·스키마·복구·저장소 단위 테스트 | `docs/tasks/b-security-core.md`, [B6 · SQLite 인수](docs/tasks/b-sqlite-store.md) |
+| C · 보안 기반·검증 | `feat/c-security-platform` | 위험 연산 모듈, 서버 등록·Scanner, 저장소 리뷰·독립 검증, fixture·계수, 통합·공격·실험, CI | `docs/tasks/c-security-platform.md` |
 
 브랜치 이름은 담당 범위를 나타낸다. 실제 담당자 이름은 아직 지정하지 않았다. `main`은 공통 기준 문서와 리뷰를 마친 변경을 모으는 브랜치다.
+
+2026-10-12 사용자 결정으로 SQLite 구현을 C에서 B로 이관했다. 현행 소유권과 리뷰는 [협업 규칙](docs/team-workflow.md)을 따른다. 기술 설계 원문은 보존하며, 이전 SQLite 담당 표기는 이 결정으로 대체한다. Store API의 세부 제안은 별도 검토 대상이다.
 
 ## 해결할 문제
 
@@ -106,7 +108,7 @@ flowchart LR
 | `services` | Guard·승인·응답 게이트(B), Runner·bridge(A), registry(C) | 역할별 분담 |
 | `adapters` | MCP·AGT·모델(A), Cisco Scanner(C) | 역할별 분담 |
 | `security` | 위험 연산(C), 예외 판정 변환·승인 해시(B) | 역할별 분담 |
-| `storage` | SQLite와 원자적 트랜잭션 | B, C 검증 |
+| `storage` | SQLite·스키마·복구·원자적 트랜잭션·단위 테스트 | B 구현, C 리뷰·독립 검증 |
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
 | `fixtures`, 테스트, CI | 실제 수신 계수로 집행을 검증 | C 주도 |
 

@@ -9,11 +9,13 @@
 | 현재 브랜치 | 담당 | 필수 작업 문서 |
 | --- | --- | --- |
 | `feat/a-application` | A · 애플리케이션 | `docs/tasks/a-application.md`, `docs/integration-notes.md` |
-| `feat/b-security-core` | B · 보안 코어 | `docs/tasks/b-security-core.md`, `docs/contracts.md` |
+| `feat/b-security-core` | B · 보안 코어·SQLite | `docs/tasks/b-security-core.md`, `docs/tasks/b-sqlite-store.md`, `docs/contracts.md` |
 | `feat/c-security-platform` | C · 보안 기반·검증 | `docs/tasks/c-security-platform.md`, `docs/weakness_register.md` |
 | `main` | 공통 문서·통합 | `README.md`, `docs/team-workflow.md` |
 
 사용자가 별도의 담당이나 하위 작업 브랜치를 명시하면 그 역할 문서를 따른다. 이름만으로 역할을 알 수 없으면 기존 작업 지시를 확인한다. 필요한 문서가 없으면 다른 역할 지침으로 대체하지 않는다.
+
+2026-10-12 사용자 결정으로 SQLite 구현은 B로 이관했다. 현행 배정은 [협업 규칙](docs/team-workflow.md), B의 추가 작업은 [B6 · SQLite 인수](docs/tasks/b-sqlite-store.md)를 따른다. 기존 B 역할 문서의 SQLite 제외 문구는 이 결정으로 대체하며, B 브랜치에서 해당 문서와 인수 안내를 갱신한다.
 
 ## 착수와 인수
 

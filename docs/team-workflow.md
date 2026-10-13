@@ -1,15 +1,17 @@
 # 3인 협업 규칙
 
-> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
+설계 기준은 [기술 설계 및 개발 문서](technical-design.md)이며, 현행 역할·리뷰는 이 문서의 소유권 표를 따른다. 2026-10-12 사용자가 **"sqlite b로 넘기자"**고 결정해 SQLite 구현을 B로 이관했다. 기술 설계 원문 0.5·2.1절 등의 `storage` C 표기와 저장소 단위 테스트 담당 표기는 이 결정으로 대체한다. 원문은 보존한다.
 
-기준 문서는 [기술 설계 및 개발 문서](technical-design.md)다. 아래 역할·리뷰는 원문 0.5절을 따른다. 이 문서는 작업 배정과 인수 조건을 정한다. 현재 A 구현·검증·미완료 조건은 [A 작업 현황](tasks/a-progress.md)을 기준으로 확인한다.
+B1–B5 구현 초안은 B 브랜치에 있다. SQLite 이관은 담당 배정이며, Store API의 세부 합의·SQLite 구현·독립 인수 완료를 뜻하지 않는다. 기록은 [담당 변경](contracts.md#담당-변경-기록), 인수 작업은 [B6 · SQLite](tasks/b-sqlite-store.md)를 따른다.
+
+현재 A 구현·검증·미완료 조건은 [A 작업 현황](tasks/a-progress.md), 임시 앱 계약은 [리뷰 반영 기록](tasks/a-review-fixes.md)을 따른다.
 
 ## 브랜치와 작업 문서
 
 | 담당 | 브랜치 | 브랜치 안에서 먼저 읽을 문서 |
 | --- | --- | --- |
 | A | `feat/a-application` | `AGENT.md`, `docs/tasks/a-application.md`, `docs/integration-notes.md` |
-| B | `feat/b-security-core` | `AGENT.md`, `docs/tasks/b-security-core.md`, `docs/contracts.md` |
+| B | `feat/b-security-core` | `AGENT.md`, `docs/tasks/b-security-core.md`, `docs/tasks/b-sqlite-store.md`, `docs/contracts.md` |
 | C | `feat/c-security-platform` | `AGENT.md`, `docs/tasks/c-security-platform.md`, `docs/weakness_register.md` |
 
 `main`의 공통 문서 커밋을 세 브랜치가 공유한다. 역할 브랜치의 루트 `AGENT.md`는 같은 내용으로 유지하며, 현재 브랜치에 따라 고유한 작업 문서를 읽는다. 역할별 규칙을 바꿀 때는 `docs/tasks/`의 자기 문서를 수정한다. 이렇게 해야 세 브랜치를 합칠 때 역할 지침 파일이 서로 덮어써지지 않는다.
@@ -26,7 +28,7 @@
 | `services/approvals.py`, `services/response_gate.py` | B | C |
 | `security/failclosed.py`, `security/digest.py` | B | C |
 | `security/paths.py`, `endpoints.py`, `ids.py`, `secrets.py`, `redact.py`, `launcher.py` | C | B |
-| `storage/*` | B | C |
+| `storage/*` · SQLite·스키마·마이그레이션·감사 저장·영속 순번·시작 복구 | B | C |
 | `services/registry.py`, `adapters/cisco.py` | C | B |
 | `adapters/mcp_transport.py` | A | B |
 | `adapters/agt.py` 연결·번역 | A | B, 합성 규칙은 B 담당 |
@@ -39,13 +41,15 @@
 
 `config/`·패키징·의존성 lock의 세부 편집 담당은 착수 때 [계약 체크리스트](contracts.md)에 합의해서 기록한다. 원문에 없는 파일 소유권을 임의로 확정하지 않는다.
 
+저장소 단위 테스트·S03의 바인딩 SQL 단위 부분은 B가 작성하고 C가 리뷰한다. 저장소 계약·통합·공격·결함 주입·실험 테스트는 C가 작성하고 B가 리뷰한다. C는 Registry·Scanner 서비스의 의미를 구현하고, 영속화에는 B 저장소의 검토된 인터페이스를 사용한다. 단일 writer를 공유하는 계약을 정하며 `services/registry.py`에 별도 SQL 실행 경로를 만들지 않는다. SQL 제한 Semgrep·import-linter 규칙은 C가 관리하고 B의 저장소 구현과 함께 검토한다.
+
 ## 개발 순서와 인수 조건
 
 | 단계 | A | B | C | 완료 조건 |
 | --- | --- | --- | --- | --- |
 | 0 · 공통 계약 | Transport·AccessChecker·ModelClient·UI 이벤트 요구 제공 | domain·ports·결과·상태 계약 초안 | Store·Scanner·Registry·계수 요구 제공 | 세 사람이 계약 및 미확정 항목 확인 |
-| 1 · 독립 구현 | SDK stdio·HTTP·AGT 호환 확인, 어댑터 구현 | 순수 정책·등급 병합·Catalog·SQLite 구현 | 안전 연산·fixture·수신 계수 구현 | 동일 SDK 조합과 계약 테스트 기반 확보 |
-| 2 · 실행 경로 | worker·Runner를 Guard에 연결 | Guard·승인·응답 게이트 구현 | B 저장소와 C 등록을 연결해 독립 통합·결함 주입 | ALLOW/ASK/DENY와 커밋 후 공개를 계수로 증명 |
+| 1 · 독립 구현 | SDK stdio·HTTP·AGT 호환 확인, 어댑터 구현 | 순수 정책·등급 병합·Catalog·SQLite·단위 테스트 구현 | 안전 연산·fixture·수신 계수 구현, 저장소 계약 검증 준비 | 동일 SDK 조합과 계약 테스트 기반 확보 |
+| 2 · 실행 경로 | worker·Runner를 Guard에 연결 | Guard·승인·응답 게이트와 원자적 저장소 연결 | Registry·Scanner 연결, 저장소 리뷰·통합·결함 주입 | ALLOW/ASK/DENY와 커밋 후 공개를 계수로 증명 |
 | 3 · 화면과 공격 | bridge·GUI·승인 렌더링, T18 | 공격·경쟁 실패 수정, 계약 유지 | T/S 검증·replay·CI·약점 관리대장 | 담당 리뷰, 불변식 검증, 제한과 과잉 제한 보고 |
 
 상세 태스크는 각 브랜치의 `docs/tasks/`에 있다. 다른 담당의 구현이 아직 없으면 필요한 계약 초안·문서·담당 모듈의 독립 작업을 진행한다. 임시로 보안 경로를 우회해 연결하지 않는다.
@@ -70,6 +74,14 @@ git merge origin/main
 ```
 
 작업은 역할 브랜치에서 커밋하고 `main` 대상으로 리뷰한다. 승인된 변경은 단계별로 합친다. B의 공통 계약을 먼저 반영하고 A·C가 그 변경을 가져오면 병렬 구현의 충돌을 줄일 수 있다. 공용 브랜치의 force push나 다른 사람의 커밋 삭제를 하지 않는다.
+
+## 담당 변경과 작업 전달
+
+1. 담당 변경은 이 문서의 소유권 표와 `docs/contracts.md`에 근거·범위·리뷰 책임을 기록한다. 사용자 결정은 결정 근거로 기록하며 실제 A·B·C 확인을 대신 작성하지 않는다.
+2. 공통 지침·담당표·B6 작업 문서·C 요구 문서 변경을 문서 PR로 묶어 `main`에 반영한다. C 브랜치의 제품 구현 전체를 B에 병합하는 방식으로 담당 변경을 전달하지 않는다.
+3. B와 A는 각자의 작업을 저장한 뒤 공통 문서 커밋을 가져온다. B는 자기 역할 문서·인수 안내의 이전 SQLite 제외 문구를 갱신한다. 담당 변경의 재승인을 기다리지 않고 배정을 적용하되, 미확정 API는 기존 계약 절차로 검토한다.
+4. 개인 메시지는 결정·문서 PR 또는 커밋·다음 태스크 링크를 알리는 데 사용한다. 전달 여부·착수·구현·검증 상태는 문서와 PR에 구분해서 남긴다. 로컬 문서 수정만으로 다른 clone에 전달됐다고 보고하지 않는다.
+5. B는 API·DTO·상태/오류 규칙을 먼저 검토 가능한 변경으로 제공한다. C는 독립 인수 기준을 대조하고 A는 시작 게이트·제어 큐·호출 결과 영향을 확인한다. SQLite 구현·단위 검증 후 C 계약·결함 주입, A 연결 후 실제 계수 검증 순으로 진행한다.
 
 ## 리뷰와 완료 보고
 

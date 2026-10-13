@@ -30,7 +30,7 @@
 | A41 패키징 | lock·설치·단위 검증 | 전체 보안 스캔/CI는 미실행 | C CI 연결 |
 | A42 인수 | 현재 문서 간소화 | 제품 인수 의존성 위 표 참조 | 리뷰 결과와 검증을 함께 인계 |
 
-검증: 전체 단위·앱 smoke **1153 passed**, lock 새 환경의 stdio 6경로 재현.
+원격 리뷰 당시 검증: 전체 단위·앱 smoke **1153 passed**, lock 새 환경의 stdio 6경로 재현.
 
 현재 실행: 저장소 루트에서 `uv sync --locked`, `uv run python -m guard_app --demo`.
 합성 자료 전용이며 실제 모델·외부 송신·SQLite 제품 실행으로 표시하지 않는다.
@@ -41,3 +41,10 @@
 세션 종료 확인·늦은 bootstrap 자원 정리·승인 경합 뒤 Task 상태 재확인과
 상세창 재사용·공개 텍스트 표시·stdio 입력 상한을 원격 앱 실행 경로와 함께 유지한다.
 미추적 QA 보고서·재현 자료는 사용자 작업 트리에 보존하며 병합 커밋에 포함하지 않는다.
+
+공통 기준 `origin/main`의 `4179f98`도 병합해 SQLite B6 소유권과 C 독립 검증 문서를 반영했다.
+병합 후 전체 단위·앱 테스트 **1179 passed** (29.74초, Qt offscreen), 충돌한 Python 파일과 Runner 회귀 테스트의 Ruff 검사를 통과했다.
+Runner 테스트 대역도 `expected_epoch`를 받아 검증하도록 원격 계약에 맞췄다.
+
+실제 stdio 합성 서버의 allow·deny·승인·거절·취소·긴급 차단 6경로도 통과했다.
+bridge·앱 runtime 집중 재검증은 **41 passed** (3.98초)였다. 정식 C wire·SQLite 인수와는 구분한다.
