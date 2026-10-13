@@ -1,6 +1,10 @@
 # 공통 계약 체크리스트
 
 > 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
+
+2026-10-13 현재 재검토 기준은 **A `cd75bf9`, B `3bf414c`, C/main `4179f98`**다.
+B 서비스/971개 회귀 근거는 `29025e0`이며 과거 질문·시험·구현 이력을 현재 상태와 구분한다.
+
 담당은 B, 사용자는 A·C다. `domain/*`와 `ports.py` 변경은 3인 합의 대상이다. 이 문서는 [개발문서](technical-design.md) 0.5·3·7–12장의 계약 요구를 정리한 **미확정 체크리스트**다. 실제 코드의 모든 메서드·반환형을 이미 정의했다는 뜻은 아니다.
 
 ## 담당 변경 기록
@@ -109,19 +113,19 @@ A의 상태·제어·승인 상세 요청을 대조했다. 원자 승인 API·DT
 
 | 피드백 | B 상태 | 다음 인수 |
 | --- | --- | --- |
-| 일반 submit의 호출자 기대 epoch | 서비스에 선택적 `expected_epoch`를 추가하고 Task lock 내부에서 ID 확인 직후 검사. A `c9f6e1a` Runner의 전달 코드 확인. domain·ports 변경 없음 | 최신 B 보완 동기화 후 A 재검증, C 실제 교체 경합·전송 0 검증 |
+| 일반 submit의 호출자 기대 epoch | 서비스에 선택적 `expected_epoch`를 추가하고 Task lock 내부에서 ID 확인 직후 검사. A `cd75bf9` Runner 전달과 최신 B 서비스 병합 확인. domain·ports 변경 없음 | C 실제 epoch 교체 경합·전송 0 검증 |
 | 권위 상태·revision·제어 적용 결과 | B6 변경안의 승인/요청/Task 조회·접수/적용 분리 제안 | A·C 계약 검토, 실제 저장소와 UI 연결 |
 | 동일 메모리 승인 사본 상세 | 현재 `HumanControl.review(approval_id)` 구현. strict 승인 모델·ID, Task ID/epoch·PENDING·hash·현재 등록·양시계 만료와 메모리 사본을 검사 | A 표시·접근 수명 인수. B6의 revision 지정 조회는 별도 공동 제안 |
 | 긴급 차단·늦은 AGT 정리 | 인증 후 lock 전에 정지 요청 기록, 소비·예약·전송 직전 재검사. 실제 AGT 작업 완료 전 추적·실행 슬롯 유지 | A 실제 어댑터 취소·종료, C 소비·dispatch·wire 계수 검증. 같은 Task ID/epoch 복구 규칙 미정 |
 | 승인 생성·종결 원자성 | open/finish 및 반환 관계 DTO 제안 | 공통 API 합의 후 B6 구현·C 독립 검증 |
 | 등록 스키마 정규식 | B 처리 방향은 기능 유지·전체 검증 프로세스 실행. 연결안 제공, 제품 소스는 유지 | A 직접 검증·C launcher·공동 비동기/실패 계약 검토 후 구현·인수 |
-| 실제 AGT 규칙·버전·감사 | A `c9f6e1a`의 로컬 판정 연결 확인. 제품 규칙·policy_version/승인 결속·agt_mode/규칙 버전 영속 감사는 추가 검토안 | AGT-01–03 회신, B6 저장·마이그레이션과 C 독립 계수 인수 |
-| 공통 설치 조합 | A jsonschema 4.25.1, B 4.26.0 차이 확인. A의 AGT·HTTP·Qt 조합과 B 검사 도구를 대조 | ENV-01 회신, 통합 버전·lock 담당과 Scanner 포함 인수 환경 결정 |
+| 실제 AGT 규칙·버전·감사 | A `cd75bf9`의 로컬 판정 연결 확인. 제품 규칙·policy_version/승인 결속·agt_mode/규칙 버전 영속 감사는 추가 검토안 | AGT-01–03 회신, B6 저장·마이그레이션과 C 독립 계수 인수 |
+| 공통 설치 조합 | A 실행 lock jsonschema 4.25.1 유지, B lock 4.26.0은 별도 검사 환경. A에 config/b-core 검사 설정 보존 | ENV-01 회신, 공통 제품 버전·lock 담당과 Scanner 포함 인수 환경 결정 |
 
 submit의 생략 기본값은 기존 호출과 호환되는 `None`이며, 기대 epoch가 다른 호출은
 `Denied(TASK_NOT_RUNNING)`을 반환한다. 새 epoch의 Task를 정지·수정하거나 요청을 만들지 않는다.
 신뢰 epoch의 bool·음수·float·문자열은 `Denied(STATE_MISSING)`이다. 모델 DTO에는 epoch를 추가하지 않는다.
-A `c9f6e1a`에서는 Runner가 `expected_epoch=self.epoch`를 전달한다. 코드 연결 확인과
+A `cd75bf9`에서는 Runner가 `expected_epoch=self.epoch`를 전달한다. 코드 연결 확인과
 실제 epoch 교체 경합·C 독립 T21 인수는 구분하며, 이번 문서 갱신을 인수 통과로 표시하지 않는다.
 2026-10-13 B에서는 관련 회귀 22개와 기존 테스트를 포함한 886개 단위·성질 테스트,
 Ruff·포맷·mypy·pip check를 통과했다. 실제 MCP·SQLite·wire·수신 부작용 검증은 별도다.
@@ -151,15 +155,26 @@ B 최신 코드·SQLite·C 서비스가 함께 연결된 제품과 C 독립 인�
 
 ## 2026-10-13 추가 요청: 최신 A와 AGT 검토
 
-검토 기준은 A `c9f6e1a`, B `29025e0`, C/main `4179f98`다. A는 실제 로컬 AGT와
-HTTP loopback을 구현했지만 B `29025e0`의 승인 ID·상세 만료·늦은 AGT 추적 보완은
-A 사본에 아직 없다. 최신 B 동기화 후 AGT real/mock × stdio/HTTP의 재검증을 요청한다.
-A의 1,282개 테스트·HTTP 앱 각 모드 8경로는 A 문서의 실행 기록이며 이번 B 재현 결과가 아니다.
+현재 재검토 기준은 A `cd75bf9`, B `3bf414c`, C/main `4179f98`다. B 서비스는 `29025e0`과 같다.
+A는 `cd75bf9`에 B `3bf414c`를 병합했다. B `29025e0`의 승인 ID·상세 만료/현재성·늦은 AGT
+추적 보완이 반영됐으며 domain·ports·Guard·승인 소스는 현재 B와 동일하다.
+[A 동기화 기록](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-b-sync-2026-10-13.md)은
+A lock 전체 1,371개·별도 B lock의 B 소유 테스트 971개와 AGT real/mock × stdio/HTTP
+총 32경로 통과를 보고한다. 코드 동기화·A 자체 검증과 공동 계약 동의·C 독립 인수는 구분한다.
+A는 `6452b13`에서 기본 대기/실행 16개·퇴역 worker 예산 2개·제한적 교체·실제 종료 확인을,
+`91b966b`에서 한국어 결과와 Task 정지/입력 대기 표시를 추가했다. `281cbae`의 1,298개 테스트,
+87개 집중 시험 × 30회 실패0·stdio 각 모드 8경로와 이전 HTTP 1,282개는 당시 A 보고다.
+위 최신 병합 검증과 과거 기록은 이번 B 재현 결과나 C 독립 인수로 표시하지 않는다.
 
 A가 요청한 AGT mode/규칙 버전의 영속 감사와 규칙 변경/승인 결속은
 [B6 변경안 11절](b6-contract-proposal.md)의 검토 제안이다. 현재 불변 합성 규칙을 제품 정책
 인수로 확대하거나 A의 NOT NULL 감사 필드 제안을 공동 합의로 간주하지 않는다.
 기존 불명 감사 기록을 real/mock으로 추정하지 않으며 정확한 migration·필드·실패 처리를 검토한다.
+최신 [A18-D 역할 결정 요청](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-agt-role-decision.md)의
+운영자 차단 목록/조건 규칙 및 별도 서명 정책 관리 선택은 AGT-01의 첫 검토 항목이다.
+SDK 기본 판정·새 신뢰 입력·로딩/서명 책임과 정책/승인 결속은 실제 선택 후 정한다.
+AGT-03은 영구 정지 전제가 아니라 제한적 worker 교체·미평가 대기열 이관·퇴역 예산과
+Guard 결합을 대상으로 다시 검토한다. 실패 요청/MCP SEND 재시도 권한은 만들지 않는다.
 
 아래 표는 **검토 요청 관리**이고 합의 기록이 아니다. 실제 회신이 오면 항목별 상태를 갱신하고,
 확정한 선택·영향·검토자·날짜·문서/커밋만 아래 합의 기록에 남긴다.
@@ -172,11 +187,11 @@ A가 요청한 AGT mode/규칙 버전의 영속 감사와 규칙 변경/승인 �
 | B6-04 | SEND 실패 상태·시작 정리·recovery epoch | 미기록 | 미기록 | 요청 초안 |
 | B6-05 | 권위 조회·사람 상세·명령 접수/적용 결과 | 미기록 | 미기록 | 요청 초안 |
 | B6-06 | Registry 등록·지문 영속화·단일 writer | 미기록 | 미기록 | 요청 초안 |
-| AGT-01 | 제품 규칙·버전·Task/승인 결속 | 미기록 | 미기록 | 요청 초안 |
+| AGT-01 | 역할·관리 경로·규칙/버전·Task/승인 결속 | A18-D 선택지 제안 확인, 동의 회신 아님 | 미기록 | 공동 선택 미결 |
 | AGT-02 | mode/규칙 버전 감사·migration·실패 | 미기록 | 미기록 | 요청 초안 |
-| AGT-03 | 상한·취소·늦은 SDK 작업·종료 미확인 | 미기록 | 미기록 | 요청 초안 |
+| AGT-03 | 대기/실행·worker 교체·퇴역 예산·실제 종료 | QA·B 병합·Guard 4슬롯 단위 시험 확인, 계약 동의 회신 아님 | 미기록 | C 독립 인수·합의 미결 |
 | SCHEMA-01 | 전체 스키마 검증과 C launcher 연결 | 미기록 | 미기록 | 요청 초안 |
-| ENV-01 | 통합 버전·lock·검사 도구·Scanner 조합 | 미기록 | 미기록 | 요청 초안 |
+| ENV-01 | 통합 버전·lock·검사 도구·Scanner 조합 | A 실행/B 검사 환경 분리 확인, 제품 조합 동의 회신 아님 | 미기록 | 공통 제품 조합 미결 |
 
 답변 형식은 [중앙 요청 6절](ac-contract-review-request.md)을 따른다. 이번 작업은 요청 문서
 준비이며 실제 전달·A/C 동의·새 공유 계약 구현·SQLite 착수/제품 검증 완료를 뜻하지 않는다.

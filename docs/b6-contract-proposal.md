@@ -1,6 +1,7 @@
 # B6 · Store·승인·A 연결 계약 제안 v1
 
 기준일: **2026-10-13**. 작성 B, 상태는 **검토용 제안·A/B/C 공동 합의 미완료**다.
+현재 A 소스·QA·역할 결정 요청 기준은 **`cd75bf9`**이며 이전 검토 이후 변경까지 반영했다.
 SQLite 담당 이관은 확정됐지만 이 문서의 API·DTO·필드·상태 선택은 확정 계약이 아니다.
 이 문서는 구현 요구를 구체화하는 일반 저장소 문서다. domain·ports 소스 변경,
 SQLite 구현, 아래 검증 실행, A/C 동의 기록은 이 문서 작성으로 수행하지 않는다.
@@ -13,20 +14,24 @@ SQLite 구현, 아래 검증 실행, A/C 동의 기록은 이 문서 작성으�
 ## 1. 기준과 범위
 
 - 최종 기준은 [기술설계](technical-design.md) 3.4·6–8·11–12장이다. 원문을 수정하지 않는다.
-- Store 계약 대조 기준은 B `f3c2d2b`의 12개 메서드다. B `f22968c`와 후속 B 변경도 이 포트를 유지한다.
-- 이번 정적 대조 기준은 B `29025e038f7e4beb6cdcce15305f8cafc9550897`,
-  A `c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3`,
+- 현재 Store 계약 대조 기준은 B `3bf414c`의 12개 메서드다. 서비스 구현·971개 회귀 근거는 `29025e0`이고 포트는 같다.
+- 이번 정적 대조 기준은 B `3bf414cded1c7262f744dd4f282c0abe93109f4f`,
+  A `cd75bf9fa2a96a76f84fc1ce17a746705265ae53`,
   C/main `4179f98b476b41e806c4a87b879cbdf95dc92b54`다.
 - SQLite 담당 이관 근거는 [B6 작업](tasks/b-sqlite-store.md)과 [공통 계약](contracts.md)이다.
 - C의 [요구 U1–U8](tasks/c-store-requirements.md)·[처리 제안](tasks/c-store-proposal.md)을 대조했다.
-- A `5598009`의 `docs/tasks/a-port-review.md` 6–7절과 UI 계약 제안을 검토했다.
-  A 문서의 요청은 합의가 아니다. 후속 A `655aef5`의 B 소유 긴급 차단·상세 조회 반영은
-  이번 B6 공유 API 변경과 분리하며 아래 7절에 현재 동작을 기록한다.
-- 최신 A에는 실제 로컬 AGT core 5.0.0의 판정 전용 adapter와 명시적 real/mock 모드,
-  Streamable HTTP adapter·loopback 합성 앱, Runner의 trusted `expected_epoch` 전달이 있다.
-  이는 A 코드·문서의 정적 확인이며 이번 B 문서 작업에서 재실행한 결과가 아니다.
+- 최신 A의 `docs/tasks/a-b-sync-2026-10-13.md`, `a-agt-integration.md` QA 절, 새 `a-agt-role-decision.md`,
+  AGT adapter·UI·테스트를 다시 대조했다. 현재 기준은 `cd75bf9`이며,
+  `6452b13` 동시성/worker 교체, `91b966b` 한국어 결과 표시, `281cbae` QA/역할 문서와
+  `cd75bf9`의 B `3bf414c` 병합까지 포함한다. 현재 Guard·승인·domain·ports는 B와 동일하다.
+- 현재 A에는 실제 로컬 AGT core 5.0.0의 판정 전용 adapter와 명시적 real/mock 모드,
+  HTTP loopback·Runner expected_epoch, 기본 대기/실행 16개·퇴역 worker 예산 2개·실제 종료 확인이 있다.
+  A 동기화 기록은 A lock 1,371개·별도 B lock의 B 소유 테스트 971개와 real/mock × stdio/HTTP
+  총 32경로 통과를 보고한다. 이는 A 자체 보고와 코드·문서의 정적 확인이며 이번 B 재실행 결과가 아니다.
   실제 B6 SQLite·C Registry/launcher·독립 인수까지 연결한 제품 구성은 미완료다.
   A의 AGT 규칙·버전·영속 감사 요청은 11절의 공동 검토 대상으로 추가한다.
+- 과거 `5598009`의 최초 포트 질문과 `655aef5`에서 선별 반영한 긴급 차단/상세 조회는
+  구현 이력으로 보존한다. 그 문서의 당시 미구현 설명을 현재 A 상태로 사용하지 않는다.
 - B는 저장소·단위 테스트, C는 리뷰·독립 계약/통합/결함 검증, A는 앱 시작·제어 큐·UI를 맡는다.
 
 ## 2. 유지할 모델과 추가 DTO 제안
@@ -175,7 +180,7 @@ COMMIT 직전 만료는 전체 rollback False, COMMIT 성공 뒤 ACK 시 만료�
   불일치면 교체 Task를 정지시키지 않고 예약·전송 전에 거절한다. ProposedCall에 epoch를 넣지 않는다.
   이 선택적 B 서비스 인자는 2026-10-13에 구현·단위 검증했다. epoch 불일치는
   Denied(TASK_NOT_RUNNING), 신뢰 인자 타입 오류는 Denied(STATE_MISSING)이며,
-  생략 시 기존 호출과 호환된다. 최신 A `c9f6e1a`의 Runner는 trusted `self.epoch`를
+  생략 시 기존 호출과 호환된다. 최신 A `cd75bf9`의 Runner는 trusted `self.epoch`를
   `expected_epoch`로 전달한다. C의 실제 Task 교체 경합·전송 0 인수와 공동 계약 동결은 별도다.
 - 권위 조회: Store의 일관된 승인/요청/Task 조회를 B 서비스에서 관계·타입 검증 후 제공한다.
   Denied(APPROVAL_RACE/TASK_NOT_RUNNING)만으로 reject/expire/cancel 적용 여부를 추론하지 않는다.
@@ -183,8 +188,8 @@ COMMIT 직전 만료는 전체 rollback False, COMMIT 성공 뒤 ACK 시 만료�
   운영자·메모리 snapshot·ID/epoch/hash·활성 상태·양시계 만료·WAITING 맥락을 재검사한다.
   같은 snapshot의 전체 인자·경계·등급·수신처를 반환하고 일반 조회·감사·CSV·모델에는 넣지 않는다.
   사본 부재·종결·만료 시 거부하며 A는 plain text 표시와 상세 수명 종료를 맡는다(T18).
-  위 revision 지정 API는 미구현 공동 제안이다. 현재는 사용자 지시로 A `655aef5`의
-  `HumanControl.review(approval_id) -> ApprovalSnapshot | None`을 B 브랜치에 반영했다.
+  위 revision 지정 API는 미구현 공동 제안이다. 현재 B `29025e0`에는
+  `HumanControl.review(approval_id) -> ApprovalSnapshot | None`이 구현돼 있다.
   strict 승인 모델·승인 ID·request ID·PENDING·hash·Task ID/epoch·현재 ACTIVE 등록·지문을 확인하고,
   마지막 await 뒤 UTC·monotonic 만료와 메모리 사본 현재성을 재검사한다. 조회는 승인 소비·
   상태 쓰기 없이 같은 메모리 사본만 반환하며 원문을 일반 이벤트·감사·DB에서 재구성하지 않는다.
@@ -196,6 +201,12 @@ COMMIT 직전 만료는 전체 rollback False, COMMIT 성공 뒤 ACK 시 만료�
   중복·오래된 이벤트는 무시하고 revision 갭·재연결에는 snapshot을 읽는다. 실행을 재발행하지 않는다.
 - durable 명령 중복 방지, 목록 pagination·집계, Registry 영속 API는 별도 공동 계약으로 남긴다.
   B의 승인 1회 소비만으로 모든 제어 명령·UI 재동기화가 완성됐다고 표시하지 않는다.
+
+최신 A `91b966b`는 RUNNING 입력 대기와 한국어 결과를 표시하고 cancel/halt는 공개된
+HALTED/CLOSED 상태를 확인해 완료 문구를 만든다. bridge 내부 코드와 공통 DTO는 유지됐다.
+이 UI 보완은 권위 있는 승인/Task 조회·revision·명령별 적용 결과 합의의 완료가 아니다.
+B6-05에서는 Denied의 승인 종결 여부와 Withheld의 실제 전송 여부를 결과형만으로 추정하지
+않도록 단계·상태·관계 근거를 정해야 한다. 예약 후 재검증 실패는 실제 전송 0도 가능하다.
 
 같은 B 변경에서 긴급 차단은 인증 후 Task lock 전에 정지 요청을 기록하고 소비·예약·전송
 직전에 재확인한다. 취소한 AGT는 실제 완료 전 추적·동시 실행 슬롯을 유지하며, 미종료 작업이
@@ -273,7 +284,7 @@ B6-04 복구·SEND, B6-05 조회·제어, B6-06 Registry·단일 writer로 식�
 
 ### 11.1 확인한 현재 범위
 
-A `c9f6e1a`의 실제 adapter는 신뢰 설정의 `(server_id, tool_name, ToolKind) -> bool`
+A `cd75bf9`의 실제 adapter는 신뢰 설정의 `(server_id, tool_name, ToolKind) -> bool`
 허용 목록을 복사해 고정하고 `rule_version`을 별도 문자열로 받는다. 기본 거절·거부권만
 사용하며 자체 도구 실행·사람 승인·원격 backend·임의 규칙 파일 로더는 연결하지 않는다.
 SDK에는 도구 키의 해시만 전달하고 원문 인자·Task/운영자 ID·경계 권한을 넘기지 않는다.
@@ -285,19 +296,30 @@ AGT mode·규칙 버전은 직접 포함하지 않는다. 이는 제품에서 �
 결속 방식을 확정해야 한다는 근거다. 현재 고정 합성·불변 규칙 코드의 확정 취약점이나
 실제로 오래된 승인이 실행됐다는 검증 결과로 단정하지 않는다.
 
-근거는 최신 A의 [실제 AGT 연결과 남은 인수](https://github.com/hsminu/MCP-Runtime-Guard/blob/c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3/docs/tasks/a-agt-integration.md),
-[규칙·mode 구성](https://github.com/hsminu/MCP-Runtime-Guard/blob/c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3/examples/synthetic_app.py#L68-L85),
-[고정 Task 버전](https://github.com/hsminu/MCP-Runtime-Guard/blob/c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3/examples/synthetic_app.py#L118-L123),
+근거는 최신 A의 [실제 AGT 연결과 남은 인수](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-agt-integration.md),
+[규칙·mode 구성](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/examples/synthetic_app.py#L68-L85),
+[고정 Task 버전](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/examples/synthetic_app.py#L118-L123),
 B의 [승인 해시 구성](https://github.com/hsminu/MCP-Runtime-Guard/blob/29025e038f7e4beb6cdcce15305f8cafc9550897/src/guard_app/core/snapshot.py#L88-L115)이다.
-A의 이전 [감사 제안](https://github.com/hsminu/MCP-Runtime-Guard/blob/c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3/docs/tasks/a-review-fixes.md#L81-L96)은
+A의 이전 [감사 제안](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-review-fixes.md#L81-L96)은
 요청 근거로 보존한다. mock 전용 상태는 그 문서의 역사 기록이며 현재 A 상태로 사용하지 않는다.
 
 ### 11.2 AGT-01 · 규칙 의미·버전과 승인 결속
 
-제품 규칙을 등록된 도구의 사용 허용 목록으로 정의하고 기본 거절·ASK/DENY 완화 금지·
-Guard 사람 승인만 사용하도록 유지하는 안을 제안한다. 본문 기반 프롬프트 주입 탐지나
-의미 기반 유출 판정 기능으로 소개하지 않는다. 실제 규칙 key의 ToolKind와 mock 차이,
-미등록 규칙·형식 불명·SDK 승인 요구의 처리도 같은 검토에 포함한다.
+최신 [A18-D 역할 결정 요청](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-agt-role-decision.md)을
+먼저 검토한다. 현재 코드는 정확 일치·default deny 허용 목록이며, 제품 역할은 미확정이다.
+
+| A 선택지 | B가 요청하는 결정 | A/C 검토와 구현 영향 |
+| --- | --- | --- |
+| 1. 운영자 차단 목록 | 등록된 도구에 대한 기본 허용/명시 거절을 채택할지, 변경 권한·사건·버전 관리 | 현재 SDK default deny와 다른 기본 정책이므로 실제 설정/형식 변경을 A가 제시. C는 설정/로더 실패를 허용으로 처리하지 않는지 인수 |
+| 2. 조건 규칙 | Registry/Guard와 중복되지 않는 추가 거부 역할, 허용할 신뢰 metadata·조건식 문법/자원 상한 | B는 등급·경계·호출 계수 등의 신뢰 출처/최소 DTO를 제안, A는 번역, C는 조건식 주입·상한·계수 검증. 원문/인증정보 기본 미전달 |
+| 3. 서명 정책 관리 | 1/2와 함께 쓸 관리 경로, 서명 주체·키 저장/교체·버전/내용 해시·hot reload 허용 여부 | A는 로더 조합과 형식 검증, C는 지정 위험 모듈의 안전 경로·서명/키 취급 인터페이스, B는 정책 변경·승인/감사 결속을 공동 검토 |
+
+3번은 1/2의 역할을 대체하는 별도 역할이 아니라 규칙 관리 방식이다. 어떤 선택지든
+AGT는 추가 거부권만 갖고 Guard의 ASK/DENY를 완화하거나 사람 승인을 대신하지 않는다.
+잘못된 설정·형식·검증/로딩 실패는 실행 권한으로 바꾸지 않는다. 사용자·A/B/C가 역할과
+확장 입력을 결정하기 전 허용 목록을 확정 제품 역할로 기록하거나 규칙/포트를 변경하지 않는다.
+본문 기반 프롬프트 주입/의미 기반 유출 탐지 기능은 현재 구현 인수 범위가 아니다.
+real/mock의 ToolKind 차이·미등록 항목·SDK 승인 요구 처리도 선택안과 함께 확인한다.
 
 규칙 버전 문자열만으로 실제 규칙 내용이 바뀌지 않았다고 판단하지 않는 안을 제안한다.
 정규화한 신뢰 AGT mode·규칙 내용·규칙 버전을 기존 `policy_version` 산출에 포함하는 안과
@@ -306,7 +328,8 @@ Guard 사람 승인만 사용하도록 유지하는 안을 제안한다. 본문 
 
 회신 질문:
 
-1. 제품의 규칙 의미·key·기본 거절과 mock/real 비교 범위를 어떻게 확정할까?
+1. A18-D 1/2 중 제품 역할과 3번 관리 방식을 어떻게 고를까? 규칙 key·기본 판정·변경
+   권한자·필요한 신뢰 입력·조건식/서명 상한과 real/mock 비교 범위를 제시해줘.
 2. mode·규칙 내용·규칙 버전·SDK 버전 중 어떤 변경을 보안 정책 변경으로 취급하고,
    기존 `policy_version`과 별도 AGT 맥락 중 무엇으로 Task·승인을 결속할까?
 3. 변경 시 기존 Task의 다음 호출·대기 승인·소비 직전 경합을 어떤 상태/Reason으로
@@ -342,19 +365,28 @@ submit/approval_recheck 단계와 미실행·허용·거절·오류를 기록하
 
 ### 11.4 AGT-03 · 수명·timeout·취소와 종료 확인
 
-현재 A 합성 설정은 Guard의 접근 검사 상한(`access_timeout_seconds`) 2초에서
-adapter 판정 상한 1초를 파생하고,
-시작 5초·종료 확인 1초를 사용한다. adapter의 미완료 판정 상한은 1개이며 B Guard의
-동시 검사 상한 4개와 서로 다른 범위다. 시간초과 후 adapter는 닫히고 자동 재시작·mock
-전환을 하지 않는다. SDK daemon 스레드의 실제 종료가 확인되지 않으면 A는
-`AgtShutdownError`를 전달한다. 이를 제품에 그대로 사용할지는 공동 검토 대상이다.
+현재 A 합성 설정은 Guard 전체 상한 2초·adapter 판정 상한 1초, 시작 5초·종료 확인 1초다.
+`6452b13` 이후에는 `max_pending=16`까지 대기/실행을 받고 현 worker가 순서대로 처리한다.
+대기 취소는 즉시 슬롯을 회수하고 실행 중 취소는 SDK 반환 또는 worker 퇴역까지 별도 추적한다.
+timeout이 난 요청의 전체 대기 동안 같은 엔진 생성/판정에 머문 worker를 퇴역시켜 늦은 결과를
+폐기하며 아직 미평가된 대기열을 새 worker에 옮긴다. 살아 있는 퇴역 worker 예산은 기본 2개다.
+예산 소진·새 thread 생성 실패·SDK 예외·교체 엔진 시작 실패는 인스턴스를 닫는다.
+
+같은 실패 요청의 재평가나 MCP SEND 재전송을 하지 않고 mock/허용으로 전환하지 않는다.
+이 worker 교체는 B6 DB 커밋/복구 재시도 규칙과 별개다. Guard의 기본 동시 검사 상한 4개·
+정리 대기 0.05초와 adapter/퇴역 예산은 범위가 다르다. A `cd75bf9`의 새 단위 시험은 실제 SDK
+adapter와 대역 Store/transport로 Guard 4슬롯 허용·5번째 AGT_ERROR/전송 0을 확인하며,
+합성 앱 4조합·32경로 통과도 보고했다. C의 실제 Store/wire·승인 소비 독립 인수는 미완료다.
+`close()`는 Future 완료뿐 아니라 현·퇴역 worker의 실제 thread 종료를 확인해야 성공하고,
+제한시간 안에 확인하지 못하면 `AgtShutdownError`를 전달한다. 현재 A 소스의 구현 사실이며
+제품 예산·교체 허용 범위·감사/표시 계약은 아직 공동 검토 대상이다.
 
 회신 질문:
 
 1. 제품의 시작/판정/종료 상한과 adapter 상한의 파생 관계를 어떻게 정할까?
-   adapter 1개와 Guard 검사 슬롯의 동시 실행·busy·종료 후 수용 조건을 구분해줘.
-2. 취소 후 남은 SDK 작업·늦은 허용·timeout으로 닫힌 instance를 누가 추적·정리하고,
-   재사용 금지·새 bootstrap 조건을 어떻게 앱 상태와 실행 게이트에 반영할까?
+   Guard 4개·adapter 16개·퇴역 예산 2개의 범위와 대기 시간을 포함한 deadline을 구분해줘.
+2. 실패 요청 폐기·미평가 대기열 이관·퇴역 worker 예산/완료 회수·교체 엔진 실패를 누가
+   추적하고, instance 닫힘·새 bootstrap 조건을 어떤 앱 상태/감사로 연결할까?
 3. 종료 미확인·Task 정지·승인 소비/예약 ACK 경합에서 사용자에게 보여줄 고정 상태와
    감사 사건은 무엇일까? 확인하지 않은 스레드 종료나 전송 취소를 성공으로 표시하지 않아야 해.
 
@@ -370,10 +402,11 @@ adapter 판정 상한 1초를 파생하고,
 | --- | --- | --- |
 | AGT-01 | mode·규칙/버전 변경 후 과거 Task·승인 사용 차단, 동일 버전 문자열 아래 내용 변경 탐지, mock/real 종류 구분, AGT 허용 후 ASK/DENY 유지 | I2·I3·I6·I7, T08·T10·T20·T21 |
 | AGT-02 | 신뢰 구성과 저장 맥락 일치, 필드 누락/불일치 차단, 과거 감사 의미 보존·마이그레이션 실패 rollback, 감사 실패 시 관련 상태/승인/예약 부분 커밋 없음, SDK 원문 비공개 | I3·I5·I6·I9, T07·T09–T12·T19·T36, S03/S04 |
-| AGT-03 | 거절·오류·timeout·형식 불명·늦은 허용과 긴급 차단에서 대상 요청의 dispatch/wire/수신 0, 정상 승인 소비·실행 최대 1, 미종료 작업의 추가 생성/자동 재시도 없음, 종료 미확인 보존 | I2·I3·I6·I8, T08·T14–T16·T20·T26·T27·T37 |
+| AGT-03 | 실패/취소 대상 요청의 dispatch/wire/수신 0, 이관된 미평가 요청의 SDK 평가 최대 1, 정상 승인 소비/실행 최대 1, 현 대기/실행 및 살아 있는 퇴역 worker 예산·소진 시 차단·늦은 허용 폐기·전체 thread 종료 미확인 보존. A 결합 단위 시험과 별도로 C 독립 인수 필요 | I2·I3·I6·I8, T08·T14–T16·T20·T26·T27·T37 |
 
 B는 자기 모듈·저장소 단위 검증을, C는 실제 Store/Fake 계약·결함 주입과 독립 계수를,
 A는 앱 구성·시작/종료·표시 연결을 검증한다. 이미 끝난 READ의 계수와 차단 대상 SEND의
 계수를 분리하고 DB 예약·host_dispatch를 wire/receiver effect로 대신 보고하지 않는다.
-이 절의 새 검증은 미실행이며 실제 A/C 동의는 미결이다. 회신과 합의 근거는
+이 절의 제품 정책·영속 감사 검증과 C 독립 인수는 미실행이며 실제 A/C 동의는 미결이다.
+A가 보고한 현행 adapter/Guard 단위·합성 연결 시험을 새 계약의 검증으로 확대하지 않는다. 회신과 합의 근거는
 [A·C 계약 검토 요청](ac-contract-review-request.md)과 [공통 계약](contracts.md)에 기록한다.
