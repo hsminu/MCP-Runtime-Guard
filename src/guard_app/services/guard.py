@@ -92,6 +92,8 @@ class GuardService:
         taint_mode: str = "accumulate",
         max_result_bytes: int = 262144,
         access_timeout_seconds: float = 30.0,
+        max_access_checks: int = 4,
+        access_cleanup_timeout_seconds: float = 0.05,
     ) -> None:
         for value in (profile_id, policy_version, operator_id):
             if (
@@ -108,6 +110,14 @@ class GuardService:
             or access_timeout_seconds <= 0
         ):
             raise GuardConfigError("접근 검사 제한 시간이 유효하지 않다")
+        if type(max_access_checks) is not int or max_access_checks <= 0:
+            raise GuardConfigError("접근 검사 동시 실행 상한이 유효하지 않다")
+        if (
+            type(access_cleanup_timeout_seconds) not in (int, float)
+            or not math.isfinite(access_cleanup_timeout_seconds)
+            or access_cleanup_timeout_seconds <= 0
+        ):
+            raise GuardConfigError("접근 검사 정리 제한 시간이 유효하지 않다")
         callbacks = (
             request_id_factory,
             approval_id_factory,
@@ -133,8 +143,13 @@ class GuardService:
         self._monotonic = monotonic
         self._mode = taint_mode
         self._access_timeout = float(access_timeout_seconds)
+        self._max_access_checks = max_access_checks
+        self._access_cleanup_timeout = float(access_cleanup_timeout_seconds)
+        self._access_checks: set[asyncio.Task[AccessResult]] = set()
+        self._unfinished_access_checks: set[asyncio.Task[AccessResult]] = set()
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_halt = False
+        self._stop_requests: dict[str, asyncio.Event] = {}
         self._gate = ResponseGate(
             store,
             catalog,
@@ -189,6 +204,17 @@ class GuardService:
     def _task_lock(self, task_id: str) -> asyncio.Lock:
         return self._locks.setdefault(task_id, asyncio.Lock())
 
+    def _request_stop(self, task_id: str) -> None:
+        """인증된 사람 제어만 호출한다. lock을 기다리기 전에 정지 의도를 고정한다."""
+        if type(task_id) is not str or not task_id:
+            raise ResolutionError(Reason.STATE_MISSING)
+        self._stop_requests.setdefault(task_id, asyncio.Event()).set()
+
+    def _check_stop(self, task_id: str) -> None:
+        event = self._stop_requests.get(task_id)
+        if event is not None and event.is_set():
+            raise ResolutionError(Reason.TASK_NOT_RUNNING)
+
     def _policy_matches(self, state: TaskState) -> bool:
         return (
             not self._global_halt
@@ -206,6 +232,7 @@ class GuardService:
             raise StoreError(Reason.STATE_MISSING)
         if expected_epoch is not None and state.epoch != expected_epoch:
             return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
+        self._check_stop(task_id)
         if not self._policy_matches(state):
             await self._halt_task(task_id, Reason.POLICY_CHANGED)
             await self._approvals.invalidate_task(task_id, Reason.POLICY_CHANGED)
@@ -228,6 +255,7 @@ class GuardService:
             arguments_digest=json_digest(req.arguments.to_dict()),
             at_utc=self._utc_now(),
         )
+        self._check_stop(task_id)
         if decision.decision is Decision.DENY:
             return Denied(request_id=req.request_id, reasons=decision.reasons)
         if decision.decision is Decision.ASK:
@@ -247,6 +275,7 @@ class GuardService:
         *,
         phase: Literal["submit", "approval_recheck"],
     ) -> PolicyDecision:
+        self._check_stop(req.task_id)
         if self._global_halt:
             raise ResolutionError(Reason.INTERNAL_ERROR)
         if not self._policy_matches(state):
@@ -270,13 +299,8 @@ class GuardService:
         )
         if preliminary.decision is Decision.DENY:
             return preliminary
-        try:
-            async with asyncio.timeout(self._access_timeout):
-                access = await self._access_checker.check_access(
-                    req, TrustedContext(state=state, operator_id=self._operator_id)
-                )
-        except TimeoutError:
-            access = AccessResult(allowed=False, reason="", error=True)
+        access = await self._wait_for_access(req, state)
+        self._check_stop(req.task_id)
         # await 중 등록 상태나 지문이 바뀌어도 현재 값을 다시 검사한다.
         fingerprint = self._registry.fingerprint(req.tool)
         if fingerprint is None:
@@ -293,6 +317,51 @@ class GuardService:
                 phase=phase,
             )
         )
+
+    async def _wait_for_access(self, req: ResolvedRequest, state: TaskState) -> AccessResult:
+        # 완료 callback보다 새 호출이 먼저 실행돼도 정상 종료 슬롯은 바로 회수한다.
+        for check in tuple(self._access_checks):
+            if check.done():
+                self._discard_access_result(check)
+        if self._unfinished_access_checks or len(self._access_checks) >= self._max_access_checks:
+            return AccessResult(allowed=False, reason="", error=True)
+
+        stop = self._stop_requests.setdefault(req.task_id, asyncio.Event())
+        work = asyncio.create_task(
+            self._access_checker.check_access(
+                req, TrustedContext(state=state, operator_id=self._operator_id)
+            )
+        )
+        self._access_checks.add(work)
+        work.add_done_callback(self._discard_access_result)
+        interrupted = asyncio.create_task(stop.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {work, interrupted},
+                timeout=self._access_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            self._check_stop(req.task_id)
+            if work not in done:
+                return AccessResult(allowed=False, reason="", error=True)
+            try:
+                return work.result()
+            except TimeoutError:
+                return AccessResult(allowed=False, reason="", error=True)
+        finally:
+            interrupted.cancel()
+            if not work.done():
+                # 정리 대기도 다시 취소될 수 있다. 실제 완료 전에는 추적/슬롯을 해제하지 않는다.
+                self._unfinished_access_checks.add(work)
+                work.cancel()
+                await asyncio.wait({work}, timeout=self._access_cleanup_timeout)
+
+    def _discard_access_result(self, work: asyncio.Task[AccessResult]) -> None:
+        self._access_checks.discard(work)
+        self._unfinished_access_checks.discard(work)
+        if not work.cancelled():
+            # 늦은 값은 실행 권한이 아니다. 예외 원문도 logger로 전달하지 않는다.
+            work.exception()
 
     async def _dispatch_reserved(
         self,
@@ -361,6 +430,7 @@ class GuardService:
                 or self._utc_now() >= expires_at_utc
             ):
                 raise ResolutionError(Reason.APPROVAL_STALE)
+        self._check_stop(req.task_id)
         raw = await self._transport.call(req)
         return await self._gate.handle(req, raw, expected_state=state)
 
@@ -461,6 +531,12 @@ class _ApprovalHost:
 
     def task_lock(self, task_id: str) -> asyncio.Lock:
         return self._guard._task_lock(task_id)
+
+    def request_stop(self, task_id: str) -> None:
+        self._guard._request_stop(task_id)
+
+    def check_stop(self, task_id: str) -> None:
+        self._guard._check_stop(task_id)
 
     def policy_matches(self, state: TaskState) -> bool:
         return self._guard._policy_matches(state)

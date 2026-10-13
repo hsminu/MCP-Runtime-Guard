@@ -11,11 +11,12 @@ SQLite 구현, 아래 검증 실행, A/C 동의 기록은 이 문서 작성으�
 ## 1. 기준과 범위
 
 - 최종 기준은 [기술설계](technical-design.md) 3.4·6–8·11–12장이다. 원문을 수정하지 않는다.
-- 현재 호출부는 B `f3c2d2b`의 Store 12개 메서드와 Guard·승인·응답 게이트다.
+- Store 계약 대조 기준은 B `f3c2d2b`의 12개 메서드다. B `f22968c`와 후속 B 변경도 이 포트를 유지한다.
 - SQLite 담당 이관 근거는 [B6 작업](tasks/b-sqlite-store.md)과 [공통 계약](contracts.md)이다.
 - C의 [요구 U1–U8](tasks/c-store-requirements.md)·[처리 제안](tasks/c-store-proposal.md)을 대조했다.
 - A `5598009`의 `docs/tasks/a-port-review.md` 6–7절과 UI 계약 제안을 검토했다.
-  A 문서의 요청은 합의가 아니다. B 브랜치에 A 구현을 복제하는 제안도 아니다.
+  A 문서의 요청은 합의가 아니다. 후속 A `655aef5`의 B 소유 긴급 차단·상세 조회 반영은
+  이번 B6 공유 API 변경과 분리하며 아래 7절에 현재 동작을 기록한다.
 - B는 저장소·단위 테스트, C는 리뷰·독립 계약/통합/결함 검증, A는 앱 시작·제어 큐·UI를 맡는다.
 
 ## 2. 유지할 모델과 추가 DTO 제안
@@ -171,11 +172,29 @@ COMMIT 직전 만료는 전체 rollback False, COMMIT 성공 뒤 ACK 시 만료�
   운영자·메모리 snapshot·ID/epoch/hash·활성 상태·양시계 만료·WAITING 맥락을 재검사한다.
   같은 snapshot의 전체 인자·경계·등급·수신처를 반환하고 일반 조회·감사·CSV·모델에는 넣지 않는다.
   사본 부재·종결·만료 시 거부하며 A는 plain text 표시와 상세 수명 종료를 맡는다(T18).
+  위 revision 지정 API는 미구현 공동 제안이다. 현재는 사용자 지시로 A `655aef5`의
+  `HumanControl.review(approval_id) -> ApprovalSnapshot | None`을 B 브랜치에 반영했다.
+  strict 승인 모델·승인 ID·request ID·PENDING·hash·Task ID/epoch·현재 ACTIVE 등록·지문을 확인하고,
+  마지막 await 뒤 UTC·monotonic 만료와 메모리 사본 현재성을 재검사한다. 조회는 승인 소비·
+  상태 쓰기 없이 같은 메모리 사본만 반환하며 원문을 일반 이벤트·감사·DB에서 재구성하지 않는다.
+  만료·정지·조회 취소는 `None`, 깨진 Store·모델·Task 관계는 `None`과 global halt다.
+  승인 ID 대조는 승인·거절·만료·무효화·재조회·오류 정리 및 전이 반환에도 공통 적용한다.
+  오연결 행은 추가 행 변경·소비·전송 없이 봉쇄하며 관계없는 승인·다른 Task 사본은 유지한다.
 - 제어 접수 ACK와 적용 결과는 분리한다. A bridge의 BACKEND_RETURNED는 적용 완료 증명이 아니다.
   적용 결과는 command_id·Task epoch·객체별 revision·확정 상태·Reason·UTC에 연결하도록 제안한다.
   중복·오래된 이벤트는 무시하고 revision 갭·재연결에는 snapshot을 읽는다. 실행을 재발행하지 않는다.
 - durable 명령 중복 방지, 목록 pagination·집계, Registry 영속 API는 별도 공동 계약으로 남긴다.
   B의 승인 1회 소비만으로 모든 제어 명령·UI 재동기화가 완성됐다고 표시하지 않는다.
+
+같은 B 변경에서 긴급 차단은 인증 후 Task lock 전에 정지 요청을 기록하고 소비·예약·전송
+직전에 재확인한다. 취소한 AGT는 실제 완료 전 추적·동시 실행 슬롯을 유지하며, 미종료 작업이
+있으면 새 검사를 생성하지 않는다. 기본 상한 `max_access_checks=4`와 정리 대기
+`access_cleanup_timeout_seconds=0.05`는 실측 최적값이 아닌 보수적 설정이다.
+정지 latch는 Task ID에 남으므로 새 Task ID로 재시작한다. 같은 ID/epoch 복구는 8절 미정 항목이다.
+세 지적과 동일 ID 오류의 상태 변경 경로 회귀를 포함한 관련 250개·전체 971개 테스트와
+정적 검사를 통과했다. 사용자는 이번 B 브랜치 변경의 commit·push를 승인했다.
+실제 A·C 제품 연결·MCP·AGT·SQLite·C 독립 검증은 미완료다.
+이 반영 지시는 B6·정규식 공동 계약 전체의 동의를 대신하지 않는다.
 
 ## 8. 복구 권고와 해석이 남은 질문
 

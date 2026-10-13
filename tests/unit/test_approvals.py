@@ -21,7 +21,7 @@ from guard_app.domain.enums import (
     ToolKind,
     TrustTier,
 )
-from guard_app.domain.errors import StoreError
+from guard_app.domain.errors import ResolutionError, StoreError
 from guard_app.domain.models import (
     AccessResult,
     Boundary,
@@ -205,6 +205,13 @@ class _Host:
     def task_lock(self, task_id: str) -> asyncio.Lock:
         assert task_id == self.store.state.task_id
         return self.lock
+
+    def request_stop(self, task_id):
+        self.stopped = task_id
+
+    def check_stop(self, task_id):
+        if getattr(self, "stopped", None) == task_id:
+            raise ResolutionError(Reason.TASK_NOT_RUNNING)
 
     def policy_matches(self, state: TaskState) -> bool:
         return (

@@ -15,7 +15,7 @@ A·C의 동의·리뷰·실제 MCP·SQLite 실행을 완료했다는 기록은 �
 | B3 | `services/catalog*.py` | 요청·출처 해석 구현. C Registry·안전 경로 연결 필요 |
 | 해시·예외 | `core/snapshot.py`, `security/digest.py`, `failclosed.py` | 사본·양시계 만료·예약 전후 예외 처리 구현 |
 | B4 | `services/guard.py`, `response_gate.py` | Task 직렬화·검사·커밋 후 공개 구현. 실제 A·C 연결 필요 |
-| B5 | `services/approvals.py` | 사람 제어·재평가·소비 연계 구현. 실제 DB·제어 큐 연결 필요 |
+| B5 | `services/approvals.py` | 사람 제어·상세 조회·재평가·소비 연계 구현. 긴급 차단 후 소비·전송 방지 보강. 실제 DB·제어 큐 연결 필요 |
 | B6 | `storage/*` 예정 | SQLite 담당 인수·API 검토 단계. 구현·저장소 단위 검증·C 독립 인수 미완료 |
 
 담당 단위·성질 테스트는 `tests/unit`에 있다. 테스트 대역은 이 디렉터리에만 있으며
@@ -23,6 +23,8 @@ A·C의 동의·리뷰·실제 MCP·SQLite 실행을 완료했다는 기록은 �
 B1–B5 전달물에는 MCP SDK·AGT·Scanner·GUI·SQLite 구현·C의 CI 규칙이 없다.
 A 브랜치 `5598009`에는 transport·AGT mock·모델·Runner·bridge·Qt UI 구현이 있으나
 실제 B 저장소·C 서비스와 제품 연결은 미완료다. 모의 AGT와 실제 연동을 구분한다.
+A `655aef5`의 B 소유 긴급 차단·승인 상세 변경은 사용자 지시로 선별 반영했으며
+이번 B 브랜치 변경의 공개를 승인받았다.
 
 상세 근거는 [B1](b1-contract-draft.md), [B2](b2-policy-and-taint.md),
 [B3](b3-catalog.md), [B4·B5](b4-b5-execution.md), [B6](tasks/b-sqlite-store.md),
@@ -38,6 +40,7 @@ A 브랜치 `5598009`에는 transport·AGT mock·모델·Runner·bridge·Qt UI �
 | ModelClient·Runner | `GuardService.submit(task_id, ProposedCall) -> Outcome` | Task ID는 신뢰 실행 맥락에서 전달. 모델은 도구·인자만 제안 |
 | 모델용 도구 목록 | `Catalog.tool_views(server_ids)` | ACTIVE·현재 지문 일치·지원 종류의 도구만 노출 |
 | 인증된 사람 제어 큐 | `guard.human_control(operator_id)` | 반환 HumanControl을 모델 도구·실행 큐에 노출하지 않음 |
+| 사람 승인 상세 | `HumanControl.review(approval_id)` | 같은 메모리 사본 또는 `None` 반환. A는 사람 UI에 표시하고 만료·종결 시 상세 수명을 종료 |
 | 화면·대화 반영 | Outcome의 kind별 처리 | Released.result만 본문으로 공개. 예외 문자열·RawResult 공개 금지 |
 
 Guard의 request_id·call_seq와 모델의 model_call_id는 서로 다른 식별자다.
@@ -155,7 +158,7 @@ A의 인증된 사람 제어 경로에서만 보관한다.
 - [ ] policy·Registry 변경 시 승인 일괄 무효화와 재시작 시 잔존 승인 정리.
 - [ ] A의 인증된 제어 큐, Task 생성·시작과 새 Task 격리 책임.
 - [ ] 일반 submit에 trusted `expected_epoch`를 전달하고 Guard의 Task lock 내부에서 비교하는 계약.
-- [ ] 인증된 UI가 실행에 사용할 동일 메모리 승인 사본을 조회하는 API와 상태·수명·누락 처리.
+- [ ] 구현된 `HumanControl.review`의 사람 UI 표시·상태·수명·누락 처리 인수와 B6의 revision 지정 조회 제안 검토.
 - [ ] 권위 있는 승인·Task 조회, revision·종결 여부, 제어 명령의 접수/적용 결과 또는 확정 이벤트.
 
 이 목록은 [공통 계약](contracts.md)의 미합의 항목을 구체화한 것이다.
@@ -226,6 +229,38 @@ Task lock 획득 후 조회한 상태의 ID·epoch를 정책 변경 처리 전�
 22개 회귀를 포함한 B 전체 **886개 통과**, Ruff·포맷·mypy·pip check 통과를 확인했다.
 이는 B 대역 단위 검증이며 A 제품 연결·C 실제 경합 검증·SQLite 인수를 뜻하지 않는다.
 
+### A 긴급 차단·승인 상세 선별 반영 · B 브랜치 공개 승인
+
+B `f22968c`를 기준으로 A `655aef5`의 B 소유 서비스 변경을 반영하고 세 지적을 보완했다.
+인증 후 Task lock 전에 정지 의도를 기록하고 AGT 대기·소비·예약·전송 직전에 확인한다.
+이미 예약된 요청의 실패는 기존 READ 미공개·SEND 결과 불명 경계를 유지한다.
+
+`HumanControl.review(approval_id)`는 strict 승인 모델·요청 승인 ID·PENDING·운영자·hash·
+Task ID/epoch·WAITING 맥락·현재 ACTIVE 등록과 지문을 확인한다. 마지막 await 뒤
+양시계 만료와 메모리 객체 현재성을 다시 검사하며 같은 불변 사본만 반환한다.
+상태 쓰기·승인 소비·DB 원문 재구성은 없다. 만료·정지·조회 취소는 `None`, 깨진 Store·
+모델·Task 관계는 `None`과 global halt다. B6의 `view_approval(expected_approval_revision)`은
+현재 API와 별개인 미구현 공동 제안이다.
+
+승인 ID 대조는 상세 조회뿐 아니라 승인·거절·만료·Task 무효화·소비 실패 재조회·오류 정리와
+승인 전이 반환에도 적용했다. Store가 다른 ID의 행을 반환하면 추가 행 변경·소비·전송 없이
+global halt하고 해당 Task의 메모리 사본을 폐기한다. 관계없는 Task의 승인·사본은 유지한다.
+이미 정상 전이가 커밋된 뒤 반환 DTO가 깨진 경우에는 그 전이를 되돌리지 않고 실행을 차단한다.
+
+AGT 작업은 실제 완료 전까지 추적한다. 취소 후 미종료 작업이 있으면 새 검사는 접근 오류로
+거부하고, 작업 완료 후 다시 허용한다. 기본 `max_access_checks=4`와
+`access_cleanup_timeout_seconds=0.05`는 보수적 설정이며 실측 최적값이 아니다.
+동기적으로 이벤트 루프를 막는 어댑터의 강제 종료는 이 asyncio 경계가 보장하지 않는다.
+정지 latch는 Task ID에 유지하므로 새 Task ID로 재시작한다. 같은 ID/epoch 복구는 미합의다.
+
+관련 테스트 **250개(1.36초)**, 전체 **971개(4.21초, 기존 886개+85개)**가 통과했다.
+조회 중 UTC·monotonic 만료, 다른 승인 ID, 취소를 무시하는 AGT 반복 생성 반례를 회귀에 포함했다.
+독립 검토에서 발견한 동일 ID 오류의 상태 변경 경로를 보완하고 관련 회귀 11개도 포함했다.
+Ruff·45개 Python 파일 포맷·24개 소스 strict mypy·pip check·diff 검사도 통과했다.
+최종 설계·domain·ports·lock·B6 공유 API는 변경하지 않았다.
+사용자는 이번 B 브랜치 변경의 commit·push를 승인했다.
+실제 A·C 제품 연결·MCP·AGT·SQLite·C 독립 인수는 미완료다.
+
 1. B가 현재 Store와 C 요구·제안 및 A 조회·제어 요구를 대조해 API·DTO·상태/오류 변경안을 제공한다.
 2. A·C가 계약 영향을 리뷰하고 실제 합의 근거를 contracts.md에 기록한다.
 3. B가 합의된 계약으로 B6 SQLite와 저장소 단위 테스트를 구현하고 대상 커밋·설정·검증 결과를 전달한다.
@@ -245,4 +280,5 @@ A가 모델 입력·ToolView·비동기 호출 관점에서, C가 launcher·제�
 독립 검증 관점에서 검토해야 한다. 예약 전 실패와 예약/승인 소비 후 실패를 구분한다.
 처리 방향 선택과 실제 수정은 별개이며, 현재 정규식 위험은 해결 전이다.
 
-이번 자료는 로컬 B 브랜치에서 준비했다. 원격 공유와 A/C 전달·리뷰·동의는 미완료다.
+B6·정규식 검토 자료는 B `f22968c`로 원격에 공유했다. A/C 전달·리뷰·동의는 미완료이며,
+이번 긴급 차단·상세 코드 변경도 사용자에게 B 브랜치 공개를 승인받았다.

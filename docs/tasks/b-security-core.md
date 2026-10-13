@@ -110,8 +110,26 @@ C의 안전 ID·safe_path·Registry·Scanner 소유권은 유지하며 Registry 
 
 A 브랜치 `5598009`에는 transport·AGT mock·모델·Runner·bridge·Qt UI 구현이 있으며 실제
 제품 연결은 미완료다. 일반 submit의 trusted `expected_epoch` 검사, 인증된 동일 메모리 승인
-사본 조회, 권위 있는 승인·Task 상태·revision 및 제어 적용 결과는
+사본 조회의 UI 인수, 권위 있는 승인·Task 상태·revision 및 제어 적용 결과는
 [A 계약 요청](https://github.com/hsminu/MCP-Runtime-Guard/blob/55980091fc49871903d72e8ba1e657ab7682035b/docs/tasks/a-port-review.md#7-b-head-f3c2d2b-연동-중-드러난-호출제어-계약-질문)에 있는 미합의 사항이다.
+
+2026-10-13 후속 사용자 지시로 B `f22968c`에 A `655aef5`의 긴급 차단·
+`HumanControl.review(approval_id)`를 선별 반영한 B 브랜치 변경을 준비했다. 조회 도중 만료·
+다른 승인 ID·취소 후 AGT 누적 세 지적을 보완했다. 상세는 strict 모델·승인/Task ID·epoch·
+PENDING·hash·현재 ACTIVE/지문과 마지막 await 뒤 양시계·메모리 사본을 확인한다.
+조회는 상태 쓰기·승인 소비 없이 메모리 사본 또는 `None`을 반환하며 깨진 Store 관계는 global halt다.
+같은 승인 ID 검사도 승인·거절·만료·무효화·재조회·오류 정리 및 전이 반환에 공통 적용했다.
+오연결 행은 추가 상태 변경·소비·전송 없이 봉쇄하며 다른 Task의 승인 행·사본을 보존한다.
+긴급 차단은 인증 후 lock 전에 정지 요청을 기록하고 예약·소비·전송 직전에 확인한다.
+AGT 실제 완료 전 추적·슬롯을 유지하고 미종료 취소 작업이 있으면 새 검사를 생성하지 않는다.
+기본 상한 4개·정리 대기 0.05초는 실측 최적값이 아니며, 새 Task ID로 재시작한다.
+같은 ID/epoch 복구·B6 revision 지정 상세 조회·정규식 프로세스 연결 계약은 아직 검토 대상이다.
+
+관련 **250개(1.36초)**와 전체 **971개(4.21초, 기존 886개+85개)** 테스트,
+Ruff·45개 파일 포맷·24개 소스 strict mypy·pip check·diff 검사 통과를 확인했다.
+기존 840·864·886 결과는 해당 단계의 기록으로 보존한다. 최종 설계·domain·ports·lock·
+B6 공유 API는 변경하지 않았다. 사용자는 이번 B 브랜치 변경의 commit·push를 승인했다.
+실제 A·C 제품 연결·MCP·AGT·SQLite·C 독립 검증은 미완료다.
 
 ## 검증과 인수
 
