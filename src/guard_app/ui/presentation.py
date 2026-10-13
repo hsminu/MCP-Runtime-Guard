@@ -98,7 +98,7 @@ RUN_RESULTS = {
         "도구 결과를 공개하지 않았어 · 모델에는 결과 대신 비공개 안내만 전달했어. "
         "Task는 계속 실행 중이라 새 사용자 지시로 이어갈 수 있어."
     ),
-    "RUNNER_UNAVAILABLE": "실행기를 찾을 수 없어 · 이 Task는 실행할 수 없어.",
+    "RUNNER_UNAVAILABLE": "이 실행에서 다룰 수 없는 작업이야 · 실행·제어하지 않았어.",
     "RUNNER_UNCONFIRMED": "실행 결과를 확인하지 못했어 · 위 Task 상태를 확인해.",
 }
 APPROVAL_RESULTS = {
@@ -113,12 +113,14 @@ APPROVAL_RESULTS = {
         "제어 처리 중 Guard 내부 오류가 발생했어 · 이 Task 실행은 이어갈 수 없어. "
         "Task 상태는 위에 다시 조회된 표시를 기준으로 확인해."
     ),
-    "REVIEW_READY":"승인 사본을 불러왔어 · 아래 전체 인자를 확인한 뒤 승인해.",
+    "REVIEW_READY": "승인 사본을 불러왔어 · 아래 전체 인자를 확인한 뒤 승인해.",
     "REVIEW_UNAVAILABLE": "승인 사본을 불러올 수 없어 · 이미 처리됐거나 만료됐을 수 있어.",
 }
 # Bridge lifecycle codes -> current backend state for the operator. The code
 # itself stays visible only as secondary text.
 LIFECYCLE_MESSAGES = {
+    "PROCESS_RESTART_REQUIRED": "정리 확인 실패 · 프로그램을 다시 시작해야 해.",
+    "BACKEND_ALREADY_ACTIVE": "이전 백엔드가 아직 종료되지 않았어 · 프로그램을 다시 시작해야 해.",
     "STARTING": "백엔드 시작 중 · 준비되면 실행할 수 있어.",
     "READY": "백엔드 준비 완료.",
     "CLOSING": "백엔드 종료 중 · 새 요청은 받지 않아.",
@@ -157,9 +159,7 @@ PAGES = {
 }
 
 
-def fixed(
-    mapping: dict[str, str], value: str | None, *, default: str = "미확인"
-) -> str:
+def fixed(mapping: dict[str, str], value: str | None, *, default: str = "미확인") -> str:
     """Avoid echoing an unknown backend status or reason as arbitrary text."""
 
     return mapping.get(value, default) if value is not None else MISSING
@@ -197,6 +197,4 @@ def public_display_text(value: str | None) -> str:
 
     if not value:
         return MISSING
-    return "".join(
-        f"[U+{ord(char):04X}]" if is_hidden_char(char) else char for char in value
-    )
+    return "".join(f"[U+{ord(char):04X}]" if is_hidden_char(char) else char for char in value)

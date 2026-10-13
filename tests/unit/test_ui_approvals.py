@@ -294,15 +294,10 @@ def test_table_and_controls_fit_viewport_at_multiple_widths(
         QTest.qWait(20)
         app.processEvents()
         assert view.width() == width
-        assert (
-            tuple(i for i in range(6) if not view.table.isColumnHidden(i))
-            == visible_columns
-        )
+        assert tuple(i for i in range(6) if not view.table.isColumnHidden(i)) == visible_columns
         assert view.table.horizontalScrollBar().maximum() == 0
         direction = (
-            QBoxLayout.Direction.TopToBottom
-            if stacked
-            else QBoxLayout.Direction.LeftToRight
+            QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
         )
         assert view.filters.direction() == direction
         assert view.pager.direction() == direction
@@ -346,6 +341,7 @@ def test_narrow_keyboard_selection_shows_only_public_summary(app: QApplication) 
 
 
 def test_public_summary_cannot_spoof_status_line(app: QApplication) -> None:
+    """T18: 승인 요약의 비신뢰 문자열이 상태 줄을 위조하지 않음."""
     view = ApprovalListPage()
     view.resize(320, 580)
     view.show()
@@ -392,6 +388,7 @@ def test_scroll_host_can_shrink_from_full_to_narrow_without_page_overflow(
 
 
 def test_waiting_hint_does_not_expire_or_interpret_markup(app: QApplication) -> None:
+    """T18: 대기 참고 표시가 HTML을 해석하거나 만료를 결정하지 않음."""
     view = ApprovalListPage()
     view.refresh()
     long_wait = summary(

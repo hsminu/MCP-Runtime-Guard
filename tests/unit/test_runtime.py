@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from examples.synthetic_app import bootstrap
 from guard_app.domain.enums import TaskStatus
+from guard_app.services import bridge as bridge_module
 from guard_app.services.bridge import (
     BackendBindings,
     BackendBridge,
@@ -43,6 +44,7 @@ def wait_until(app, predicate, timeout=8):
 @pytest.mark.parametrize("agt_mode", ["real", "mock"])
 @pytest.mark.parametrize("mcp_transport", ["stdio", "http"])
 def test_human_review_approve_and_shutdown_use_real_mcp(agt_mode, mcp_transport):
+    """T18 표시 연결 부분, I1/I3: 실제 승인 사본 표시·승인·SEND 수명 확인."""
     app = QApplication.instance() or QApplication([])
     bridge = BackendBridge(lambda: bootstrap(agt_mode=agt_mode, mcp_transport=mcp_transport))
     panel = RuntimePanel(bridge)
@@ -331,3 +333,32 @@ def test_initial_snapshot_failure_or_stop_closes_resources(mode):
     wait_until(app, lambda: bridge.thread_done)
     assert cleaned.is_set()
     assert bridge.state is (BridgeState.CLOSED if mode == "close" else BridgeState.FAILED)
+
+
+@pytest.fixture(autouse=True)
+def isolate_process_start_gate(monkeypatch):
+    # 의도적인 정리 미확인 테스트가 전역 게이트를 오염시켜 뒤 테스트를 깨뜨리지 않게 한다.
+    monkeypatch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
+
+
+@pytest.mark.parametrize("code", ["PROCESS_RESTART_REQUIRED", "BACKEND_ALREADY_ACTIVE"])
+def test_restart_gate_failure_disables_every_runtime_action(code):
+    """REC-01·REC-05, I1/I6: 고정 재시작 안내와 실행·제어 비활성; 대응 T/S ID 없음."""
+    from guard_app.services.bridge import LifecycleEvent
+    from guard_app.ui.presentation import LIFECYCLE_MESSAGES
+
+    app = QApplication.instance() or QApplication([])
+    bridge = BackendBridge(lambda: bootstrap(agt_mode="mock"))
+    panel = RuntimePanel(bridge)
+    panel.set_snapshot(TaskProjection("task", 1, TaskStatus.WAITING_APPROVAL, "approval"))
+    panel._ready = True
+    panel._reviewed = "approval"
+    panel._refresh()
+    assert panel.approve_button.isEnabled()
+    bridge.lifecycle_changed.emit(LifecycleEvent(BridgeState.FAILED, code))
+    app.processEvents()
+    assert panel.message.text() == LIFECYCLE_MESSAGES[code] + "\n내부 코드: " + code
+    assert not any(button.isEnabled() for button in panel.buttons)
+    assert panel._reviewed is None
+    bridge.close()
+    panel.close()

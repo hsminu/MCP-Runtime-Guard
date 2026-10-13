@@ -223,6 +223,8 @@ async def bootstrap(
         runner.add_user_message("합성 문서를 읽고 합성 수신처에 전송")
 
         async def snapshot(task_id):
+            if task_id != runner.task_id:
+                raise ValueError("Task is unavailable")
             current = await store.load_task(task_id)
             pending = runner.pending_approval_id
             if pending is not None:

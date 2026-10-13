@@ -246,6 +246,8 @@ class RuntimePanel(QWidget):
         self._refresh()
 
     def _result_text(self, action: ControlAction | str, code: str) -> str:
+        if code == "RUNNER_UNAVAILABLE":
+            return RUN_RESULTS[code]
         name = _STOP_NAMES.get(action) if isinstance(action, ControlAction) else None
         if name is not None:
             # Cancel and halt always return Denied; success is the Task state

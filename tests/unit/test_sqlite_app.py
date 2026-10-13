@@ -19,6 +19,7 @@ from guard_app.__main__ import main
 from guard_app.domain.contracts import Denied, Released
 from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus
 from guard_app.domain.errors import StoreError
+from guard_app.services import bridge as bridge_module
 from guard_app.services.bridge import BackendBridge, BridgeState, CommandStage
 from guard_app.storage.sqlite_store import SQLiteStore
 
@@ -453,3 +454,346 @@ def test_cli_rejects_invalid_store_configuration(monkeypatch, capsys, args):
     output = capsys.readouterr()
     assert "저장소 종류와 DB 경로 설정이 일치하지 않는다" in output.err
     assert "PRIVATE_DB_MARKER" not in output.err + output.out
+
+
+def test_old_task_commands_are_rejected_before_model_control_and_projection(
+    tmp_path, observed, monkeypatch
+):
+    """REC-03, I1/I3/I7, T11 재시작 부분: 옛 Task 실행·제어와 행 변경 0."""
+    import asyncio
+
+    from guard_app.services.approvals import HumanControl
+    from guard_app.services.bridge import ControlAction
+
+    app = QApplication.instance() or QApplication([])
+    path = tmp_path / "old-task.db"
+
+    async def first_run():
+        bindings = await synthetic_app.bootstrap(agt_mode="mock", store_kind="sqlite", db_path=path)
+        try:
+            old_id = bindings.initial_task_id
+            update = await bindings.runner_for_task(old_id).advance()
+            assert update.status == "pending"
+            return old_id
+        finally:
+            await bindings.close()
+
+    async def load_old():
+        with SQLiteStore(path) as store:
+            return await store.load_task(old_id)
+
+    old_id = asyncio.run(first_run())
+    old_state = asyncio.run(load_old())
+    model_calls, control_calls, loads, discarded = [], [], [], []
+    original_step = synthetic_app.SyntheticModel.step
+    original_load = SQLiteStore.load_task
+    original_discard = synthetic_app.McpTransport.discard_queued
+
+    async def step(self, *args, **kwargs):
+        model_calls.append(1)
+        return await original_step(self, *args, **kwargs)
+
+    async def load(self, task_id):
+        loads.append(task_id)
+        return await original_load(self, task_id)
+
+    def discard(self, task_id):
+        discarded.append(task_id)
+        return original_discard(self, task_id)
+
+    monkeypatch.setattr(synthetic_app.SyntheticModel, "step", step)
+    monkeypatch.setattr(SQLiteStore, "load_task", load)
+    monkeypatch.setattr(synthetic_app.McpTransport, "discard_queued", discard)
+    for name in ("cancel", "emergency_halt", "approve", "reject"):
+        original = getattr(HumanControl, name)
+
+        async def counted(self, target, original=original, name=name):
+            control_calls.append((name, target))
+            return await original(self, target)
+
+        monkeypatch.setattr(HumanControl, name, counted)
+    projections, commands = [], []
+    bridge = BackendBridge(
+        lambda: synthetic_app.bootstrap(agt_mode="mock", store_kind="sqlite", db_path=path)
+    )
+    bridge.task_changed.connect(projections.append)
+    bridge.command_changed.connect(commands.append)
+    dispatch_start = len(observed.dispatches)
+
+    def settled(command_id):
+        return next(
+            (
+                e
+                for e in reversed(commands)
+                if e.command_id == command_id
+                and e.stage in (CommandStage.BACKEND_RETURNED, CommandStage.UNCONFIRMED)
+            ),
+            None,
+        )
+
+    try:
+        bridge.start()
+        pump_until(app, lambda: bridge.state is BridgeState.READY and bool(projections), timeout=8)
+        new_id = projections[-1].task_id
+        assert new_id != old_id
+        codes = []
+        command_id = bridge.request_run(old_id)
+        pump_until(app, lambda command_id=command_id: settled(command_id))
+        codes.append(settled(command_id).code)
+        for action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
+            command_id = bridge.request_control(action, old_id)
+            pump_until(app, lambda command_id=command_id: settled(command_id))
+            codes.append(settled(command_id).code)
+        app.processEvents()
+        evidence = {
+            "codes": codes,
+            "model": len(model_calls),
+            "control": control_calls,
+            "discard": discarded,
+            "old_projections": sum(p.task_id == old_id for p in projections),
+            "old_loads": loads.count(old_id),
+            "dispatch": len(observed.dispatches) - dispatch_start,
+            "receiver": counts(observed),
+        }
+        assert evidence == {
+            "codes": ["RUNNER_UNAVAILABLE"] * 3,
+            "model": 0,
+            "control": [],
+            "discard": [],
+            "old_projections": 0,
+            "old_loads": 0,
+            "dispatch": 0,
+            "receiver": {"receiver_calls": 0, "receiver_effect": 0},
+        }
+        assert projections[-1].task_id == new_id
+        assert projections[-1].status is TaskStatus.RUNNING
+        command_id = bridge.request_run(new_id)
+        pump_until(app, lambda command_id=command_id: settled(command_id), timeout=8)
+        assert settled(command_id).code == "RUN_PENDING_QUERY_REQUIRED"
+        pending = projections[-1]
+        assert pending.approval_id and pending.status is TaskStatus.WAITING_APPROVAL
+        assert (pending.host_dispatch, pending.receiver_effect) == (1, 0)
+        command_id = bridge.request_control(ControlAction.APPROVE, pending.approval_id)
+        pump_until(app, lambda command_id=command_id: settled(command_id), timeout=8)
+        assert settled(command_id).code == "CONTROL_RELEASED_QUERY_REQUIRED"
+        assert projections[-1].status is TaskStatus.RUNNING
+        assert (projections[-1].host_dispatch, projections[-1].receiver_effect) == (2, 1)
+        assert len(observed.dispatches) - dispatch_start == 2
+        assert counts(observed) == {"receiver_calls": 2, "receiver_effect": 1}
+        assert model_calls == [1]
+        assert control_calls == [("approve", pending.approval_id)]
+    finally:
+        bridge.close()
+        pump_until(app, lambda: bridge.thread_done, timeout=8)
+        assert asyncio.run(load_old()) == old_state
+
+
+@pytest.mark.asyncio
+async def test_snapshot_rejects_foreign_task_before_store_read(tmp_path, observed, monkeypatch):
+    """REC-03, I7: 현재 Runner 밖 Task projection을 조회 전에 거부; 대응 T/S ID 없음."""
+    bindings = await synthetic_app.bootstrap(
+        agt_mode="mock", store_kind="sqlite", db_path=tmp_path / "snapshot.db"
+    )
+    loads = []
+    original = SQLiteStore.load_task
+
+    async def load(self, task_id):
+        loads.append(task_id)
+        return await original(self, task_id)
+
+    monkeypatch.setattr(SQLiteStore, "load_task", load)
+    try:
+        with pytest.raises(ValueError, match="^Task is unavailable$"):
+            await bindings.snapshot("old-task")
+        assert loads == []
+    finally:
+        await bindings.close()
+
+
+@pytest.fixture(autouse=True)
+def isolate_process_start_gate(monkeypatch):
+    # 의도적인 정리 미확인 테스트가 전역 게이트를 오염시켜 뒤 테스트를 깨뜨리지 않게 한다.
+    monkeypatch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
+
+
+@pytest.mark.parametrize("mcp_transport", ["stdio", "http"])
+@pytest.mark.parametrize("agt_mode", ["mock", "real"])
+def test_tainted_gate_starts_no_synthetic_resources(
+    observed, mcp_transport, agt_mode, monkeypatch, tmp_path
+):
+    """REC-01·REC-05, I1/I6: 실제 bootstrap·AGT·MCP·counts 구성 0; 대응 T/S ID 없음."""
+    app = QApplication.instance() or QApplication([])
+    gate = bridge_module._ProcessStartGate()
+    owner = object()
+    assert gate.try_start(owner) is None
+    gate.finish(owner, "CLEANUP_UNCONFIRMED", None)
+    from contextlib import nullcontext
+
+    # 만약 bootstrap이 잘못 호출되면 이 알려진 디렉터리에 counts.json을 만들게 한다.
+    monkeypatch.setattr(synthetic_app, "TemporaryDirectory", lambda **_: nullcontext(str(tmp_path)))
+    calls, events = [], []
+
+    async def boot():
+        calls.append(1)
+        return await synthetic_app.bootstrap(agt_mode=agt_mode, mcp_transport=mcp_transport)
+
+    bridge = BackendBridge(boot, start_gate=gate)
+    bridge.lifecycle_changed.connect(events.append)
+    bridge.start()
+    app.processEvents()
+    assert bridge.state is BridgeState.FAILED
+    assert events[-1].code == "PROCESS_RESTART_REQUIRED"
+    assert calls == [] and bridge.thread_done and not bridge.backend_alive
+    assert not (tmp_path / "counts.json").exists()
+    assert_not_started(observed)
+    bridge.close()
+
+
+def test_clean_bridge_restart_runs_real_synthetic_send(observed):
+    """REC-01·REC-05, I1/I3/I6, T02 A 부분: 확인 종료 후 새 실제 실행·SEND 1회."""
+    from guard_app.services.bridge import ControlAction
+
+    app = QApplication.instance() or QApplication([])
+    gate = bridge_module._ProcessStartGate()
+    starts = []
+
+    async def boot():
+        starts.append(1)
+        return await synthetic_app.bootstrap(agt_mode="mock")
+
+    for _ in range(2):
+        projections, commands, events = [], [], []
+        bridge = BackendBridge(boot, start_gate=gate)
+        bridge.task_changed.connect(projections.append)
+        bridge.command_changed.connect(commands.append)
+        bridge.lifecycle_changed.connect(events.append)
+        try:
+            bridge.start()
+            pump_until(
+                app,
+                lambda bridge=bridge, projections=projections: (
+                    bridge.state is BridgeState.READY and bool(projections)
+                ),
+                timeout=8,
+            )
+            receiver_effect_start = counts(observed)["receiver_effect"]
+            bridge.request_run(projections[-1].task_id)
+            pump_until(
+                app,
+                lambda projections=projections: projections[-1].approval_id is not None,
+                timeout=8,
+            )
+            assert projections[-1].status is TaskStatus.WAITING_APPROVAL
+            assert projections[-1].host_dispatch == 1  # READ만 실행
+            assert projections[-1].receiver_effect == 0
+            assert counts(observed)["receiver_effect"] - receiver_effect_start == 0
+            bridge.request_control(ControlAction.APPROVE, projections[-1].approval_id)
+            pump_until(
+                app, lambda projections=projections: projections[-1].receiver_effect == 1, timeout=8
+            )
+            assert projections[-1].host_dispatch == 2
+            assert counts(observed) == {"receiver_calls": 2, "receiver_effect": 1}
+        finally:
+            bridge.close()
+            pump_until(
+                app,
+                lambda bridge=bridge: bridge.thread_done and not bridge.backend_alive,
+                timeout=8,
+            )
+        app.processEvents()
+        assert events[-1].code == "CLOSED"
+    assert starts == [1, 1] and len(observed.starts) == 2
+    assert len(observed.dispatches) == 4
+
+
+@pytest.mark.parametrize("action_name", ["REVIEW", "APPROVE", "REJECT"])
+def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeypatch, action_name):
+    """REC-03, I3, T11 재시작 부분: 옛 승인 제어의 실행 계수와 저장 행을 비교한다."""
+    import asyncio
+
+    from guard_app.services.bridge import ControlAction
+
+    app = QApplication.instance() or QApplication([])
+    path = tmp_path / "old-approval.db"
+
+    async def first_run():
+        bindings = await synthetic_app.bootstrap(
+            agt_mode="mock", mcp_transport="stdio", store_kind="sqlite", db_path=path
+        )
+        try:
+            old_task_id = bindings.initial_task_id
+            pending = await bindings.runner_for_task(old_task_id).advance()
+            assert pending.status == "pending" and pending.approval_id is not None
+            assert counts(observed) == {"receiver_calls": 1, "receiver_effect": 0}
+            return old_task_id, pending.approval_id
+        finally:
+            await bindings.close()
+
+    async def load_old():
+        with SQLiteStore(path) as store:
+            return await store.get_approval(old_approval_id), await store.load_task(old_task_id)
+
+    old_task_id, old_approval_id = asyncio.run(first_run())
+    old_approval, old_task = asyncio.run(load_old())
+    assert old_approval.status is ApprovalStatus.PENDING
+    assert old_task.status is TaskStatus.WAITING_APPROVAL
+    model_calls, projections, commands = [], [], []
+    original_step = synthetic_app.SyntheticModel.step
+
+    async def step(self, *args, **kwargs):
+        model_calls.append(1)
+        return await original_step(self, *args, **kwargs)
+
+    monkeypatch.setattr(synthetic_app.SyntheticModel, "step", step)
+    bridge = BackendBridge(
+        lambda: synthetic_app.bootstrap(
+            agt_mode="mock", mcp_transport="stdio", store_kind="sqlite", db_path=path
+        )
+    )
+    bridge.task_changed.connect(projections.append)
+    bridge.command_changed.connect(commands.append)
+    dispatch_start = len(observed.dispatches)
+    try:
+        bridge.start()
+        pump_until(app, lambda: bridge.state is BridgeState.READY and bool(projections), timeout=8)
+        assert projections[-1].task_id != old_task_id
+        command_id = bridge.request_control(ControlAction[action_name], old_approval_id)
+        pump_until(
+            app,
+            lambda: any(
+                e.command_id == command_id
+                and e.stage in (CommandStage.BACKEND_RETURNED, CommandStage.UNCONFIRMED)
+                for e in commands
+            ),
+            timeout=8,
+        )
+        app.processEvents()
+        final = next(e for e in reversed(commands) if e.command_id == command_id)
+        assert final.stage is CommandStage.BACKEND_RETURNED
+        assert final.code == (
+            "REVIEW_UNAVAILABLE" if action_name == "REVIEW" else "CONTROL_DENIED_QUERY_REQUIRED"
+        )
+        assert model_calls == []
+        assert len(observed.dispatches) - dispatch_start == 0
+        assert counts(observed) == {"receiver_calls": 0, "receiver_effect": 0}
+        assert sum(p.task_id == old_task_id for p in projections) == 0
+        assert (projections[-1].host_dispatch, projections[-1].receiver_effect) == (0, 0)
+    finally:
+        bridge.close()
+        pump_until(app, lambda: bridge.thread_done and not bridge.backend_alive, timeout=8)
+
+    after_approval, after_task = asyncio.run(load_old())
+    # 실패 진단도 원문 없이 상태·revision만 비교한다.
+    assert (
+        after_approval.status,
+        after_approval.row_revision,
+        after_task.status,
+        after_task.row_revision,
+    ) == (
+        old_approval.status,
+        old_approval.row_revision,
+        old_task.status,
+        old_task.row_revision,
+    )
+    assert after_approval == old_approval
+    assert after_task == old_task

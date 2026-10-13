@@ -45,6 +45,7 @@ class UrlProbe(QObject):
 
 
 def test_controls_bidi_and_confusables_have_unambiguous_visible_codes() -> None:
+    """T18: 제어·혼동 문자 표시의 구분과 원문 보존."""
     source = "Aа\\u200B\u200b\u202e\x00\t\n한"
     rendered = visible_review_text(source)
 
@@ -90,7 +91,11 @@ def test_composed_and_punctuation_lookalikes_are_marked(source: str, expected: s
 
 @pytest.mark.parametrize(
     "source",
-    ['{"file":"보고서_v2.pdf"}', '{"to":"홍길동@corp.example"}', "https://corp.example/분기/보고서"],
+    [
+        '{"file":"보고서_v2.pdf"}',
+        '{"to":"홍길동@corp.example"}',
+        "https://corp.example/분기/보고서",
+    ],
 )
 def test_precomposed_korean_mixed_with_ascii_is_not_tagged(source: str) -> None:
     # QA 2026-10-13 Q11: every precomposed syllable was followed by \\uXXXX.
@@ -110,13 +115,12 @@ def test_cyrillic_hostname_is_visible_but_plain_korean_remains_readable():
 def test_markup_links_and_remote_images_remain_literal_plain_text(
     app: QApplication,
 ) -> None:
+    """T18: HTML·링크·원격 이미지 일반 텍스트와 HTTPS 외부 열기 0."""
     probe = UrlProbe()
     QDesktopServices.setUrlHandler("https", probe, "capture(QUrl)")
     dialog = ApprovalDetailDialog()
     try:
-        destination = (
-            'https://review.invalid/a?<img src="https://review.invalid/pixel">'
-        )
+        destination = 'https://review.invalid/a?<img src="https://review.invalid/pixel">'
         arguments = (
             b'{"body":"<a href=\\"https://review.invalid/approve\\">'
             b'approve</a><img src=\\"https://review.invalid/pixel\\">"}'
@@ -156,6 +160,7 @@ def test_markup_links_and_remote_images_remain_literal_plain_text(
 def test_markup_and_link_clicks_make_no_loopback_http_requests(
     app: QApplication,
 ) -> None:
+    """T18: 상세 필드의 자동 이미지 요청·링크 클릭 loopback HTTP 0."""
     requests: list[str] = []
 
     class RequestHandler(BaseHTTPRequestHandler):
@@ -221,6 +226,7 @@ def test_markup_and_link_clicks_make_no_loopback_http_requests(
 def test_long_fields_are_complete_and_dialog_releases_its_copies(
     app: QApplication,
 ) -> None:
+    """T18: 전체 필드 표시와 닫기 후 표시 사본 해제."""
     host = QWidget()
     layout = QVBoxLayout(host)
     opener = QPushButton("상세")
@@ -270,6 +276,7 @@ def test_invalid_utf8_never_leaves_stale_detail_visible(app: QApplication) -> No
 
 
 def test_short_owner_scrolls_both_complete_plain_fields(app: QApplication) -> None:
+    """T18: 작은 화면에서도 전체 필드를 일반 텍스트로 유지."""
     owner = QWidget()
     owner.resize(320, 240)
     owner.show()

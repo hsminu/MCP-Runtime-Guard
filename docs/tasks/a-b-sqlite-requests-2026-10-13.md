@@ -14,6 +14,7 @@
 | B-SQL-03 | 조회 API 부족 | Store.load_task/get_approval, 앱 snapshot | Task·대기 승인·복구 대상 목록의 공개 조회 |
 | B-SQL-04 | 감사 API 부족 | Guard.failure_audit, Store 포트 | 사전 예약 실패 감사의 영속 저장 연산 |
 | B-SQL-05 | 감사 맥락 부족 | SQLite 감사, AGT-02 | agt_mode·규칙 버전 감사 필드·마이그레이션 |
+| B-SQL-06 | 실행 회차 범위 방어 검토 | ApprovalService._cancel / HumanControl.cancel·emergency_halt | 새 실행의 capability로 옛 Task 행 정지 가능. A 입구 차단 완료, B 범위 계약 검토 요청 |
 
 ## B-SQL-01 · 영속 call_seq
 
@@ -59,3 +60,39 @@
 - 다른 application_id/미래 schema DB는 B 공개 API로 생성할 수 없으므로 이번 A 시험에서 생략했다. A 테스트에 SQL 실행을 추가하지 않았다. B의 기존 스키마 거부 단위 검증과 구분한다.
 - 2라운드 정상 stdio/HTTP의 host_dispatch·receiver_calls·receiver_effect를 실측했다. HTTP는 `spike.counts`와 `TaskProjection.host_dispatch/receiver_effect`를 사용했다. ASK 승인 전 전체 dispatch/receiver_calls/effect=1/1/0(READ만), 승인·중복 승인 후 2/2/1(SEND 1회), DENY는 1/1/0(SEND 0회), ALLOW는 2/2/1이다. 이 counts는 도구 함수 수신 계수이며 별도 ASGI wire tools/call 계수는 아니다. stdio/HTTP 독립 wire 계수는 이번 파일에서 검증 불가다. 시작 실패는 stream/counts 파일 구성 전 차단해 spawn·wire·수신 효과 경로가 만들어지지 않음을 확인한다.
 - 이번 연결에서 새 B 코드 결함은 확인되지 않았다. 최종 명령·결과는 [A 진행 현황](a-progress.md)의 SQLite 연결 절에 기록한다. 위 항목은 기능/공동 계약 부족이며 결함 재현 결과로 바꾸어 쓰지 않는다.
+
+
+## B-SQL-06 · 새 실행 HumanControl의 옛 Task 제어 범위
+
+- 추가 기준: HEAD `631e116` + W1–W4 작업 트리(2026-10-13). 이전 절의 "새 B 결함 없음"은 당시 SQLite 연결 기록이다.
+- 위치: `services/approvals.py`의 `ApprovalService._cancel`(기준 554줄), `HumanControl.cancel/emergency_halt`(820/823줄).
+  인증된 operator와 ID 형식은 검사하지만 현 실행 Runner 소유 관계는 검사하지 않는다. `request_stop` 뒤 공개 Store 조회·invalidate·halt가 진행된다.
+- 재현: 같은 SQLite 파일로 실제 mock AGT/stdio bootstrap → Pending → close → 새 bridge/bootstrap READY.
+  옛 Task ID로 run/cancel/emergency_halt를 차례로 보낸다. 수정 전
+  `test_old_task_commands_are_rejected_before_model_control_and_projection`가 실패했다.
+  run은 RUNNER_UNAVAILABLE이나 cancel/halt는 CONTROL_DENIED_QUERY_REQUIRED, B 제어 2회·discard 2회·옛 조회 6회·옛 projection 2회였다.
+  정리 후 공개 load_task 비교도 실패해 옛 행 row_revision 2→3을 확인했다. 모델·dispatch·receiver_calls/effect는 0이었다.
+- 원인 분류: A bridge의 소유 검사 누락과 A snapshot의 옛 행/현재 Runner 혼합은 A 결함으로 수정했다.
+  B capability가 여러 Task를 다루는 현 계약 자체를 이번 요청만으로 B 회귀 결함이라고 단정하지 않는다.
+  다만 REC-03의 옛 행 비변경 원칙을 B 경계에서도 보장할지, 허용 Task/실행 회차 범위를 누가 공급할지 검토가 필요하다.
+- A 임시 처리: cancel/halt도 run과 같이 현재 TaskRunner·task_id 일치를 먼저 검사한다.
+  실패하면 RUNNER_UNAVAILABLE, discard·B 제어·Store 조회·projection 모두 0이다.
+  synthetic snapshot은 현재 Runner 밖 ID를 조회 전에 고정 ValueError("Task is unavailable")로 거부한다.
+- 수정 후 증거: 같은 테스트에서 위 계수 전부 0, 옛 Task 전체 상태·epoch 불변, 새 Task ASK 승인 뒤 dispatch/receiver_calls/effect=2/2/1이다.
+  B 파일·테스트·공동 계약은 바꾸지 않았다. B 검토·C 독립 인수·다른 clone 전달은 미완료다.
+
+### 옛 approval ID · 2라운드 검증 (2026-10-14)
+
+- test_old_approval_controls_preserve_restart_rows의 REVIEW/APPROVE/REJECT 3개 매개변수 사례는
+  각각 실제 synthetic bootstrap·SQLite·mock AGT·stdio의 1회차를 Pending까지 진행해 얻은 ID를 사용한다.
+  1회차 정리 뒤 새 SQLiteStore의 공개 get_approval/load_task로 기준 행을 읽고 닫은 다음 새 bridge를 시작한다.
+- 최종 코드: REVIEW는 REVIEW_UNAVAILABLE, APPROVE와 REJECT는 CONTROL_DENIED_QUERY_REQUIRED.
+  각 사례에서 모델 호출=0, host dispatch=0, receiver_calls/effect=0/0, 옛 Task projection=0이다.
+- 2회차 정리 후 다시 새 SQLiteStore의 공개 API로 확인한 실제 결과: 세 사례 모두
+  옛 승인 PENDING→PENDING, 옛 Task WAITING_APPROVAL→WAITING_APPROVAL,
+  승인·Task row_revision 증가량 각각 0, 전체 DTO 동일이다. REJECT도 옛 승인 행을 변경하지 않았다.
+- 처리: 행 불변을 그대로 단언하는 A 테스트로 남겼다. 추가 A 차단·B 소스/테스트·공동 계약 변경은 없다.
+  기존 test_bridge.py 승인 테스트를 변경하지 않았고 정상 Runner 승인 경로를 포함한 지정 집중 시험은
+  121 passed/0 failed, 전체는 2,264 passed/0 failed다. 상세 명령·D1 계수는 a-progress.md의 2라운드 기록을 따른다.
+- 연결: REC-03·I3·T11 재시작 부분. 앞선 옛 Task 제어 범위의 B 검토 요청은 유지하며,
+  이 관측을 모든 오래된 승인 상태·복구 상황에 대한 보장이나 C 독립 인수로 확대하지 않는다.

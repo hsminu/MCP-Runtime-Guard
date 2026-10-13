@@ -23,11 +23,11 @@ from .models import LoadState
 from .presentation import LABELS, format_kst
 
 
-def plain_label(
-    text: str = "", *, name: str | None = None, wrap: bool = True
-) -> QLabel:
+def plain_label(text: str = "", *, name: str | None = None, wrap: bool = True) -> QLabel:
     label = QLabel(text)
     label.setTextFormat(Qt.TextFormat.PlainText)
+    label.setOpenExternalLinks(False)
+    label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
     label.setWordWrap(wrap)
     if name:
         label.setObjectName(name)
@@ -153,9 +153,7 @@ class PlainDetailDialog(QDialog):
         layout.addWidget(close_button, 0, Qt.AlignmentFlag.AlignRight)
         self.finished.connect(self._restore_focus)
 
-    def show_detail(
-        self, *, title: str, text: str, return_focus: QWidget | None = None
-    ) -> None:
+    def show_detail(self, *, title: str, text: str, return_focus: QWidget | None = None) -> None:
         self.setWindowTitle(title)
         self.heading.setText(title)
         self.body.setPlainText(text)
@@ -170,11 +168,7 @@ class PlainDetailDialog(QDialog):
         if target is not None and shiboken6.isValid(target):
 
             def restore_if_closed() -> None:
-                if (
-                    shiboken6.isValid(self)
-                    and not self.isVisible()
-                    and shiboken6.isValid(target)
-                ):
+                if shiboken6.isValid(self) and not self.isVisible() and shiboken6.isValid(target):
                     target.setFocus()
 
             QTimer.singleShot(0, restore_if_closed)

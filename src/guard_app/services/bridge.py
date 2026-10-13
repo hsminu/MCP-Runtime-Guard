@@ -138,6 +138,48 @@ class _IngressItem:
     replay: CommandEvent | None = None
 
 
+class _ProcessStartGate:
+    """정리 결과와 실제 스레드 종료를 확인하는 프로세스 단위 시작 게이트."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._tainted = False
+        self._active: object | None = None
+        self._finished = False
+        self._thread: threading.Thread | None = None
+
+    def try_start(self, owner: object) -> str | None:
+        with self._lock:
+            if self._tainted:
+                return "PROCESS_RESTART_REQUIRED"
+            if self._active is not None and (
+                not self._finished or (self._thread is not None and self._thread.is_alive())
+            ):
+                return "BACKEND_ALREADY_ACTIVE"
+            self._active = owner
+            self._finished = False
+            self._thread = None
+            return None
+
+    def finish(self, owner: object, code: str, thread: threading.Thread | None) -> None:
+        with self._lock:
+            if self._active is not owner or self._finished:
+                return
+            # BACKEND_FAILURE도 _serve의 정리를 확인하지 못했으므로 영구 오염이다.
+            if code not in {
+                "CLOSED",
+                "STARTUP_FAILED",
+                "INITIAL_SNAPSHOT_FAILED",
+                "START_THREAD_FAILED",
+            }:
+                self._tainted = True
+            self._finished = True
+            self._thread = thread
+
+
+_PROCESS_START_GATE = _ProcessStartGate()
+
+
 class BackendBridge(QObject):
     """Call public methods on the Qt thread; never wait there for backend work.
 
@@ -166,6 +208,7 @@ class BackendBridge(QObject):
         max_command_ids: int = 4096,
         startup_timeout: float = 10.0,
         shutdown_timeout: float = 3.0,
+        start_gate: _ProcessStartGate | None = None,
     ) -> None:
         app = QCoreApplication.instance()
         if app is None or QThread.currentThread() != app.thread():
@@ -193,6 +236,9 @@ class BackendBridge(QObject):
             raise ValueError("Bridge limits are invalid")
         super().__init__()
         self._bootstrap = bootstrap
+        self._start_gate = _PROCESS_START_GATE if start_gate is None else start_gate
+        self._start_owner = object()
+        self._state_code = "NEW"
         self._run_queue_size = run_queue_size
         self._control_queue_size = control_queue_size
         self._control_workers = control_workers
@@ -255,13 +301,18 @@ class BackendBridge(QObject):
         with self._state_lock:
             if self._state is not BridgeState.NEW:
                 raise ValueError("Bridge has already started")
-            self._state = BridgeState.STARTING
-        self.lifecycle_changed.emit(LifecycleEvent(BridgeState.STARTING, "STARTING"))
-        self._thread = threading.Thread(target=self._thread_main, name="guard-backend")
+        rejection = self._start_gate.try_start(self._start_owner)
+        if rejection is not None:
+            self._set_state(BridgeState.FAILED, rejection)
+            self._thread_done.set()
+            return
+        self._set_state(BridgeState.STARTING, "STARTING")
         try:
+            self._thread = threading.Thread(target=self._thread_main, name="guard-backend")
             self._thread.start()
         except (RuntimeError, OSError):
             self._set_state(BridgeState.FAILED, "START_THREAD_FAILED")
+            self._start_gate.finish(self._start_owner, "START_THREAD_FAILED", self._thread)
             self._thread_done.set()
 
     def request_run(self, task_id: str, *, command_id: str | None = None) -> str:
@@ -343,11 +394,12 @@ class BackendBridge(QObject):
         with self._state_lock:
             if self._state is BridgeState.CLOSING and state is BridgeState.READY:
                 return
-            if code.endswith("CLEANUP_UNCONFIRMED"):
+            if code.endswith("CLEANUP_UNCONFIRMED") or code == "BACKEND_FAILURE":
                 self._cleanup_unconfirmed = True
             elif self._cleanup_unconfirmed and state is BridgeState.CLOSED:
                 code = "CLEANUP_UNCONFIRMED"
             self._state = state
+            self._state_code = code
         self.lifecycle_changed.emit(LifecycleEvent(state, code))
 
     def _submit(self, command: _Command) -> None:
@@ -598,6 +650,7 @@ class BackendBridge(QObject):
             self._loop = None
         if self._stop_requested.is_set() and self.state is BridgeState.CLOSING:
             self._set_state(BridgeState.CLOSED, "CLOSED")
+        self._start_gate.finish(self._start_owner, self._state_code, self._thread)
         self._thread_done.set()
 
     async def _serve(self) -> None:
@@ -827,6 +880,9 @@ class BackendBridge(QObject):
             )
             return "REVIEW_READY"
         if command.action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
+            runner = bindings.runner_for_task(command.target_id)
+            if not isinstance(runner, TaskRunner) or runner.task_id != command.target_id:
+                return "RUNNER_UNAVAILABLE"
             try:
                 return await self._stop_task(bindings, control, command)
             finally:

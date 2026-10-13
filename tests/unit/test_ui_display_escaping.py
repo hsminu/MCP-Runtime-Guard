@@ -92,6 +92,7 @@ def test_server_list_and_detail_escape_ids_and_names(app: QApplication) -> None:
 
 
 def test_approval_table_cells_escape_ids_and_destination(app: QApplication) -> None:
+    """T18: 승인 목록 ID·수신처의 숨은 문자 가시화."""
     page = ApprovalListPage()
     requests = []
     page.query_requested.connect(requests.append)
