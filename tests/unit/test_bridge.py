@@ -8,6 +8,8 @@ import os
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -15,10 +17,12 @@ import pytest
 from PySide6.QtCore import QObject, QThread, QTimer, Slot
 from PySide6.QtWidgets import QApplication
 
-from guard_app.domain.contracts import Denied
+from guard_app.domain.contracts import Denied, Outcome
+from guard_app.domain.enums import Label, TaskStatus, ToolKind
 from guard_app.domain.reasons import Reason
 from guard_app.services.approvals import HumanControl
 from guard_app.services.bridge import (
+    ApprovalReview,
     BackendBindings,
     BackendBridge,
     BridgeState,
@@ -26,6 +30,8 @@ from guard_app.services.bridge import (
     CommandStage,
     ControlAction,
     LifecycleEvent,
+    TaskProjection,
+    _review_header,
 )
 from guard_app.services.runner import RunUpdate, TaskRunner
 
@@ -964,3 +970,212 @@ def test_shutdown_marks_processing_control_unconfirmed(app) -> None:
         gate.set()
         if not bridge.thread_done:
             close_bridge(app, bridge)
+
+
+
+class ProjectionReceiver(QObject):
+    def __init__(self) -> None:
+        super().__init__()
+        self.projections: list[TaskProjection] = []
+        self.reviews: list[ApprovalReview] = []
+
+    @Slot(object)
+    def on_task(self, projection: TaskProjection) -> None:
+        self.projections.append(projection)
+
+    @Slot(object)
+    def on_review(self, review: ApprovalReview) -> None:
+        self.reviews.append(review)
+
+
+class StoreTruth:
+    """Stand-in for the Store-backed snapshot binding."""
+
+    def __init__(self, status: TaskStatus, approval_id: str | None = None) -> None:
+        self.status = status
+        self.approval_id = approval_id
+        self.reads = 0
+
+    async def snapshot(self, task_id: str) -> TaskProjection:
+        self.reads += 1
+        return TaskProjection(
+            task_id=task_id,
+            epoch=1,
+            status=self.status,
+            approval_id=self.approval_id,
+        )
+
+
+class PendingRunner(TaskRunner):
+    """Returns one pending approval, then applies or fails the resume."""
+
+    def __init__(self, task_id: str, resume: Callable[[Outcome], RunUpdate]) -> None:
+        self.task_id = task_id
+        self._resume = resume
+        self.resumed: list[Outcome] = []
+
+    async def advance(self) -> RunUpdate:
+        return RunUpdate(task_id=self.task_id, epoch=1, status="pending", approval_id="approval-1")
+
+    async def resume_approval(
+        self, task_id: str, epoch: int, approval_id: str, outcome: Outcome
+    ) -> RunUpdate:
+        self.resumed.append(outcome)
+        return self._resume(outcome)
+
+
+def _start_with(app, bindings: Callable[[], BackendBindings]):
+    async def bootstrap() -> BackendBindings:
+        return bindings()
+
+    bridge = BackendBridge(bootstrap)
+    receiver = attach(bridge)
+    projections = ProjectionReceiver()
+    bridge.task_changed.connect(projections.on_task)
+    bridge.review_ready.connect(projections.on_review)
+    bridge.start()
+    pump_until(app, lambda: bridge.state is BridgeState.READY)
+    return bridge, receiver, projections
+
+
+def _settled(receiver: Receiver, command_id: str) -> bool:
+    return any(
+        event.stage in (CommandStage.BACKEND_RETURNED, CommandStage.UNCONFIRMED)
+        for event in receiver.stages(command_id)
+    )
+
+
+@pytest.mark.parametrize("resume_fails", (False, True))
+def test_approval_failure_always_republishes_store_projection(app, resume_fails: bool) -> None:
+    """Q09: the UI must not keep an approvable projection after a failed approval."""
+    truth = StoreTruth(TaskStatus.WAITING_APPROVAL, "approval-1")
+
+    def resume(outcome: Outcome) -> RunUpdate:
+        # The approval attempt halted the Task (and Guard) in the Store.
+        truth.status, truth.approval_id = TaskStatus.HALTED, None
+        if resume_fails:
+            raise RuntimeError("synthetic-private-marker")
+        return RunUpdate(task_id="task-1", epoch=1, status="guard_error")
+
+    class InternalErrorControl(FakeControl):
+        async def approve(self, approval_id: str) -> Denied:
+            return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
+
+    runner = PendingRunner("task-1", resume)
+    bridge, receiver, projections = _start_with(
+        app,
+        lambda: BackendBindings(
+            lambda task_id: runner, InternalErrorControl(), snapshot=truth.snapshot
+        ),
+    )
+    try:
+        run_id = bridge.request_run("task-1")
+        pump_until(app, lambda: _settled(receiver, run_id))
+        assert projections.projections[-1].status is TaskStatus.WAITING_APPROVAL
+        approve_id = bridge.request_control(ControlAction.APPROVE, "approval-1")
+        pump_until(app, lambda: _settled(receiver, approve_id))
+        app.processEvents()
+        assert projections.projections[-1].status is TaskStatus.HALTED
+        assert projections.projections[-1].approval_id is None
+        final = receiver.stages(approve_id)[-1]
+        if resume_fails:
+            assert final.stage is CommandStage.UNCONFIRMED
+            assert final.code == "BACKEND_UNCONFIRMED"
+        else:
+            assert final.code == "CONTROL_GUARD_ERROR_QUERY_REQUIRED"
+        assert "synthetic-private-marker" not in repr(receiver.commands)
+        assert len(runner.resumed) == 1
+    finally:
+        close_bridge(app, bridge)
+
+
+@pytest.mark.parametrize("action", (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT))
+@pytest.mark.parametrize("discard_fails", (False, True))
+def test_stop_discards_queued_commands_before_control_starts(
+    app, action: ControlAction, discard_fails: bool
+) -> None:
+    """Q01/T20: queued pre-wire commands are settled before the stop latch."""
+    order: list[tuple[str, str]] = []
+    truth = StoreTruth(TaskStatus.RUNNING)
+
+    def discard(task_id: str) -> int:
+        order.append(("discard", task_id))
+        if discard_fails:
+            raise RuntimeError("synthetic-private-marker")
+        return 2
+
+    class OrderedControl(FakeControl):
+        async def cancel(self, task_id: str) -> Denied:
+            order.append(("cancel", task_id))
+            truth.status = TaskStatus.HALTED
+            return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
+
+        async def emergency_halt(self, task_id: str) -> Denied:
+            order.append(("emergency_halt", task_id))
+            truth.status = TaskStatus.HALTED
+            return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
+
+    runner = FakeRunner("task-1", threading.Event(), threading.Event())
+    bridge, receiver, projections = _start_with(
+        app,
+        lambda: BackendBindings(
+            lambda task_id: runner,
+            OrderedControl(),
+            snapshot=truth.snapshot,
+            discard_queued=discard,
+        ),
+    )
+    try:
+        command_id = bridge.request_control(action, "task-1")
+        pump_until(app, lambda: _settled(receiver, command_id))
+        app.processEvents()
+        assert order == [("discard", "task-1"), (action.value, "task-1")]
+        assert projections.projections[-1].status is TaskStatus.HALTED
+        final = receiver.stages(command_id)[-1]
+        if discard_fails:
+            # The stop still ran; the unconfirmed discard is not hidden.
+            assert final.stage is CommandStage.UNCONFIRMED
+        else:
+            assert final.code == "CONTROL_DENIED_QUERY_REQUIRED"
+        assert "synthetic-private-marker" not in repr(receiver.commands)
+    finally:
+        close_bridge(app, bridge)
+
+
+def test_non_callable_discard_binding_fails_startup(app) -> None:
+    async def bootstrap() -> BackendBindings:
+        return BackendBindings(lambda task_id: None, FakeControl(), discard_queued="not callable")
+
+    bridge = BackendBridge(bootstrap)
+    receiver = attach(bridge)
+    bridge.start()
+    pump_until(app, lambda: bridge.state is BridgeState.FAILED)
+    app.processEvents()
+    assert receiver.states[-1] == LifecycleEvent(BridgeState.FAILED, "STARTUP_FAILED")
+    close_bridge(app, bridge)
+
+
+def test_review_header_names_tool_kind_and_expiry_on_one_line() -> None:
+    """R09: two pending approvals with equal server/arguments stay distinct."""
+
+    def snapshot(tool_name: str, kind: ToolKind, minute: int) -> SimpleNamespace:
+        boundary = SimpleNamespace(boundary_id="docs")
+        return SimpleNamespace(
+            request=SimpleNamespace(
+                tool=SimpleNamespace(server_id="docs", tool_name=tool_name, kind=kind),
+                server_boundary=boundary,
+                destination=None,
+            ),
+            effective_label=Label.INTERNAL,
+            expires_at_utc=datetime(2026, 10, 13, 12, minute, tzinfo=UTC),
+        )
+
+    read = _review_header(snapshot("read_doc", ToolKind.READ, 5))
+    send = _review_header(snapshot("send_doc", ToolKind.SEND, 6))
+    assert "\n" not in read and "\\n" not in read
+    assert read == (
+        "도구: read_doc (READ) · MCP 서버: docs (경계 docs) · 목적지 경계: 없음"
+        " · Task 등급: INTERNAL · 만료: 2026-10-13 12:05:00 UTC"
+    )
+    assert "send_doc (SEND)" in send and "12:06:00 UTC" in send
+    assert read != send

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -20,6 +20,7 @@ from guard_app.adapters.model_client import (
     validate_model_conversation_budget,
 )
 from guard_app.domain.contracts import (
+    ApprovalRecord,
     ConversationMessage,
     Denied,
     ModelTurn,
@@ -29,7 +30,7 @@ from guard_app.domain.contracts import (
     Released,
     Withheld,
 )
-from guard_app.domain.enums import TaskStatus
+from guard_app.domain.enums import ApprovalStatus, TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import ProposedCall, TaskState
 from guard_app.domain.reasons import Reason
@@ -40,6 +41,56 @@ from guard_app.services.guard import GuardService
 _PENDING_TEXT = "승인을 기다리는 중입니다."
 _DENIED_TEXT = "이 요청은 실행되지 않았습니다."
 _SKIPPED_TEXT = "이 호출은 실행되지 않았습니다."
+# Fixed notice for a READ the gate did not disclose. No result data, reason,
+# label or request status enters the model context.
+_WITHHELD_TEXT = "이 호출 결과는 공개되지 않았습니다."
+
+# Guard containment without a policy decision. Guard may hold only an
+# in-memory global halt while Store still says RUNNING, so these stop the
+# Runner regardless of the Store status.
+_GUARD_FAILURE_REASONS = frozenset(
+    (Reason.INTERNAL_ERROR, Reason.STATE_MISSING, Reason.STATE_COMMIT_FAILED)
+)
+# A pre-decision denial caused by the Task itself (stop latch, epoch, policy
+# or classification). The Runner stops even if Store has not caught up yet.
+_TASK_STOP_REASONS = frozenset(
+    (Reason.TASK_NOT_RUNNING, Reason.POLICY_CHANGED, Reason.TASK_UNCLASSIFIED)
+)
+# Pre-decision resolution of the model's proposed call. Only these, without
+# a request ID, are an ordinary deny that may accept another user turn.
+_RESOLUTION_DENY_REASONS = frozenset(
+    (
+        Reason.INVALID_ARGUMENTS,
+        Reason.TOOL_UNSUPPORTED,
+        Reason.UNKNOWN_DESTINATION,
+        Reason.UNKNOWN_SERVER,
+        Reason.REG_NOT_ACTIVE,
+        Reason.TOOL_FINGERPRINT_CHANGED,
+    )
+)
+# Approval states after which no actual human-control result can follow.
+_SETTLED_APPROVALS = frozenset(
+    (
+        ApprovalStatus.REJECTED,
+        ApprovalStatus.EXPIRED,
+        ApprovalStatus.CANCELLED,
+        ApprovalStatus.INVALIDATED,
+    )
+)
+
+type RunStatus = Literal[
+    "complete",
+    "continue",
+    "pending",
+    "denied",
+    "withheld",
+    "halted",
+    "outcome_unknown",
+    "model_error",
+    "guard_error",
+    "closed",
+    "stopped",
+]
 
 
 class RunnerStateError(ValueError):
@@ -55,23 +106,32 @@ class RunUpdate:
 
     In particular, ``closed`` only invalidates this Runner's conversation.
     The backend must use B/Store's confirmed state for Task status and display.
+    ``withheld`` means Store kept the Task RUNNING after an undisclosed READ
+    result; the turn ended and a new user turn may follow. ``guard_error``
+    means Guard contained an internal failure (for example an in-memory
+    global halt); this Runner stops even when Store still says RUNNING.
     """
 
     task_id: str
     epoch: int
-    status: Literal[
-        "complete",
-        "continue",
-        "pending",
-        "denied",
-        "halted",
-        "outcome_unknown",
-        "model_error",
-        "closed",
-        "stopped",
-    ]
+    status: RunStatus
     approval_id: str | None = None
     assistant_text: str | None = field(default=None, repr=False)
+
+
+def _denied_kind(outcome: Denied) -> Literal["deny", "guard_error", "task_stop"]:
+    """Separate Guard containment and Task stops from an ordinary deny."""
+    reasons = frozenset(outcome.reasons)
+    if reasons & _GUARD_FAILURE_REASONS:
+        return "guard_error"
+    if outcome.request_id is None:
+        if reasons & _TASK_STOP_REASONS:
+            return "task_stop"
+        if not reasons or not reasons <= _RESOLUTION_DENY_REASONS:
+            # Unknown pre-decision reasons (for example a StoreError reason
+            # that also set the global halt) fail closed.
+            return "guard_error"
+    return "deny"
 
 
 class TaskRunner:
@@ -155,48 +215,51 @@ class TaskRunner:
         async with self._lock:
             if self._closed or self._stopped or self._pending or self._awaiting_user:
                 raise RunnerStateError()
-            task_status = await self._task_run_state()
+            return await self._stop_on_error(self._advance_locked())
+
+    async def _advance_locked(self) -> RunUpdate:
+        task_status = await self._task_run_state()
+        if self._closed:
+            return self._update("closed")
+        if task_status != "running":
+            return self._update(task_status)
+        try:
+            views = self._catalog.tool_views(self._server_ids)
+        except CatalogConfigError:
+            self._stopped = True
+            return self._update("stopped")
+        try:
+            conversation = tuple(self._conversation)
+            validate_model_conversation_budget(conversation)
+            turn = await self._model.step(conversation, views)
+        except ModelFormatError:
             if self._closed:
                 return self._update("closed")
-            if task_status != "running":
-                return self._update(task_status)
-            try:
-                views = self._catalog.tool_views(self._server_ids)
-            except CatalogConfigError:
-                self._stopped = True
-                return self._update("stopped")
-            try:
-                conversation = tuple(self._conversation)
-                validate_model_conversation_budget(conversation)
-                turn = await self._model.step(conversation, views)
-            except ModelFormatError:
-                if self._closed:
-                    return self._update("closed")
-                self._stopped = True
-                return self._update("model_error")
-            if self._closed:
-                return self._update("closed")
-            task_status = await self._task_run_state()
-            if self._closed:
-                return self._update("closed")
-            if task_status != "running":
-                return self._update(task_status)
-            try:
-                turn = ModelTurn.model_validate(turn)
-            except ValidationError:
-                self._stopped = True
-                return self._update("model_error")
-            if not self._valid_calls(turn, tuple(view.tool_ref for view in views)):
-                self._stopped = True
-                return self._update("model_error")
-            self._conversation.append(
-                ConversationMessage(role="assistant", content=turn.text or "", calls=turn.calls)
-            )
-            self._seen_call_ids.update(call.model_call_id for call in turn.calls)
-            if not turn.calls:
-                self._awaiting_user = True
-                return self._update("complete", assistant_text=turn.text)
-            return await self._dispatch(turn.calls)
+            self._stopped = True
+            return self._update("model_error")
+        if self._closed:
+            return self._update("closed")
+        task_status = await self._task_run_state()
+        if self._closed:
+            return self._update("closed")
+        if task_status != "running":
+            return self._update(task_status)
+        try:
+            turn = ModelTurn.model_validate(turn)
+        except ValidationError:
+            self._stopped = True
+            return self._update("model_error")
+        if not self._valid_calls(turn, tuple(view.tool_ref for view in views)):
+            self._stopped = True
+            return self._update("model_error")
+        self._conversation.append(
+            ConversationMessage(role="assistant", content=turn.text or "", calls=turn.calls)
+        )
+        self._seen_call_ids.update(call.model_call_id for call in turn.calls)
+        if not turn.calls:
+            self._awaiting_user = True
+            return self._update("complete", assistant_text=turn.text)
+        return await self._dispatch(turn.calls)
 
     async def resume_approval(
         self, task_id: str, epoch: int, approval_id: str, outcome: Outcome
@@ -216,55 +279,137 @@ class TaskRunner:
                 or epoch != self.epoch
                 or approval_id != pending.approval_id
                 or not isinstance(outcome, (Released, Denied, Withheld, OutcomeUnknown))
-                or outcome.request_id != pending.request_id
             ):
+                raise RunnerStateError()
+            # Approval-path containment answers this exact approval without a
+            # request ID. It is a terminal approval failure, not a stale result.
+            contained = isinstance(outcome, Denied) and outcome.request_id is None
+            if not contained and outcome.request_id != pending.request_id:
                 raise RunnerStateError()
             if self._pending_message_index is None or self._pending_call_id is None:
                 raise RunnerStateError()
-            if isinstance(outcome, Denied):
-                approval_race = outcome.reasons == (Reason.APPROVAL_RACE,)
-                # A premature expiry can leave the Task waiting, but a
-                # concurrent cancel or policy change can stop it first.
-                task_status = await self._task_run_state(
-                    allow_waiting_approval=approval_race
-                )
+            return await self._stop_on_error(self._resume_locked(pending, outcome))
+
+    async def _resume_locked(self, pending: Pending, outcome: Outcome) -> RunUpdate:
+        if isinstance(outcome, Denied):
+            kind = _denied_kind(outcome)
+            if outcome.request_id is None and kind == "deny":
+                kind = "guard_error"
+            if kind != "deny":
+                return await self._stop_pending(kind)
+            approval_race = outcome.reasons == (Reason.APPROVAL_RACE,)
+            # A premature expiry can leave the Task waiting, but a
+            # concurrent cancel or policy change can stop it first.
+            task_status = await self._task_run_state(allow_waiting_approval=approval_race)
+            if self._closed:
+                return self._update("closed")
+            if task_status in ("halted", "outcome_unknown", "stopped"):
+                return self._update(task_status)
+            if approval_race and task_status == "pending":
+                # This is not a confirmed decision. Keep the placeholder
+                # until the actual human-control result arrives.
+                return self._update("pending", approval_id=pending.approval_id)
+            if approval_race:
+                # B resumed the Task to RUNNING. Only a settled approval record
+                # proves that no actual human-control result can follow.
+                settled = await self._approval_settled(pending)
                 if self._closed:
                     return self._update("closed")
-                if task_status in ("halted", "outcome_unknown", "stopped"):
-                    return self._update(task_status)
-                if approval_race:
-                    # This is not a confirmed decision. Keep the placeholder
-                    # until the actual human-control result arrives.
+                if settled is None:
+                    self._stopped = True
+                    return self._update("stopped")
+                if not settled:
                     return self._update("pending", approval_id=pending.approval_id)
-            message_index = self._pending_message_index
-            call_id = self._pending_call_id
-            remaining = self._remaining
-            self._pending = None
-            self._pending_call_id = None
-            self._pending_message_index = None
-            self._remaining = ()
-            if isinstance(outcome, Released):
-                task_status = await self._task_run_state()
-                if self._closed:
-                    return self._update("closed")
-                if task_status != "running":
-                    return self._update(task_status)
-                self._conversation[message_index] = self._released_message(call_id, outcome)
-                return await self._dispatch(remaining)
-            if isinstance(outcome, Denied):
+        message_index, call_id, remaining = self._take_pending()
+        if isinstance(outcome, Released):
+            task_status = await self._task_run_state()
+            if self._closed:
+                return self._update("closed")
+            if task_status != "running":
+                return self._update(task_status)
+            self._conversation[message_index] = self._released_message(call_id, outcome)
+            return await self._dispatch(remaining)
+        if isinstance(outcome, Denied):
+            self._conversation[message_index] = ConversationMessage(
+                role="tool", content=_DENIED_TEXT, model_call_id=call_id
+            )
+            self._append_skipped(remaining)
+            self._awaiting_user = True
+            return self._update("denied")
+        if isinstance(outcome, Withheld):
+            task_status = await self._task_run_state()
+            if self._closed:
+                return self._update("closed")
+            if task_status == "running":
+                # Store kept the Task RUNNING (a READ without data). Only the
+                # fixed notice replaces the placeholder; the turn ends here.
                 self._conversation[message_index] = ConversationMessage(
-                    role="tool", content=_DENIED_TEXT, model_call_id=call_id
+                    role="tool", content=_WITHHELD_TEXT, model_call_id=call_id
                 )
                 self._append_skipped(remaining)
                 self._awaiting_user = True
-                return self._update("denied")
-            # A post-dispatch failure cannot be called a blocked request. The
-            # placeholder is discarded because the model must never continue.
-            del self._conversation[message_index]
-            self._stopped = True
-            if isinstance(outcome, OutcomeUnknown):
-                return self._update("outcome_unknown")
-            return self._update("halted")
+                return self._update("withheld")
+        # A post-dispatch failure cannot be called a blocked request. The
+        # placeholder is discarded because the model must never continue.
+        del self._conversation[message_index]
+        self._stopped = True
+        if isinstance(outcome, OutcomeUnknown):
+            return self._update("outcome_unknown")
+        return self._update("halted")
+
+    def _take_pending(self) -> tuple[int, str, tuple[ProposedCall, ...]]:
+        message_index = self._pending_message_index
+        call_id = self._pending_call_id
+        if message_index is None or call_id is None:
+            raise RunnerStateError()
+        remaining = self._remaining
+        self._pending = None
+        self._pending_call_id = None
+        self._pending_message_index = None
+        self._remaining = ()
+        return message_index, call_id, remaining
+
+    async def _stop_pending(self, kind: Literal["guard_error", "task_stop"]) -> RunUpdate:
+        """Drop the approval placeholder and stop without another model turn."""
+        message_index, _, _ = self._take_pending()
+        del self._conversation[message_index]
+        return await self._contained_stop(kind)
+
+    async def _contained_stop(self, kind: Literal["guard_error", "task_stop"]) -> RunUpdate:
+        self._stopped = True
+        task_status = await self._task_run_state()
+        if self._closed:
+            return self._update("closed")
+        if kind == "guard_error":
+            return self._update("guard_error")
+        return self._update("stopped" if task_status == "running" else task_status)
+
+    async def _approval_settled(self, pending: Pending) -> bool | None:
+        """True only for a terminal record of this approval; None if unconfirmed."""
+        try:
+            record = ApprovalRecord.model_validate(
+                await self._store.get_approval(pending.approval_id)
+            )
+        except (StoreError, ValidationError):
+            return None
+        if record.approval_id != pending.approval_id or record.request_id != pending.request_id:
+            return None
+        return record.status in _SETTLED_APPROVALS
+
+    async def _stop_on_error(self, work: Awaitable[RunUpdate]) -> RunUpdate:
+        """Leave no runnable loop after an unclassified failure.
+
+        The error itself propagates unchanged to the bridge, which reports a
+        fixed code; this only keeps the Runner from accepting another turn.
+        """
+        completed = False
+        try:
+            update = await work
+            completed = True
+            return update
+        finally:
+            if not completed:
+                self._stopped = True
 
     def close(self) -> None:
         """Invalidate late model/approval responses and drop local history."""
@@ -349,6 +494,9 @@ class TaskRunner:
                 )
                 return self._update("pending", approval_id=outcome.approval_id)
             if isinstance(outcome, Denied):
+                kind = _denied_kind(outcome)
+                if kind != "deny":
+                    return await self._contained_stop(kind)
                 # Guard can halt the Task while returning Denied (for example
                 # when its current policy version differs). Only a Task that
                 # is still RUNNING may accept another user turn.
@@ -367,12 +515,30 @@ class TaskRunner:
                 self._append_skipped(calls[index + 1 :])
                 self._awaiting_user = True
                 return self._update("denied")
-            if isinstance(outcome, (Withheld, OutcomeUnknown)):
-                self._stopped = True
-                return self._update(
-                    "outcome_unknown" if isinstance(outcome, OutcomeUnknown) else "halted"
+            if isinstance(outcome, Withheld):
+                # B can commit a failed READ without data and keep the Task
+                # RUNNING. Store decides; withheld data never reaches the model.
+                task_status = await self._task_run_state()
+                if self._closed:
+                    return self._update("halted")
+                if task_status != "running":
+                    self._stopped = True
+                    return self._update(
+                        "outcome_unknown" if task_status == "outcome_unknown" else "halted"
+                    )
+                self._conversation.append(
+                    ConversationMessage(
+                        role="tool",
+                        content=_WITHHELD_TEXT,
+                        model_call_id=call.model_call_id,
+                    )
                 )
+                self._append_skipped(calls[index + 1 :])
+                self._awaiting_user = True
+                return self._update("withheld")
             self._stopped = True
+            if isinstance(outcome, OutcomeUnknown):
+                return self._update("outcome_unknown")
             return self._update("halted")
         return self._update("continue")
 
@@ -406,17 +572,7 @@ class TaskRunner:
 
     def _update(
         self,
-        status: Literal[
-            "complete",
-            "continue",
-            "pending",
-            "denied",
-            "halted",
-            "outcome_unknown",
-            "model_error",
-            "closed",
-            "stopped",
-        ],
+        status: RunStatus,
         *,
         approval_id: str | None = None,
         assistant_text: str | None = None,

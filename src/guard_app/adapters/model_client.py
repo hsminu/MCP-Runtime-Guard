@@ -65,6 +65,19 @@ def _discard_late_completion(task: asyncio.Task[object]) -> None:
         task.exception()
 
 
+# Standard exception families an injected provider completion can raise. The
+# list is explicit (not a broad handler); anything else still propagates and
+# the Runner stops without classifying it.
+_PROVIDER_FAILURES = (
+    OSError,
+    ValueError,
+    TypeError,
+    LookupError,
+    ArithmeticError,
+    RuntimeError,
+)
+
+
 # Bounds on one normalized provider response. The completion remains untrusted
 # even when the provider transport has its own token or HTTP response limit.
 MAX_MODEL_TEXT_CHARS = 65_536
@@ -427,6 +440,10 @@ def parse_model_turn(value: object, tools: tuple[ToolView, ...]) -> ModelTurn:
             SchemaError,
             Unresolvable,
             re.error,
+            # The "regex" format compiles a model-chosen pattern. A huge
+            # repetition count or deep nesting fails outside re.error.
+            OverflowError,
+            RecursionError,
         ):
             raise ModelFormatError() from None
     try:
@@ -501,6 +518,8 @@ class ProviderNeutralModelClient:
             raw = completion_task.result()
         except TimeoutError:
             raise ModelDeadlineError() from None
-        except OSError:
+        except _PROVIDER_FAILURES:
+            # Provider messages can echo credentials or request content. Only
+            # the fixed completion error leaves this boundary.
             raise ModelCompletionError() from None
         return parse_model_turn(raw, safe_tools)

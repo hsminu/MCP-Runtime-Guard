@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -15,6 +15,7 @@ from guard_app.adapters.model_client import (
     ProviderNeutralModelClient,
 )
 from guard_app.domain.contracts import (
+    ApprovalRecord,
     Denied,
     ModelTurn,
     OutcomeUnknown,
@@ -24,7 +25,8 @@ from guard_app.domain.contracts import (
     ToolView,
     Withheld,
 )
-from guard_app.domain.enums import Label, TaskStatus
+from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus
+from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.models import ProposedCall, TaskState
 from guard_app.domain.reasons import Reason
@@ -506,24 +508,39 @@ def test_approval_race_after_task_stop_is_not_reported_pending(
 
 
 @pytest.mark.parametrize(
-    "outcome, expected",
+    "outcome, store_status, expected",
     [
         (
             Withheld(request_id="request-1", reasons=(Reason.STATE_COMMIT_FAILED,)),
+            TaskStatus.HALTED,
             "halted",
         ),
         (
             OutcomeUnknown(
                 request_id="request-1", reasons=(Reason.POST_DISPATCH_ERROR,)
             ),
+            TaskStatus.UNKNOWN_OUTCOME,
+            "outcome_unknown",
+        ),
+        (
+            # A SEND uncertainty stops even while Store still says RUNNING.
+            OutcomeUnknown(request_id="request-1", reasons=(Reason.POST_DISPATCH_ERROR,)),
+            TaskStatus.RUNNING,
             "outcome_unknown",
         ),
     ],
 )
-def test_nonreleased_result_never_enters_model_context(outcome, expected) -> None:
+def test_nonreleased_result_never_enters_model_context(outcome, store_status, expected) -> None:
+    store = FakeStore(_state())
+
+    class CommittingGuard(FakeGuard):
+        async def submit(self, task_id, call, *, expected_epoch):
+            store.state = _state(status=store_status)
+            return await super().submit(task_id, call, expected_epoch=expected_epoch)
+
     model = FakeModel(ModelTurn(calls=(_call(1), _call(2))))
-    guard = FakeGuard(outcome)
-    runner = _runner(_state(), model, guard)
+    guard = CommittingGuard(outcome)
+    runner = _runner(_state(), model, guard, store)
     runner.add_user_message("read")
 
     async def run():
@@ -911,3 +928,284 @@ def test_close_during_approval_state_lookup_discards_late_release() -> None:
 
     assert asyncio.run(run()).status == "closed"
     assert len(guard.calls) == 1
+
+
+
+def _pending(request_id: str = "request-1", approval_id: str = "approval-1") -> Pending:
+    return Pending(
+        request_id=request_id,
+        approval_id=approval_id,
+        reasons=(Reason.INTERNAL_TO_EXTERNAL,),
+    )
+
+
+class ApprovalStore(FakeStore):
+    """FakeStore plus the approval row B committed for this approval."""
+
+    def __init__(self, state: TaskState, status: ApprovalStatus | None) -> None:
+        super().__init__(state)
+        self.status = status
+        self.approval_reads = 0
+
+    async def get_approval(self, approval_id: str) -> ApprovalRecord | None:
+        self.approval_reads += 1
+        if self.status is None:
+            raise StoreError(Reason.STATE_MISSING)
+        now = datetime(2026, 10, 13, tzinfo=UTC)
+        consumed = self.status is ApprovalStatus.CONSUMED
+        return ApprovalRecord(
+            approval_id=approval_id,
+            request_id="request-1",
+            snapshot_hash="0" * 64,
+            approver_id="operator-1",
+            status=self.status,
+            created_at_utc=now,
+            expires_at_utc=now + timedelta(minutes=5),
+            decided_at_utc=now if consumed else None,
+            consumed_at_utc=now if consumed else None,
+        )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        Reason.INTERNAL_ERROR,
+        Reason.STATE_COMMIT_FAILED,
+        Reason.STATE_MISSING,
+        # A StoreError reason Guard also uses with its global halt.
+        Reason.APPROVAL_RACE,
+    ],
+)
+def test_guard_containment_deny_stops_runner_while_store_running(reason: Reason) -> None:
+    """Q04/I1: an in-memory global halt is not a policy deny to retry around."""
+    model = FakeModel(ModelTurn(calls=(_call(1), _call(2))), ModelTurn(text="never"))
+    guard = FakeGuard(Denied(request_id=None, reasons=(reason,)))
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    update = asyncio.run(runner.advance())
+
+    assert update.status == "guard_error"
+    with pytest.raises(RunnerStateError):
+        runner.add_user_message("new input after global halt")
+    with pytest.raises(RunnerStateError):
+        asyncio.run(runner.advance())
+    assert not runner.can_advance
+    assert len(model.seen) == 1
+    assert len(guard.calls) == 1
+
+
+def test_pre_decision_resolution_deny_still_allows_new_turn() -> None:
+    """Resolution denials of the model's own call remain ordinary denies."""
+    model = FakeModel(ModelTurn(calls=(_call(),)), ModelTurn(text="later"))
+    guard = FakeGuard(Denied(request_id=None, reasons=(Reason.INVALID_ARGUMENTS,)))
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    async def run():
+        first = await runner.advance()
+        runner.add_user_message("try again")
+        return first, await runner.advance()
+
+    first, second = asyncio.run(run())
+    assert (first.status, second.status) == ("denied", "complete")
+
+
+def test_stop_latch_deny_before_store_halt_rejects_new_input() -> None:
+    """R16/T20: cancel can deny a submit before its Store halt commits."""
+    model = FakeModel(ModelTurn(calls=(_call(1), _call(2))))
+    guard = FakeGuard(Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,)))
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    update = asyncio.run(runner.advance())
+
+    assert update.status == "stopped"
+    with pytest.raises(RunnerStateError):
+        runner.add_user_message("new input while cancel lands")
+    assert len(model.seen) == 1
+
+
+def test_withheld_read_with_running_task_ends_turn_without_data() -> None:
+    """Q05/I7: B keeps the Task RUNNING for a failed READ without data."""
+    model = FakeModel(ModelTurn(calls=(_call(1), _call(2))), ModelTurn(text="next"))
+    guard = FakeGuard(Withheld(request_id="request-1", reasons=(Reason.POST_DISPATCH_ERROR,)))
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    async def run():
+        first = await runner.advance()
+        assert not runner.can_advance
+        with pytest.raises(RunnerStateError):
+            await runner.advance()
+        runner.add_user_message("continue")
+        return first, await runner.advance()
+
+    first, second = asyncio.run(run())
+    assert first.status == "withheld"
+    assert second.status == "complete"
+    assert len(guard.calls) == 1
+    tool_messages = [m for m in model.seen[1][0] if m.role == "tool"]
+    assert [m.content for m in tool_messages] == [
+        "이 호출 결과는 공개되지 않았습니다.",
+        "이 호출은 실행되지 않았습니다.",
+    ]
+    assert all("POST_DISPATCH_ERROR" not in m.content for m in tool_messages)
+
+
+def test_approved_withheld_read_with_running_task_can_continue() -> None:
+    model = FakeModel(ModelTurn(calls=(_call(1), _call(2))), ModelTurn(text="next"))
+    guard = FakeGuard(_pending())
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    async def run():
+        assert (await runner.advance()).status == "pending"
+        resumed = await runner.resume_approval(
+            "task-1",
+            1,
+            "approval-1",
+            Withheld(request_id="request-1", reasons=(Reason.POST_DISPATCH_ERROR,)),
+        )
+        runner.add_user_message("continue")
+        return resumed, await runner.advance()
+
+    resumed, second = asyncio.run(run())
+    assert (resumed.status, second.status) == ("withheld", "complete")
+    assert len(guard.calls) == 1
+    assert [m.content for m in model.seen[1][0] if m.role == "tool"] == [
+        "이 호출 결과는 공개되지 않았습니다.",
+        "이 호출은 실행되지 않았습니다.",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("approval_status", "expected"),
+    [
+        (ApprovalStatus.INVALIDATED, "denied"),
+        (ApprovalStatus.CANCELLED, "denied"),
+        (ApprovalStatus.CONSUMED, "pending"),
+        (None, "stopped"),
+    ],
+)
+def test_approval_race_after_resume_to_running_follows_approval_record(
+    approval_status: ApprovalStatus | None, expected: str
+) -> None:
+    """Q08: B resumes the Task to RUNNING and settles the approval."""
+    state = _state()
+    store = ApprovalStore(state, approval_status)
+    model = FakeModel(ModelTurn(calls=(_call(1), _call(2))), ModelTurn(text="later"))
+    guard = FakeGuard(_pending())
+    runner = _runner(state, model, guard, store)
+    runner.add_user_message("read")
+
+    async def run():
+        assert (await runner.advance()).status == "pending"
+        return await runner.resume_approval(
+            "task-1",
+            1,
+            "approval-1",
+            Denied(request_id="request-1", reasons=(Reason.APPROVAL_RACE,)),
+        )
+
+    update = asyncio.run(run())
+    assert update.status == expected
+    assert store.approval_reads == 1
+    if expected == "denied":
+        runner.add_user_message("new request")
+        assert asyncio.run(runner.advance()).status == "complete"
+        assert model.seen[1][0][-3].content == "이 요청은 실행되지 않았습니다."
+        assert model.seen[1][0][-2].content == "이 호출은 실행되지 않았습니다."
+    else:
+        with pytest.raises(RunnerStateError):
+            runner.add_user_message("new request")
+    assert len(guard.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("reason", "store_status", "expected"),
+    [
+        (Reason.INTERNAL_ERROR, TaskStatus.HALTED, "guard_error"),
+        (Reason.INTERNAL_ERROR, TaskStatus.RUNNING, "guard_error"),
+        (Reason.APPROVAL_RACE, TaskStatus.RUNNING, "guard_error"),
+        (Reason.TASK_NOT_RUNNING, TaskStatus.HALTED, "halted"),
+    ],
+)
+def test_approval_failure_without_request_id_is_terminal(
+    reason: Reason, store_status: TaskStatus, expected: str
+) -> None:
+    """Q09: approval-path containment has no request ID but ends this approval."""
+    state = _state()
+    store = FakeStore(state)
+    model = FakeModel(ModelTurn(calls=(_call(1), _call(2))))
+    guard = FakeGuard(_pending())
+    runner = _runner(state, model, guard, store)
+    runner.add_user_message("read")
+
+    async def run():
+        assert (await runner.advance()).status == "pending"
+        store.state = state.model_copy(update={"status": store_status})
+        update = await runner.resume_approval(
+            "task-1", 1, "approval-1", Denied(request_id=None, reasons=(reason,))
+        )
+        with pytest.raises(RunnerStateError):
+            await runner.resume_approval(
+                "task-1", 1, "approval-1", Denied(request_id=None, reasons=(reason,))
+            )
+        return update
+
+    update = asyncio.run(run())
+    assert update.status == expected
+    assert not runner.can_advance
+    with pytest.raises(RunnerStateError):
+        runner.add_user_message("new input")
+    assert len(model.seen) == 1
+    assert len(guard.calls) == 1
+
+
+def test_resume_still_rejects_other_request_result() -> None:
+    model = FakeModel(ModelTurn(calls=(_call(),)), ModelTurn(text="later"))
+    guard = FakeGuard(_pending())
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    async def run():
+        assert (await runner.advance()).status == "pending"
+        with pytest.raises(RunnerStateError):
+            await runner.resume_approval(
+                "task-1",
+                1,
+                "approval-1",
+                Denied(request_id="request-other", reasons=(Reason.OK,)),
+            )
+        # A mismatched result neither consumes nor stops the pending approval.
+        return await runner.resume_approval(
+            "task-1", 1, "approval-1", Denied(request_id="request-1", reasons=(Reason.OK,))
+        )
+
+    assert asyncio.run(run()).status == "denied"
+
+
+@pytest.mark.parametrize("failure", [ValueError, OverflowError, RecursionError])
+def test_unclassified_model_failure_stops_runner(failure: type[Exception]) -> None:
+    """R07: an exception escaping the model client leaves no runnable loop."""
+
+    class RaisingModel:
+        calls = 0
+
+        async def step(self, conversation, tools):
+            self.calls += 1
+            raise failure("synthetic-private-marker")
+
+    model = RaisingModel()
+    guard = FakeGuard()
+    runner = _runner(_state(), model, guard)
+    runner.add_user_message("read")
+
+    with pytest.raises(failure):
+        asyncio.run(runner.advance())
+    assert not runner.can_advance
+    with pytest.raises(RunnerStateError):
+        asyncio.run(runner.advance())
+    assert model.calls == 1
+    assert guard.calls == []

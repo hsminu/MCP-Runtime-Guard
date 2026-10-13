@@ -14,12 +14,14 @@ import threading
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC
 from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
 
+from guard_app.core.snapshot import ApprovalSnapshot
 from guard_app.domain.contracts import (
     Denied,
     OutcomeUnknown,
@@ -81,6 +83,9 @@ class BackendBindings:
     bridge invokes only ``TaskRunner.advance``; it accepts no user-supplied
     coroutine or direct transport operation. ``human_control`` is the B
     capability obtained from ``GuardService.human_control``.
+    ``discard_queued`` settles a Task's queued, not-yet-active transport
+    commands before wire; it is called synchronously right before a human
+    cancel or emergency halt starts.
     """
 
     runner_for_task: Callable[[str], TaskRunner]
@@ -88,6 +93,7 @@ class BackendBindings:
     close: Callable[[], Awaitable[None]] | None = None
     snapshot: Callable[[str], Awaitable[TaskProjection]] | None = None
     initial_task_id: str | None = None
+    discard_queued: Callable[[str], int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -623,6 +629,7 @@ class BackendBridge(QObject):
             or not callable(bindings.runner_for_task)
             or not isinstance(bindings.human_control, HumanControl)
             or (bindings.close is not None and not callable(bindings.close))
+            or (bindings.discard_queued is not None and not callable(bindings.discard_queued))
         ):
             cleaned = await self._cleanup_bindings() if adopted else False
             if self._stop_requested.is_set():
@@ -785,41 +792,77 @@ class BackendBridge(QObject):
             runner = bindings.runner_for_task(command.target_id)
             if not isinstance(runner, TaskRunner) or runner.task_id != command.target_id:
                 return "RUNNER_UNAVAILABLE"
-            update = await runner.advance()
-            if type(update) is not RunUpdate or update.task_id != command.target_id:
-                return "RUNNER_UNCONFIRMED"
-            if update.approval_id is not None:
-                self._pending_runs[update.approval_id] = (update.task_id, update.epoch)
-            await self._publish_task(update.task_id)
-            return f"RUN_{update.status.upper()}_QUERY_REQUIRED"
+            try:
+                update = await runner.advance()
+                if type(update) is not RunUpdate or update.task_id != command.target_id:
+                    return "RUNNER_UNCONFIRMED"
+                if update.approval_id is not None:
+                    self._pending_runs[update.approval_id] = (update.task_id, update.epoch)
+                return f"RUN_{update.status.upper()}_QUERY_REQUIRED"
+            finally:
+                # Even a failed or unclassified run must not leave the UI on
+                # an older projection; Store decides what is displayed.
+                await self._publish_after(command.target_id)
         control = bindings.human_control
         if command.action == ControlAction.REVIEW:
             snapshot = await control.review(command.target_id)
             if snapshot is None:
                 return "REVIEW_UNAVAILABLE"
-            req = snapshot.request
             self.review_ready.emit(
                 ApprovalReview(
                     command.command_id,
                     command.target_id,
                     snapshot.task_id,
-                    req.epoch,
-                    f"MCP 서버: {req.tool.server_id} / {req.server_boundary.boundary_id}\n"
-                    f"목적지 경계: {req.destination.boundary_id if req.destination else '없음'}",
+                    snapshot.request.epoch,
+                    _review_header(snapshot),
                     snapshot.arguments_bytes,
                 )
             )
             return "REVIEW_READY"
+        if command.action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
+            try:
+                return await self._stop_task(bindings, control, command)
+            finally:
+                await self._publish_after(command.target_id)
+        known = self._pending_runs.get(command.target_id)
+        try:
+            return await self._decide_approval(bindings, control, command)
+        finally:
+            # Approval failures can halt the Task (and Guard) while an
+            # approvable waiting projection is still on screen.
+            routed = known or self._pending_runs.get(command.target_id)
+            if routed is not None:
+                await self._publish_after(routed[0])
+
+    async def _stop_task(
+        self, bindings: BackendBindings, control: HumanControl, command: _Command
+    ) -> str:
+        discard = bindings.discard_queued
+        try:
+            if discard is not None:
+                # Synchronous: queued commands are settled before wire, and
+                # the stop latch below is set before its first await.
+                discard(command.target_id)
+        finally:
+            # A failed discard still issues the stop (fail closed); its error
+            # then leaves this command unconfirmed.
+            if command.action == ControlAction.CANCEL:
+                result = await control.cancel(command.target_id)
+            else:
+                result = await control.emergency_halt(command.target_id)
+        if isinstance(result, (Denied, Pending, Released, Withheld, OutcomeUnknown)):
+            return f"CONTROL_{result.kind.upper()}_QUERY_REQUIRED"
+        return "CONTROL_UNCONFIRMED"
+
+    async def _decide_approval(
+        self, bindings: BackendBindings, control: HumanControl, command: _Command
+    ) -> str:
         if command.action == ControlAction.APPROVE:
             result = await control.approve(command.target_id)
-        elif command.action == ControlAction.REJECT:
-            result = await control.reject(command.target_id)
-        elif command.action == ControlAction.CANCEL:
-            result = await control.cancel(command.target_id)
         else:
-            result = await control.emergency_halt(command.target_id)
+            result = await control.reject(command.target_id)
         pending = self._pending_runs.get(command.target_id)
-        if pending is not None and command.action in (ControlAction.APPROVE, ControlAction.REJECT):
+        if pending is not None:
             task_id, epoch = pending
             runner = bindings.runner_for_task(task_id)
             update = await runner.resume_approval(task_id, epoch, command.target_id, result)
@@ -827,12 +870,15 @@ class BackendBridge(QObject):
                 self._pending_runs.pop(command.target_id, None)
             if update.approval_id is not None:
                 self._pending_runs[update.approval_id] = (task_id, epoch)
-            await self._publish_task(task_id)
-        elif command.action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
-            await self._publish_task(command.target_id)
+            if update.status == "guard_error":
+                return "CONTROL_GUARD_ERROR_QUERY_REQUIRED"
         if isinstance(result, (Denied, Pending, Released, Withheld, OutcomeUnknown)):
             return f"CONTROL_{result.kind.upper()}_QUERY_REQUIRED"
         return "CONTROL_UNCONFIRMED"
+
+    async def _publish_after(self, task_id: str) -> None:
+        if not self._stop_requested.is_set():
+            await self._publish_task(task_id)
 
     async def _publish_task(self, task_id: str) -> None:
         bindings = self._bindings
@@ -849,3 +895,24 @@ class BackendBridge(QObject):
     def _consume_task(task: asyncio.Future[Any]) -> None:
         if not task.cancelled():
             task.exception()  # Suppress default raw exception logging; events use fixed codes.
+
+
+def _review_header(snapshot: ApprovalSnapshot) -> str:
+    """Trusted request metadata on one line.
+
+    The UI renders every newline in review text as a visible escape, so the
+    fields use a separator. Tool, kind and expiry tell apart two pending
+    approvals with the same server and arguments.
+    """
+    req = snapshot.request
+    destination = req.destination.boundary_id if req.destination else "없음"
+    expires = snapshot.expires_at_utc.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return " · ".join(
+        (
+            f"도구: {req.tool.tool_name} ({req.tool.kind.name})",
+            f"MCP 서버: {req.tool.server_id} (경계 {req.server_boundary.boundary_id})",
+            f"목적지 경계: {destination}",
+            f"Task 등급: {snapshot.effective_label.name}",
+            f"만료: {expires}",
+        )
+    )

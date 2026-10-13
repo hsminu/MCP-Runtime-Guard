@@ -117,7 +117,17 @@ def test_completion_deadline_must_be_finite_and_positive(timeout_s: object) -> N
 
 
 @pytest.mark.parametrize(
-    "failure", [OSError("synthetic-private-marker"), asyncio.CancelledError()]
+    "failure",
+    [
+        OSError("synthetic-private-marker"),
+        asyncio.CancelledError(),
+        # R07: provider SDKs also raise plain ValueError/TypeError/etc.
+        ValueError("synthetic-private-marker"),
+        TypeError("synthetic-private-marker"),
+        KeyError("synthetic-private-marker"),
+        RuntimeError("synthetic-private-marker"),
+        OverflowError("synthetic-private-marker"),
+    ],
 )
 def test_provider_failure_has_fixed_content_free_error(failure: BaseException) -> None:
     async def complete(conversation, tools):
@@ -130,6 +140,34 @@ def test_provider_failure_has_fixed_content_free_error(failure: BaseException) -
         )
     assert str(captured.value) == "모델 요청을 완료할 수 없다"
     assert "synthetic-private-marker" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["a{4294967296}", "(" * 600 + ")" * 600, "[z-a]"],
+    ids=["overflow", "recursion", "re-error"],
+)
+def test_regex_format_failure_is_classified_without_content(pattern: str) -> None:
+    """R07/I7: a model-chosen regex cannot escape as an unclassified error."""
+    view = ToolView(
+        tool_ref="alpha__search",
+        input_schema=FrozenJsonObject(
+            {
+                "type": "object",
+                "properties": {"pattern": {"type": "string", "format": "regex"}},
+                "required": ["pattern"],
+                "additionalProperties": False,
+            }
+        ),
+        description="",
+    )
+    response = {
+        "text": None,
+        "calls": [_call("alpha__search", json.dumps({"pattern": pattern}))],
+    }
+    with pytest.raises(ModelFormatError) as captured:
+        parse_model_turn(response, (view,))
+    assert str(captured.value) == "모델 응답 형식이 유효하지 않다"
 
 
 def test_provider_timeout_has_fixed_content_free_error() -> None:
