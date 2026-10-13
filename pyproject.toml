@@ -12,7 +12,8 @@ dependencies = [
   "mcp==1.29.0",
   "httpx==0.28.1",
   "pydantic==2.14.0",
-  "jsonschema==4.25.1",
+  "jsonschema==4.26.0",
+  "referencing==0.37.0",
   "PySide6==6.12.0",
 ]
 
@@ -20,7 +21,16 @@ dependencies = [
 guard-app = "guard_app.__main__:main"
 
 [dependency-groups]
-dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "hypothesis==6.169.0", "ruff==0.17.0", "uvicorn==0.54.0"]
+dev = [
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "hypothesis==6.169.0",
+  "ruff==0.17.0",
+  "mypy==2.4.0",
+  "import-linter==2.15",
+  "types-jsonschema==4.26.0.20261006",
+  "uvicorn==0.54.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
