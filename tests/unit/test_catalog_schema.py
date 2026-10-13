@@ -1,7 +1,7 @@
 """B3/I6: 등록 스키마 사본의 검증·폐쇄·오류 원문 격리."""
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from jsonschema import Draft202012Validator
 
@@ -218,7 +218,9 @@ def test_scalar_all_of_constraints_are_supported(count: int, valid: bool) -> Non
             compiled.validate(Arguments({"count": count}))
 
 
-@settings(max_examples=100)
+# 캐시(.hypothesis)가 없는 첫 실행은 st.text의 유니코드 표 생성(약 1초)이 입력 생성
+# 시간으로 잡혀 too_slow로 실패한다. 표가 생긴 뒤에는 통과하므로 이 검사만 끈다.
+@settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
 @given(
     condition=st.sampled_from(
         [
