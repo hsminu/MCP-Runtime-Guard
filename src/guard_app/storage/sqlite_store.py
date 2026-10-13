@@ -34,6 +34,12 @@ from guard_app.domain.errors import StoreError
 from guard_app.domain.models import Boundary, Escalation, PolicyDecision, ResolvedRequest, TaskState
 from guard_app.domain.reasons import Reason
 from guard_app.security.digest import json_digest
+from guard_app.storage.startup_inventory import (
+    _StartupInventory,
+    _StoredApproval,
+    _StoredRequest,
+    _StoredTask,
+)
 
 SCHEMA_VERSION = 1
 APPLICATION_ID = 0x4D435047  # MCPG. 기존 다른 앱의 DB를 자동 채택하지 않는다.
@@ -374,6 +380,100 @@ class SQLiteStore:
         if result.task_id != task_id:
             raise StoreError()
         return result
+
+    def _inspect_startup(self) -> _StartupInventory:
+        """B 시작 복구 준비용 내부 조회. 기존 v1 데이터만 읽고 실행 상태를 쓰지 않는다.
+
+        이 반환은 준비/복구 성공 ACK가 아니다. 순번 배정·schema 이관·상태/epoch
+        변경과 앱 bootstrap 연결은 SEQ/REC 합의 후다. SQL은 지정 모듈에만 둔다.
+        """
+        return _store_result(self._inspect_startup_rows)
+
+    def _inspect_startup_rows(self) -> _StartupInventory:
+        connection = self._owned_connection()
+        if connection.in_transaction:
+            # 기존 쓰기 TX를 BEGIN 실패 처리로 rollback하지 않는다.
+            raise StoreError()
+        with self._transaction(write=False):
+            version = _integer(connection.execute("PRAGMA user_version").fetchone()[0])
+            application = connection.execute("PRAGMA application_id").fetchone()[0]
+            entries = connection.execute(
+                "SELECT name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
+            ).fetchall()
+            if (
+                version != SCHEMA_VERSION
+                or application != APPLICATION_ID
+                or {row[0]: row[1] for row in entries} != dict(_SCHEMA)
+            ):
+                raise StoreError()
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise StoreError(Reason.STATE_MISSING)
+
+            task_rows = connection.execute("SELECT * FROM tasks ORDER BY task_id").fetchall()
+            history_rows = connection.execute(
+                """SELECT task_id, at_seq, source_id, from_label, to_label
+                FROM escalations ORDER BY task_id, at_seq"""
+            ).fetchall()
+            histories: dict[str, list[sqlite3.Row]] = {}
+            for row in history_rows:
+                histories.setdefault(_identifier(row["task_id"]), []).append(row)
+            states: dict[str, TaskState] = {}
+            for row in task_rows:
+                task_id = _identifier(row["task_id"])
+                if task_id in states:
+                    raise StoreError(Reason.STATE_MISSING)
+                states[task_id] = _decode_task(row, histories.get(task_id, []))
+            if histories.keys() - states.keys():
+                raise StoreError(Reason.STATE_MISSING)
+
+            requests: dict[str, _StoredRequest] = {}
+            request_sequences: set[tuple[str, int]] = set()
+            request_maxima: dict[str, int] = {}
+            for row in connection.execute("SELECT * FROM requests ORDER BY request_id").fetchall():
+                stored = _decode_stored_request(row)
+                sequence_key = (stored.task_id, stored.call_seq)
+                if (
+                    stored.task_id not in states
+                    or stored.request_id in requests
+                    or sequence_key in request_sequences
+                ):
+                    raise StoreError(Reason.STATE_MISSING)
+                requests[stored.request_id] = stored
+                request_sequences.add(sequence_key)
+                request_maxima[stored.task_id] = max(
+                    request_maxima.get(stored.task_id, stored.call_seq), stored.call_seq
+                )
+
+            approvals: list[_StoredApproval] = []
+            approved_requests: set[str] = set()
+            for row in connection.execute(
+                "SELECT approval_id FROM approvals ORDER BY approval_id"
+            ).fetchall():
+                record = self._approval_locked(connection, _identifier(row["approval_id"]))
+                if (
+                    record is None
+                    or record.request_id not in requests
+                    or record.request_id in approved_requests
+                ):
+                    raise StoreError(Reason.STATE_MISSING)
+                approved_requests.add(record.request_id)
+                approvals.append(_StoredApproval(record, requests[record.request_id].task_id))
+
+            return _StartupInventory(
+                schema_version=version,
+                tasks=tuple(
+                    _StoredTask(
+                        state=state,
+                        request_sequence_max=request_maxima.get(task_id),
+                        escalation_sequence_max=max(
+                            (item.at_seq for item in state.escalations), default=None
+                        ),
+                    )
+                    for task_id, state in states.items()
+                ),
+                requests=tuple(requests.values()),
+                approvals=tuple(approvals),
+            )
 
     async def set_task_status(
         self,
@@ -1546,6 +1646,35 @@ def _check_task(state: TaskState) -> None:
         ):
             raise ValueError("invalid escalation history")
         previous = item
+
+
+def _decode_stored_request(row: sqlite3.Row) -> _StoredRequest:
+    """v1 문자열/정수/시각을 기존 타입으로 검사하고 상태 조합은 추정하지 않는다."""
+    _identifier(row["server_id"])
+    _identifier(row["tool_name"])
+    if row["destination_id"] is not None:
+        _identifier(row["destination_id"])
+    _sha256(row["arguments_digest"])
+    decision = None if row["decision"] is None else Decision(_integer(row["decision"]))
+    if row["reasons"] is not None:
+        try:
+            reasons = json.loads(_text(row["reasons"]))
+        except RecursionError:
+            raise StoreError() from None
+        if type(reasons) is not list or not reasons:
+            raise StoreError()
+        for reason in reasons:
+            Reason(_text(reason))
+    return _StoredRequest(
+        request_id=_identifier(row["request_id"]),
+        task_id=_identifier(row["task_id"]),
+        call_seq=_integer(row["call_seq"]),
+        status=RequestStatus(_text(row["status"])),
+        decision=decision,
+        dispatch_reserved_at_utc=None
+        if row["dispatch_reserved_at_utc"] is None
+        else _utc_value(row["dispatch_reserved_at_utc"]),
+    )
 
 
 def _decode_task(row: sqlite3.Row, history: list[sqlite3.Row]) -> TaskState:
