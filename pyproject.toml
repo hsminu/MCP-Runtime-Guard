@@ -41,5 +41,114 @@ pythonpath = ["src"]
 addopts = "--strict-markers --strict-config"
 
 [tool.ruff]
-target-version = "py312"
 line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+include = ["*.py", "*.pyi", "pyproject.toml"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "RET", "BLE", "S", "ASYNC", "PT"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+# Qt가 정한 camelCase 재정의 이름(closeEvent·keyPressEvent 등)은 영구 예외다.
+"src/guard_app/__main__.py" = ["N802", "E501"]
+"src/guard_app/ui/**" = ["N802", "N815"]
+# ---- A+B 통합 기준선(2026-10-14) ----
+# 통합 시점에 이미 있던 위반만 파일별로 면제한다. 새 파일과 B 파일에는 적용하지 않는다.
+# 담당자가 해당 파일을 고치면 항목을 지운다. 범위는 docs/integration-a-b.md 참고.
+"src/guard_app/adapters/mcp_transport.py" = ["N818", "S101"]
+"src/guard_app/services/bridge.py" = ["ASYNC109", "S101", "SIM105"]
+"src/guard_app/ui/approvals.py" = ["E501", "S101"]
+"src/guard_app/ui/models.py" = ["UP046"]
+"src/guard_app/ui/presentation.py" = ["E501"]
+"src/guard_app/ui/server_add.py" = ["E501"]
+"src/guard_app/ui/style.py" = ["E501"]
+"src/guard_app/ui/task_status.py" = ["E501"]
+"src/guard_app/ui/window.py" = ["E501"]
+"examples/**" = ["E501", "I001", "PT018", "S101"]
+"tests/unit/test_agt.py" = ["PT018"]
+"tests/unit/test_agt_real.py" = ["ASYNC110", "B007", "I001", "PT006", "PT012", "PT018"]
+"tests/unit/test_bridge.py" = ["ASYNC110", "PT007", "PT018"]
+"tests/unit/test_call_logs.py" = ["PT018"]
+"tests/unit/test_mcp_http.py" = ["I001", "PT006", "PT011", "PT017", "PT018"]
+"tests/unit/test_mcp_transport.py" = ["PT007", "PT018"]
+"tests/unit/test_model_client.py" = ["S105"]
+"tests/unit/test_runner.py" = ["PT006", "PT018"]
+"tests/unit/test_runtime.py" = ["I001", "PT006", "PT018"]
+"tests/unit/test_server_add.py" = ["PT006", "PT018"]
+"tests/unit/test_sqlite_app.py" = ["I001", "PT011", "PT018"]
+"tests/unit/test_stdio_logging.py" = ["E501", "PT011"]
+"tests/unit/test_ui_approvals.py" = ["PT018"]
+"tests/unit/test_ui_keyboard.py" = ["PT018"]
+"tests/unit/test_ui_overview.py" = ["PT018"]
+
+[tool.ruff.format]
+quote-style = "double"
+# A+B 통합 기준선(2026-10-14): 아직 포맷하지 않은 A 파일. 작업 중 충돌을 피하려고
+# 통합 브랜치에서 일괄 포맷하지 않았다. A가 원하는 시점에 포맷하고 목록을 지운다.
+exclude = [
+  "src/guard_app/adapters/model_client.py",
+  "src/guard_app/ui/approvals.py",
+  "src/guard_app/ui/call_logs.py",
+  "src/guard_app/ui/overview.py",
+  "src/guard_app/ui/presentation.py",
+  "src/guard_app/ui/scan_status.py",
+  "src/guard_app/ui/server_add.py",
+  "src/guard_app/ui/servers.py",
+  "src/guard_app/ui/task_status.py",
+  "src/guard_app/ui/widgets.py",
+  "src/guard_app/ui/window.py",
+  "tests/unit/test_approval_detail.py",
+  "tests/unit/test_bridge.py",
+  "tests/unit/test_call_logs.py",
+  "tests/unit/test_model_client.py",
+  "tests/unit/test_runner.py",
+  "tests/unit/test_task_status.py",
+  "tests/unit/test_ui_approvals.py",
+  "tests/unit/test_ui_keyboard.py",
+  "tests/unit/test_ui_overview.py",
+  "tests/unit/test_ui_read_only_pages.py",
+  "tests/unit/test_ui_responsive_detail.py",
+]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+strict = true
+files = ["src/guard_app"]
+native_parser = false
+
+[[tool.mypy.overrides]]
+# 시연 조립과 테스트 대역은 검사 대상이 아니다. src의 import를 따라 들어가지 않는다.
+module = ["examples.*", "tests.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+# A+B 통합 기준선(2026-10-14): A 모듈은 미타입 함수를 허용하되 본문의 타입 오류는 검사한다.
+module = [
+  "guard_app.__main__",
+  "guard_app.adapters.*",
+  "guard_app.services.bridge",
+  "guard_app.services.runner",
+  "guard_app.ui.*",
+]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# 기준선: `active` 같은 bool 변수로 좁힌 Optional을 mypy가 추적하지 못하는 오탐.
+module = "guard_app.ui.runtime"
+disable_error_code = ["union-attr"]
+
+[[tool.mypy.overrides]]
+# 기준선: PySide6 스텁의 QApplication.instance() 반환형이 QCoreApplication이다.
+module = "guard_app.__main__"
+disable_error_code = ["attr-defined"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
