@@ -17,7 +17,7 @@
 | A14 원시 출력 | 필수 errlog·stdio/HTTP SDK와 합성 HTTP 서버 로그 격리 | 정식 C 공개 handler 인수 없음 | C 로그 정책·A39 함께 검증 |
 | A15·A16 등록 | 요구·단위 구현 | 지문/Registry/launcher 미연결 | 실제 등록 계약 연결 |
 | A17 AGT 선정 | [core 5.0.0 선정](a-agt-selection.md), Windows 판정 스파이크 8경로 통과 | Scanner와 함께 쓸 공통 제품 조합 미검증 | C 조합 인수 |
-| A18 AGT 연결 | [실제 로컬 판정·명시적 real/mock·timeout/취소 검증](a-agt-integration.md) | 제품 규칙 계약·영속 mode 감사·C 독립 인수 미완료 | B 규칙/감사 검토, C dispatch 0 인수 |
+| A18 AGT 연결 | [실제 로컬 판정·명시적 real/mock·timeout/취소 검증](a-agt-integration.md), 10-13 QA 반영(동시 16·멈춘 worker 교체·종료 확인·한국어 결과 문구) | [AGT 역할·규칙 관리 결정](a-agt-role-decision.md) 미확정, 영속 mode 감사·C 독립 인수 미완료, B Guard 4개 상한 병합 후 재확인 | 역할 결정, B 규칙/감사 검토, C dispatch 0 인수 |
 | A19·A20 모델 | 중립 adapter·한계 단위 검증 | 실제 제공자 미선정 | 승인 환경 확정 |
 | A21·A22 Runner | expected_epoch·승인 resume 연결 | 실제 모델 세션 격리 미검증 | 제공자 선정 후 T21 |
 | A23 B 리뷰 | AGT 지연 중 긴급 차단 수정·회귀 검증 | C 독립 wire 검증 미실행 | B·C 소유자 리뷰 |

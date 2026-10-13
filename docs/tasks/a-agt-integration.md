@@ -41,12 +41,22 @@ Guard가 최종 합성과 실행을 담당하므로 AGT 허용은 ASK·DENY를 �
 
 합성 bootstrap은 Guard 상한 2초에서 adapter 판정 상한 1초를 파생한다.
 시작 상한 5초, 종료 확인 상한 1초이며, 설정은 유한한 양수·최대 30초만 받는다.
-동시에 미완료 판정은 1개만 허용한다. 취소 뒤 기존 작업이 끝나기 전 추가 요청은
-`AGT_BUSY`, 시간초과 뒤 해당 인스턴스는 닫힌 상태가 된다. 자동 재시작·재시도는 없다.
+(2026-10-13 QA 수정) 대기·실행 중 판정은 `max_pending` 16개까지 받고, 현재 worker가
+순서대로 처리한다. B 최신 Guard의 동시 검사 상한 4개(`max_access_checks`)보다 좁지 않다.
+상한을 넘은 요청만 `AGT_BUSY`다. 대기 중 취소는 슬롯을 바로 돌려주고, SDK 안에서 실행 중인
+취소는 SDK가 돌아올 때까지 슬롯을 유지한다.
+
+시간초과는 더 이상 인스턴스를 영구 정지시키지 않는다. 해당 요청이 기다리는 내내 worker가
+같은 엔진 생성이나 같은 판정에 머물렀다면 그 worker를 퇴역시킨다. 실행 중이던 결과는
+`AGT_TIMEOUT`으로 확정하고 늦은 허용은 버린다. 대기열은 새 worker로 옮긴다. 아직 살아 있는
+퇴역 스레드는 `max_stuck_workers`(기본 2) 예산에 들어가고, 예산을 넘거나 새 스레드를 만들 수
+없으면 인스턴스를 닫는다(`AGT_UNAVAILABLE`). 같은 요청을 재시도하지 않으며 mock이나 허용으로
+바꾸지 않는다. SDK 예외와 재시작 worker의 엔진 생성 실패도 인스턴스를 닫는다.
 실제 모드는 SDK 준비를 확인한 뒤에만 MCP 서버를 시작하고 실행 버튼·모드를 공개한다.
 
 스레드는 강제로 종료할 수 없다. SDK가 멈추면 호출자를 제한시간 안에 차단하고
 종료 확인 실패를 `AgtShutdownError`로 전달한다. bridge는 이를 정리 미확인으로 다룬다.
+`close()`는 퇴역 worker를 포함한 모든 스레드가 실제로 끝난 뒤에만 성공한다.
 daemon은 프로세스 종료를 막지 않지만, 이 동작을 작업 스레드 종료 성공으로 보고하지 않는다.
 이후 늦은 허용 결과는 폐기한다. SDK 예외는 기존 `security.failclosed.fail_closed`
 경계에서 처리하며 새로운 넓은 예외 처리 경계를 추가하지 않았다.
@@ -104,8 +114,31 @@ Qt runtime 검증은 real/mock 표시, 사본 조회·승인·중복 클릭·std
 host_dispatch는 실제 `ClientSession.call_tool` 직전 callback,
 receiver_effect는 별도 stdio 합성 프로세스의 계수다. 독립 wire 계수는 관측하지 않았다.
 
+## 2026-10-13 QA 지적 반영
+
+| # | 지적 | 원인 | 변경 | 검증 |
+| --- | --- | --- | --- | --- |
+| 1 | 허용 요청 10개 동시 → 1 허용·9 `AGT_BUSY` | 어댑터 대기 1개(`Queue(maxsize=1)`), B Guard는 4개 허용 | 순서 대기열 `max_pending=16` | 실제 SDK 10개 동시 허용 10/10, 허용·거절 혼합 10개 정확 |
+| 2 | 시간초과 1회 후 영구 정지 | 시간초과 분기가 `_request_stop()`으로 인스턴스를 닫음(코드로 확인, 수정 전 실행 재현은 안 함) | 멈춘 worker만 퇴역, 대기열 이관, 퇴역 예산 2 | 교체 후 허용 판정, 늦은 허용 폐기, 예산 0/1 소진 시 fail-closed |
+| 3 | AGT가 사실상 허용 목록, 규칙 관리 주체 없음 | 정확 일치 규칙 + examples 하드코딩 | 코드 변경 없음, [결정 요청](a-agt-role-decision.md) 작성 | 해당 없음(미확정) |
+| 4 | 화면에 내부 코드만, RUNNING인데 실행 버튼 꺼짐, 긴급 차단 성공이 실패처럼 보임 | bridge 코드를 그대로 표시, 사용자 입력 대기 상태 미표시, cancel/halt는 항상 `Denied` 반환 | 한국어 결과 문구 + 보조 내부 코드, 입력 대기 안내, 정지 성공은 확정 Task 상태(HALTED/CLOSED)로 판단 | 실제 bootstrap에서 deny-send 문구·버튼 상태, 긴급 차단·취소 성공 문구 |
+| 5 | 실제 SDK 테스트 간헐 실패 | `_finished`가 스레드 종료 직전에 설정돼 `close()` 후 `is_alive()`가 참일 수 있음 | `close()`가 모든 worker 스레드의 실제 종료까지 확인 | 수정 전 30회 중 15회 실패 → 수정 후 30회 중 0회 |
+
+bridge 반환 코드 값은 바꾸지 않았다(`tests/unit/test_bridge.py` 계약 유지). 문구 매핑은
+`ui/presentation.py`의 `RUN_RESULTS`·`APPROVAL_RESULTS`다. B 소유 모듈은 수정하지 않았다.
+B 최신 Guard(`origin/feat/b-security-core` `29025e0`)는 아직 이 브랜치에 병합되지 않아,
+4개 상한과의 결합은 코드 대조와 어댑터 단독 동시성 검증까지만 했다. 병합 후 Guard 경유 재확인이 필요하다.
+
+검증(Windows, `.venv` CPython 3.12, Qt offscreen):
+
+- 전체 pytest **1,298 passed**, 44.4초.
+- `test_agt_real.py` + `test_runtime.py` 30회 반복: **0/30 실패**(87 passed/회).
+- `examples.verify_stdio_spike --agt-mode real`/`mock`: 각 8경로, 위 계수표와 일치.
+- 변경 파일 Ruff check 통과. `git diff --check` 통과.
+
 ## 남은 인수
 
+- A·B·C·사용자: [AGT 역할·규칙 관리 결정](a-agt-role-decision.md).
 - B: 제품 규칙의 의미·버전 변경/승인 결속과 `agt_mode`·규칙 버전의 영속 감사.
   현재 bootstrap의 규칙은 고정 합성이며 임의 규칙 파일 로더는 없다.
 - C: 정식 fixture에서 거절·오류·시간초과·형식 불명의 dispatch/wire/수신 계수,
