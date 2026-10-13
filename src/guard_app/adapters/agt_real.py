@@ -1,8 +1,9 @@
 """A18: bounded, local AGT decisions for the existing AccessChecker port.
 
-One daemon worker owns the SDK. Only an opaque tool key reaches it; no tool
-arguments, Task state, actor identity, execution callback or approval capability
-does. Rules are trusted exact matches, never caller-supplied expressions.
+One daemon worker at a time owns an SDK engine. Only an opaque tool key reaches
+it; no tool arguments, Task state, actor identity, execution callback or
+approval capability does. Rules are trusted exact matches, never caller-supplied
+expressions.
 """
 
 from __future__ import annotations
@@ -10,9 +11,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import math
-import queue
 import re
 import threading
+import time
+from collections import deque
 from collections.abc import Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass, field
@@ -67,20 +69,49 @@ def _tool_key(server: str, tool: str, kind: ToolKind) -> str:
     return hashlib.sha256(b"".join(len(p).to_bytes(4, "big") + p for p in parts)).hexdigest()
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, eq=False)
 class _Job:
     key: str
     result: Future[AccessResult] = field(default_factory=Future)
-    abandoned: threading.Event = field(default_factory=threading.Event)
+    admitted_at: float = field(default_factory=time.monotonic)
+    abandoned: bool = False  # Guarded by the checker lock.
+
+
+class _Worker:
+    """One SDK engine and the daemon thread that owns it.
+
+    ``jobs``, ``running`` and ``stop`` are guarded by the checker lock that also
+    backs ``wake``. A stopped worker never settles or counts a job again.
+    """
+
+    def __init__(self, lock: threading.Lock) -> None:
+        self.jobs: deque[_Job] = deque()
+        self.wake = threading.Condition(lock)
+        self.running: _Job | None = None
+        self.stop = False
+        self.ready: Future[bool] = Future()
+        self.finished: Future[None] = Future()
+        self.thread: threading.Thread | None = None
+        # Start of the engine build or of the running job; None while idle.
+        self.busy_since: float | None = time.monotonic()
+
+    def alive(self) -> bool:
+        return self.thread is not None and self.thread.is_alive()
 
 
 class AgentGovernanceAccessChecker:
     """Real AGT, deny by default; caller owns start/close on the backend loop.
 
-    At most one queued/running evaluation exists. Cancellation abandons its result
-    without admitting more work until it settles. A timeout poisons this instance;
-    it cannot restart or silently fall back. A stuck thread reports unconfirmed
-    cleanup and cannot hold interpreter shutdown through a default executor.
+    Up to ``max_pending`` evaluations may be queued or running; the current
+    worker serves them in order, so concurrent Tasks are not rejected below that
+    bound. A cancelled request leaves the queue at once, or keeps its slot until
+    the SDK returns if it was already running.
+
+    A timeout retires the current worker when it stayed on one engine build or
+    job for that request's whole wait: its running result is discarded, its
+    queued requests move to a fresh worker, and the stuck thread counts against
+    ``max_stuck_workers``. Past that bound, or on an SDK exception or a failed
+    restart, the instance stays closed. Nothing falls back to allow or mock.
     """
 
     mode = "real"
@@ -93,6 +124,8 @@ class AgentGovernanceAccessChecker:
         evaluation_timeout_s: float = 1.0,
         startup_timeout_s: float = 5.0,
         close_timeout_s: float = 1.0,
+        max_pending: int = 16,
+        max_stuck_workers: int = 2,
     ) -> None:
         if not isinstance(rules, Mapping) or len(rules) > MAX_AGT_RULES:
             raise AgtConfigError()
@@ -101,6 +134,12 @@ class AgentGovernanceAccessChecker:
         for value in (evaluation_timeout_s, startup_timeout_s, close_timeout_s):
             if type(value) not in (int, float) or not 0 < value <= 30 or not math.isfinite(value):
                 raise AgtConfigError()
+        # B's Guard admits 4 concurrent access checks by default; the adapter
+        # must not be the narrower bound.
+        if type(max_pending) is not int or not 1 <= max_pending <= MAX_AGT_RULES:
+            raise AgtConfigError()
+        if type(max_stuck_workers) is not int or not 0 <= max_stuck_workers <= 8:
+            raise AgtConfigError()
         compiled: list[tuple[str, bool]] = []
         for key, allowed in rules.items():
             if len(compiled) >= MAX_AGT_RULES or type(key) is not tuple or len(key) != 3:
@@ -113,13 +152,15 @@ class AgentGovernanceAccessChecker:
         self._evaluation_timeout = float(evaluation_timeout_s)
         self._startup_timeout = float(startup_timeout_s)
         self._close_timeout = float(close_timeout_s)
+        self._max_pending = max_pending
+        self._max_stuck = max_stuck_workers
         self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._ready: Future[bool] = Future()
-        self._finished: Future[None] = Future()
-        self._queue: queue.Queue[_Job] = queue.Queue(maxsize=1)
-        self._job: _Job | None = None
-        self._thread: threading.Thread | None = None
+        self._closed = False
+        self._available = False
+        self._admitted = 0  # Jobs queued on or running in the current worker.
+        self._worker: _Worker | None = None
+        self._retired: list[_Worker] = []
+        self.restarts = 0
 
     @property
     def rule_version(self) -> str:
@@ -127,31 +168,28 @@ class AgentGovernanceAccessChecker:
 
     async def start(self) -> None:
         with self._lock:
-            if self._stop.is_set():
+            if self._closed:
                 raise AgtStartupError()
-            if self._thread is None:
-                self._thread = threading.Thread(
-                    target=self._thread_main, name="guard-agt", daemon=True
-                )
-                try:
-                    self._thread.start()
-                except (RuntimeError, OSError):
-                    self._stop.set()
-                    self._ready.set_result(False)
-                    self._finished.set_result(None)
-                    raise AgtStartupError() from None
+            if self._worker is None:
+                self._worker = self._spawn_locked()
+                if self._worker is None:
+                    self._close_locked("AGT_UNAVAILABLE")
+                    raise AgtStartupError()
+            worker = self._worker
         try:
             ready = await asyncio.wait_for(
-                asyncio.shield(asyncio.wrap_future(self._ready)), self._startup_timeout
+                asyncio.shield(asyncio.wrap_future(worker.ready)), self._startup_timeout
             )
         except TimeoutError:
-            self._request_stop()
+            self._shutdown()
             raise AgtStartupError() from None
         except asyncio.CancelledError:
-            self._request_stop()
+            self._shutdown()
             raise
-        if not ready or self._stop.is_set():
-            raise AgtStartupError()
+        with self._lock:
+            if not ready or self._closed:
+                raise AgtStartupError()
+            self._available = True
 
     async def check_access(self, req: ResolvedRequest, ctx: TrustedContext) -> AccessResult:
         if req.task_id != ctx.state.task_id or req.epoch != ctx.state.epoch:
@@ -161,46 +199,141 @@ class AgentGovernanceAccessChecker:
         except AgtConfigError:
             return _error("AGT_INPUT_INVALID")
         with self._lock:
-            if self._stop.is_set() or not self._ready.done() or not self._ready.result():
+            worker = self._worker
+            if self._closed or not self._available or worker is None:
                 return _error("AGT_UNAVAILABLE")
-            if self._job is not None:
+            if self._admitted >= self._max_pending:
                 return _error("AGT_BUSY")
             job = _Job(key)
-            self._job = job
-            self._queue.put_nowait(job)
+            worker.jobs.append(job)
+            self._admitted += 1
+            worker.wake.notify()
         try:
             return await asyncio.wait_for(
                 asyncio.shield(asyncio.wrap_future(job.result)), self._evaluation_timeout
             )
         except TimeoutError:
-            job.abandoned.set()
-            self._request_stop()
+            self._timed_out(job)
             return _error("AGT_TIMEOUT")
         except asyncio.CancelledError:
-            job.abandoned.set()
+            self._abandon(job)
             raise
 
-    def _request_stop(self) -> None:
+    def _abandon(self, job: _Job) -> None:
         with self._lock:
-            self._stop.set()
-            if self._job is not None:
-                self._job.abandoned.set()
-                if not self._job.result.done():
-                    self._job.result.set_result(_error("AGT_CLOSED"))
-            if self._thread is None:
-                if not self._ready.done():
-                    self._ready.set_result(False)
-                if not self._finished.done():
-                    self._finished.set_result(None)
+            job.abandoned = True
+            worker = self._worker
+            if worker is not None and job in worker.jobs:
+                # It never reached the SDK; free its slot now.
+                worker.jobs.remove(job)
+                self._admitted -= 1
+                job.result.set_result(_error("AGT_CANCELLED"))
+
+    def _timed_out(self, job: _Job) -> None:
+        with self._lock:
+            job.abandoned = True
+            worker = self._worker
+            if self._closed or worker is None or job.result.done():
+                return
+            if job in worker.jobs:
+                worker.jobs.remove(job)
+                self._admitted -= 1
+                job.result.set_result(_error("AGT_TIMEOUT"))
+            # Replace the worker only if it stayed on one build or job for this
+            # request's whole wait, not when it inherited an old backlog. Its
+            # late result is discarded; the instance itself stays usable.
+            since = worker.busy_since
+            if worker.running is job or (since is not None and since <= job.admitted_at):
+                self._retire_locked(worker)
+
+    def _retire_locked(self, worker: _Worker) -> None:
+        worker.stop = True
+        worker.wake.notify_all()
+        running, worker.running = worker.running, None
+        if running is not None:
+            # Its slot moves into the stuck-worker budget below.
+            running.abandoned = True
+            self._admitted -= 1
+            if not running.result.done():
+                running.result.set_result(_error("AGT_TIMEOUT"))
+        queued = list(worker.jobs)
+        worker.jobs.clear()
+        self._retired = [w for w in self._retired if w.alive()]
+        if worker.alive():
+            self._retired.append(worker)
+        replacement = None
+        if len(self._retired) <= self._max_stuck:
+            replacement = self._spawn_locked()
+        if replacement is None:
+            # Budget exhausted or no thread: fail closed for good.
+            worker.jobs.extend(queued)
+            self._close_locked("AGT_UNAVAILABLE")
+            return
+        self._worker = replacement
+        self.restarts += 1
+        replacement.jobs.extend(queued)
+        replacement.wake.notify()
+
+    def _spawn_locked(self) -> _Worker | None:
+        worker = _Worker(self._lock)
+        thread = threading.Thread(
+            target=self._thread_main, args=(worker,), name="guard-agt", daemon=True
+        )
+        try:
+            thread.start()
+        except (RuntimeError, OSError):
+            worker.stop = True
+            worker.ready.set_result(False)
+            worker.finished.set_result(None)
+            return None
+        worker.thread = thread
+        return worker
+
+    def _close_locked(self, code: str) -> None:
+        self._closed = True
+        self._available = False
+        worker = self._worker
+        for each in (worker, *self._retired):
+            if each is not None:
+                each.stop = True
+                each.wake.notify_all()
+        if worker is not None:
+            running, worker.running = worker.running, None
+            if running is not None:
+                running.abandoned = True
+                if not running.result.done():
+                    running.result.set_result(_error(code))
+            for job in worker.jobs:
+                if not job.result.done():
+                    job.result.set_result(_error(code))
+            worker.jobs.clear()
+        self._admitted = 0
+
+    def _shutdown(self) -> tuple[_Worker, ...]:
+        with self._lock:
+            self._close_locked("AGT_CLOSED")
+            return tuple(w for w in (self._worker, *self._retired) if w is not None)
 
     async def close(self) -> None:
-        self._request_stop()
-        try:
-            await asyncio.wait_for(
-                asyncio.shield(asyncio.wrap_future(self._finished)), self._close_timeout
-            )
-        except TimeoutError:
-            raise AgtShutdownError() from None
+        """Succeed only when every worker thread, retired ones included, exited."""
+
+        workers = self._shutdown()
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._close_timeout
+        for worker in workers:
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(asyncio.wrap_future(worker.finished)),
+                    max(0.0, deadline - loop.time()),
+                )
+            except TimeoutError:
+                raise AgtShutdownError() from None
+            # ``finished`` is the thread's last action, not its exit. Confirm
+            # the exit itself so a successful close never leaves it running.
+            while worker.alive():
+                if loop.time() >= deadline:
+                    raise AgtShutdownError()
+                await asyncio.sleep(0.001)
 
     def _create_engine(self) -> tuple[Any, type]:
         # Import, version check, policy construction and evaluation all remain
@@ -246,45 +379,55 @@ class AgentGovernanceAccessChecker:
             allowed=allowed, reason="AGT_ALLOW" if allowed else "AGT_DENY", error=False
         )
 
-    async def _serve(self) -> None:
+    async def _serve(self, worker: _Worker) -> None:
         engine, decision_type = self._create_engine()
         with self._lock:
-            self._ready.set_result(not self._stop.is_set())
-        while not self._stop.is_set():
-            try:
-                job = self._queue.get(timeout=0.02)
-            except queue.Empty:
-                continue
-            result = _error("AGT_CANCELLED")
-            if not self._stop.is_set() and not job.abandoned.is_set():
-                result = self._translate(
-                    engine.evaluate(_AGENT, {"tool": {"key": job.key}}, stage="pre_tool"),
-                    decision_type,
-                )
+            worker.ready.set_result(not worker.stop)
+            worker.busy_since = None
+        while True:
             with self._lock:
+                while not worker.stop and not worker.jobs:
+                    worker.wake.wait()
+                if worker.stop:
+                    return
+                job = worker.jobs.popleft()
+                worker.running = job
+                worker.busy_since = time.monotonic()
+            result = self._translate(
+                engine.evaluate(_AGENT, {"tool": {"key": job.key}}, stage="pre_tool"),
+                decision_type,
+            )
+            with self._lock:
+                if worker.stop:
+                    return  # Retired or closed: the job was already settled.
+                worker.running = None
+                worker.busy_since = None
+                self._admitted -= 1
                 if not job.result.done():
-                    job.result.set_result(
-                        _error("AGT_CANCELLED") if job.abandoned.is_set() else result
-                    )
-                self._job = None
+                    job.result.set_result(_error("AGT_CANCELLED") if job.abandoned else result)
 
-    async def _worker_failed(self, _exc: BaseException) -> None:
+    async def _worker_failed(self, worker: _Worker, _exc: BaseException) -> None:
         # Reuse the repository's sole pre-dispatch broad containment boundary.
         # No exception object or its text crosses into a Future, log or UI.
         with self._lock:
-            self._stop.set()
-            if self._job is not None and not self._job.result.done():
-                self._job.result.set_result(_error("AGT_EVALUATION_ERROR"))
+            job = worker.running
+            if not worker.stop and job is not None and not job.result.done():
+                job.result.set_result(_error("AGT_EVALUATION_ERROR"))
 
-    def _thread_main(self) -> None:
+    def _thread_main(self, worker: _Worker) -> None:
         try:
-            asyncio.run(fail_closed(self._serve, self._worker_failed))
+            asyncio.run(
+                fail_closed(
+                    lambda: self._serve(worker),
+                    lambda exc: self._worker_failed(worker, exc),
+                )
+            )
         finally:
             with self._lock:
-                self._stop.set()
-                if not self._ready.done():
-                    self._ready.set_result(False)
-                if self._job is not None and not self._job.result.done():
-                    self._job.result.set_result(_error("AGT_UNAVAILABLE"))
-                self._job = None
-                self._finished.set_result(None)
+                if self._worker is worker and not worker.stop:
+                    # The current worker died (SDK exception or failed start).
+                    self._close_locked("AGT_UNAVAILABLE")
+                worker.stop = True
+                if not worker.ready.done():
+                    worker.ready.set_result(False)
+                worker.finished.set_result(None)

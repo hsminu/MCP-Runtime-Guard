@@ -70,7 +70,32 @@ async def test_actual_sdk_exact_rules_kind_default_deny_and_source_copy():
         assert not result.allowed and not result.error
     finally:
         await access.close()
-    assert not access._thread.is_alive()
+    # close() succeeds only after the worker thread itself has exited.
+    assert not access._worker.alive()
+
+
+@pytest.mark.asyncio
+async def test_actual_sdk_serves_concurrent_allowed_requests_without_busy():
+    # QA 2026-10-13: 10 concurrent allowed requests returned 1 allow + 9 AGT_BUSY.
+    access = checker()
+    try:
+        await access.start()
+        results = await asyncio.gather(
+            *(access.check_access(_request(), _context()) for _ in range(10))
+        )
+        assert [r.reason for r in results] == ["AGT_ALLOW"] * 10
+        assert all(r.allowed and not r.error for r in results)
+        mixed = await asyncio.gather(
+            *(
+                access.check_access(_request(tool_name=name), _context())
+                for name in ("read", "write") * 5
+            )
+        )
+        assert [r.allowed for r in mixed] == [True, False] * 5
+        assert access._admitted == 0
+    finally:
+        await access.close()
+    assert not access._worker.alive()
 
 
 @pytest.mark.asyncio
@@ -117,6 +142,23 @@ async def test_expression_shaped_names_are_exact_data_for_real_sdk():
 @pytest.mark.parametrize("value", [0, -1, True, "1", float("inf"), float("nan"), 31, 10**400])
 @pytest.mark.parametrize("field", ["evaluation_timeout_s", "startup_timeout_s", "close_timeout_s"])
 def test_invalid_limits_are_fixed_config_errors(field, value):
+    with pytest.raises(AgtConfigError, match="AGT 설정이 유효하지 않다"):
+        checker(**{field: value})
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("max_pending", 0),
+        ("max_pending", 257),
+        ("max_pending", True),
+        ("max_pending", 4.0),
+        ("max_stuck_workers", -1),
+        ("max_stuck_workers", 9),
+        ("max_stuck_workers", False),
+    ],
+)
+def test_invalid_concurrency_bounds_are_fixed_config_errors(field, value):
     with pytest.raises(AgtConfigError, match="AGT 설정이 유효하지 않다"):
         checker(**{field: value})
 
@@ -171,7 +213,7 @@ async def test_wrong_distribution_version_startup_fails_without_fallback(monkeyp
         await access.start()
     assert (await access.check_access(_request(), _context())).error
     await access.close()
-    assert not access._thread.is_alive()
+    assert not access._worker.alive()
     assert capsys.readouterr().err == ""
 
 
@@ -192,50 +234,174 @@ async def test_sdk_exception_is_fixed_error_and_worker_stays_closed(monkeypatch,
     assert "RAW_SECRET_MARKER" not in output.out + output.err + caplog.text + result.reason
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stop", ["cancel", "timeout", "close"])
-async def test_slow_sdk_keeps_loop_responsive_bounds_work_and_discards_late_allow(
-    monkeypatch, stop
-):
-    entered, release = threading.Event(), threading.Event()
-    access = checker(evaluation_timeout_s=0.1 if stop == "timeout" else 2, close_timeout_s=0.03)
-    calls = []
+def blocking_first(calls, entered, release):
+    """The first SDK call hangs until released; later calls answer at once."""
 
     def evaluate(*args, **kwargs):
         calls.append(1)
-        entered.set()
-        assert release.wait(3)
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(5)
         return Decision()
 
-    inject(monkeypatch, access, evaluate)
+    return evaluate
+
+
+@pytest.mark.asyncio
+async def test_slow_sdk_keeps_loop_responsive_queues_in_order_and_bounds_pending(monkeypatch):
+    entered, release, calls = threading.Event(), threading.Event(), []
+    access = checker(evaluation_timeout_s=2, max_pending=2)
+    inject(monkeypatch, access, blocking_first(calls, entered, release))
     await access.start()
-    task = asyncio.create_task(access.check_access(_request(), _context()))
+    first = asyncio.create_task(access.check_access(_request(), _context()))
     try:
         await wait_for(entered.is_set)  # Requires the asyncio loop to keep making progress.
+        queued = asyncio.create_task(access.check_access(_request(), _context()))
+        await wait_for(lambda: access._admitted == 2)
         busy = await access.check_access(_request(), _context())
         assert busy.error and busy.reason == "AGT_BUSY" and calls == [1]
-        if stop == "cancel":
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-            assert (await access.check_access(_request(), _context())).reason == "AGT_BUSY"
-        elif stop == "timeout":
-            result = await asyncio.wait_for(task, 1)
-            assert result.error and result.reason == "AGT_TIMEOUT"
+        release.set()
+        assert (await first).reason == "AGT_ALLOW" and (await queued).reason == "AGT_ALLOW"
+        assert calls == [1, 1] and access._admitted == 0 and access.restarts == 0
+    finally:
+        release.set()
+        await access.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_frees_queued_slot_at_once_and_running_slot_only_after_sdk_returns(
+    monkeypatch,
+):
+    entered, release, calls = threading.Event(), threading.Event(), []
+    access = checker(evaluation_timeout_s=2, max_pending=2)
+    inject(monkeypatch, access, blocking_first(calls, entered, release))
+    await access.start()
+    running = asyncio.create_task(access.check_access(_request(), _context()))
+    try:
+        await wait_for(entered.is_set)
+        queued = asyncio.create_task(access.check_access(_request(), _context()))
+        await wait_for(lambda: access._admitted == 2)
+        queued.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await queued
+        assert access._admitted == 1
+        job = access._worker.running
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+        assert access._admitted == 1  # Still inside the SDK: the slot stays bounded.
+        release.set()
+        await wait_for(lambda: access._admitted == 0)
+        assert job.result.result().reason == "AGT_CANCELLED"  # Late allow discarded.
+        assert calls == [1]  # The cancelled queued request never reached the SDK.
+        assert (await access.check_access(_request(), _context())).allowed
+    finally:
+        release.set()
+        await access.close()
+
+
+@pytest.mark.asyncio
+async def test_timeout_replaces_stuck_worker_moves_queue_and_discards_late_allow(monkeypatch):
+    entered, release, calls = threading.Event(), threading.Event(), []
+    access = checker(evaluation_timeout_s=0.4, close_timeout_s=0.05)
+    inject(monkeypatch, access, blocking_first(calls, entered, release))
+    await access.start()
+    stuck_task = asyncio.create_task(access.check_access(_request(), _context()))
+    try:
+        await wait_for(entered.is_set)
+        stuck = access._worker
+        stuck_job = stuck.running
+        # Leave the queued request enough of its own deadline for the restart.
+        await asyncio.sleep(0.2)
+        queued = asyncio.create_task(access.check_access(_request(), _context()))
+        timed_out = await asyncio.wait_for(stuck_task, 2)
+        assert timed_out.error and not timed_out.allowed and timed_out.reason == "AGT_TIMEOUT"
+        # Before the fix one timeout closed the instance until app restart.
+        assert access.restarts == 1 and access._worker is not stuck
+        assert (await asyncio.wait_for(queued, 2)).reason == "AGT_ALLOW"
+        assert (await access.check_access(_request(), _context())).reason == "AGT_ALLOW"
+        assert stuck.alive() and access._retired == [stuck]
         with pytest.raises(AgtShutdownError):
-            await access.close()
-        if stop == "close":
-            result = await task
-            assert result.error and result.reason == "AGT_CLOSED"
-        assert access._thread.daemon and calls == [1]
+            await access.close()  # A stuck thread is reported, never hidden.
+        release.set()
+        await wait_for(lambda: not stuck.alive())
+        assert stuck_job.result.result().reason == "AGT_TIMEOUT"  # Late allow discarded.
         assert (await access.check_access(_request(), _context())).reason == "AGT_UNAVAILABLE"
     finally:
         release.set()
-        await wait_for(access._finished.done)
         await access.close()
-    assert not access._thread.is_alive()
+    assert not stuck.alive() and not access._worker.alive()
     with pytest.raises(AgtStartupError):
         await access.start()
+
+
+@pytest.mark.asyncio
+async def test_inherited_backlog_timeout_does_not_retire_the_fresh_worker(monkeypatch):
+    entered, release, calls = threading.Event(), threading.Event(), []
+    access = checker(evaluation_timeout_s=0.2)
+    inject(monkeypatch, access, blocking_first(calls, entered, release))
+    await access.start()
+    stuck = asyncio.create_task(access.check_access(_request(), _context()))
+    try:
+        await wait_for(entered.is_set)
+        # Admitted right behind the stuck call, so both deadlines nearly coincide.
+        behind = await access.check_access(_request(), _context())
+        assert (await stuck).reason == "AGT_TIMEOUT"
+        assert behind.reason in ("AGT_ALLOW", "AGT_TIMEOUT")
+        assert access.restarts == 1 and not access._closed
+        assert (await access.check_access(_request(), _context())).reason == "AGT_ALLOW"
+    finally:
+        release.set()
+        await access.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", [0, 1])
+async def test_stuck_worker_budget_exhaustion_fails_closed(monkeypatch, budget):
+    release, calls = threading.Event(), []
+
+    def evaluate(*args, **kwargs):
+        calls.append(1)
+        assert release.wait(5)
+        return Decision()
+
+    access = checker(evaluation_timeout_s=0.1, max_stuck_workers=budget)
+    inject(monkeypatch, access, evaluate)
+    await access.start()
+    try:
+        for _ in range(budget):
+            assert (await access.check_access(_request(), _context())).reason == "AGT_TIMEOUT"
+            assert not access._closed
+        assert (await access.check_access(_request(), _context())).reason == "AGT_TIMEOUT"
+        assert access._closed and access.restarts == budget
+        assert (await access.check_access(_request(), _context())).reason == "AGT_UNAVAILABLE"
+        assert len(calls) == budget + 1
+    finally:
+        release.set()
+        await wait_for(lambda: not any(w.alive() for w in (access._worker, *access._retired)))
+        await access.close()
+
+
+@pytest.mark.asyncio
+async def test_close_during_sdk_evaluation_reports_closed_and_unconfirmed_cleanup(monkeypatch):
+    entered, release, calls = threading.Event(), threading.Event(), []
+    access = checker(evaluation_timeout_s=2, close_timeout_s=0.03)
+    inject(monkeypatch, access, blocking_first(calls, entered, release))
+    await access.start()
+    task = asyncio.create_task(access.check_access(_request(), _context()))
+    try:
+        await wait_for(entered.is_set)
+        with pytest.raises(AgtShutdownError):
+            await access.close()
+        result = await task
+        assert result.error and result.reason == "AGT_CLOSED"
+        assert access._worker.thread.daemon and calls == [1]
+        assert (await access.check_access(_request(), _context())).reason == "AGT_UNAVAILABLE"
+    finally:
+        release.set()
+        await wait_for(access._worker.finished.done)
+        await access.close()
+    assert not access._worker.alive()
 
 
 @pytest.mark.asyncio
@@ -264,7 +430,7 @@ async def test_late_sdk_start_is_closed_and_never_becomes_ready(monkeypatch, sto
     finally:
         release.set()
         await access.close()
-    assert not access._ready.result()
+    assert not access._worker.ready.result()
 
 
 @pytest.mark.asyncio
