@@ -388,7 +388,9 @@ async def test_timeout_is_contained_without_claiming_no_data_and_worker_survives
     monkeypatch.setattr(
         mcp_transport, "ClientSession", lambda *_args, **_kwargs: session
     )
-    transport = McpTransport({"server": _streams([])}, call_timeout_s=0.01)
+    # The first call waits on an unset event. Allow normal scheduling jitter
+    # for the following successful call while still exercising a real timeout.
+    transport = McpTransport({"server": _streams([])}, call_timeout_s=0.25)
     await transport.start()
     with pytest.raises(DispatchError) as timeout:
         await transport.call(_request(kind=ToolKind.SEND))

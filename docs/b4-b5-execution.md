@@ -4,6 +4,9 @@
 2026-10-11 B 브랜치에서 해시·스냅샷·예외 경계, GuardService, ResponseGate,
 ApprovalService와 담당 단위·성질 테스트를 구현했다.
 실제 MCP·AGT·SQLite·UI 연결과 C의 계약·통합·결함 주입 검증은 별도 인수 대상이다.
+2026-10-13 문서 갱신에서는 2026-10-12 사용자 결정에 따른 SQLite 담당 변경을 반영했다.
+현행 배정은 [협업 규칙](team-workflow.md)을 따른다. SQLite·영속 순번·감사 저장·시작 복구는
+[B6](tasks/b-sqlite-store.md)가 구현하고 C가 리뷰·독립 검증한다. API 세부 합의·B6 구현은 미완료다.
 
 ## 구현 파일과 실행 입구
 
@@ -28,14 +31,15 @@ SDK import나 직접 SQLite·파일·URL·프로세스 연산은 추가하지 �
 | --- | --- |
 | `profile_id`, `policy_version`, `operator_id`, `taint_mode` | 검증된 운영 설정. 모델·도구 출력에서 받지 않는다 |
 | `request_id_factory`, `approval_id_factory` | C의 ID 공급 함수 |
-| `next_call_seq(task_id)` | Task별 중복 없는 순번 공급. 재시작·기존 Task도 고려해야 한다 |
-| `failure_audit(FailureEvent)` | C의 내구성 감사 연결. Task·요청 ID, 단계, reason, 예외 타입만 받는다 |
+| `next_call_seq(task_id)` | B6 저장소의 Task별 영속 순번 공급. 재시작·기존 Task도 고려해야 한다 |
+| `failure_audit(FailureEvent)` | B6 저장소의 내구성 감사 연결. Task·요청 ID, 단계, reason, 예외 타입만 받는다 |
 | `utc_now`, `monotonic` | UTC 감사/DB 만료와 프로세스 내부 deadline |
 | `approval_ttl_seconds`, `max_result_bytes`, `access_timeout_seconds` | 승인 만료·결과 크기·접근 검사 제한 설정 |
 
 기존 B1 Store 포트에는 ID·순번·예약 전 예외 감사의 공급 API가 없어서,
-이번에는 B 서비스의 구성 callback으로 분리했다. C 저장소·보안 모듈을 대신
-구현하거나 `ports.py`를 합의된 계약으로 변경하지 않았다.
+당시 B1–B5 구현에서는 B 서비스의 구성 callback으로 분리했다. 저장소·C 보안 모듈을
+구현하거나 `ports.py`를 합의된 계약으로 변경하지 않았다. 이후 B6 이관으로 영속 순번·
+감사 저장은 B 담당이며 안전 ID 모듈은 C 담당이다. 정식 API와 배치는 A·C와 검토한다.
 callback 공급자는 ID·순번 충돌과 감사 내구성을 실제 구현으로 보장해야 한다.
 
 ## Guard와 예약 전후 실패
@@ -48,7 +52,7 @@ ASK는 WAITING_APPROVAL과 메모리 사본을 만든 뒤 반환한다. 사람�
 정지·결과 불명·종료 Task는 기존 Task에서 RUNNING으로 복구하지 않는다.
 Profile·policy_version 불일치는 Task를 정지시키고 해당 서비스의 살아 있는 승인을
 무효화한다. 실제 설정 변경 알림·Registry의 일괄 승인 무효화·프로세스 시작 시
-기존 승인 정리는 A·C 연결 경로에서도 집행해야 한다.
+기존 승인 정리는 A의 시작 실행 게이트·C Registry·B6 저장소 연결 경로에서도 집행해야 한다.
 
 로컬 전제조건·경계의 DENY는 AGT에 원문을 전달하기 전에 결정한다.
 접근 검사 결과는 기존 순수 정책에 합성하며 AGT 허용은 ASK를 완화하지 않는다.
@@ -137,12 +141,14 @@ ALLOW로 바뀐 승인도 무효화한다. 상태·보안 버전·지문·정책
 현재 포트는 Task WAITING 전이와 승인 생성을 별도 메서드로 둔다.
 ApprovalService.open은 WAITING 반환 상태를 먼저 저장하고 그 보안 버전으로 사본을
 만든 뒤 승인·요청 WAITING을 생성한다. 중간 실패는 정상 Pending으로 반환하지 않고
-global halt로 처리한다. Task 전이와 승인 생성의 원자 묶음 API는 C와 합의 대상이다.
+global halt로 처리한다. Task 전이와 승인 생성의 원자 묶음 API는 B가 변경안을 제공하고
+A·C와 검토할 대상이다. [C Store 요구](tasks/c-store-requirements.md)와
+[처리 제안 v1](tasks/c-store-proposal.md)은 검토·독립 인수 기준이며 API 확정 기록이 아니다.
 
 WAITING 전이의 security_version 증가 여부가 B1 초안에서 미확정이라 실제 반환
 상태를 사본에 고정한다. 소비 후 WAITING→RUNNING은 버전 유지 또는 1 증가를
 허용하되 나머지 사본의 보안 맥락은 그대로여야 한다. 설계 SQL은 소비 시
-row_revision만 증가시키므로 최종 C 계약에서는 한 의미로 확정해야 한다.
+row_revision만 증가시키므로 최종 A·B·C Store 계약에서는 한 의미로 확정해야 한다.
 
 consume_and_reserve의 True는 승인·요청·Task·감사가 한 트랜잭션으로 내구성 커밋된
 뒤 반환되어야 한다. False와 저장 오류는 전송으로 이어지지 않는다.
@@ -179,8 +185,8 @@ reserve/consume의 내구성 커밋과 취소·ACK 순서도 C의 계약 검증 
 - 원본 technical-design.md는 변경하지 않았다. 실제 A·C 연결·SQLite·wire·
   receiver_effect·GUI·CI 검증은 실행하지 않았다.
 
-남은 인수는 A의 transport·AGT·Runner·제어 큐 연결, C의 ID·순번·오류 감사·Registry·
-안전 경로·SQLite 구현, A·C의 공통 계약 합의와 담당 리뷰다.
+남은 인수는 A의 transport·AGT·Runner·제어 큐 연결, C의 안전 ID·Registry·Scanner·
+안전 경로, B6의 SQLite·영속 순번·오류 감사·복구 구현, A·C의 공통 계약 합의와 담당 리뷰다.
 C가 실제 승인 소비·host dispatch·wire tools/call·receiver effect 계수와
 T07·T19·T36 등의 결함·유출 시나리오를 검증해야 한다.
 
@@ -188,3 +194,25 @@ T07·T19·T36 등의 결함·유출 시나리오를 검증해야 한다.
 확인하도록 보완했다. 다른 Task의 RUNNING·HALTED·CLOSED 반환을 거부하는 단위 테스트
 3개를 추가했으며 전체 **840개 통과**, Ruff·mypy·pip check 통과를 확인했다.
 연결 위치·구성 예시·최신 검증 결과와 남은 합의는 [B 인수 안내](b-handoff.md)에 정리했다.
+
+## 승인 식별자 후속 수정과 추가 계약 요청
+
+2026-10-12 `f3c2d2b`에서 승인 조회 직후 Task ID·snapshot epoch를 먼저 검사하고,
+승인에 따른 Task 정지 직전에도 기대 epoch를 대조하도록 보강했다. 조회가 다른 Task나
+교체된 epoch를 반환하면 해당 Task 행을 변경하지 않고 승인 종결·사본 폐기·global halt로
+처리한다. 일반 submit의 trusted caller 기대 epoch 요청은 이 승인 수정과 별도이며 미합의다.
+
+24개 추가 회귀 케이스를 수정 전에 실패로 재현했다. 후속 수정 후 B의 전체 단위·성질
+테스트는 **864개 통과**했고 Ruff·mypy·pip check를 확인했다. C도 `f3c2d2b`의 864개·
+Ruff·mypy를 별도 Ubuntu 환경에서 재현했다. 상세 근거는
+[C 후속 수정 검토](tasks/c-b-review.md#후속-수정-f3c2d2b-확인)다.
+앞의 837·840개 결과는 각 시점의 기록으로 유지한다. 후속 결과도 대역 검증이며 실제
+SQLite·wire·receiver_effect의 검증을 뜻하지 않는다. 이번 문서 갱신에서 새 코드 시험은 실행하지 않았다.
+
+A 브랜치 `5598009`에는 transport·AGT mock·모델 어댑터·Runner·bridge·Qt UI 구현이 있고
+실제 제품 연결은 남아 있다. A는 일반 submit의 lock 내부 `expected_epoch` 비교,
+인증된 UI의 동일 메모리 승인 사본 조회, 권위 있는 승인·Task 상태와 revision·종결 여부,
+제어 명령 접수/적용 결과를 요청했다. 근거는
+[A 계약 검토](https://github.com/hsminu/MCP-Runtime-Guard/blob/55980091fc49871903d72e8ba1e657ab7682035b/docs/tasks/a-port-review.md#7-b-head-f3c2d2b-연동-중-드러난-호출제어-계약-질문)다.
+이 요구와 C의 승인 생성·종결 원자성·버전·ACK/커밋 불명·만료·복구 제안을
+B6 계약 변경안으로 대조하고, 실제 합의 후 구현·B 단위 검증·C 독립 검증·A 연결 순서로 진행한다.

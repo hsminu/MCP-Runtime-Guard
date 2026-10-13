@@ -21,7 +21,7 @@ from guard_app.domain.enums import (
     ToolKind,
     TrustTier,
 )
-from guard_app.domain.errors import StoreError
+from guard_app.domain.errors import ResolutionError, StoreError
 from guard_app.domain.models import (
     AccessResult,
     Boundary,
@@ -211,7 +211,7 @@ class _Host:
 
     def check_stop(self, task_id):
         if getattr(self, "stopped", None) == task_id:
-            raise StoreError(Reason.TASK_NOT_RUNNING)
+            raise ResolutionError(Reason.TASK_NOT_RUNNING)
 
     def policy_matches(self, state: TaskState) -> bool:
         return (

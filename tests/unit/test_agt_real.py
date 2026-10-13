@@ -54,7 +54,9 @@ def inject(monkeypatch, access, evaluate):
 @pytest.mark.asyncio
 async def test_actual_sdk_exact_rules_kind_default_deny_and_source_copy():
     rules = {("srv-1", "read", ToolKind.READ): True, ("srv-1", "write", ToolKind.READ): False}
-    access = AgentGovernanceAccessChecker(rules, rule_version="unit-v1")
+    # This checks SDK rule semantics, not cold-import speed. Deadline behavior
+    # is tested separately with a controlled blocked engine constructor.
+    access = AgentGovernanceAccessChecker(rules, rule_version="unit-v1", startup_timeout_s=30)
     rules[("srv-1", "read", ToolKind.READ)] = False
     try:
         await access.start()
@@ -530,3 +532,47 @@ async def test_human_stop_during_sdk_evaluation_never_dispatches_late_allow(monk
         release.set()
         await access.close()
     assert h.transport.calls == []
+
+
+@pytest.mark.asyncio
+async def test_guard_slots_share_real_adapter_queue_without_spurious_busy(monkeypatch):
+    """I2/I6, T20: four Guard slots use A's queue; a fifth cannot dispatch."""
+    h = _Harness(access_timeout_seconds=3)
+    access = AgentGovernanceAccessChecker(
+        {("docs", "send", ToolKind.SEND): True}, rule_version="unit-v1"
+    )
+    h.guard._access_checker = access
+    task_ids = [f"task-{index}" for index in range(5)]
+    for task_id in task_ids:
+        h.store.states[task_id] = h.store.states["task"].model_copy(update={"task_id": task_id})
+    entered, release = [], asyncio.Event()
+    original = access.check_access
+
+    async def hold(req, ctx):
+        entered.append(req.task_id)
+        await release.wait()
+        return await original(req, ctx)
+
+    monkeypatch.setattr(access, "check_access", hold)
+    executions = []
+    try:
+        await access.start()
+        executions = [
+            asyncio.create_task(h.guard.submit(task_id, _call("send"), expected_epoch=1))
+            for task_id in task_ids[:4]
+        ]
+        await wait_for(lambda: len(entered) == 4)
+        assert len(h.guard._access_checks) == 4
+        rejected = await h.guard.submit(task_ids[4], _call("send"), expected_epoch=1)
+        assert isinstance(rejected, Denied) and Reason.AGT_ERROR in rejected.reasons
+        assert len(entered) == 4 and h.transport.calls == []
+        release.set()
+        results = await asyncio.wait_for(asyncio.gather(*executions), 3)
+        assert all(isinstance(result, Released) for result in results)
+        assert {req.task_id for req in h.transport.calls} == set(task_ids[:4])
+        assert len(h.transport.calls) == 4 and h.store.consume_count == 0
+        assert not h.guard._access_checks and not h.guard._unfinished_access_checks
+    finally:
+        release.set()
+        await asyncio.gather(*executions, return_exceptions=True)
+        await access.close()

@@ -4,6 +4,9 @@
 Scanner·B6 SQLite·C launcher/endpoint·독립 통합 인수는 미실행이다.
 아래 날짜별 기록은 당시의 증거이며 현재 상태와 혼동하지 않는다.
 
+최신 B `3bf414c` 병합 후 전체 1,371개·별도 B 환경 971개·AGT real/mock × stdio/HTTP
+32경로 검증과 남은 환경/계약 차이는 [A 동기화 기록](tasks/a-b-sync-2026-10-13.md)을 따른다.
+
 ## 2026-10-13 · 리뷰 후 실행 골격과 실제 stdio
 
 - CPython 3.12.15, uv 0.13.0, MCP 1.29.0, PySide6 6.12.0, pydantic 2.14.0,

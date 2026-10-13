@@ -138,6 +138,9 @@ B 최신 Guard(`origin/feat/b-security-core` `29025e0`)는 아직 이 브랜치�
 
 ## 남은 인수
 
+후속: B `3bf414c` 병합과 Guard 4개 슬롯/실제 adapter 연결 검증은
+[A 동기화 기록](a-b-sync-2026-10-13.md)을 따른다. 위 QA 절의 미병합 문구는 당시 기록이다.
+
 - A·B·C·사용자: [AGT 역할·규칙 관리 결정](a-agt-role-decision.md).
 - B: 제품 규칙의 의미·버전 변경/승인 결속과 `agt_mode`·규칙 버전의 영속 감사.
   현재 bootstrap의 규칙은 고정 합성이며 임의 규칙 파일 로더는 없다.

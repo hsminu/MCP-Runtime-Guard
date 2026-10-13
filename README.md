@@ -45,6 +45,8 @@ C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/tasks/a-htt
 
 B 기준 갱신 시 소스와 B 테스트를 함께 대조한 뒤 `uv run pytest -q`를 실행한다.
 A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_approvals.py`로 분리했다.
+최신 B 병합·AGT 기준 차이·분리된 B 검사 환경은 [A 동기화 기록](docs/tasks/a-b-sync-2026-10-13.md)을 따른다.
+`requirements.lock`은 B 코어 검사 전용이며 A 실행 환경은 `uv.lock`을 사용한다.
 
 
 ## 개발 문서
@@ -54,6 +56,14 @@ A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_
 | [기술 설계 및 개발 문서](docs/technical-design.md) | 제공받은 개발문서 원본 사본. 상세 설계, 테스트 T01–T38·S01–S05, ADR 기준 |
 | [3인 협업 규칙](docs/team-workflow.md) | 모듈 소유권, 리뷰 담당, 개발 순서, 브랜치 사용법 |
 | [공통 계약 체크리스트](docs/contracts.md) | B가 정의하고 A·C와 합의해야 하는 모델·포트·이벤트 계약 |
+| [B 구현 인수 안내](docs/b-handoff.md) | A·C 연결 위치, 구성 예시, 남은 합의와 환경 재현·인수 순서 |
+| [A·C 공동 계약 검토 요청](docs/ac-contract-review-request.md) | 항목별 목적·A/C 회신 질문·최신 AGT 요구·답변 형식과 합의 절차 |
+| [B6 계약 변경안](docs/b6-contract-proposal.md) | SQLite 승인 원자성·버전·오류/복구와 AGT 규칙·영속 감사 제안 |
+| [정규식 검증 연결안](docs/b-schema-validation-proposal.md) | A 모델 입력·B 검증 의미·C 프로세스 실행/종료 연결 검토 |
+| [B1 구현 초안과 검증](docs/b1-contract-draft.md) | 구현 범위, 포트 초안 선택, 설치·단위 검사, A·C 검토 항목 |
+| [B2 순수 정책과 등급 누적](docs/b2-policy-and-taint.md) | 경계·AGT 판정, READ 누적·비교 모드, 버전과 성질 검증 |
+| [B3 Catalog 구현과 연동 경계](docs/b3-catalog.md) | 고정 스키마·namespace·출처·목적지 해석, C 안전 경로 연결 조건 |
+| [B4·B5 실행·응답·승인 구현](docs/b4-b5-execution.md) | 해시·예외, Task 직렬화, 커밋 후 공개, 사람 승인·재평가·소비와 A·C 연결 조건 |
 | [공통 에이전트 지침](AGENTS.md) | 모든 브랜치에 적용하는 작업 지침 |
 | [A 작업 현황](docs/tasks/a-progress.md) | 현재 구현, 실제 검증, 미완료 조건과 커밋 추적 |
 
