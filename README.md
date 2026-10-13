@@ -4,8 +4,8 @@
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
 현재 A 브랜치에는 보안 코어·transport·Runner·Qt 앱의 **합성 개발 경로**가 있다.
-실제 stdio MCP 서버와 로컬 AGT 판정을 연결했고, AGT는 명시적으로 real/mock을 선택한다.
-Store·Registry는 B 단위 대역이고 모델은 mock이다. 제품용 SQLite·C launcher·HTTP·실제 모델 및 C 독립 인수는 아직 완료하지 않았다.
+실제 stdio·로컬 HTTP MCP 서버와 로컬 AGT 판정을 연결했고, AGT는 명시적으로 real/mock을 선택한다.
+Store·Registry는 B 단위 대역이고 모델은 mock이다. 제품용 SQLite·C launcher/endpoint 검증·실제 모델 및 C 독립 인수는 아직 완료하지 않았다.
 작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/tasks/a-progress.md)이다.
 
 ## 설치와 실행
@@ -16,10 +16,12 @@ uv가 `.python-version`의 3.12를 설치하며 이번 검증은 CPython 3.12.15
 ```powershell
 uv sync --locked
 uv run python -m guard_app --demo --agt-mode real
+uv run python -m guard_app --demo --agt-mode real --mcp-transport http
 uv run python -m guard_app --demo --agt-mode real --scenario deny
 uv run python -m guard_app --demo --agt-mode real --agt-policy deny-send
 uv run python -m guard_app --demo --agt-mode mock
 uv run python -m examples.verify_stdio_spike --agt-mode real
+uv run python -m examples.verify_http_spike --agt-mode real
 uv run pytest -q
 ```
 
@@ -28,6 +30,12 @@ uv run pytest -q
 합성 INTERNAL 읽기 후 ASK, 승인 뒤 SEND 한 번이 기본 경로다.
 `--scenario allow`는 PUBLIC, `--scenario deny`는 CONFIDENTIAL 읽기를 사용한다.
 실제 외부 목적지로 보내지 않고 합성 서버 내부 계수만 올린다.
+
+`--mcp-transport http`는 앱이 띄운 `127.0.0.1` 합성 서버와 실제 TCP로 통신한다.
+기본값은 `stdio`다. HTTP는 JSON·SSE 응답을 지원하고 redirect·자동 인증·POST 재시도를
+사용하지 않는다. 응답 유실·timeout 뒤 SEND는 결과 불명으로 처리한다.
+현재 CLI는 임의 외부 서버 URL·인증정보를 받지 않는다. 제품 endpoint 검증·등록 연결은
+C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/tasks/a-http-integration.md)을 따른다.
 
 `--agt-mode`는 필수다. real은 `agent-governance-toolkit-core==5.0.0`의 로컬
 `PolicyEngine`으로 판정하며, 시작 실패·판정 오류·시간초과 시 차단한다.

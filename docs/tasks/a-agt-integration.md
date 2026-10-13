@@ -110,5 +110,6 @@ receiver_effect는 별도 stdio 합성 프로세스의 계수다. 독립 wire �
   현재 bootstrap의 규칙은 고정 합성이며 임의 규칙 파일 로더는 없다.
 - C: 정식 fixture에서 거절·오류·시간초과·형식 불명의 dispatch/wire/수신 계수,
   전체 T/S 인수와 Scanner 포함 설치 조합.
-- 실제 모델·SQLite·C Registry/launcher·HTTP는 아직 제품 구성에 연결하지 않았다.
+- 실제 모델·SQLite·C Registry/launcher는 아직 제품 구성에 연결하지 않았다.
+  이후 [A08/A12](a-http-integration.md)에서 HTTP adapter·loopback 합성 앱을 연결했다.
   이 어댑터를 붙인 것으로 전체 제품 인수를 완료 표시하지 않는다.

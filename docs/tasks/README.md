@@ -27,6 +27,7 @@
 | 문서 | 성격 |
 | --- | --- |
 | [연동·호환성 기록](../integration-notes.md) | 날짜별 로컬 환경·SDK·Qt 검증 기록 |
+| [A08/A12 · HTTP 연결](a-http-integration.md) | HTTP client 설정·실제 loopback 왕복·재전송 금지·지원 한계 |
 | [A07·A08 · 호환성 실행 준비](a-compatibility-runbook.md) | C fixture가 준비되면 실행할 stdio·HTTP 왕복 절차 |
 | [A 보안 검토](a-security-review.md) | 고정 리비전의 스캔 근거와 ARTEX 실행 조건 |
 

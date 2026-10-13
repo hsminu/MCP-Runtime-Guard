@@ -1,7 +1,7 @@
 # 외부 연동·호환성 기록
 
-담당 A, 리뷰 B·C. 2026-10-13 현재 stdio 합성 MCP 왕복·Qt 제어 smoke를 실행했다.
-HTTP·실제 AGT/Scanner·B6 SQLite·C launcher 인수는 미실행이다.
+담당 A, 리뷰 B·C. 2026-10-13 현재 stdio/HTTP 합성 MCP 왕복·실제 로컬 AGT·Qt 제어 smoke를 실행했다.
+Scanner·B6 SQLite·C launcher/endpoint·독립 통합 인수는 미실행이다.
 아래 날짜별 기록은 당시의 증거이며 현재 상태와 혼동하지 않는다.
 
 ## 2026-10-13 · 리뷰 후 실행 골격과 실제 stdio
@@ -22,16 +22,16 @@ HTTP·실제 AGT/Scanner·B6 SQLite·C launcher 인수는 미실행이다.
 
 | 항목 | 확인할 내용 | 상태 | 실제 버전 / 근거 / 재현 결과 |
 | --- | --- | --- | --- |
-| Python·MCP SDK | Python 3.12, 클라이언트·fixture의 동일 SDK 조합 | 설치·import 확인, 왕복 미실행 | 2026-10-12 A02: CPython 3.12.15, `mcp 1.29.0`. fixture의 SDK는 아직 확인하지 않음 |
+| Python·MCP SDK | Python 3.12, 클라이언트·서버의 동일 SDK 조합 | A stdio/HTTP 왕복 확인 | CPython 3.12.15, MCP 1.29.0. 정식 C fixture는 별도 |
 | stdio READ | 세션 진입·호출·종료 | A 합성 왕복 실행 | 2026-10-13, MCP 1.29.0. C resource fixture는 별도 |
-| HTTP SEND | Streamable HTTP 왕복, tools/call·부작용 계수 | 미실행 | 미확정 |
-| redirect·retry | 307·308, 재연결, 쓰기 요청 자동 재전송 없음 | 설치 코드 조사, 동작 미실행 | SDK 기본 HTTP 팩토리는 redirect를 따름. A02 조사와 A12·A16·A39 실측 필요 |
+| HTTP SEND | Streamable HTTP 왕복, tools/call·부작용 계수 | A loopback TCP 검증 | MCP 1.29.0/HTTPX 0.28.1, JSON/SSE × stateful/stateless, [A08/A12](tasks/a-http-integration.md) |
+| redirect·retry | 307·308, 재연결, 쓰기 요청 자동 재전송 없음 | A 설정·수신 계수 검증 | 오류 SEND POST 1회, redirect 대상·GET 재개 수신 0. C 독립 인수는 별도 |
 | 원시 출력 격리 | stderr·SDK 파서 로그 | A 격리·회귀 검증 | A14에서 MCP 1.29.0의 잘못된 알림이 callback 밖 root logger에 남는 것을 합성 표지로 확인. C 공개 handler 정책·격리 sink와 A39 검증 필요 |
-| AGT | pre-call 거부권, 실행 분리, AccessResult 번역, 의존성 충돌 | 현재 환경 미설치·미실행 | 실제 AGT 연결·충돌 여부 미확인 |
+| AGT | pre-call 거부권, 실행 분리, AccessResult 번역, 의존성 충돌 | 실제 로컬 판정 연결 | core 5.0.0, [A18](tasks/a-agt-integration.md). B 규칙/감사·C 독립 인수는 별도 |
 | Cisco Scanner | MCP SDK 의존성 충돌 여부, C의 별도 환경 결정과 연계 | 현재 환경 미설치·미실행 | C의 설치 환경·버전 미확인 |
 | 모델 제공자 | Task별 대화·핸들·캐시 분리, 시연 환경 승인 상태 | 미실행 | 미확정 |
-| PySide6 bridge | 메인·백엔드 스레드 연결, 제어 큐, 안전한 종료 | offscreen 커널 단위 검증 | PySide6/Qt 6.12.0. A24/A25 커널 시험 10건 통과; 실제 앱 구성·C Store 수명·확정 상태 UI는 미연결 |
-| lock 재설치 | 새 가상환경에서 같은 stdio·HTTP 검증 재현 | 미실행 | 미확정 |
+| PySide6 bridge | 메인·백엔드 스레드 연결, 제어 큐, 안전한 종료 | stdio/HTTP × AGT real/mock 앱 검증 | PySide6/Qt 6.12.0. 승인·중복 클릭·종료, 제품 SQLite 수명은 별도 |
+| lock 재설치 | 새 가상환경에서 같은 stdio·HTTP 검증 재현 | 새 환경 설치·실행 성공 | `.cache/http-lock-check`, 66개 배포판 의존성 충돌 없음 |
 
 ## 조사 기록 형식
 
@@ -232,3 +232,20 @@ AGT를 모의 연동으로 선택하면 불가능했던 실제 연결 조건과 
   **0/0**, deny-send에서 READ 포함 **1/0**, 사람 승인에서 **2/1**이다.
   별도 SDK probe 8경로의 audit hook network/process 시도는 0이었다.
   independent wire·C fixture·Scanner 조합·B6 영속 감사 인수는 남아 있다.
+
+## 2026-10-13 · A08/A12 HTTP MCP 연결
+
+- `http_stream_factory`를 기존 서버별 worker/Guard에 연결하고 앱에
+  `--mcp-transport http`를 추가했다. stdio 기본값은 유지한다.
+- 설치 API: MCP 1.29.0 `streamable_http_client(url, *, http_client, terminate_on_close)`,
+  HTTPX 0.28.1 `AsyncHTTPTransport(retries=0, trust_env=False, verify=True, limits=...)`와
+  `AsyncClient(follow_redirects=False, auth=None, trust_env=False, timeout=...)`.
+  HTTPX를 직접 의존성으로, Uvicorn 0.54.0을 개발 의존성으로 명시했다. 기존 lock 버전은 유지했다.
+- 실제 localhost TCP의 JSON/SSE × stateful/stateless 4조합을 확인했다.
+  Guard 호출·사람 승인·Qt 종료를 유지하고, 307/308·401·404·500·응답 유실·timeout·SSE 유실·
+  호출자 취소에서 추가 SEND POST가 없었다. 결과 불명 뒤 새 요청도 Guard가 거절한다.
+- 합성 서버의 생성·실행 로그도 context로 격리해 세션 ID가 공개 로그에 나오지 않게 했다.
+  SDK의 `lifespan` forward reference 경고 1건과 기존 AGT deprecation 경고 4건은 관찰했으며
+  원시 요청·응답 로그와 구분한다.
+- 상세 재현·실제 계수·검증 결과·인증/endpoint 지원 한계는
+  [HTTP 연결 기록](tasks/a-http-integration.md)을 따른다. C 독립 인수 완료가 아니다.

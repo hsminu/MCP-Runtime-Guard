@@ -4,6 +4,9 @@
 
 ## 담당 범위
 
+2026-10-13 후속: [실제 AGT](a-agt-integration.md)와 [HTTP MCP](a-http-integration.md)를
+합성 앱에 연결했다. 전체 체크리스트와 C 독립 인수 상태는 각 기록의 한계를 따른다.
+
 제품 경로는 `src/guard_app/` 기준이다. 표는 A의 책임 범위이며 실제 구현·검증 상태는 [A 작업 현황](a-progress.md)을 따른다.
 
 | 파일 / 영역 | 구현 책임 | 리뷰 |

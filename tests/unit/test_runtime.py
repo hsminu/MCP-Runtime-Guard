@@ -31,9 +31,10 @@ def wait_until(app, predicate, timeout=8):
 
 
 @pytest.mark.parametrize("agt_mode", ["real", "mock"])
-def test_human_review_approve_and_shutdown_use_real_stdio(agt_mode):
+@pytest.mark.parametrize("mcp_transport", ["stdio", "http"])
+def test_human_review_approve_and_shutdown_use_real_mcp(agt_mode, mcp_transport):
     app = QApplication.instance() or QApplication([])
-    bridge = BackendBridge(lambda: bootstrap(agt_mode=agt_mode))
+    bridge = BackendBridge(lambda: bootstrap(agt_mode=agt_mode, mcp_transport=mcp_transport))
     panel = RuntimePanel(bridge)
     panel.show()
     try:

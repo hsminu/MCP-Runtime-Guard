@@ -11,22 +11,22 @@
 | A04 C 연결 | 요구사항 전달 | C launcher·Registry 미연결 | C 인수 환경에서 대조 |
 | A05 UI 계약 | 앱 내부 Task projection·사람 review 연결 | 공통 조회 DTO 합의 미완료 | B·C 정식 계약 검토 |
 | A07·A11 stdio | 실제 SDK·Guard 왕복 스파이크 실행 | 정식 C 수신 fixture 미사용 | C 인수 증거로 확장 |
-| A08·A12 HTTP | 미실행 | HTTP 왕복 코드·인수 미완료 | A 독립 loopback 스파이크부터 수행 |
+| A08·A12 HTTP | [Streamable HTTP adapter·loopback 왕복·JSON/SSE·재전송 차단](a-http-integration.md) | C endpoint 검증·독립 fixture 인수·인증 확장 미완료 | C 등록/endpoint 연결과 독립 계수 인수 |
 | A09·A10 worker | 구현·회귀 검증 | 수신 직전 wire-size 상한은 C 의존 | C stream ingress 연결 |
 | A13 종료 | 앱 종료·스레드 종료 smoke 검증 | 실제 DB 없음 | B6 close 순서 검증 |
-| A14 원시 출력 | 필수 errlog·SDK worker 로그 원문 격리 | 정식 C 공개 handler 인수 없음 | C 로그 정책·A39 함께 검증 |
+| A14 원시 출력 | 필수 errlog·stdio/HTTP SDK와 합성 HTTP 서버 로그 격리 | 정식 C 공개 handler 인수 없음 | C 로그 정책·A39 함께 검증 |
 | A15·A16 등록 | 요구·단위 구현 | 지문/Registry/launcher 미연결 | 실제 등록 계약 연결 |
 | A17 AGT 선정 | [core 5.0.0 선정](a-agt-selection.md), Windows 판정 스파이크 8경로 통과 | Scanner와 함께 쓸 공통 제품 조합 미검증 | C 조합 인수 |
 | A18 AGT 연결 | [실제 로컬 판정·명시적 real/mock·timeout/취소 검증](a-agt-integration.md) | 제품 규칙 계약·영속 mode 감사·C 독립 인수 미완료 | B 규칙/감사 검토, C dispatch 0 인수 |
 | A19·A20 모델 | 중립 adapter·한계 단위 검증 | 실제 제공자 미선정 | 승인 환경 확정 |
 | A21·A22 Runner | expected_epoch·승인 resume 연결 | 실제 모델 세션 격리 미검증 | 제공자 선정 후 T21 |
 | A23 B 리뷰 | AGT 지연 중 긴급 차단 수정·회귀 검증 | C 독립 wire 검증 미실행 | B·C 소유자 리뷰 |
-| A24–A27 bridge·앱 | __main__ + 실제 stdio 합성 앱 | Store·Registry는 B 단위 대역 | B6·C 구성으로 교체 |
+| A24–A27 bridge·앱 | __main__ + 실제 stdio/HTTP 합성 앱 | Store·Registry는 B 단위 대역 | B6·C 구성으로 교체 |
 | A28–A32 화면 | 기존 읽기 화면 유지 | 제품 Registry/Scanner 조회 없음 | 합의된 조회 연결 |
 | A33·A34 승인 | 실행 탭에서 사본 확인·승인·거절 가능 | 제품 조회 목록과 실행 탭 통합 미완료 | 동일 사람 capability로 목록 연결 |
 | A35 로그 | enum 값 매핑 수정 | 영속 감사 조회 미연결 | B6 조회 연결 |
 | A36·A37 제어·표시 | 확정 상태/요청됨 분리, 한글 표시 수정 | C 전체 GUI 인수 미실행 | 실제 운영 구성 검증 |
-| A38–A40 통합 | AGT real/mock 각각 A 합성 smoke 8경로 | SQLite·HTTP·C launcher 없음 | C 정식 T/S 계수 검증 |
+| A38–A40 통합 | AGT real/mock × stdio/HTTP 합성 경로, A HTTP 어댑터 수신 계수 검증 | SQLite·C launcher/endpoint·독립 인수 없음 | C 정식 T/S 계수 검증 |
 | A41 패키징 | lock·설치·단위 검증 | 전체 보안 스캔/CI는 미실행 | C CI 연결 |
 | A42 인수 | 현재 문서 간소화 | 제품 인수 의존성 위 표 참조 | 리뷰 결과와 검증을 함께 인계 |
 
@@ -59,3 +59,14 @@ timeout·취소·늦은 결과 폐기·종료 미확인과 Guard의 거부권 �
 새 lock 환경 설치 66개 배포판의 의존성 검사 성공, 전체 테스트 **1,243 passed**
 (40.11초, Qt offscreen, SDK deprecation 경고 4건), real/mock stdio 각각 8경로 통과.
 상세 계수·재현법·B 규칙/감사와 C 독립 인수 의존성은 [A18 연결 기록](a-agt-integration.md)을 따른다.
+
+## 2026-10-13 HTTP MCP 연결
+
+Streamable HTTP factory·로컬 TCP 서버를 연결했고 CLI에서 `--mcp-transport http`로 실행한다.
+JSON/SSE × stateful/stateless, 307/308·인증/세션 오류·응답 유실·timeout·취소의
+SEND 추가 전송 0을 검증했다. SDK/client·합성 서버 로그도 같은 context에서 격리한다.
+
+새 lock 환경 설치·66개 배포판 의존성 검사 성공, 전체 **1,282 passed**
+(22.55초, Qt offscreen, SDK 경고 5건), HTTP 앱의 AGT real/mock 각각 8경로 통과.
+HTTP 단위 probe의 wire 계수와 제품 endpoint/인증·C 독립 인수 한계는
+[A08/A12 연결 기록](a-http-integration.md)을 따른다.

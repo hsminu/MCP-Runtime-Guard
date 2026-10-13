@@ -1,4 +1,4 @@
-"""Source-checkout-only composition: real stdio MCP, explicit B unit doubles.
+"""Source-checkout-only composition: real stdio/HTTP MCP, explicit B unit doubles.
 
 No production Store/Registry or external model is implied by this spike.
 Every dependency is constructed on the backend loop. The fixed server is the
@@ -21,6 +21,7 @@ from guard_app.adapters.agt_real import AgentGovernanceAccessChecker
 from guard_app.adapters.mcp_transport import (
     McpTransport,
     StdioServerParameters,
+    http_stream_factory,
     stdio_stream_factory,
 )
 from guard_app.domain.contracts import ModelTurn
@@ -32,6 +33,8 @@ from guard_app.services.catalog_sources import SourceRule
 from guard_app.services.guard import GuardService
 from guard_app.services.runner import TaskRunner
 from tests.unit.test_guard import _Registry, _Store
+
+from .http_spike_server import http_spike
 
 
 class SyntheticModel:
@@ -52,11 +55,15 @@ class SyntheticModel:
         )
 
 
-async def bootstrap(scenario="ask", *, agt_mode: str, agt_policy="allow-tools") -> BackendBindings:
+async def bootstrap(
+    scenario="ask", *, agt_mode: str, agt_policy="allow-tools", mcp_transport="stdio"
+) -> BackendBindings:
     if scenario not in {"ask", "allow", "deny"} or agt_mode not in {"real", "mock"}:
         raise ValueError("합성 실행 모드가 유효하지 않다")
     if agt_policy not in {"allow-tools", "deny-send", "deny-all"}:
         raise ValueError("합성 AGT 정책이 유효하지 않다")
+    if mcp_transport not in {"stdio", "http"}:
+        raise ValueError("합성 MCP 전송 방식이 유효하지 않다")
     async with AsyncExitStack() as lifetime:
         # Fixed, synthetic metadata rules; no arbitrary policy expressions/files.
         rules = {
@@ -76,22 +83,33 @@ async def bootstrap(scenario="ask", *, agt_mode: str, agt_policy="allow-tools") 
             access = RuleBasedMockAccessChecker(
                 {(server, tool): allowed for (server, tool, _kind), allowed in rules.items()}
             )
-        temporary = lifetime.enter_context(TemporaryDirectory(prefix="guard-a-spike-"))
-        counter_path = Path(temporary) / "counts.json"
-        counter_path.write_text('{"receiver_calls":0,"receiver_effect":0}', encoding="utf-8")
-        # Deliberate discard: never inherit the host's stderr.
-        sink = lifetime.enter_context(open(os.devnull, "w", encoding="utf-8"))  # noqa: ASYNC230, SIM115 - ExitStack owns backend null-device lifetime
+        if mcp_transport == "http":
+            spike = await lifetime.enter_async_context(http_spike())
+            stream_factory = http_stream_factory(spike.endpoint, io_timeout_s=1.0)
+
+            def read_counts():
+                return dict(spike.counts)
+        else:
+            temporary = lifetime.enter_context(TemporaryDirectory(prefix="guard-a-spike-"))
+            counter_path = Path(temporary) / "counts.json"
+            counter_path.write_text('{"receiver_calls":0,"receiver_effect":0}', encoding="utf-8")
+            # Deliberate discard: never inherit the host's stderr.
+            sink = lifetime.enter_context(open(os.devnull, "w", encoding="utf-8"))  # noqa: ASYNC230, SIM115 - ExitStack owns backend null-device lifetime
+            server_path = Path(__file__).with_name("stdio_spike_server.py").resolve()
+            stream_factory = stdio_stream_factory(
+                StdioServerParameters(
+                    command=sys.executable, args=[str(server_path), str(counter_path)], env={}
+                ),
+                errlog=sink,
+            )
+
+            def read_counts():
+                return json.loads(counter_path.read_text(encoding="utf-8"))
+
         dispatches = []
-        server_path = Path(__file__).with_name("stdio_spike_server.py").resolve()
         transport = McpTransport(
-            {
-                "docs": stdio_stream_factory(
-                    StdioServerParameters(
-                        command=sys.executable, args=[str(server_path), str(counter_path)], env={}
-                    ),
-                    errlog=sink,
-                )
-            },
+            {"docs": stream_factory},
+            call_timeout_s=5.0,
             close_timeout_s=2.0,
             on_dispatch=dispatches.append,
         )
@@ -174,7 +192,7 @@ async def bootstrap(scenario="ask", *, agt_mode: str, agt_policy="allow-tools") 
                 ),
                 None,
             )
-            counts = json.loads(counter_path.read_text(encoding="utf-8"))
+            counts = read_counts()
             return TaskProjection(
                 task_id,
                 current.epoch,

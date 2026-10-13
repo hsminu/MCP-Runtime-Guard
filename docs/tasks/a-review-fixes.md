@@ -3,6 +3,7 @@
 > 이 문서는 앞선 리뷰의 실행 기록이다. 이후 [AGT 선정](a-agt-selection.md)과
 > [A18 실제 연결](a-agt-integration.md)을 반영했다. 아래 mock 전용·AGT 미포함 설명은
 > 당시 상태이며, 현재 앱·lock·검증은 A18 기록과 [진행 현황](a-progress.md)을 따른다.
+> HTTP의 이후 구현·재현은 [A08/A12 연결 기록](a-http-integration.md)을 따른다.
 
 출발점 A `5598009`, B `f22968c`. 사용자의 이 리뷰에 대한 “고쳐” 요청을 근거로
 A 구현·패키징과 지적된 B Guard/승인 경계를 수정했다. B·C의 별도 리뷰나 3인 합의가

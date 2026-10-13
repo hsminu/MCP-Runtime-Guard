@@ -1,8 +1,8 @@
 """MCP session ownership and the Guard's queued Transport implementation.
 
-The stream factories are supplied by the trusted composition root after C's
-launcher/endpoint validation. This module deliberately does not accept paths,
-URLs, environment dictionaries, or create a second tools/call entry point.
+Stream factories are supplied by the trusted composition root after C's
+launcher/endpoint validation. The SDK factories below enforce transport settings;
+they do not replace registration, endpoint approval or Guard's tools/call entry.
 """
 
 from __future__ import annotations
@@ -20,8 +20,10 @@ from types import TracebackType
 from typing import Any, Protocol, TextIO, cast
 
 import anyio
+import httpx
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 from pydantic import AnyUrl, BaseModel
 
@@ -86,6 +88,91 @@ def stdio_stream_factory(server: StdioServerParameters, *, errlog: TextIO) -> St
         token = _SDK_LOG_SCOPE.set(True)
         try:
             async with stdio_client(parameters, errlog=errlog) as streams:
+                yield streams
+        finally:
+            _SDK_LOG_SCOPE.reset(token)
+
+    return connect
+
+
+def http_stream_factory(endpoint: str, *, io_timeout_s: float = 5.0) -> StreamFactory:
+    """Open a preapproved Streamable HTTP endpoint with no write replay.
+
+    The composition root must supply C-validated endpoint/registration data.
+    These checks only bound the supported URL shape: HTTPS, or literal loopback
+    HTTP for a local server. DNS/IP policy and credential provisioning are not
+    implemented here. This initial transport supports unauthenticated servers.
+    """
+    if (
+        type(endpoint) is not str
+        or not 1 <= len(endpoint) <= 2048
+        or any(ord(char) <= 32 or ord(char) == 127 for char in endpoint)
+        or "\\" in endpoint
+    ):
+        raise ValueError("Invalid HTTP MCP endpoint")
+    try:
+        url = httpx.URL(endpoint)
+    except httpx.InvalidURL:
+        raise ValueError("Invalid HTTP MCP endpoint") from None
+    if (
+        not url.is_absolute_url
+        or not url.host
+        or any(char in url.host for char in "[]%")
+        or url.scheme not in {"http", "https"}
+        or url.userinfo
+        or "?" in endpoint
+        or "#" in endpoint
+        or (url.scheme == "http" and url.host not in {"127.0.0.1", "::1"})
+    ):
+        raise ValueError("Invalid HTTP MCP endpoint")
+    if (
+        type(io_timeout_s) not in (int, float)
+        or not 0 < io_timeout_s <= 300
+        or not math.isfinite(io_timeout_s)
+    ):
+        raise ValueError("Invalid HTTP MCP timeout")
+    _install_sdk_log_containment()
+
+    @asynccontextmanager
+    async def connect():
+        token = _SDK_LOG_SCOPE.set(True)
+        get_started = False
+
+        async def constrain_request(request: httpx.Request) -> None:
+            nonlocal get_started
+            if request.url != url or request.method not in {"POST", "GET", "DELETE"}:
+                raise httpx.RequestError("MCP_ENDPOINT_MISMATCH")
+            if "authorization" in request.headers or "proxy-authorization" in request.headers:
+                raise httpx.RequestError("MCP_AUTH_UNSUPPORTED")
+            # HTTPX stores server cookies. They are not part of this unauthenticated
+            # transport's contract; never turn Set-Cookie into ambient credentials.
+            request.headers.pop("cookie", None)
+            if request.method == "GET":
+                # One notification stream is supported. No automatic GET resume
+                # or reconnect may recover a lost SEND as an apparent success.
+                if get_started or "last-event-id" in request.headers:
+                    raise httpx.RequestError("MCP_RESUME_DISABLED")
+                get_started = True
+
+        try:
+            async with (
+                httpx.AsyncClient(
+                    transport=httpx.AsyncHTTPTransport(
+                        retries=0,
+                        trust_env=False,
+                        verify=True,
+                        limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+                    ),
+                    timeout=httpx.Timeout(float(io_timeout_s)),
+                    follow_redirects=False,
+                    trust_env=False,
+                    auth=None,
+                    event_hooks={"request": [constrain_request]},
+                ) as client,
+                streamable_http_client(
+                    str(url), http_client=client, terminate_on_close=True
+                ) as streams,
+            ):
                 yield streams
         finally:
             _SDK_LOG_SCOPE.reset(token)
@@ -259,8 +346,8 @@ async def _discard_message(_message: object) -> None:
 def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
     """Wrap only streams supplied by a verified composition root.
 
-    No stdio/HTTP stream factory is shipped here: C's connection validation,
-    isolated output sinks, and SDK logger containment must precede wiring.
+    C's connection validation and isolated output sinks precede wiring. SDK
+    logger containment covers the streams, session and their child tasks.
     """
 
     _install_sdk_log_containment()
@@ -422,8 +509,7 @@ class ServerWorker:
             raise DispatchError("WorkerCloseTimeout") from None
         owner_error = outcome[0]
         owner_failed = isinstance(owner_error, BaseException) and (
-            not isinstance(owner_error, asyncio.CancelledError)
-            or not self._owner_cancel_expected
+            not isinstance(owner_error, asyncio.CancelledError) or not self._owner_cancel_expected
         )
         teardown_failed = self._session_exit_attempted and not self._session_exited
         teardown_missing = self._session_entered and not self._session_exit_attempted
@@ -432,9 +518,7 @@ class ServerWorker:
         if self._close_failed:
             self._state = _State.FAILED
             name = (
-                "SessionCloseFailed"
-                if teardown_failed or teardown_missing
-                else "WorkerOwnerFailed"
+                "SessionCloseFailed" if teardown_failed or teardown_missing else "WorkerOwnerFailed"
             )
             raise DispatchError(name) from None
         if self._state is _State.CLOSING:
