@@ -4,13 +4,18 @@
 초기 요청 문서는 B `3bf414c`로 공개했다. 기존 A `cd75bf9` 검토 후 추가 기준은
 A `ab82919`, B SQLite 공개 기준 `9eb0560`이다. 후속 QA 요청과 B 내부 보완은
 [B QA 반영 기록](b-qa-fixes-2026-10-13.md)을 따른다.
+이번 순번·복구 설계의 코드 기준은 공개된 B `6115fa6`이다.
+[상세 설계](b6-sequence-recovery-design.md)·[검증 계획](b6-sequence-recovery-validation.md)의
+추가 회신 항목은 아래 7절에 연결했다. 최초 설계 준비는 문서 작업이고,
+후속 사용자 지시로 [B 내부 사전 점검/단위 검증](b6-startup-preflight.md)만 추가한다.
+새 shared API·계수 schema·배정·상태 복구·제품 연결은 구현하지 않는다.
 문서 작성으로 팀원에게 전달·동의·제품 연결·독립 검증 완료를 기록하지 않는다.
 
 ## 1. 검토 기준과 현재 연결 상태
 
 | 담당 | 확인한 기준 커밋 | 이번 검토에서 확인한 상태 |
 | --- | --- | --- |
-| B | [9eb0560](https://github.com/hsminu/MCP-Runtime-Guard/commit/9eb0560a8372cf23ad7f03b7a10d063af3af039f) + 로컬 QA 변경 | 기존 Store 12/12개 SQLite 구현 공개·당시 1,395개 통과. 후속 QA-01·02·05·07·08·09의 B 내부 보완. 공유 계약 동의와 제품 배선은 별도 |
+| B | [6115fa6](https://github.com/hsminu/MCP-Runtime-Guard/commit/6115fa65236b58250e9ee9ca2e3d686130e35416) | 기존 SQLite 12/12·후속 QA 보완 공개·전체 1,614개 통과. 이번 순번/복구는 설계·50개 시나리오 준비이며 구현·공유 계약 동의·제품 배선은 별도 |
 | A | [ab82919](https://github.com/hsminu/MCP-Runtime-Guard/commit/ab82919cbdc55492e1604a5aec41fec4fbedb33b) | B 문서 5f8a003 병합. 후속 Runner·transport·AGT·UI QA 수정과 B 소유 요청 10개 확인. SQLite 9eb0560과 이번 QA 보완은 아직 병합되지 않음 |
 | C / main | [4179f98](https://github.com/hsminu/MCP-Runtime-Guard/commit/4179f98b476b41e806c4a87b879cbdf95dc92b54) | SQLite 구현 B 이관·C 독립 검증 배정과 기존 Store 요구/처리 제안 |
 
@@ -136,3 +141,26 @@ C 독립 계약/결함 검증과 A 제품 연결 후 실제 계수를 확인한 
 A18-D의 선택지 제시는 B6/AGT-01–03에 대한 동의 회신이 아니다. 실제 선택과 근거를 기록한 뒤 갱신한다.
 사용자는 이번 최신 A 재검토 문서의 B 브랜치 commit·push를 승인했다.
 문서 공유 승인은 A/C의 계약 동의나 SQLite·정규식 구현 승인으로 확대하지 않는다.
+
+## 7. 영속 순번·재시작 복구 추가 회신
+
+[상세 설계 8절](b6-sequence-recovery-design.md)에 A/C 질문과
+상위 B6 계약 연결을 정리했다. [50개 검증 계획](b6-sequence-recovery-validation.md)은 미실행이다.
+다음 **8개 항목의 동의/수정안/미결**을 6절 형식으로 남겨 줘.
+
+| ID | 회신할 내용 | A 영향 | C 영향 |
+| --- | --- | --- | --- |
+| SEQ-01 | Task ID 생애 단위 계수·신규 초기값·공백/회수 금지 | 새 Task/호출 번호 표시 | UNIQUE·여러 epoch·승격 순번 |
+| SEQ-02 | 콜백/Store 입구·expected_epoch 여부·오류/배정 ACK·할당 감사 | bootstrap 주입·실패 표시 | 반환·COMMIT 불명·대역 계약 |
+| SEQ-03 | 독립 계수 구조·schema 이관·v1 보장 한계/과거 백업 | 지원 DB/교체 절차 | seed·누락/손상·삭제 이력·migration 원자성 |
+| REC-01 | 이전 실행자 종료·단일 DB 인스턴스 소유·시작 barrier | 모델/제어 개방·Runner/worker/AGT 종료 | 안전 소유권·동시 앱·전송 계수 |
+| REC-02 | 상태 표·split 중단 상태·v1 kind 유실·종결 U8 충돌 | 오래된 승인 제거·READ 미공개/SEND 불명 | 관계/상태·파손과 crash 구분·추가 전송 0 |
+| REC-03 | epoch 증가와 새 Task 복구의 영속 관계 기록 | Task/대화/캐시 격리·옛 명령 | old epoch 보존·반복 복구·범위 |
+| REC-04 | 버전·반복 적용·run 표식·감사/UTC·RecoveryReport | ACK와 화면 projection 구분 | 원자성·중복/누출·시간 역행 |
+| REC-05 | 전체 복구 TX·불명 ACK·예산·백업/미확정 메모리 | 실패 시 계속 닫기·재초기화 안내 | 프로세스 중단·잠금·성능/오류·지원 경계 |
+
+기술설계의 승인 복원/결과 불명 SEND 재전송 금지·등급 보존은 재투표 대상이 아니다.
+구체적인 epoch·종류 유실·API/스키마 선택을 공동 결정하고 [contracts.md](contracts.md)에
+실제 합의 근거를 기록한 뒤 기능을 구현한다. 후속 B 내부 사전 점검기는 사실 관찰만 하고,
+이 SEQ/REC 계약을 확정/대체하지 않는다. 최초 문서·후속 코드는 add로 준비했고,
+이후 2026-10-13 사용자가 설계/점검기 묶음의 commit·push를 지시했다. 자료 공개와 계약 동의는 구분한다.

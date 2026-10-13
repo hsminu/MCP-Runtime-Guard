@@ -19,6 +19,9 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | [B6 SQLite 첫 단계](docs/b6-sqlite-foundation.md) | 실제 연결·v1 스키마·Task 생성/조회 구현과 74개 SQLite 단위 검사·남은 연결 |
 | [B6 상태·판정·예약](docs/b6-sqlite-decisions.md) | 3개 연산 추가·감사 원자성·같은 인스턴스 ALLOW 결속과 전체 1,193개 검사 |
 | [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md) | 남은 7개 추가·현행 12/12개 구현·전체 1,395개 검사와 제품 연결/복구 한계 |
+| [B6 영속 순번·복구 설계안](docs/b6-sequence-recovery-design.md) | 계수/migration·시작 게이트·복구 상태/epoch·A/C 회신 8항목 |
+| [B6 순번·복구 검증 계획](docs/b6-sequence-recovery-validation.md) | B 단위·C 독립·A 시작 연결의 50개 미실행 시나리오와 crash 지점 |
+| [B6 내부 시작 점검기](docs/b6-startup-preflight.md) | B 단독 구현: v1 사실·관계·기록 MAX의 읽기 전용 점검, 새 배정/복구 권한 없음 |
 | [정규식 검증 연결안](docs/b-schema-validation-proposal.md) | A 모델 입력·B 검증 의미·C 프로세스 실행/종료 연결 검토 |
 | [B1 구현 초안과 검증](docs/b1-contract-draft.md) | 구현 범위, 포트 초안 선택, 설치·단위 검사, A·C 검토 항목 |
 | [B2 순수 정책과 등급 누적](docs/b2-policy-and-taint.md) | 경계·AGT 판정, READ 누적·비교 모드, 버전과 성질 검증 |
@@ -26,8 +29,10 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | [B4·B5 실행·응답·승인 구현](docs/b4-b5-execution.md) | 해시·예외, Task 직렬화, 커밋 후 공개, 사람 승인·재평가·소비와 A·C 연결 조건 |
 | [공통 에이전트 지침](AGENTS.md) | 모든 브랜치에 적용하는 작업 지침 |
 
-2026-10-13 현재 A 재검토 기준은 **`ab82919`**, B 구현 시작 기준은 `9eb0560`이다.
+2026-10-13 현재 문서 대조 기준은 **A `ab82919`, B 공개 `6115fa6`**이다.
 후속 QA-09까지 반영 후 B 전체 **1,614개 테스트·Ruff·포맷·mypy·의존성 검사**를 통과했다.
+후속 로컬 [읽기 전용 사전 점검기](docs/b6-startup-preflight.md) 추가 후 전체 **1,683개**와
+동일 코드 검사를 통과했다. 영속 배정/상태 복구·공유 계약·제품 연결은 아직 완료되지 않았다.
 A의 후속 Runner·transport·AGT·UI 수정과 B QA 요청은 [B 반영 기록](docs/b-qa-fixes-2026-10-13.md)에 정리했다.
 A 자체 보고(전체 1,485개·합성 32경로), B 단위 검증, 미합의 계약·C 독립 인수를 구분한다.
 이전 `cd75bf9` 기준의 AGT/연동 기록은 해당 시점의 근거로 보존한다.
