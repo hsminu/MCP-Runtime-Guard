@@ -2,7 +2,11 @@
 
 작업 브랜치는 `feat/b-security-core`다. **호출을 보내도 되는지 결정하고, 승인·결과 공개·Task 상태를 일관되게 집행하는 코어**를 맡는다. B1 계약 초안과 B2–B5 담당 서비스·단위 테스트를 구현했다. 2026-10-12 사용자 결정으로 SQLite 구현을 B6로 인수했다. 2026-10-13 연결·초기 v1 스키마/마이그레이션과 현행 Store **12/12개 메서드·전체 1,395개 검사**를 완료했다. 분리 승인 생성/종결 간격·시작 복구·영속 순번·새 API 합의·제품 연결·독립 인수는 남아 있다. 아래 구현 체크는 B 소유 코드 범위이며 A·C 계약 합의·실제 연결·인수 검증은 별도다.
 
-현재 A 재검토 기준은 **`cd75bf9`**, B 문서 기준은 `3bf414c`(서비스 `29025e0`)다.
+현재 A 재검토 기준은 **`ab82919`**, B 구현 시작 기준은 `9eb0560`이다.
+후속 QA 요청 **01·02·05·07·08**의 B 내부 수정·검증·남은 항목은
+[B QA 반영 기록](../b-qa-fixes-2026-10-13.md)을 따른다. 아래 1,395개는 SQLite 추가 당시 기록이다.
+후속 [QA-09 자원 수명 보완](../b-qa09-task-lifecycle.md)까지 구현했고,
+최신 전체 검사는 **1,614 passed**, Ruff·포맷·mypy·의존성 검사 통과다.
 회신 입구는 [A·C 계약 검토 요청 초안](../ac-contract-review-request.md)이다.
 최신 A/B 상태와 담당별 질문을 모았으며 실제 전달·동의·새 검증 완료 기록은 아니다.
 
@@ -123,11 +127,11 @@ A `5598009`의 transport·AGT mock·모델·Runner·bridge·Qt UI와 아래 `655
 승인·Task 상태·revision 및 제어 적용 결과의 요청 근거는
 [A 최초 계약 질문의 역사 기록](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-port-review.md#7-b-head-f3c2d2b-연동-중-드러난-호출제어-계약-질문)에 있다. 현재 구현과 남은 계약은 아래 최신 대조를 따른다.
 
-현재 읽은 A `cd75bf9fa2a96a76f84fc1ce17a746705265ae53`에는 실제 로컬 AGT core 5.0.0과
+이전 검토 기준 A `cd75bf9fa2a96a76f84fc1ce17a746705265ae53`에는 실제 로컬 AGT core 5.0.0과
 loopback HTTP MCP가 추가됐고 Runner가 신뢰 맥락의 `expected_epoch=self.epoch`를 Guard에 전달한다.
 최신 QA 변경은 adapter 대기/실행 상한 16개·퇴역 worker 예산 2개·제한적 worker 교체·실제 thread
 종료 확인 및 한국어 실행/제어 문구다. AGT 제품 역할과 규칙 관리의 새 A18-D 결정 요청은 미확정이다.
-A `cd75bf9`는 B `3bf414c`를 병합했다. domain·ports·Guard·승인 서비스는 B와 동일하며
+A `cd75bf9`는 B `3bf414c`를 병합했다. 당시 domain·ports·Guard·승인 서비스는 B와 동일했으며
 B `29025e0`의 승인 ID 검증·마지막 조회 만료/현재성 확인·늦은 AGT 작업 추적 보완이 반영됐다.
 A의 연결 검증 보고는 아래에 기록한다. C의 독립 경합·소비·dispatch·wire·부작용 인수와
 공동 계약 합의는 필요하다. 제품 SQLite·C 서비스 연결은 미완료다.

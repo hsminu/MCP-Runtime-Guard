@@ -19,6 +19,7 @@ from threading import get_ident
 from types import TracebackType
 from typing import Literal
 
+from guard_app.core.approval_time import approval_event_time
 from guard_app.core.taint import merge
 from guard_app.domain.contracts import ApprovalRecord
 from guard_app.domain.enums import (
@@ -804,10 +805,11 @@ class SQLiteStore:
                 current != context.waiting or current.unclassified or now >= record.expires_at_utc
             ):
                 raise StoreError(Reason.APPROVAL_STALE)
+            event_time = approval_event_time(record, now)
             updated = record.model_copy(
                 update={
                     "status": status,
-                    "decided_at_utc": now,
+                    "decided_at_utc": event_time,
                     "row_revision": _integer(record.row_revision + 1),
                 }
             )
@@ -817,7 +819,7 @@ class SQLiteStore:
                     WHERE approval_id=? AND request_id=? AND row_revision=? AND status=?""",
                     (
                         status.value,
-                        _utc_text(now),
+                        _utc_text(event_time),
                         updated.row_revision,
                         approval_id,
                         record.request_id,
@@ -841,7 +843,7 @@ class SQLiteStore:
                 task_id=current.task_id,
                 request_id=record.request_id,
                 reason=reason,
-                timestamp=_utc_text(now),
+                timestamp=_utc_text(event_time),
             )
             if status is ApprovalStatus.APPROVED:
                 final_now = max(now_utc, self._fresh_utc())

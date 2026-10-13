@@ -23,6 +23,7 @@ from guard_app.domain.models import ResolvedRequest, TaskState
 from guard_app.domain.reasons import Reason
 from guard_app.ports import Store
 from guard_app.services.catalog import Catalog
+from guard_app.services.state_checks import checked_task, preserve_task_context
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -208,7 +209,7 @@ class ResponseGate:
                 exception_type=exception_type,
             )
             state = self._validated_state(req, committed)
-            self._preserve_context(state, expected_state)
+            self._preserve_context(state, expected_state, allow_last_read_change=False)
             if state.status is not TaskStatus.UNKNOWN_OUTCOME:
                 raise StoreError(Reason.STATE_COMMIT_FAILED)
             return OutcomeUnknown(request_id=req.request_id, reasons=(reason,))
@@ -221,38 +222,20 @@ class ResponseGate:
             exception_type=exception_type,
         )
         state = self._validated_state(req, committed)
-        self._preserve_context(state, expected_state)
+        self._preserve_context(state, expected_state, allow_last_read_change=not no_data_read)
         if state.status is not (TaskStatus.RUNNING if no_data_read else TaskStatus.HALTED):
             raise StoreError(Reason.STATE_COMMIT_FAILED)
         return Withheld(request_id=req.request_id, reasons=(reason,))
 
     @staticmethod
     def _validated_state(req: ResolvedRequest, value: TaskState) -> TaskState:
-        try:
-            state = TaskState.model_validate(value)
-        except ValidationError:
-            raise StoreError(Reason.STATE_COMMIT_FAILED) from None
-        if state.task_id != req.task_id or state.epoch != req.epoch:
-            raise StoreError(Reason.STATE_COMMIT_FAILED)
-        return state
+        return checked_task(value, task_id=req.task_id, epoch=req.epoch)
 
     @staticmethod
-    def _preserve_context(state: TaskState, expected: TaskState | None) -> None:
-        if expected is None:
-            return
-        changed = (
-            state.high_watermark != expected.high_watermark
-            or state.unclassified != expected.unclassified
-        )
-        if (
-            state.profile_id != expected.profile_id
-            or state.policy_version != expected.policy_version
-            or state.high_watermark < expected.high_watermark
-            or (expected.unclassified and not state.unclassified)
-            or state.security_version < expected.security_version
-            or (changed and state.security_version <= expected.security_version)
-        ):
-            raise StoreError(Reason.STATE_COMMIT_FAILED)
+    def _preserve_context(
+        state: TaskState, expected: TaskState | None, *, allow_last_read_change: bool = True
+    ) -> None:
+        preserve_task_context(state, expected, allow_last_read_change=allow_last_read_change)
 
     def _check_observation(
         self,
@@ -263,7 +246,7 @@ class ResponseGate:
         expected_state: TaskState | None,
     ) -> None:
         state = self._validated_state(req, value)
-        self._preserve_context(state, expected_state)
+        self._preserve_context(state, expected_state, allow_last_read_change=label is not None)
         if label is None:
             valid = state.status is TaskStatus.HALTED and state.unclassified
         else:

@@ -8,7 +8,7 @@ import asyncio
 import traceback
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from itertools import count
 from pathlib import Path
 
@@ -309,7 +309,7 @@ def test_approval_transition_matrix(
         {"expected_row_revision": -1},
         {"approver_id": "another-operator"},
         {"now_utc": NOW.replace(tzinfo=None)},
-        {"now_utc": NOW - timedelta(seconds=1)},
+        {"now_utc": NOW.astimezone(timezone(timedelta(hours=9)))},
         {"reason": "TEST_SECRET_reason"},
     ],
 )

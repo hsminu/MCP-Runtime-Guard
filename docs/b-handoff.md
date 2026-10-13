@@ -1,7 +1,9 @@
 # B 구현 인수 안내
 
-2026-10-13 재검토 기준: **A `cd75bf9`, B `3bf414c`, C/main `4179f98`**.
-서비스 회귀 기준은 B `29025e0`이며 과거 커밋/시험은 당시 이력으로 구분한다.
+2026-10-13 재검토 기준: **A `ab82919`, B 구현 시작 `9eb0560`, C/main `4179f98`**.
+후속 B QA 수정은 [QA 반영 기록](b-qa-fixes-2026-10-13.md)을 따른다.
+QA-09까지 반영 후 전체 **1,614 passed**와 Ruff·포맷·mypy·의존성 검사를 통과했다.
+이전 B `29025e0`/A `cd75bf9`의 코드 대조·시험은 해당 시점의 이력으로 구분한다.
 기준 설계는 [최종 기술설계서](technical-design.md)다.
 현행 소유권은 [협업 규칙](team-workflow.md)을 따르며, 2026-10-12 사용자 결정에 따라
 SQLite 구현·영속 순번·감사 저장·시작 복구는 B6, 저장소 리뷰·독립 검증은 C가 맡는다.
@@ -10,6 +12,14 @@ A·C의 동의·리뷰·MCP/SQLite 제품 통합 실행을 완료했다는 기�
 
 현재 회신 입구는 [A·C 계약 검토 요청 초안](ac-contract-review-request.md)이다.
 최신 브랜치 기준, 담당별 질문, 합의와 구현의 경계를 모았으며 실제 전달·동의 기록은 아니다.
+
+A 최신 QA 요청 중 **01·02·05·07·08**을 B 내부에서 보완했다.
+[요청별 처리 표](tasks/a-b-qa-requests-2026-10-13.md#b-처리-결과--2026-10-13)를 먼저 읽으면 된다.
+후속 [QA-09의 안전한 자원 정리](b-qa09-task-lifecycle.md)도 B 내부에서 구현했다.
+공유 domain/ports/v1 스키마 변경은 없으며, 03/10·04·06의 공동 결정과
+미확정 정지 정보의 해제·시작 복구는 남아 있다.
+최초 변경은 사용자 요청대로 로컬 add까지 준비했고, 이후 2026-10-13 사용자가
+이번 QA 묶음의 commit·push를 지시했다. 공개 대상은 검증된 B 브랜치 변경이다.
 
 ## 전달 범위와 현재 상태
 
@@ -28,7 +38,8 @@ A·C의 동의·리뷰·MCP/SQLite 제품 통합 실행을 완료했다는 기�
 B1–B5 전달물에는 MCP SDK·AGT·Scanner·GUI·SQLite 구현·C의 CI 규칙이 없다.
 후속 B6 첫 단계는 [SQLite 구현/검증 기록](b6-sqlite-foundation.md)을 따른다.
 후속 [상태·판정·ALLOW 예약](b6-sqlite-decisions.md) 3개, [승인·응답 저장](b6-sqlite-lifecycle.md)
-7개를 추가해 현재 **현행 12/12개 메서드·전체 1,395개 테스트 통과**다. DB 하나와 7개 테이블이다.
+7개를 추가해 **현행 12/12개 메서드**를 구현했다. 이 단계의 전체 시험은 **1,395개**였고
+후속 QA-09까지 반영 후 현재는 **1,614개 통과**다. DB 하나와 7개 테이블이다.
 감사 쓰기에는 신뢰 audit_id_factory가 필요하고 승인 만료 검사는 신뢰 utc_now도 사용한다.
 재개방한 옛 ALLOW/승인/예약에서 실행·응답 커밋 권한을 복원하지 않는다.
 시작 복구·새 open/finish 합의·A 구성 루트 연결·C 독립 인수가 남아 제품에 주입하지 않았다.
@@ -37,7 +48,7 @@ A `5598009`의 transport·AGT mock·모델·Runner·bridge·Qt UI 기록과 `655
 긴급 차단·승인 상세는 당시 상태의 근거다. `655aef5`의 B 소유 변경은 사용자 지시로
 선별 반영했고, 세 후속 보완을 포함한 B `29025e038f7e4beb6cdcce15305f8cafc9550897`을 공개했다.
 
-현재 코드·문서 대조 기준 A는 `cd75bf9fa2a96a76f84fc1ce17a746705265ae53`이다.
+아래 AGT·앱 연결 대조는 이전 A `cd75bf9fa2a96a76f84fc1ce17a746705265ae53` 당시 기록이다.
 [실제 로컬 AGT](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-agt-integration.md)와
 [loopback HTTP MCP](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-http-integration.md)가 추가됐고,
 Runner는 신뢰 실행 맥락의 `expected_epoch=self.epoch`를 Guard에 전달한다.
@@ -47,7 +58,7 @@ Runner는 신뢰 실행 맥락의 `expected_epoch=self.epoch`를 Guard에 전달
 운영자 차단 목록/조건 규칙 역할과 서명 정책 관리의 선택을 요청하며 아직 미확정이다.
 이는 소스·문서 확인이며 실제 모델·B6 SQLite·C Registry/endpoint/Scanner의 제품 연결은 미완료다.
 A `cd75bf9`는 B `3bf414c`를 병합해 승인 반환 ID 검사·상세 조회 마지막 만료/현재성 확인·
-늦은 AGT 작업 추적 보완을 반영했다. 현재 domain·ports·Guard·승인 소스는 B와 동일하다.
+늦은 AGT 작업 추적 보완을 반영했다. 당시 domain·ports·Guard·승인 소스는 B와 동일했다.
 [A 동기화 기록](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-b-sync-2026-10-13.md)의
 real/mock AGT × stdio/HTTP 검증 보고도 확인했다. 공동 계약 합의와 C 독립 인수는 계속 필요하다.
 
@@ -337,4 +348,6 @@ A가 모델 입력·ToolView·비동기 호출 관점에서, C가 launcher·제�
 B6·정규식 검토 자료는 B `f22968c`로 원격에 공유했다. A/C 전달·리뷰·동의는 미완료이며,
 긴급 차단·상세 보완은 B `29025e0`으로 공개됐다. 이번 [A·C 계약 검토 요청](ac-contract-review-request.md)은
 문서 요청 초안이며 실제 전달·공동 합의·SQLite/정규식 구현·이번 B의 새 테스트 실행 완료를 기록하지 않는다.
-A의 B 병합과 A 자체 시험 보고는 위 최신 상태에 별도로 기록했다.
+A의 B 병합과 A 자체 시험 보고는 위 상태에 별도로 기록했다.
+이후 A `ab82919`의 QA 요청을 B에서 보완한 결과·실제 검사·남은 항목은
+[최신 B QA 기록](b-qa-fixes-2026-10-13.md)을 따른다.

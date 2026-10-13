@@ -12,6 +12,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
+from weakref import WeakValueDictionary, finalize
+
+from pydantic import ValidationError
 
 from guard_app.core.policy import effective_label, evaluate
 from guard_app.domain.contracts import (
@@ -39,6 +42,11 @@ from guard_app.security.failclosed import after_dispatch, fail_closed
 from guard_app.services.approvals import ApprovalService, HumanControl, _ApprovalTaskMismatchError
 from guard_app.services.catalog import Catalog
 from guard_app.services.response_gate import ResponseGate
+from guard_app.services.state_checks import (
+    checked_status_change,
+    checked_task,
+    preserve_task_context,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +68,14 @@ class _Allowed:
 
 class GuardConfigError(ValueError):
     """고정 문구의 서비스 구성 오류."""
+
+
+class _TaskStopSignal(asyncio.Event):
+    """종결 ACK를 받은 정지 의도만 수명 종료 후 제거한다."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.terminal_epoch: int | None = None
 
 
 class GuardService:
@@ -147,9 +163,10 @@ class GuardService:
         self._access_cleanup_timeout = float(access_cleanup_timeout_seconds)
         self._access_checks: set[asyncio.Task[AccessResult]] = set()
         self._unfinished_access_checks: set[asyncio.Task[AccessResult]] = set()
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._access_task_ids: dict[asyncio.Task[AccessResult], str] = {}
+        self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._global_halt = False
-        self._stop_requests: dict[str, asyncio.Event] = {}
+        self._stop_requests: dict[str, _TaskStopSignal] = {}
         self._gate = ResponseGate(
             store,
             catalog,
@@ -202,13 +219,46 @@ class GuardService:
             return await self._dispatch_reserved(decided.request, decided.state)
 
     def _task_lock(self, task_id: str) -> asyncio.Lock:
-        return self._locks.setdefault(task_id, asyncio.Lock())
+        lock = self._locks.get(task_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[task_id] = lock
+            # 소유자·대기자·빌린 참조가 있는 동안 같은 lock이 살아 있다.
+            # callback은 lock을 보관하지 않고 마지막 참조가 사라진 뒤만 실행한다.
+            finalize(lock, self._cleanup_task_resources, task_id)
+        return lock
+
+    def _cleanup_task_resources(self, task_id: str) -> None:
+        """I3/I6/I8: 실행 참조가 남거나 정지 저장이 불명이면 신호를 보존한다."""
+        if (
+            self._locks.get(task_id) is not None
+            or task_id in self._access_task_ids.values()
+            or self._approvals._has_task_context(task_id)
+        ):
+            return
+        signal = self._stop_requests.get(task_id)
+        if signal is not None and (not signal.is_set() or signal.terminal_epoch is not None):
+            self._stop_requests.pop(task_id, None)
+
+    def _confirm_terminal_stop(self, state: TaskState) -> None:
+        """검증한 Store 반환만 종결 근거로 삼는다. 캐시 정리로 재개하지 않는다."""
+        signal = self._stop_requests.get(state.task_id)
+        if signal is not None and state.status in (
+            TaskStatus.HALTED,
+            TaskStatus.UNKNOWN_OUTCOME,
+            TaskStatus.CLOSED,
+        ):
+            signal.terminal_epoch = state.epoch
+            self._cleanup_task_resources(state.task_id)
 
     def _request_stop(self, task_id: str) -> None:
         """인증된 사람 제어만 호출한다. lock을 기다리기 전에 정지 의도를 고정한다."""
         if type(task_id) is not str or not task_id:
             raise ResolutionError(Reason.STATE_MISSING)
-        self._stop_requests.setdefault(task_id, asyncio.Event()).set()
+        signal = self._stop_requests.setdefault(task_id, _TaskStopSignal())
+        # 새 제어의 확인을 이전 제어의 종결 ACK로 대신하지 않는다.
+        signal.terminal_epoch = None
+        signal.set()
 
     def _check_stop(self, task_id: str) -> None:
         event = self._stop_requests.get(task_id)
@@ -227,7 +277,22 @@ class GuardService:
     ) -> _Allowed | Denied | Pending:
         if self._global_halt:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
-        state = TaskState.model_validate(await self._store.load_task(task_id))
+        try:
+            loaded = await self._store.load_task(task_id)
+        except StoreError as error:
+            # 최초 직접 조회의 정상 부재만 호출 단위 거부다. 승인 관계가 이미
+            # 남아 있거나 뒤 단계에서 상태를 잃으면 저장 무결성 오류로 유지한다.
+            if (
+                type(error) is StoreError
+                and error.reason is Reason.STATE_MISSING
+                and not self._approvals._has_task_context(task_id)
+            ):
+                return Denied(request_id=None, reasons=(Reason.STATE_MISSING,))
+            raise
+        try:
+            state = TaskState.model_validate(loaded)
+        except ValidationError:
+            raise StoreError(Reason.STATE_MISSING) from None
         if state.task_id != task_id:
             raise StoreError(Reason.STATE_MISSING)
         if expected_epoch is not None and state.epoch != expected_epoch:
@@ -326,13 +391,14 @@ class GuardService:
         if self._unfinished_access_checks or len(self._access_checks) >= self._max_access_checks:
             return AccessResult(allowed=False, reason="", error=True)
 
-        stop = self._stop_requests.setdefault(req.task_id, asyncio.Event())
+        stop = self._stop_requests.setdefault(req.task_id, _TaskStopSignal())
         work = asyncio.create_task(
             self._access_checker.check_access(
                 req, TrustedContext(state=state, operator_id=self._operator_id)
             )
         )
         self._access_checks.add(work)
+        self._access_task_ids[work] = req.task_id
         work.add_done_callback(self._discard_access_result)
         interrupted = asyncio.create_task(stop.wait())
         try:
@@ -359,9 +425,12 @@ class GuardService:
     def _discard_access_result(self, work: asyncio.Task[AccessResult]) -> None:
         self._access_checks.discard(work)
         self._unfinished_access_checks.discard(work)
+        task_id = self._access_task_ids.pop(work, None)
         if not work.cancelled():
             # 늦은 값은 실행 권한이 아니다. 예외 원문도 logger로 전달하지 않는다.
             work.exception()
+        if task_id is not None:
+            self._cleanup_task_resources(task_id)
 
     async def _dispatch_reserved(
         self,
@@ -376,7 +445,7 @@ class GuardService:
             lambda: self._dispatch_and_commit(
                 req, state, expires_at_utc=expires_at_utc, monotonic_deadline=monotonic_deadline
             ),
-            lambda exc: self._contain_post_dispatch(req, exc),
+            lambda exc: self._contain_post_dispatch(req, exc, expected_state=state),
             on_containment_error=lambda exc: self._post_failure_fallback(req, exc),
         )
 
@@ -445,25 +514,20 @@ class GuardService:
         if expected_epoch is not None and state.epoch != expected_epoch:
             raise _ApprovalTaskMismatchError()
         if state.status in (TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME, TaskStatus.CLOSED):
+            self._confirm_terminal_stop(state)
             return state
-        halted = TaskState.model_validate(
+        halted = checked_status_change(
             await self._store.set_task_status(
                 task_id,
                 TaskStatus.HALTED,
                 expected_row_revision=state.row_revision,
                 at_utc=self._utc_now(),
                 reason=reason,
-            )
+            ),
+            state,
+            TaskStatus.HALTED,
         )
-        if (
-            halted.task_id != state.task_id
-            or halted.epoch != state.epoch
-            or halted.status is not TaskStatus.HALTED
-            or halted.high_watermark < state.high_watermark
-            or (state.unclassified and not halted.unclassified)
-            or halted.security_version < state.security_version
-        ):
-            raise StoreError(Reason.STATE_COMMIT_FAILED)
+        self._confirm_terminal_stop(halted)
         return halted
 
     def _halt_globally(self) -> None:
@@ -484,7 +548,33 @@ class GuardService:
         self._halt_globally()
         return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
 
-    async def _contain_post_dispatch(self, req: ResolvedRequest, exc: BaseException) -> Outcome:
+    async def _contain_post_dispatch(
+        self, req: ResolvedRequest, exc: BaseException, *, expected_state: TaskState
+    ) -> Outcome:
+        is_send = req.tool.kind is ToolKind.SEND
+        # Task·요청·내구성 감사부터 커밋한다. 추가 감사 대기/실패가 정지를 늦추면 안 된다.
+        contained = checked_task(
+            await self._store.commit_request_failure(
+                req,
+                request_status=RequestStatus.UNKNOWN_OUTCOME if is_send else RequestStatus.WITHHELD,
+                task_status=TaskStatus.UNKNOWN_OUTCOME if is_send else TaskStatus.HALTED,
+                reason=Reason.POST_DISPATCH_ERROR,
+                at_utc=self._utc_now(),
+                exception_type=_exception_type(exc),
+            ),
+            task_id=req.task_id,
+            epoch=req.epoch,
+        )
+        preserve_task_context(contained, expected_state, allow_last_read_change=not is_send)
+        if (
+            contained.task_id != req.task_id
+            or contained.epoch != req.epoch
+            or contained.status
+            is not (TaskStatus.UNKNOWN_OUTCOME if is_send else TaskStatus.HALTED)
+        ):
+            raise StoreError(Reason.STATE_COMMIT_FAILED)
+        self._confirm_terminal_stop(contained)
+        # 성공 ACK와 반환 맥락을 확인한 뒤에만 별도 감사 연결을 호출한다.
         await self._failure_audit(
             FailureEvent(
                 req.task_id,
@@ -494,24 +584,6 @@ class GuardService:
                 _exception_type(exc),
             )
         )
-        is_send = req.tool.kind is ToolKind.SEND
-        contained = TaskState.model_validate(
-            await self._store.commit_request_failure(
-                req,
-                request_status=RequestStatus.UNKNOWN_OUTCOME if is_send else RequestStatus.WITHHELD,
-                task_status=TaskStatus.UNKNOWN_OUTCOME if is_send else TaskStatus.HALTED,
-                reason=Reason.POST_DISPATCH_ERROR,
-                at_utc=self._utc_now(),
-                exception_type=_exception_type(exc),
-            )
-        )
-        if (
-            contained.task_id != req.task_id
-            or contained.epoch != req.epoch
-            or contained.status
-            is not (TaskStatus.UNKNOWN_OUTCOME if is_send else TaskStatus.HALTED)
-        ):
-            raise StoreError(Reason.STATE_COMMIT_FAILED)
         if is_send:
             return OutcomeUnknown(request_id=req.request_id, reasons=(Reason.POST_DISPATCH_ERROR,))
         return Withheld(request_id=req.request_id, reasons=(Reason.POST_DISPATCH_ERROR,))

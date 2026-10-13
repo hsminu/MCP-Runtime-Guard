@@ -683,7 +683,9 @@ def test_restart_context_is_not_restored_from_hash_only_record():
         )
         result = await restarted.human_channel("operator-1").approve(approval.approval_id)
         assert result.reasons == (Reason.APPROVAL_CONTEXT_LOST,)
-        assert store.approvals[approval.approval_id].status is ApprovalStatus.EXPIRED
+        # 재시작 전체 폐기는 B6 startup recovery에서 처리한다. Task 소유 관계를
+        # 모르는 실행 제어는 잠금 없이 승인 행을 전이하지 않는다.
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.PENDING
         assert not restarted._memory_snapshots
         assert not host.dispatched
         assert not store.consumed
