@@ -6,6 +6,9 @@ SQLite 구현·영속 순번·감사 저장·시작 복구는 B6, 저장소 리�
 이 자료는 A·C가 B 코드와 연결할 위치, 확인할 계약, 검증 순서를 모은 인수 초안이다.
 A·C의 동의·리뷰·실제 MCP·SQLite 실행을 완료했다는 기록은 아니다.
 
+현재 회신 입구는 [A·C 계약 검토 요청 초안](ac-contract-review-request.md)이다.
+최신 브랜치 기준, 담당별 질문, 합의와 구현의 경계를 모았으며 실제 전달·동의 기록은 아니다.
+
 ## 전달 범위와 현재 상태
 
 | B 단계 | 전달 코드 | 구현 상태 / 남은 연결 |
@@ -21,10 +24,18 @@ A·C의 동의·리뷰·실제 MCP·SQLite 실행을 완료했다는 기록은 �
 담당 단위·성질 테스트는 `tests/unit`에 있다. 테스트 대역은 이 디렉터리에만 있으며
 운영용 가짜 Transport·Store·Registry나 보안 경로 우회 구현을 추가하지 않았다.
 B1–B5 전달물에는 MCP SDK·AGT·Scanner·GUI·SQLite 구현·C의 CI 규칙이 없다.
-A 브랜치 `5598009`에는 transport·AGT mock·모델·Runner·bridge·Qt UI 구현이 있으나
-실제 B 저장소·C 서비스와 제품 연결은 미완료다. 모의 AGT와 실제 연동을 구분한다.
-A `655aef5`의 B 소유 긴급 차단·승인 상세 변경은 사용자 지시로 선별 반영했으며
-이번 B 브랜치 변경의 공개를 승인받았다.
+A `5598009`의 transport·AGT mock·모델·Runner·bridge·Qt UI 기록과 `655aef5`의
+긴급 차단·승인 상세는 당시 상태의 근거다. `655aef5`의 B 소유 변경은 사용자 지시로
+선별 반영했고, 세 후속 보완을 포함한 B `29025e038f7e4beb6cdcce15305f8cafc9550897`을 공개했다.
+
+2026-10-13 현재 읽은 A는 `c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3`이다.
+[실제 로컬 AGT](https://github.com/hsminu/MCP-Runtime-Guard/blob/c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3/docs/tasks/a-agt-integration.md)와
+[loopback HTTP MCP](https://github.com/hsminu/MCP-Runtime-Guard/blob/c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3/docs/tasks/a-http-integration.md)가 추가됐고,
+Runner는 신뢰 실행 맥락의 `expected_epoch=self.epoch`를 Guard에 전달한다.
+이는 소스·문서 확인이며 실제 모델·B6 SQLite·C Registry/endpoint/Scanner의 제품 연결은 미완료다.
+A의 현재 `domain/*`·`ports.py`는 B `29025e0`과 같지만 Guard·승인 서비스에는 B의
+승인 반환 ID 검사·상세 조회 마지막 만료/현재성 확인·늦은 AGT 작업 추적 보완이 아직 없다.
+A가 B 보완을 동기화한 뒤 real/mock AGT × stdio/HTTP를 재검증하고 C의 독립 인수를 받아야 한다.
 
 상세 근거는 [B1](b1-contract-draft.md), [B2](b2-policy-and-taint.md),
 [B3](b3-catalog.md), [B4·B5](b4-b5-execution.md), [B6](tasks/b-sqlite-store.md),
@@ -37,7 +48,7 @@ A `655aef5`의 B 소유 긴급 차단·승인 상세 변경은 사용자 지시�
 | --- | --- | --- |
 | MCP Transport·Worker | `Transport.call(req) -> RawResult` | Guard가 전달한 요청만 실행. 결과 불명 SEND 재전송 금지 |
 | AGT 어댑터 | `AccessChecker.check_access(req, ctx) -> AccessResult` | 접근 검사만 수행. 오류·형식 불명은 error=True. 사람 승인 대체 금지 |
-| ModelClient·Runner | `GuardService.submit(task_id, ProposedCall) -> Outcome` | Task ID는 신뢰 실행 맥락에서 전달. 모델은 도구·인자만 제안 |
+| ModelClient·Runner | `GuardService.submit(task_id, ProposedCall, expected_epoch=...) -> Outcome` | Task ID·기대 epoch는 신뢰 실행 맥락에서 전달. 현재 A Runner 전달 구현은 있으며 교체 경합의 C 독립 인수는 남음 |
 | 모델용 도구 목록 | `Catalog.tool_views(server_ids)` | ACTIVE·현재 지문 일치·지원 종류의 도구만 노출 |
 | 인증된 사람 제어 큐 | `guard.human_control(operator_id)` | 반환 HumanControl을 모델 도구·실행 큐에 노출하지 않음 |
 | 사람 승인 상세 | `HumanControl.review(approval_id)` | 같은 메모리 사본 또는 `None` 반환. A는 사람 UI에 표시하고 만료·종결 시 상세 수명을 종료 |
@@ -160,6 +171,10 @@ A의 인증된 사람 제어 경로에서만 보관한다.
 - [ ] 일반 submit에 trusted `expected_epoch`를 전달하고 Guard의 Task lock 내부에서 비교하는 계약.
 - [ ] 구현된 `HumanControl.review`의 사람 UI 표시·상태·수명·누락 처리 인수와 B6의 revision 지정 조회 제안 검토.
 - [ ] 권위 있는 승인·Task 조회, revision·종결 여부, 제어 명령의 접수/적용 결과 또는 확정 이벤트.
+- [ ] 실제 AGT 제품 규칙과 `rule_version`·`policy_version`의 관계, 변경 시 승인 무효화,
+  `agt_mode`·규칙 버전의 B6 영속 감사와 허용 메타데이터. 현재 A의 규칙은 고정 합성 설정이다.
+- [ ] B의 접근 검사 상한 4개·정리 대기 0.05초와 A 실제 AGT의 미완료 1개·판정 제한시간,
+  취소 후 작업·종료 미확인 수명의 연결. API·규칙 변경은 A·C 회신 후 정한다.
 
 이 목록은 [공통 계약](contracts.md)의 미합의 항목을 구체화한 것이다.
 기존 domain·ports 시그니처는 이 자료만으로 확정하거나 변경하지 않는다.
@@ -171,6 +186,15 @@ SQLite 담당 변경은 확정됐지만 이들 API 세부 사항과 C Store 처�
 
 의존성 lock은 Windows x64·Python 3.12.15에서 검증한 B 단독 구성이다.
 MCP SDK·AGT·Scanner·GUI를 포함한 전체 호환 구성은 A·C와 별도로 확인한다.
+A `c9f6e1a`의 `pyproject.toml`·`uv.lock`은 jsonschema 4.25.1, B `29025e0`의
+`pyproject.toml`·`requirements.lock`은 4.26.0이다. Pydantic 2.14.0·referencing 0.37.0은 같다.
+A는 MCP 1.29.0·AGT core 5.0.0·HTTPX 0.28.1·PySide6 6.12.0과 cryptography 49.0.0을
+기록했다. 공통 버전·설치 방식, B의 strict 검사·타입 패키지 유지와 Scanner 포함 조합은 검토 대기다.
+이번 문서 작업에서는 설치·테스트를 실행하거나 lock을 변경하지 않았다.
+
+A HTTP 문서의 **1,282 passed(22.55초)**와 real/mock smoke 결과는 A가 기록한 자체 검증이다.
+이번 B 문서 검토에서 재현한 결과나 B `29025e0` 동기화 후 결과, C 독립 인수로 보지 않는다.
+아래 B 자체 검증과 후속 **971개** 기록은 기존 대상 커밋의 결과로 유지한다.
 아래 python 명령에는 Python 3.12 실행 파일을 사용한다. 기존 .venv가 있으면 생성을 생략한다.
 
 ```powershell
@@ -225,7 +249,8 @@ Task ID·snapshot epoch를 검사하도록 보강했다. 다른 Task·교체된 
 Task lock 획득 후 조회한 상태의 ID·epoch를 정책 변경 처리 전에 확인한다.
 불일치는 새 epoch Task 변경·요청/순번 발급·AGT·예약·전송 없이
 `Denied(TASK_NOT_RUNNING)`으로 반환한다. bool·음수·float·문자열은 `STATE_MISSING`으로 거부한다.
-현재 epoch의 ALLOW·ASK와 기존 생략 호출은 유지한다. A는 Runner에서 기대 epoch를 전달해야 한다.
+현재 epoch의 ALLOW·ASK와 기존 생략 호출은 유지한다. 현재 A `c9f6e1a` Runner는 기대 epoch를
+전달한다. 이 소스 연결과 C의 실제 Task 교체 경합·추가 전송 0 검증은 구분한다.
 22개 회귀를 포함한 B 전체 **886개 통과**, Ruff·포맷·mypy·pip check 통과를 확인했다.
 이는 B 대역 단위 검증이며 A 제품 연결·C 실제 경합 검증·SQLite 인수를 뜻하지 않는다.
 
@@ -258,21 +283,24 @@ AGT 작업은 실제 완료 전까지 추적한다. 취소 후 미종료 작업�
 독립 검토에서 발견한 동일 ID 오류의 상태 변경 경로를 보완하고 관련 회귀 11개도 포함했다.
 Ruff·45개 Python 파일 포맷·24개 소스 strict mypy·pip check·diff 검사도 통과했다.
 최종 설계·domain·ports·lock·B6 공유 API는 변경하지 않았다.
-사용자는 이번 B 브랜치 변경의 commit·push를 승인했다.
+사용자는 당시 B 서비스 변경과 이번 계약 요청 문서의 B 브랜치 commit·push를 승인했다.
+팀원의 검토 회신·계약 동의와 실제 인수 결과는 별도로 기록한다.
 실제 A·C 제품 연결·MCP·AGT·SQLite·C 독립 인수는 미완료다.
 
-1. B가 현재 Store와 C 요구·제안 및 A 조회·제어 요구를 대조해 API·DTO·상태/오류 변경안을 제공한다.
-2. A·C가 계약 영향을 리뷰하고 실제 합의 근거를 contracts.md에 기록한다.
-3. B가 합의된 계약으로 B6 SQLite와 저장소 단위 테스트를 구현하고 대상 커밋·설정·검증 결과를 전달한다.
+1. B가 [검토 요청 초안](ac-contract-review-request.md)과 B6·정규식 제안에 현재 Store·A 요구·C 인수 기준의 질문을 제공한다. 기존 Store 포트를 바꾸지 않는 SQLite 독립 구현·단위 검증 준비는 진행할 수 있다.
+2. A·C가 B6·정규식·환경·AGT 계약 영향을 회신하고 B가 실제 합의 근거를 contracts.md에 기록한다. 새 공유 API·DTO·상태/버전·오류 규칙은 합의 후 변경한다.
+3. B가 기존 포트의 독립 구현과 합의된 변경을 B6 SQLite·호출부·저장소 단위 검증에 반영하고 대상 커밋·설정·실제 결과를 전달한다.
 4. C가 실제 Store와 Fake에 동일 계약 테스트를 적용하고 저장소 리뷰·결함 주입을 수행한다.
-5. A 연결 후 ALLOW·DENY·ASK 승인 전·승인 후의 소비·dispatch·wire·부작용 계수를 확인한다.
+5. A가 B `29025e0` 보완을 동기화한 뒤 AGT real/mock × stdio/HTTP를 재검증하고, C 독립 인수에서 ALLOW·DENY·ASK 승인 전·승인 후의 소비·dispatch·wire·부작용 계수를 확인한다.
 6. T07·T09–T12·T19–T20·T29·T33·T35–T37의 커밋 실패·경합·누출 방지와 C의 CI·공격·replay를 검증하고 실측 결과·한계를 기록한다.
 
 ## 2026-10-13 · 검토 자료와 선택한 방향
 
 사용자는 B6 계약을 **A·C 검토를 받은 뒤 확정**하도록 결정했다.
 [B6 변경안 10절](b6-contract-proposal.md)에 A의 앱·조회·제어 영향과 C의 U1–U8·
-원자성·버전·오류·복구 회신 항목을 제공했다. 새 공유 계약·SQLite 구현은 검토 후 진행한다.
+원자성·버전·오류·복구 회신 항목을 제공했다. 새 공유 계약과 그에 의존하는 구현은 검토 후 진행한다.
+기존 Store 포트 안의 SQLite 독립 구현·단위 검증 준비까지 회신 대기로 막는 의미는 아니다.
+새 공유 API·DTO·상태/버전·오류 규칙과 그에 의존하는 변경은 회신·공통 계약 기록 후 반영한다.
 
 정규식은 최종 기술설계와 GitHub 문서를 근거로 기존 기능을 유지하고 전체 검증을
 종료 가능한 프로세스로 옮기는 방향을 선택했다. [B3 검증 연결안](b-schema-validation-proposal.md)을
@@ -281,4 +309,5 @@ A가 모델 입력·ToolView·비동기 호출 관점에서, C가 launcher·제�
 처리 방향 선택과 실제 수정은 별개이며, 현재 정규식 위험은 해결 전이다.
 
 B6·정규식 검토 자료는 B `f22968c`로 원격에 공유했다. A/C 전달·리뷰·동의는 미완료이며,
-이번 긴급 차단·상세 코드 변경도 사용자에게 B 브랜치 공개를 승인받았다.
+긴급 차단·상세 보완은 B `29025e0`으로 공개됐다. 이번 [A·C 계약 검토 요청](ac-contract-review-request.md)은
+문서 요청 초안이며 실제 전달·합의·동기화·새 테스트 실행 완료를 기록하지 않는다.

@@ -12,6 +12,9 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | [3인 협업 규칙](docs/team-workflow.md) | 모듈 소유권, 리뷰 담당, 개발 순서, 브랜치 사용법 |
 | [공통 계약 체크리스트](docs/contracts.md) | B가 정의하고 A·C와 합의해야 하는 모델·포트·이벤트 계약 |
 | [B 구현 인수 안내](docs/b-handoff.md) | A·C 연결 위치, 구성 예시, 남은 합의와 환경 재현·인수 순서 |
+| [A·C 공동 계약 검토 요청](docs/ac-contract-review-request.md) | 항목별 목적·A/C 회신 질문·최신 AGT 요구·답변 형식과 합의 절차 |
+| [B6 계약 변경안](docs/b6-contract-proposal.md) | SQLite 승인 원자성·버전·오류/복구와 AGT 규칙·영속 감사 제안 |
+| [정규식 검증 연결안](docs/b-schema-validation-proposal.md) | A 모델 입력·B 검증 의미·C 프로세스 실행/종료 연결 검토 |
 | [B1 구현 초안과 검증](docs/b1-contract-draft.md) | 구현 범위, 포트 초안 선택, 설치·단위 검사, A·C 검토 항목 |
 | [B2 순수 정책과 등급 누적](docs/b2-policy-and-taint.md) | 경계·AGT 판정, READ 누적·비교 모드, 버전과 성질 검증 |
 | [B3 Catalog 구현과 연동 경계](docs/b3-catalog.md) | 고정 스키마·namespace·출처·목적지 해석, C 안전 경로 연결 조건 |

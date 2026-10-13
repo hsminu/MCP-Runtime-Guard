@@ -2,6 +2,9 @@
 
 작업 브랜치는 `feat/b-security-core`다. **호출을 보내도 되는지 결정하고, 승인·결과 공개·Task 상태를 일관되게 집행하는 코어**를 맡는다. B1 계약 초안과 B2–B5 담당 서비스·단위 테스트를 구현했다. 2026-10-12 사용자 결정으로 SQLite 구현을 B6로 인수하며, 2026-10-13 공통 문서의 담당 변경을 이 문서에 반영했다. B6는 API 검토 단계이며 구현·독립 인수는 미완료다. 아래 구현 체크는 B 소유 코드 범위이며 A·C 계약 합의·실제 연결·인수 검증은 별도다.
 
+현재 회신 입구는 [A·C 계약 검토 요청 초안](../ac-contract-review-request.md)이다.
+최신 A/B 상태와 담당별 질문을 모았으며 실제 전달·동의·새 검증 완료 기록은 아니다.
+
 ## 담당 범위
 
 제품 경로는 향후 `src/guard_app/` 기준이다.
@@ -100,18 +103,28 @@ B의 회귀 테스트 24개 추가 후 전체 864개 통과를 확인했고, C�
 
 - [x] 현재 Store 12개 메서드와 [C Store 요구](c-store-requirements.md)·[처리 제안 v1](c-store-proposal.md)을 대조해 [B6 계약 변경안](../b6-contract-proposal.md)을 제공했다. API·DTO·상태·버전·오류·시간·감사 선택은 공동 합의 전 제안이다.
 - [x] 사용자 결정인 A·C 검토 후 확정을 기록하고, 변경안 10절에 담당별 회신 항목을 정리했다. 실제 전달·동의는 미완료다.
+- [ ] 기존 Store 포트를 바꾸지 않는 SQLite 독립 구현·단위 검증을 준비·진행한다. 이 작업은 가능하며 현재 구현·검증 완료로 표시하지 않는다.
 - [ ] A의 시작 실행 게이트·제어 큐·조회 요구와 C의 독립 인수 기준을 대조하고 실제 API 합의 근거를 공통 계약에 기록한다.
-- [ ] 합의된 계약으로 SQLite·원자 연산·영속 순번·감사·시작 복구와 저장소 단위 테스트를 구현한다.
+- [ ] 새 공유 API·DTO·상태/버전·오류 규칙은 회신·합의 기록 후 변경하고 SQLite·원자 연산·영속 순번·감사·시작 복구와 저장소 단위 테스트에 반영한다.
 - [ ] C의 실제 Store/Fake 계약·결함 주입 검증을 받고, A 연결 후 요청별 소비·dispatch·wire·수신 부작용 계수를 확인한다.
 
 세부 체크·설정·인수 기준은 [B6 작업 문서](b-sqlite-store.md)를 따른다.
 C의 안전 ID·safe_path·Registry·Scanner 소유권은 유지하며 Registry 영속화는 B 저장소의
 단일 writer 계약으로 연결한다. 이 담당 변경으로 C 제안의 API까지 확정하지 않는다.
+기존 포트의 독립 구현·준비와 새 공유 계약의 확정은 구분한다. B6·정규식 검토 회신을 받은 뒤
+공통 계약에 실제 합의 근거를 기록하고, 합의된 변경과 A/C 통합 인수를 진행한다.
 
-A 브랜치 `5598009`에는 transport·AGT mock·모델·Runner·bridge·Qt UI 구현이 있으며 실제
-제품 연결은 미완료다. 일반 submit의 trusted `expected_epoch` 검사, 인증된 동일 메모리 승인
-사본 조회의 UI 인수, 권위 있는 승인·Task 상태·revision 및 제어 적용 결과는
+A `5598009`의 transport·AGT mock·모델·Runner·bridge·Qt UI와 아래 `655aef5` 선별 반영은
+당시 상태의 기록이다. 인증된 동일 메모리 승인 사본 조회의 UI 인수, 권위 있는
+승인·Task 상태·revision 및 제어 적용 결과의 요청 근거는
 [A 계약 요청](https://github.com/hsminu/MCP-Runtime-Guard/blob/55980091fc49871903d72e8ba1e657ab7682035b/docs/tasks/a-port-review.md#7-b-head-f3c2d2b-연동-중-드러난-호출제어-계약-질문)에 있는 미합의 사항이다.
+
+현재 읽은 A `c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3`에는 실제 로컬 AGT core 5.0.0과
+loopback HTTP MCP가 추가됐고 Runner가 신뢰 맥락의 `expected_epoch=self.epoch`를 Guard에 전달한다.
+`domain/*`·`ports.py`는 B `29025e038f7e4beb6cdcce15305f8cafc9550897`과 같다.
+다만 A Guard·승인 서비스에는 B `29025e0`의 승인 ID 검증·마지막 조회 만료/현재성 확인·
+늦은 AGT 작업 추적 보완이 없다. 동기화 후 A의 AGT real/mock × stdio/HTTP 재검증과
+C의 독립 경합·소비·dispatch·wire·부작용 인수가 필요하다. 제품 SQLite·C 서비스 연결은 미완료다.
 
 2026-10-13 후속 사용자 지시로 B `f22968c`에 A `655aef5`의 긴급 차단·
 `HumanControl.review(approval_id)`를 선별 반영한 B 브랜치 변경을 준비했다. 조회 도중 만료·
@@ -128,8 +141,14 @@ AGT 실제 완료 전 추적·슬롯을 유지하고 미종료 취소 작업이 
 관련 **250개(1.36초)**와 전체 **971개(4.21초, 기존 886개+85개)** 테스트,
 Ruff·45개 파일 포맷·24개 소스 strict mypy·pip check·diff 검사 통과를 확인했다.
 기존 840·864·886 결과는 해당 단계의 기록으로 보존한다. 최종 설계·domain·ports·lock·
-B6 공유 API는 변경하지 않았다. 사용자는 이번 B 브랜치 변경의 commit·push를 승인했다.
+B6 공유 API는 변경하지 않았다. 사용자는 당시 B 서비스 변경의 commit·push를 승인했다.
 실제 A·C 제품 연결·MCP·AGT·SQLite·C 독립 검증은 미완료다.
+
+A의 [HTTP 검증 문서](https://github.com/hsminu/MCP-Runtime-Guard/blob/c9f6e1ac37188ac1af9f9f70a9b43a9e4393c8c3/docs/tasks/a-http-integration.md)에
+기록된 **1,282 passed(22.55초)**는 A의 자체 실행 보고다. 이번 문서 검토에서 재현한 결과나
+B `29025e0` 동기화 후 결과, C 독립 인수가 아니다. 위 B **971개**는 기존 검증 기록으로 유지한다.
+A jsonschema 4.25.1과 B 4.26.0의 공통 버전·설치 조합, B strict 검사·타입 패키지 유지,
+Scanner 포함 환경은 검토 대기다. 이번 작업에서는 설치·테스트 실행·lock 변경을 하지 않는다.
 
 ## 검증과 인수
 
@@ -146,7 +165,10 @@ B6 공유 API는 변경하지 않았다. 사용자는 이번 B 브랜치 변경�
 | SQLite 저장소 | 스키마·제약·상태/버전·원자 연산·S03 바인딩 SQL의 단위 부분 | 실제 Store/Fake 계약·통합·공격·결함 주입·복구 검증 |
 
 - [ ] A의 Guard·Catalog 리뷰와 C의 정책·승인·응답·예외·해시 리뷰를 받는다.
+- [ ] 실제 AGT 제품 규칙·`rule_version`·`policy_version` 관계, 변경 시 승인 무효화와 `agt_mode`·규칙 버전의 B6 영속 감사·허용 메타데이터를 A/C와 검토한다. 현재 A 규칙은 고정 합성 설정이다.
+- [ ] B 접근 검사 상한 4개·정리 대기 0.05초와 A 실제 AGT의 미완료 1개·제한시간·취소/종료 미확인 수명, 공통 환경 조합을 [검토 요청 초안](../ac-contract-review-request.md)으로 회신받는다. 새 공유 규칙은 합의 후 변경한다.
 - [ ] B6 저장소에 대한 C 리뷰·독립 검증을 받고, C의 보안 모듈·Registry·Scanner·CI 및 C 소유 테스트를 리뷰한다.
+- [ ] A가 B `29025e0` 보완을 동기화한 뒤 AGT real/mock × stdio/HTTP를 재검증하고 C 독립 통합 인수의 실제 결과·대상 커밋을 기록한다.
 - [ ] A·C에게 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 전달한다.
 - [ ] 구현자가 만든 Fake 테스트만으로 집행을 완료 처리하지 않는다. C의 실제 수신 계수 검증을 확인한다.
 
