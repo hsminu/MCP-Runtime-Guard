@@ -30,8 +30,13 @@ from guard_app.domain.contracts import (
     Withheld,
 )
 from guard_app.domain.enums import TaskStatus
+from guard_app.domain.errors import StoreError
 from guard_app.services.approvals import HumanControl
 from guard_app.services.runner import RunUpdate, TaskRunner
+
+
+class BackendCleanupError(StoreError):
+    """A 자원 정리에서 발생한 StoreError. 원문 없이 정리 미확인을 전달한다."""
 
 
 class BridgeState(StrEnum):
@@ -733,8 +738,10 @@ class BackendBridge(QObject):
             # The bootstrap still owns anything it created. Its own finally
             # must clean partial resources; this bridge cannot confirm that.
             return False
-        if boot.cancelled() or boot.exception() is not None:
+        if boot.cancelled():
             return True
+        if boot.exception() is not None:
+            return not isinstance(boot.exception(), BackendCleanupError)
         if not self._adopt_bootstrap_result(boot):
             return False
         return await self._cleanup_bindings(timeout=max(0.0, deadline - loop.time()))

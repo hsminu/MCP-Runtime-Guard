@@ -20,10 +20,12 @@ def main() -> int:
         "--demo",
         action="store_true",
         required=True,
-        help="소스 checkout에서 B 메모리 대역 + 실제 MCP 합성 서버 사용",
+        help="소스 checkout에서 선택한 Store + 실제 MCP 합성 서버 사용",
     )
     parser.add_argument("--scenario", choices=("ask", "allow", "deny"), default="ask")
     parser.add_argument("--mcp-transport", choices=("stdio", "http"), default="stdio")
+    parser.add_argument("--store", choices=("memory", "sqlite"), default="memory")
+    parser.add_argument("--db-path", metavar="PATH", help="기존 부모 디렉터리의 SQLite 파일")
     parser.add_argument("--agt-mode", choices=("real", "mock"), required=True)
     parser.add_argument(
         "--agt-policy",
@@ -32,6 +34,9 @@ def main() -> int:
         help="합성 도구의 AGT 허용·차단 시연 정책",
     )
     args = parser.parse_args()
+    if (args.store == "sqlite") != (args.db_path is not None):
+        parser.error("저장소 종류와 DB 경로 설정이 일치하지 않는다")
+    store_title = "SQLite Store" if args.store == "sqlite" else "메모리 Store"
     from examples.synthetic_app import bootstrap
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -42,6 +47,8 @@ def main() -> int:
             agt_mode=args.agt_mode,
             agt_policy=args.agt_policy,
             mcp_transport=args.mcp_transport,
+            store_kind=args.store,
+            db_path=args.db_path,
         )
     )
 
@@ -61,10 +68,12 @@ def main() -> int:
             RuntimeIdentity(RuntimeMode(state.agt_mode), RuntimeMode(state.model_mode))
         )
     )
-    window.setWindowTitle("MCP Runtime Guard · 합성 개발 시연 / AGT 연결 확인 중 / 모델 mock")
+    window.setWindowTitle(
+        f"MCP Runtime Guard · 합성 개발 시연 / {store_title} / AGT 연결 확인 중 / 모델 mock"
+    )
     bridge.task_changed.connect(
         lambda state: window.setWindowTitle(
-            f"MCP Runtime Guard · 합성 개발 시연 / MCP {args.mcp_transport} / 메모리 Store / AGT {state.agt_mode} / 모델 mock"
+            f"MCP Runtime Guard · 합성 개발 시연 / MCP {args.mcp_transport} / {store_title} / AGT {state.agt_mode} / 모델 mock"
         )
     )
     window.navigate("runs")

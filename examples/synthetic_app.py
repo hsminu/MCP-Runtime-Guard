@@ -1,6 +1,6 @@
 """Source-checkout-only composition: real stdio/HTTP MCP, explicit B unit doubles.
 
-No production Store/Registry or external model is implied by this spike.
+선택적 B SQLite Store를 연결한 합성 앱이다. Registry와 모델은 대역이다.
 Every dependency is constructed on the backend loop. The fixed server is the
 only launch target; the UI accepts no command, environment, or real document.
 """
@@ -12,9 +12,11 @@ import os
 import sys
 import time
 from contextlib import AsyncExitStack
+from datetime import UTC, datetime
 from itertools import count
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 from guard_app.adapters.agt import RuleBasedMockAccessChecker
 from guard_app.adapters.agt_real import AgentGovernanceAccessChecker
@@ -26,12 +28,14 @@ from guard_app.adapters.mcp_transport import (
 )
 from guard_app.domain.contracts import ModelTurn
 from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus, ToolKind, TrustTier
+from guard_app.domain.errors import StoreError
 from guard_app.domain.models import Boundary, ProposedCall, TaskState
-from guard_app.services.bridge import BackendBindings, TaskProjection
+from guard_app.services.bridge import BackendBindings, BackendCleanupError, TaskProjection
 from guard_app.services.catalog import Catalog
 from guard_app.services.catalog_sources import SourceRule
 from guard_app.services.guard import GuardService
 from guard_app.services.runner import TaskRunner
+from guard_app.storage.sqlite_store import SQLiteStore
 from tests.unit.test_guard import _Registry, _Store
 
 from .http_spike_server import http_spike
@@ -56,7 +60,13 @@ class SyntheticModel:
 
 
 async def bootstrap(
-    scenario="ask", *, agt_mode: str, agt_policy="allow-tools", mcp_transport="stdio"
+    scenario="ask",
+    *,
+    agt_mode: str,
+    agt_policy="allow-tools",
+    mcp_transport="stdio",
+    store_kind: str = "memory",
+    db_path: str | os.PathLike[str] | None = None,
 ) -> BackendBindings:
     if scenario not in {"ask", "allow", "deny"} or agt_mode not in {"real", "mock"}:
         raise ValueError("합성 실행 모드가 유효하지 않다")
@@ -64,7 +74,37 @@ async def bootstrap(
         raise ValueError("합성 AGT 정책이 유효하지 않다")
     if mcp_transport not in {"stdio", "http"}:
         raise ValueError("합성 MCP 전송 방식이 유효하지 않다")
+    if store_kind not in {"memory", "sqlite"}:
+        raise ValueError("합성 저장소 종류가 유효하지 않다")
+    if (store_kind == "sqlite") != (db_path is not None):
+        raise ValueError("저장소 종류와 DB 경로 설정이 일치하지 않는다")
     async with AsyncExitStack() as lifetime:
+        if store_kind == "sqlite":
+            # 시작 복구 전에는 이전 Task·승인 권한을 복원하거나 요청을 재전송하지 않는다.
+            # 기존 행은 조회·수정하지 않고 새 실행만 허용한다. 실패 시 Guard도 만들지 않는다.
+            store = SQLiteStore(os.fspath(db_path), audit_id_factory=lambda: f"audit-{uuid4().hex}")
+
+            def close_store():
+                try:
+                    store.close()
+                except StoreError:
+                    # bootstrap 도중 실패해도 bridge가 정리 확인으로 오인하지 않게 한다.
+                    raise BackendCleanupError() from None
+
+            lifetime.callback(close_store)  # 가장 먼저 등록해 같은 백엔드 스레드에서 마지막 종료.
+        state = TaskState(
+            task_id=f"synthetic-{uuid4().hex}" if store_kind == "sqlite" else "synthetic-task",
+            epoch=1,
+            profile_id="synthetic",
+            policy_version="v1",
+            status=TaskStatus.RUNNING,
+        )
+        if store_kind == "sqlite":
+            await store.create_task(state, created_at_utc=datetime.now(UTC))
+            if await store.load_task(state.task_id) != state:
+                raise StoreError()
+        else:
+            store = _Store(state)
         # Fixed, synthetic metadata rules; no arbitrary policy expressions/files.
         rules = {
             ("docs", "read", ToolKind.READ): agt_policy != "deny-all",
@@ -120,14 +160,7 @@ async def bootstrap(
         )
         lifetime.push_async_callback(transport.close)
         await transport.start()
-        state = TaskState(
-            task_id="synthetic-task",
-            epoch=1,
-            profile_id="synthetic",
-            policy_version="v1",
-            status=TaskStatus.RUNNING,
-        )
-        store, registry = _Store(state), _Registry()
+        registry = _Registry()
         catalog = Catalog(
             registry,
             profile_id="synthetic",
@@ -151,13 +184,14 @@ async def bootstrap(
                 ),
             ),
         )
-        ids, sequences = count(1), count(1)
+        sequences = count(1)
 
         async def sequence(task_id):
+            # SQLite는 매 실행 새 Task ID이므로 (task_id, call_seq)가 중복되지 않는다.
             return next(sequences)
 
         async def audit(event):
-            # Only fixed failure metadata; the real B6 audit remains unimplemented.
+            # 사전 예약 실패 감사의 공개 저장 API가 없다(B-SQL-04). 영속 감사로 간주하지 않는다.
             pass
 
         guard = GuardService(
@@ -169,8 +203,8 @@ async def bootstrap(
             profile_id="synthetic",
             policy_version="v1",
             operator_id="local-demo-human",
-            request_id_factory=lambda: f"request-{next(ids)}",
-            approval_id_factory=lambda: f"approval-{next(ids)}",
+            request_id_factory=lambda: f"request-{uuid4().hex}",
+            approval_id_factory=lambda: f"approval-{uuid4().hex}",
             next_call_seq=sequence,
             failure_audit=audit,
             monotonic=time.monotonic,
@@ -185,18 +219,18 @@ async def bootstrap(
             server_ids=("docs",),
             system_message="합성 자료 전용 mock 모델",
         )
+        lifetime.callback(runner.close)
         runner.add_user_message("합성 문서를 읽고 합성 수신처에 전송")
 
         async def snapshot(task_id):
             current = await store.load_task(task_id)
-            pending = next(
-                (
-                    a.approval_id
-                    for a in store.approvals.values()
-                    if a.status is ApprovalStatus.PENDING
-                ),
-                None,
-            )
+            pending = runner.pending_approval_id
+            if pending is not None:
+                approval = await store.get_approval(pending)
+                if approval is not None and approval.approval_id != pending:
+                    raise StoreError()
+                if approval is None or approval.status is not ApprovalStatus.PENDING:
+                    pending = None
             counts = read_counts()
             return TaskProjection(
                 task_id,
@@ -211,7 +245,6 @@ async def bootstrap(
             )
 
         async def close():
-            runner.close()
             await retained.aclose()
 
         retained = lifetime.pop_all()

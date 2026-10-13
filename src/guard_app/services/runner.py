@@ -188,6 +188,11 @@ class TaskRunner:
         self._lock = asyncio.Lock()
 
     @property
+    def pending_approval_id(self) -> str | None:
+        """이번 Runner가 Pending으로 받은 ID만 제공한다. 실행 권한은 아니다."""
+        return self._pending.approval_id if self._pending is not None else None
+
+    @property
     def can_advance(self) -> bool:
         return not (
             self._closed

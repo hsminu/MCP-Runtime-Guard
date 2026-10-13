@@ -5,7 +5,8 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 
 현재 A 브랜치에는 보안 코어·transport·Runner·Qt 앱의 **합성 개발 경로**가 있다.
 실제 stdio·로컬 HTTP MCP 서버와 로컬 AGT 판정을 연결했고, AGT는 명시적으로 real/mock을 선택한다.
-Store·Registry는 B 단위 대역이고 모델은 mock이다. 제품용 SQLite·C launcher/endpoint 검증·실제 모델 및 C 독립 인수는 아직 완료하지 않았다.
+Store는 기본 메모리 대역 또는 B SQLiteStore를 선택하고, Registry는 B 단위 대역이며 모델은 mock이다.
+SQLite는 새 Task 실행만 연결했다. 시작 복구·C launcher/endpoint 검증·실제 모델 및 C 독립 인수는 아직 완료하지 않았다.
 작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/tasks/a-progress.md)이다.
 
 ## 설치와 실행
@@ -20,10 +21,13 @@ uv run python -m guard_app --demo --agt-mode real --mcp-transport http
 uv run python -m guard_app --demo --agt-mode real --scenario deny
 uv run python -m guard_app --demo --agt-mode real --agt-policy deny-send
 uv run python -m guard_app --demo --agt-mode mock
+uv run python -m guard_app --demo --agt-mode mock --store sqlite --db-path <파일>
 uv run python -m examples.verify_stdio_spike --agt-mode real
 uv run python -m examples.verify_http_spike --agt-mode real
 uv run pytest -q
 ```
+
+SQLite의 부모 디렉터리는 미리 있어야 한다. 같은 DB에 새 Task만 생성하며 이전 실행·승인·결과 불명 SEND 복구와 영속 call_seq는 미지원이다.
 
 저장소 루트에서 실행한다. `--demo` 없는 제품 시작은 아직 제공하지 않는다.
 실행 탭에서 실행 → 승인 사본 확인 → 승인 → 다음 모델 단계를 누른다.
