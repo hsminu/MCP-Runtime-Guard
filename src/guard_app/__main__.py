@@ -23,12 +23,21 @@ def main() -> int:
         help="소스 checkout에서 B 메모리 대역 + 실제 stdio 합성 서버 사용",
     )
     parser.add_argument("--scenario", choices=("ask", "allow", "deny"), default="ask")
+    parser.add_argument("--agt-mode", choices=("real", "mock"), required=True)
+    parser.add_argument(
+        "--agt-policy",
+        choices=("allow-tools", "deny-send", "deny-all"),
+        default="allow-tools",
+        help="합성 도구의 AGT 허용·차단 시연 정책",
+    )
     args = parser.parse_args()
     from examples.synthetic_app import bootstrap
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
-    bridge = BackendBridge(lambda: bootstrap(args.scenario))
+    bridge = BackendBridge(
+        lambda: bootstrap(args.scenario, agt_mode=args.agt_mode, agt_policy=args.agt_policy)
+    )
 
     class ApplicationWindow(GuardWindow):
         def closeEvent(self, event):
@@ -46,7 +55,12 @@ def main() -> int:
             RuntimeIdentity(RuntimeMode(state.agt_mode), RuntimeMode(state.model_mode))
         )
     )
-    window.setWindowTitle("MCP Runtime Guard · 합성 개발 시연 / 메모리 Store / AGT·모델 mock")
+    window.setWindowTitle("MCP Runtime Guard · 합성 개발 시연 / AGT 연결 확인 중 / 모델 mock")
+    bridge.task_changed.connect(
+        lambda state: window.setWindowTitle(
+            f"MCP Runtime Guard · 합성 개발 시연 / 메모리 Store / AGT {state.agt_mode} / 모델 mock"
+        )
+    )
     window.navigate("runs")
     timer = QTimer()
     timer.setInterval(25)

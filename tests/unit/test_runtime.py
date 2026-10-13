@@ -9,7 +9,6 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from examples.synthetic_app import bootstrap
@@ -26,18 +25,22 @@ def wait_until(app, predicate, timeout=8):
         app.processEvents()
         if predicate():
             return
-        QTest.qWait(5)
+        # Release the GIL so cold SDK imports can progress on the backend worker.
+        time.sleep(0.005)
     raise AssertionError("Qt/backend condition not reached")
 
 
-def test_human_review_approve_and_shutdown_use_real_stdio():
+@pytest.mark.parametrize("agt_mode", ["real", "mock"])
+def test_human_review_approve_and_shutdown_use_real_stdio(agt_mode):
     app = QApplication.instance() or QApplication([])
-    bridge = BackendBridge(bootstrap)
+    bridge = BackendBridge(lambda: bootstrap(agt_mode=agt_mode))
     panel = RuntimePanel(bridge)
     panel.show()
     try:
         bridge.start()
         wait_until(app, panel.run_button.isEnabled)
+        assert panel.current.agt_mode == agt_mode
+        assert f"AGT: {agt_mode}" in panel.summary.text()
         panel.run_button.click()
         assert not panel.run_button.isEnabled()
         wait_until(app, panel.review_button.isEnabled)

@@ -9,7 +9,7 @@
 | 파일 / 영역 | 구현 책임 | 리뷰 |
 | --- | --- | --- |
 | `adapters/mcp_transport.py` | stdio·Streamable HTTP, 서버별 세션 소유 worker, 명령 future·원시 결과 | B |
-| `adapters/agt.py` | AGT 연결과 `ResolvedRequest`·`AccessResult` 번역 | B |
+| `adapters/agt.py`, `adapters/agt_real.py` | mock/실제 AGT 연결과 `ResolvedRequest`·`AccessResult` 번역 | B |
 | `adapters/model_client.py`, `services/runner.py` | 모델 호출, 제안 변환, 공개된 결과만 대화에 전달 | B |
 | `services/bridge.py`, `ui/*`, `__main__.py` | 스레드·큐·이벤트, GUI, 시작·종료 | C |
 | 담당 모듈 단위 테스트, UI T18 | 자기 모듈 검증 | 해당 모듈 리뷰 담당 |

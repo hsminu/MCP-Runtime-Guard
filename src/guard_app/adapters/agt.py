@@ -1,7 +1,7 @@
 """Explicit decision-only mock for the B AccessChecker port.
 
-The real AGT distribution and pre-call API have not been selected.  This
-adapter is never chosen as a fallback after an AGT failure.  A trusted caller
+The real AGT adapter lives in agt_real. This mock
+adapter is never chosen as a fallback after an AGT failure. A trusted caller
 must supply the parsed rules document and explicitly construct mock mode.
 Reading and validating a rules file path belongs to C's security boundary.
 """
@@ -85,13 +85,9 @@ class RuleBasedMockAccessChecker:
             rules[key] = decision == "allow"
         return cls(rules)
 
-    async def check_access(
-        self, req: ResolvedRequest, ctx: TrustedContext
-    ) -> AccessResult:
+    async def check_access(self, req: ResolvedRequest, ctx: TrustedContext) -> AccessResult:
         if req.task_id != ctx.state.task_id or req.epoch != ctx.state.epoch:
-            return AccessResult(
-                allowed=False, reason="MOCK_CONTEXT_MISMATCH", error=True
-            )
+            return AccessResult(allowed=False, reason="MOCK_CONTEXT_MISMATCH", error=True)
         allowed = self._rules.get((req.tool.server_id, req.tool.tool_name))
         if allowed is None:
             return AccessResult(allowed=False, reason="MOCK_RULE_MISSING", error=False)

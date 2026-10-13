@@ -1,5 +1,6 @@
 """A-owned development spike, not C's launcher/SQLite/HTTP acceptance suite."""
 
+import argparse
 import asyncio
 
 from guard_app.domain.enums import TaskStatus
@@ -7,7 +8,7 @@ from guard_app.domain.enums import TaskStatus
 from .synthetic_app import bootstrap
 
 
-async def verify():
+async def verify(agt_mode="real"):
     for scenario, action, expected in (
         ("allow", None, 1),
         ("deny", None, 0),
@@ -16,11 +17,12 @@ async def verify():
         ("ask", "cancel", 0),
         ("ask", "emergency_halt", 0),
     ):
-        bindings = await bootstrap(scenario)
+        bindings = await bootstrap(scenario, agt_mode=agt_mode)
         try:
             runner = bindings.runner_for_task("synthetic-task")
             update = await runner.advance()
             before = await bindings.snapshot(runner.task_id)
+            assert before.agt_mode == agt_mode
             if action:
                 assert update.status == "pending"
                 assert before.receiver_effect == 0 and before.host_dispatch == 1
@@ -48,6 +50,21 @@ async def verify():
         finally:
             await bindings.close()
 
+    for policy, expected_dispatch in (("deny-send", 1), ("deny-all", 0)):
+        bindings = await bootstrap("allow", agt_mode=agt_mode, agt_policy=policy)
+        try:
+            runner = bindings.runner_for_task("synthetic-task")
+            assert (await runner.advance()).status == "denied"
+            snapshot = await bindings.snapshot(runner.task_id)
+            assert snapshot.agt_mode == agt_mode
+            assert snapshot.host_dispatch == expected_dispatch
+            assert snapshot.receiver_effect == 0
+            print(f"{agt_mode}/{policy}: host_dispatch={snapshot.host_dispatch}, receiver_effect=0")
+        finally:
+            await bindings.close()
+
 
 if __name__ == "__main__":
-    asyncio.run(verify())
+    parser = argparse.ArgumentParser(description="실제 stdio 합성 서버·Guard 검증")
+    parser.add_argument("--agt-mode", choices=("real", "mock"), default="real")
+    asyncio.run(verify(parser.parse_args().agt_mode))

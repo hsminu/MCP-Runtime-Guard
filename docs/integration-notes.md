@@ -213,3 +213,22 @@ AGT를 모의 연동으로 선택하면 불가능했던 실제 연결 조건과 
 
 - 제공자 중립 모델 completion의 대기는 기본 60초, 설정 최대 300초로 제한한다. 제한시간 초과나 호출자 취소 때 하위 task에 취소를 요청하고 늦게 끝난 응답은 Runner에 전달하지 않는다. 합성 completion이 취소를 무시하고 뒤늦게 도구 호출을 제안하거나 오류를 내도 Runner는 `model_error`로 멈추고 Guard 제출은 **0건**이었다. 제공자 특유의 예외를 일괄 번역하지 않으며, 현재 알려진 timeout·OS 오류와 자체 취소만 고정 비민감 오류로 매핑한다.
 - 관련 모델·Runner 집중 단위 시험 **70 passed**, A09/A20/A34 변경 후 전체 Qt offscreen 단위 시험 **246 passed**. 변경 Python 파일 6개의 Ruff check·format check와 A20 소스 mypy가 통과했다. 실제 제공자 SDK의 네트워크 취소·인증 오류 매핑 및 취소 무시 I/O 잔존 제한은 제공자 선정 후 검증해야 한다.
+
+## 2026-10-13 · A17/A18 실제 AGT 로컬 판정
+
+- 사용자 배포판 선정·진행 요청에 따라 Microsoft `agent-governance-toolkit-core==5.0.0`을
+  선정하고 lock·`adapters/agt_real.py`·합성 bootstrap·명시적 real/mock CLI에 연결했다.
+  [선정 근거](tasks/a-agt-selection.md), [구현·검증·남은 인수](tasks/a-agt-integration.md).
+- 설치 코드에서 확인한 API는 `agentmesh.governance.policy`의 `Policy`, `PolicyRule`,
+  `PolicyDecision`, `PolicyEngine(conflict_strategy="deny_overrides")`,
+  `load_policy(policy)`, `evaluate(agent_did, context, stage="pre_tool")`다.
+  명시적 agent 대상·default deny·정확 일치 규칙으로 판정만 받는다.
+  MCP 실행·AGT 사람 승인·Task 상태 변경·원격 평가 연결은 하지 않았다.
+- Windows x64 CPython 3.12.15에서 MCP 1.29.0/Pydantic 2.14.0/jsonschema 4.25.1/
+  HTTPX 0.28.1/PySide6 6.12.0을 유지했다. core의 `<50` 제약으로 cryptography는 49.0.0이다.
+  새 lock 환경 설치·66개 배포판 `uv pip check` 성공, 전체 pytest **1,243 passed**
+  (40.11초, Qt offscreen, 구 import 이름 관련 SDK deprecation 경고 4건).
+- real/mock 실제 stdio smoke 각각 8경로 성공. AGT deny-all에서 host_dispatch/receiver_effect
+  **0/0**, deny-send에서 READ 포함 **1/0**, 사람 승인에서 **2/1**이다.
+  별도 SDK probe 8경로의 audit hook network/process 시도는 0이었다.
+  independent wire·C fixture·Scanner 조합·B6 영속 감사 인수는 남아 있다.

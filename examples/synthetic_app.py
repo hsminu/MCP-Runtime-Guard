@@ -17,13 +17,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from guard_app.adapters.agt import RuleBasedMockAccessChecker
+from guard_app.adapters.agt_real import AgentGovernanceAccessChecker
 from guard_app.adapters.mcp_transport import (
     McpTransport,
     StdioServerParameters,
     stdio_stream_factory,
 )
 from guard_app.domain.contracts import ModelTurn
-from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus, TrustTier
+from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus, ToolKind, TrustTier
 from guard_app.domain.models import Boundary, ProposedCall, TaskState
 from guard_app.services.bridge import BackendBindings, TaskProjection
 from guard_app.services.catalog import Catalog
@@ -51,8 +52,30 @@ class SyntheticModel:
         )
 
 
-async def bootstrap(scenario="ask") -> BackendBindings:
+async def bootstrap(scenario="ask", *, agt_mode: str, agt_policy="allow-tools") -> BackendBindings:
+    if scenario not in {"ask", "allow", "deny"} or agt_mode not in {"real", "mock"}:
+        raise ValueError("합성 실행 모드가 유효하지 않다")
+    if agt_policy not in {"allow-tools", "deny-send", "deny-all"}:
+        raise ValueError("합성 AGT 정책이 유효하지 않다")
     async with AsyncExitStack() as lifetime:
+        # Fixed, synthetic metadata rules; no arbitrary policy expressions/files.
+        rules = {
+            ("docs", "read", ToolKind.READ): agt_policy != "deny-all",
+            ("docs", "send", ToolKind.SEND): agt_policy == "allow-tools",
+        }
+        access_timeout = 2.0
+        if agt_mode == "real":
+            access = AgentGovernanceAccessChecker(
+                rules,
+                rule_version=f"synthetic-v1-{agt_policy}",
+                evaluation_timeout_s=access_timeout / 2,
+            )
+            lifetime.push_async_callback(access.close)
+            await access.start()
+        else:
+            access = RuleBasedMockAccessChecker(
+                {(server, tool): allowed for (server, tool, _kind), allowed in rules.items()}
+            )
         temporary = lifetime.enter_context(TemporaryDirectory(prefix="guard-a-spike-"))
         counter_path = Path(temporary) / "counts.json"
         counter_path.write_text('{"receiver_calls":0,"receiver_effect":0}', encoding="utf-8")
@@ -119,7 +142,7 @@ async def bootstrap(scenario="ask") -> BackendBindings:
             registry,
             catalog,
             transport,
-            RuleBasedMockAccessChecker({("docs", "read"): True, ("docs", "send"): True}),
+            access,
             profile_id="synthetic",
             policy_version="v1",
             operator_id="local-demo-human",
@@ -128,6 +151,7 @@ async def bootstrap(scenario="ask") -> BackendBindings:
             next_call_seq=sequence,
             failure_audit=audit,
             monotonic=time.monotonic,
+            access_timeout_seconds=access_timeout,
         )
         runner = TaskRunner(
             state,
@@ -158,7 +182,7 @@ async def bootstrap(scenario="ask") -> BackendBindings:
                 pending,
                 host_dispatch=len(dispatches),
                 receiver_effect=counts["receiver_effect"],
-                agt_mode="mock",
+                agt_mode=access.mode,
                 model_mode="mock",
                 can_advance=runner.can_advance,
             )

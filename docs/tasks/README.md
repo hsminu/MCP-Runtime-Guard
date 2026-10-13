@@ -18,6 +18,8 @@
 | [A04 · C 플랫폼 요구](a-platform-review.md) | Registry·launcher·fixture·계수 인수 조건 |
 | [A05 · UI 계약 제안](a-ui-contract-proposal.md) | 명령·이벤트·조회 형태의 협의 초안 |
 | [A06 · 환경 결정표](a-environment-decisions.md) | 설정·패키징·모델 환경의 미확정 결정 |
+| [A17 · AGT 배포판 선정](a-agt-selection.md) | core 5.0.0 선정, Windows 설치·판정 스파이크와 A18 연결 조건 |
+| [A18 · 실제 AGT 연결](a-agt-integration.md) | 로컬 판정 adapter, 명시적 real/mock, 제한시간·취소·Guard 경계 검증 |
 | [A23 · B 코드 리뷰](a-b-review.md) | 특정 B 커밋의 Guard·Catalog 검토와 후속 질문 |
 
 ## 호환성과 보안 기록

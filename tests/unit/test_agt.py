@@ -1,4 +1,4 @@
-"""A18 mock AccessChecker tests; real AGT integration remains unverified."""
+"""A18 mock AccessChecker tests; real SDK coverage lives in test_agt_real.py."""
 
 import pytest
 

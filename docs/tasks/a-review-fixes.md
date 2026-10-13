@@ -1,5 +1,9 @@
 # 2026-10-13 A 리뷰 반영
 
+> 이 문서는 앞선 리뷰의 실행 기록이다. 이후 [AGT 선정](a-agt-selection.md)과
+> [A18 실제 연결](a-agt-integration.md)을 반영했다. 아래 mock 전용·AGT 미포함 설명은
+> 당시 상태이며, 현재 앱·lock·검증은 A18 기록과 [진행 현황](a-progress.md)을 따른다.
+
 출발점 A `5598009`, B `f22968c`. 사용자의 이 리뷰에 대한 “고쳐” 요청을 근거로
 A 구현·패키징과 지적된 B Guard/승인 경계를 수정했다. B·C의 별도 리뷰나 3인 합의가
 완료됐다는 뜻은 아니다. domain·ports·SQLite 스키마는 변경하지 않았다.
@@ -23,8 +27,8 @@ A 구현·패키징과 지적된 B Guard/승인 경계를 수정했다. B·C의 
 
 ```powershell
 uv sync --locked
-uv run python -m guard_app --demo
-uv run python -m examples.verify_stdio_spike
+uv run python -m guard_app --demo --agt-mode mock
+uv run python -m examples.verify_stdio_spike --agt-mode mock
 uv run pytest -q
 ```
 

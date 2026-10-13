@@ -4,8 +4,8 @@
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
 현재 A 브랜치에는 보안 코어·transport·Runner·Qt 앱의 **합성 개발 경로**가 있다.
-실제 stdio MCP 서버와 왕복하지만 Store·Registry는 B 단위 대역이며 AGT·모델은 mock이다.
-제품용 SQLite·C launcher·HTTP·실제 AGT/모델 인수는 아직 완료하지 않았다.
+실제 stdio MCP 서버와 로컬 AGT 판정을 연결했고, AGT는 명시적으로 real/mock을 선택한다.
+Store·Registry는 B 단위 대역이고 모델은 mock이다. 제품용 SQLite·C launcher·HTTP·실제 모델 및 C 독립 인수는 아직 완료하지 않았다.
 작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/tasks/a-progress.md)이다.
 
 ## 설치와 실행
@@ -15,9 +15,11 @@ uv가 `.python-version`의 3.12를 설치하며 이번 검증은 CPython 3.12.15
 
 ```powershell
 uv sync --locked
-uv run python -m guard_app --demo
-uv run python -m guard_app --demo --scenario deny
-uv run python -m examples.verify_stdio_spike
+uv run python -m guard_app --demo --agt-mode real
+uv run python -m guard_app --demo --agt-mode real --scenario deny
+uv run python -m guard_app --demo --agt-mode real --agt-policy deny-send
+uv run python -m guard_app --demo --agt-mode mock
+uv run python -m examples.verify_stdio_spike --agt-mode real
 uv run pytest -q
 ```
 
@@ -26,6 +28,12 @@ uv run pytest -q
 합성 INTERNAL 읽기 후 ASK, 승인 뒤 SEND 한 번이 기본 경로다.
 `--scenario allow`는 PUBLIC, `--scenario deny`는 CONFIDENTIAL 읽기를 사용한다.
 실제 외부 목적지로 보내지 않고 합성 서버 내부 계수만 올린다.
+
+`--agt-mode`는 필수다. real은 `agent-governance-toolkit-core==5.0.0`의 로컬
+`PolicyEngine`으로 판정하며, 시작 실패·판정 오류·시간초과 시 차단한다.
+자동 mock 전환은 없다. `--agt-policy deny-send`는 SEND만, `deny-all`은 READ부터 막는다.
+실행 탭과 창 제목에 확인된 AGT 모드를 표시한다. AGT 허용은 Guard의 ASK·DENY를 완화하지 않는다.
+[배포판 선정](docs/tasks/a-agt-selection.md)과 [실제 연결·검증 범위](docs/tasks/a-agt-integration.md)를 참고한다.
 
 B 기준 갱신 시 소스와 B 테스트를 함께 대조한 뒤 `uv run pytest -q`를 실행한다.
 A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_approvals.py`로 분리했다.
@@ -133,7 +141,7 @@ flowchart LR
 
 ## 개발 환경과 진행 순서
 
-설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. A 앱·B 단위 검증 조합은 pyproject.toml과 uv.lock에 고정했고, AGT·Scanner 실제 조합은 미확정이다. 개발문서 부록 A의 실제 stdio·HTTP 왕복과 AGT·Scanner 호환 검증을 거친 조합만 고정한다.
+설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. A 앱·B 단위 검증·로컬 AGT 조합은 pyproject.toml과 uv.lock에 고정했다. Scanner와 HTTP를 포함한 공통 제품 조합은 추가 검증 대상이다.
 
 1. 세 사람이 공통 문서와 각자의 `AGENT.md`·작업 문서를 읽는다.
 2. B가 모델·포트·명령·이벤트 계약을 제안하고 A·C와 확정한다.
