@@ -49,8 +49,9 @@ C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/tasks/a-htt
 
 B 기준 갱신 시 소스와 B 테스트를 함께 대조한 뒤 `uv run pytest -q`를 실행한다.
 A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_approvals.py`로 분리했다.
-최신 B 병합·AGT 기준 차이·분리된 B 검사 환경은 [A 동기화 기록](docs/tasks/a-b-sync-2026-10-13.md)을 따른다.
-`requirements.lock`은 B 코어 검사 전용이며 A 실행 환경은 `uv.lock`을 사용한다.
+최신 B 병합·AGT 기준 차이는 [A 동기화 기록](docs/tasks/a-b-sync-2026-10-13.md)을 따른다.
+환경은 `uv.lock` 하나로 관리하고 `requirements.lock`은 거기서 생성한다.
+Ruff·포맷·mypy 검사 명령, A 기준선, main 반영 순서는 [A+B 통합](docs/integration-a-b.md)을 따른다.
 
 B 브랜치 `6115fa6`까지 병합해 B6의 SQLite Store(현행 12/12개 메서드)와 B QA 보완이 A 브랜치에 들어왔다.
 B 범위·검증은 [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md)과 [B QA 반영 기록](docs/b-qa-fixes-2026-10-13.md)을 따른다.
@@ -79,6 +80,7 @@ B 범위·검증은 [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md)과 [
 | [B2 순수 정책과 등급 누적](docs/b2-policy-and-taint.md) | 경계·AGT 판정, READ 누적·비교 모드, 버전과 성질 검증 |
 | [B3 Catalog 구현과 연동 경계](docs/b3-catalog.md) | 고정 스키마·namespace·출처·목적지 해석, C 안전 경로 연결 조건 |
 | [B4·B5 실행·응답·승인 구현](docs/b4-b5-execution.md) | 해시·예외, Task 직렬화, 커밋 후 공개, 사람 승인·재평가·소비와 A·C 연결 조건 |
+| [A+B 통합](docs/integration-a-b.md) | main 반영 순서, 공통 환경·검사·CI, A 기준선과 담당별 남은 일 |
 | [공통 에이전트 지침](AGENTS.md) | 모든 브랜치에 적용하는 작업 지침 |
 | [A 작업 현황](docs/tasks/a-progress.md) | 현재 구현, 실제 검증, 미완료 조건과 커밋 추적 |
 

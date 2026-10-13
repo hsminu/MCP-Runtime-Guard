@@ -124,7 +124,7 @@ A의 상태·제어·승인 상세 요청을 대조했다. 원자 승인 API·DT
 | 승인 생성·종결 원자성 | open/finish 및 반환 관계 DTO 제안 | 공통 API 합의 후 B6 구현·C 독립 검증 |
 | 등록 스키마 정규식 | B 처리 방향은 기능 유지·전체 검증 프로세스 실행. 연결안 제공, 제품 소스는 유지 | A 직접 검증·C launcher·공동 비동기/실패 계약 검토 후 구현·인수 |
 | 실제 AGT 규칙·버전·감사 | A `cd75bf9`의 로컬 판정 연결 확인. 제품 규칙·policy_version/승인 결속·agt_mode/규칙 버전 영속 감사는 추가 검토안 | AGT-01–03 회신, B6 저장·마이그레이션과 C 독립 계수 인수 |
-| 공통 설치 조합 | A 실행 lock jsonschema 4.25.1 유지, B lock 4.26.0은 별도 검사 환경. A에 config/b-core 검사 설정 보존 | ENV-01 회신, 공통 제품 버전·lock 담당과 Scanner 포함 인수 환경 결정 |
+| 공통 설치 조합 | A 실행 lock jsonschema 4.25.1 유지, B lock 4.26.0은 별도 검사 환경. A에 config/b-core 검사 설정 보존 | ENV-01 회신, 공통 제품 버전·lock 담당과 Scanner 포함 인수 환경 결정. 2026-10-14 통합 제안: [A+B 통합](integration-a-b.md) |
 
 submit의 생략 기본값은 기존 호출과 호환되는 `None`이며, 기대 epoch가 다른 호출은
 `Denied(TASK_NOT_RUNNING)`을 반환한다. 새 epoch의 Task를 정지·수정하거나 요청을 만들지 않는다.

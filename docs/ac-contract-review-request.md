@@ -125,6 +125,7 @@ HTTP adapter의 재전송 제한은 A, endpoint/DNS/IP/Registry 검증·수신 �
 현재 A는 B requirements.lock을 별도 검사 환경에 설치하고 B의 Ruff·strict mypy 설정을
 config/b-core/pyproject.toml에 보존했다. A 실행 환경에 B lock을 덮어 설치하지 않는다.
 공통 제품 버전·lock 변경은 ENV-01에서 검토하고 각 검증 근거와 담당 도구를 보존한다.
+2026-10-14 `chore/integrate-a-b`가 ENV-01 제안으로 두 환경과 검사 설정을 루트 `pyproject.toml`·`uv.lock`으로 합쳤다([A+B 통합](integration-a-b.md)).
 
 ## 6. 회신 형식과 확정 절차
 

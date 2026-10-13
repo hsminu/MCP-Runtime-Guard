@@ -165,6 +165,7 @@ AGT real/mock × stdio/HTTP **4조합·총 32경로**와 Guard 4슬롯 결합 �
 1,282개는 당시 보고다. 모두 이번 B 재현·C 독립 인수가 아니다. 기존 B 971개 검증 기록도 유지한다.
 A 실행 jsonschema 4.25.1과 B 별도 코어 검사 4.26.0, A의 config/b-core strict 설정 보존을
 확인했다. 공통 제품 버전·Scanner 포함 환경은 ENV-01 검토 대기다.
+2026-10-14 `chore/integrate-a-b`가 ENV-01 제안으로 두 환경과 검사 설정을 루트 `pyproject.toml`·`uv.lock`으로 합쳤다([A+B 통합](../integration-a-b.md)).
 이번 작업에서는 설치·테스트 실행·lock 변경을 하지 않는다.
 
 ## 검증과 인수

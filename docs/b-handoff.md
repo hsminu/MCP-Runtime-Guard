@@ -229,6 +229,7 @@ A `cd75bf9`의 `pyproject.toml`·`uv.lock`은 jsonschema 4.25.1, B `29025e0`의
 A는 MCP 1.29.0·AGT core 5.0.0·HTTPX 0.28.1·PySide6 6.12.0과 cryptography 49.0.0을
 기록했다. A `cd75bf9`는 실행 pyproject·uv.lock을 유지하고 B requirements.lock을 별도 검사
 환경에서 검증했다. B Ruff·strict mypy 설정도 config/b-core/pyproject.toml에 보존했다.
+2026-10-14 `chore/integrate-a-b`가 ENV-01 제안으로 두 환경과 검사 설정을 루트 `pyproject.toml`·`uv.lock`으로 합쳤다([A+B 통합](integration-a-b.md)).
 A 실행 환경에 B lock을 덮어 설치하지 않는다. 공통 제품 버전·설치 방식과 Scanner 포함
 조합은 ENV-01 검토 대기다.
 이번 문서 작업에서는 설치·테스트를 실행하거나 lock을 변경하지 않았다.
