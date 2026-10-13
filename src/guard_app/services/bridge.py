@@ -27,6 +27,7 @@ from guard_app.domain.contracts import (
     Released,
     Withheld,
 )
+from guard_app.domain.enums import TaskStatus
 from guard_app.services.approvals import HumanControl
 from guard_app.services.runner import RunUpdate, TaskRunner
 
@@ -41,6 +42,7 @@ class BridgeState(StrEnum):
 
 
 class ControlAction(StrEnum):
+    REVIEW = "review"
     APPROVE = "approve"
     REJECT = "reject"
     CANCEL = "cancel"
@@ -84,6 +86,31 @@ class BackendBindings:
     runner_for_task: Callable[[str], TaskRunner]
     human_control: HumanControl
     close: Callable[[], Awaitable[None]] | None = None
+    snapshot: Callable[[str], Awaitable[TaskProjection]] | None = None
+    initial_task_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskProjection:
+    task_id: str
+    epoch: int
+    status: TaskStatus
+    approval_id: str | None = None
+    host_dispatch: int | None = None
+    receiver_effect: int | None = None
+    agt_mode: str = "unconfigured"
+    model_mode: str = "unconfigured"
+    can_advance: bool = False
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ApprovalReview:
+    command_id: str
+    approval_id: str
+    task_id: str
+    epoch: int
+    receiving_boundaries: str
+    arguments_bytes: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +142,8 @@ class BackendBridge(QObject):
 
     lifecycle_changed = Signal(object)
     command_changed = Signal(object)
+    task_changed = Signal(object)
+    review_ready = Signal(object)
 
     def __init__(
         self,
@@ -140,10 +169,7 @@ class BackendBridge(QObject):
                 control_workers,
                 max_command_ids,
             )
-        ) or any(
-            type(value) not in (int, float)
-            for value in (startup_timeout, shutdown_timeout)
-        ):
+        ) or any(type(value) not in (int, float) for value in (startup_timeout, shutdown_timeout)):
             raise ValueError("Bridge limits are invalid")
         try:
             startup_timeout = float(startup_timeout)
@@ -151,8 +177,7 @@ class BackendBridge(QObject):
         except OverflowError:
             raise ValueError("Bridge limits are invalid") from None
         if any(
-            not math.isfinite(value) or value <= 0
-            for value in (startup_timeout, shutdown_timeout)
+            not math.isfinite(value) or value <= 0 for value in (startup_timeout, shutdown_timeout)
         ):
             raise ValueError("Bridge limits are invalid")
         super().__init__()
@@ -179,6 +204,7 @@ class BackendBridge(QObject):
         self._records: dict[str, CommandEvent] = {}
         self._recent: OrderedDict[str, CommandEvent] = OrderedDict()
         self._operations: dict[str, asyncio.Task[object]] = {}
+        self._pending_runs: dict[str, tuple[str, int]] = {}
         # Bound commands before they become asyncio ready callbacks. A normal
         # command flood must leave an independent ingress slot for urgent work.
         self._ingress_lock = threading.Lock()
@@ -228,9 +254,7 @@ class BackendBridge(QObject):
 
     def request_run(self, task_id: str, *, command_id: str | None = None) -> str:
         self._require_qt_thread()
-        command = _Command(
-            self._id(command_id, generate=True), "run", "advance", self._id(task_id)
-        )
+        command = _Command(self._id(command_id, generate=True), "run", "advance", self._id(task_id))
         self._submit(command)
         return command.command_id
 
@@ -311,11 +335,7 @@ class BackendBridge(QObject):
         with self._state_lock:
             state, loop = self._state, self._loop
         if state is not BridgeState.READY or loop is None:
-            code = (
-                "CLOSING"
-                if state in (BridgeState.CLOSING, BridgeState.CLOSED)
-                else "NOT_READY"
-            )
+            code = "CLOSING" if state in (BridgeState.CLOSING, BridgeState.CLOSED) else "NOT_READY"
             self._emit_untracked_rejection(command, code)
             return
 
@@ -329,9 +349,9 @@ class BackendBridge(QObject):
                     rejection = "COMMAND_ID_CONFLICT"
             else:
                 with self._command_lock:
-                    previous = self._records.get(
+                    previous = self._records.get(command.command_id) or self._recent.get(
                         command.command_id
-                    ) or self._recent.get(command.command_id)
+                    )
                 lane = "replay" if previous is not None else self._ingress_lane(command)
                 pending = self._ingress[lane]
                 if len(pending) >= self._ingress_limits[lane]:
@@ -447,9 +467,7 @@ class BackendBridge(QObject):
 
     def _admit(self, command: _Command) -> None:
         with self._command_lock:
-            previous = self._records.get(command.command_id) or self._recent.get(
-                command.command_id
-            )
+            previous = self._records.get(command.command_id) or self._recent.get(command.command_id)
         if previous is not None:
             self._replay_or_conflict(command, previous)
             return
@@ -542,9 +560,7 @@ class BackendBridge(QObject):
         for task in pending:
             task.cancel()
         if pending:
-            done, unfinished = loop.run_until_complete(
-                asyncio.wait(pending, timeout=0.1)
-            )
+            done, unfinished = loop.run_until_complete(asyncio.wait(pending, timeout=0.1))
             for task in done:
                 self._consume_task(task)
             if unfinished:
@@ -596,20 +612,41 @@ class BackendBridge(QObject):
             stop.cancel()
             return
         self._bindings = bindings
+        if bindings.initial_task_id is not None:
+            projection = asyncio.create_task(self._publish_task(bindings.initial_task_id))
+            projection.add_done_callback(self._consume_task)
+            ready, _ = await asyncio.wait(
+                {projection, stop},
+                timeout=self._startup_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if (
+                projection not in ready
+                or projection.cancelled()
+                or projection.exception() is not None
+            ):
+                projection.cancel()
+                cleaned = await self._cleanup_bindings()
+                stopping = self._stop_requested.is_set()
+                self._set_state(
+                    BridgeState.CLOSED if stopping else BridgeState.FAILED,
+                    ("CLOSED" if cleaned else "CLEANUP_UNCONFIRMED")
+                    if stopping
+                    else ("INITIAL_SNAPSHOT_FAILED" if cleaned else "STARTUP_CLEANUP_UNCONFIRMED"),
+                )
+                stop.cancel()
+                return
         if self._stop_requested.is_set() or stop in done:
             self._set_state(BridgeState.CLOSING, "CLOSING")
             cleaned = await self._cleanup_bindings()
-            self._set_state(
-                BridgeState.CLOSED, "CLOSED" if cleaned else "CLEANUP_UNCONFIRMED"
-            )
+            self._set_state(BridgeState.CLOSED, "CLOSED" if cleaned else "CLEANUP_UNCONFIRMED")
             return
         self._run_queue = asyncio.Queue(maxsize=self._run_queue_size)
         self._control_queue = asyncio.Queue(maxsize=self._control_queue_size)
         self._urgent_queue = asyncio.Queue(maxsize=self._control_queue_size)
         workers = [asyncio.create_task(self._worker("run"))]
         workers.extend(
-            asyncio.create_task(self._worker("control"))
-            for _ in range(self._control_workers)
+            asyncio.create_task(self._worker("control")) for _ in range(self._control_workers)
         )
         workers.extend(asyncio.create_task(self._worker("urgent")) for _ in range(2))
         self._set_state(BridgeState.READY, "READY")
@@ -672,13 +709,9 @@ class BackendBridge(QObject):
             try:
                 await asyncio.wait({operation})
                 if operation.cancelled() or operation.exception() is not None:
-                    self._emit_command(
-                        command, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED"
-                    )
+                    self._emit_command(command, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
                 elif self._records[command.command_id].stage is CommandStage.PROCESSING:
-                    self._emit_command(
-                        command, CommandStage.BACKEND_RETURNED, operation.result()
-                    )
+                    self._emit_command(command, CommandStage.BACKEND_RETURNED, operation.result())
             finally:
                 self._operations.pop(command.command_id, None)
                 queue.task_done()
@@ -688,16 +721,33 @@ class BackendBridge(QObject):
         assert bindings is not None
         if command.lane == "run":
             runner = bindings.runner_for_task(command.target_id)
-            if (
-                not isinstance(runner, TaskRunner)
-                or runner.task_id != command.target_id
-            ):
+            if not isinstance(runner, TaskRunner) or runner.task_id != command.target_id:
                 return "RUNNER_UNAVAILABLE"
             update = await runner.advance()
             if type(update) is not RunUpdate or update.task_id != command.target_id:
                 return "RUNNER_UNCONFIRMED"
+            if update.approval_id is not None:
+                self._pending_runs[update.approval_id] = (update.task_id, update.epoch)
+            await self._publish_task(update.task_id)
             return f"RUN_{update.status.upper()}_QUERY_REQUIRED"
         control = bindings.human_control
+        if command.action == ControlAction.REVIEW:
+            snapshot = await control.review(command.target_id)
+            if snapshot is None:
+                return "REVIEW_UNAVAILABLE"
+            req = snapshot.request
+            self.review_ready.emit(
+                ApprovalReview(
+                    command.command_id,
+                    command.target_id,
+                    snapshot.task_id,
+                    req.epoch,
+                    f"MCP 서버: {req.tool.server_id} / {req.server_boundary.boundary_id}\n"
+                    f"목적지 경계: {req.destination.boundary_id if req.destination else '없음'}",
+                    snapshot.arguments_bytes,
+                )
+            )
+            return "REVIEW_READY"
         if command.action == ControlAction.APPROVE:
             result = await control.approve(command.target_id)
         elif command.action == ControlAction.REJECT:
@@ -706,9 +756,32 @@ class BackendBridge(QObject):
             result = await control.cancel(command.target_id)
         else:
             result = await control.emergency_halt(command.target_id)
+        pending = self._pending_runs.get(command.target_id)
+        if pending is not None and command.action in (ControlAction.APPROVE, ControlAction.REJECT):
+            task_id, epoch = pending
+            runner = bindings.runner_for_task(task_id)
+            update = await runner.resume_approval(task_id, epoch, command.target_id, result)
+            if update.status != "pending":
+                self._pending_runs.pop(command.target_id, None)
+            if update.approval_id is not None:
+                self._pending_runs[update.approval_id] = (task_id, epoch)
+            await self._publish_task(task_id)
+        elif command.action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
+            await self._publish_task(command.target_id)
         if isinstance(result, (Denied, Pending, Released, Withheld, OutcomeUnknown)):
             return f"CONTROL_{result.kind.upper()}_QUERY_REQUIRED"
         return "CONTROL_UNCONFIRMED"
+
+    async def _publish_task(self, task_id: str) -> None:
+        bindings = self._bindings
+        if bindings is None or bindings.snapshot is None:
+            return
+        snapshot = await bindings.snapshot(task_id)
+        if self._stop_requested.is_set():
+            return
+        if type(snapshot) is not TaskProjection or snapshot.task_id != task_id:
+            raise ValueError("Invalid public Task projection")
+        self.task_changed.emit(snapshot)
 
     @staticmethod
     def _consume_task(task: asyncio.Future[Any]) -> None:

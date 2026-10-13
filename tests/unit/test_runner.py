@@ -89,7 +89,8 @@ class FakeGuard:
         self.outcomes = deque(outcomes)
         self.calls = []
 
-    async def submit(self, task_id: str, call: ProposedCall):
+    async def submit(self, task_id: str, call: ProposedCall, *, expected_epoch):
+        assert expected_epoch == 1
         self.calls.append((task_id, call))
         return self.outcomes.popleft()
 
@@ -456,7 +457,7 @@ def test_close_during_reserved_send_keeps_unknown_outcome() -> None:
     class DelayedGuard:
         calls = 0
 
-        async def submit(self, task_id, call):
+        async def submit(self, task_id, call, *, expected_epoch):
             self.calls += 1
             entered.set()
             await release.wait()
@@ -682,7 +683,7 @@ def test_epoch_change_between_calls_stops_before_second_guard_submission() -> No
         def __init__(self) -> None:
             self.calls = []
 
-        async def submit(self, task_id: str, call: ProposedCall):
+        async def submit(self, task_id: str, call: ProposedCall, *, expected_epoch):
             self.calls.append((task_id, call))
             store.state = state.model_copy(update={"epoch": 2})
             return Released(

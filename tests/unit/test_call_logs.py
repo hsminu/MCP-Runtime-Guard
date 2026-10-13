@@ -14,6 +14,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QBoxLayout
 
+from guard_app.domain.enums import ToolKind
+
 from guard_app.ui.call_logs import (
     CallLogPage,
     DetailRequest,
@@ -58,7 +60,7 @@ def test_row_click_opens_large_plain_detail_and_ignores_late_response(app) -> No
         task_id="task-1",
         server_id="server-1",
         tool_name='<img src="https://example.invalid/leak">',
-        kind="SEND",
+        kind=ToolKind.SEND.value,
         boundary_tier="general_external",
         initial_decision="ASK",
         reason_code="POST_DISPATCH_ERROR",
@@ -149,7 +151,7 @@ def test_csv_uses_only_public_fields_and_neutralizes_formula_prefixes(app) -> No
         task_id="\r\n@task",
         server_id="\t+server",
         tool_name="\ufeff  =tool,quoted",
-        kind="SEND",
+        kind=ToolKind.SEND.value,
         boundary_tier="general_external",
         initial_decision="ASK",
         reason_code="=raw-reason-must-not-echo",

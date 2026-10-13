@@ -139,10 +139,10 @@ tbody tr.is-selected { background: #f8f7ff; }
 .status.allow, .status.active, .status.approved { color: var(--green); background: var(--green-soft); }
 .status.ask, .status.pending, .status.scan { color: var(--amber); background: var(--amber-soft); }
 .status.deny, .status.blocked, .status.rejected { color: var(--red); background: var(--red-soft); }
-.status.unknown { color: #6c5eb7; background: #f1efff; }
+.status.unknown { color: #805511; background: #fff0cd; }
 .label-chip { display: inline-block; padding: 5px 7px; border: 1px solid #e8eaf0; border-radius: 5px; background: #fff; color: #657083; font-size: 12px; font-weight: 750; }
 .label-chip.public { color: #175e88; border-color: #c1d9ed; background: #eaf5ff; }
-.label-chip.confidential { color: #6443ae; border-color: #d6c2f4; background: #f2ecff; }
+.label-chip.confidential { color: #9b263f; border-color: #edbec8; background: #fff0f3; }
 .label-chip.internal { color: #855b16; border-color: #ead09c; background: #fff4dc; }
 .server-row { display: flex; align-items: center; gap: 11px; padding: 12px 19px; border-top: 1px solid #f0f1f4; }
 .server-avatar { flex: 0 0 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: #edf2ff; color: #5e6da8; font-size: 13px; font-weight: 850; }
@@ -421,7 +421,7 @@ body.modal-open { overflow: hidden; }
 .server-security { display: block; margin-top: 17px; padding: 13px 14px; border: 1px solid var(--security-border); border-left: 4px solid var(--security-ink); border-radius: 8px; color: var(--security-ink); background: var(--security-bg); }
 .server-security.public { --security-ink: #175e88; --security-border: #c1d9ed; --security-bg: #eaf5ff; }
 .server-security.internal { --security-ink: #855b16; --security-border: #ead09c; --security-bg: #fff4dc; }
-.server-security.confidential { --security-ink: #6443ae; --security-border: #d6c2f4; --security-bg: #f2ecff; }
+.server-security.confidential { --security-ink: #9b263f; --security-border: #edbec8; --security-bg: #fff0f3; }
 .server-security.unknown { --security-ink: #586477; --security-border: #d4dbe6; --security-bg: #f2f4f8; }
 .server-security-caption { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; font-weight: 650; }
 .server-security-caption svg { width: 16px; height: 16px; flex-shrink: 0; }

@@ -8,15 +8,19 @@ URLs, environment dictionaries, or create a second tools/call entry point.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
+import sys
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TextIO, cast
 
 import anyio
 from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import CallToolResult
 from pydantic import AnyUrl, BaseModel
 
@@ -29,13 +33,63 @@ from guard_app.domain.models import ResolvedRequest
 class _ToolSession(Protocol):
     async def initialize(self) -> object: ...
 
-    async def call_tool(
-        self, name: str, arguments: dict[str, object]
-    ) -> CallToolResult: ...
+    async def call_tool(self, name: str, arguments: dict[str, object]) -> CallToolResult: ...
 
 
 type StreamFactory = Callable[[], AbstractAsyncContextManager[tuple[Any, ...]]]
 type SessionFactory = Callable[[], AbstractAsyncContextManager[_ToolSession]]
+
+_SDK_LOG_SCOPE: ContextVar[bool] = ContextVar("guard_sdk_log_scope", default=False)
+
+
+def _install_sdk_log_containment() -> None:
+    """Sanitize before *any* handler, including MCP's root logging calls.
+
+    SDK worker tasks inherit this ContextVar. Other application tasks retain
+    their logging behavior. Keep the wrapper installed to contain late tasks;
+    restoring a process-global factory while another worker lives is unsafe.
+    """
+    previous = logging.getLogRecordFactory()
+    if getattr(previous, "_guard_sdk_containment", False):
+        return
+
+    def record_factory(*args, **kwargs):
+        record = previous(*args, **kwargs)
+        if _SDK_LOG_SCOPE.get():
+            record.msg = "MCP_LOG_WITHHELD"
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+        return record
+
+    record_factory._guard_sdk_containment = True
+    logging.setLogRecordFactory(record_factory)
+
+
+def stdio_stream_factory(server: StdioServerParameters, *, errlog: TextIO) -> StreamFactory:
+    """C-validated launch parameters, explicit non-host stderr destination.
+
+    The caller owns the sink until transport shutdown. SDK default environment
+    merging still applies; this wrapper is not launcher or environment validation.
+    """
+    if errlog is sys.stderr or errlog is sys.stdout or errlog.closed:
+        raise ValueError("An isolated server stderr sink is required")
+    if errlog.fileno() in (1, 2):
+        raise ValueError("An isolated server stderr sink is required")
+    parameters = server.model_copy(deep=True)
+    _install_sdk_log_containment()
+
+    @asynccontextmanager
+    async def connect():
+        token = _SDK_LOG_SCOPE.set(True)
+        try:
+            async with stdio_client(parameters, errlog=errlog) as streams:
+                yield streams
+        finally:
+            _SDK_LOG_SCOPE.reset(token)
+
+    return connect
 
 
 class _State(Enum):
@@ -142,9 +196,7 @@ async def _check_result_budget(result: object, *, max_copy_bytes: int) -> None:
             if extra:
                 pending.append((extra, depth + 1))
         elif type(value) in (dict, list, tuple):
-            children = cast(
-                "dict[str, object] | list[object] | tuple[object, ...]", value
-            )
+            children = cast("dict[str, object] | list[object] | tuple[object, ...]", value)
         else:
             raise ValueError("unsupported MCP result value")
 
@@ -166,11 +218,7 @@ async def _check_result_budget(result: object, *, max_copy_bytes: int) -> None:
 
 def _exception_name(exc: Exception) -> str:
     name = type(exc).__name__
-    return (
-        name
-        if name.isascii() and name.isidentifier() and len(name) <= 64
-        else "Exception"
-    )
+    return name if name.isascii() and name.isidentifier() and len(name) <= 64 else "Exception"
 
 
 async def _discard_logging(_params: object) -> None:
@@ -188,18 +236,24 @@ def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
     isolated output sinks, and SDK logger containment must precede wiring.
     """
 
+    _install_sdk_log_containment()
+
     @asynccontextmanager
     async def open_session():
-        async with stream_factory() as streams:
-            if len(streams) < 2:
-                raise ValueError("MCP stream pair required")
-            async with ClientSession(
-                streams[0],
-                streams[1],
-                logging_callback=_discard_logging,
-                message_handler=_discard_message,
-            ) as session:
-                yield session
+        token = _SDK_LOG_SCOPE.set(True)
+        try:
+            async with stream_factory() as streams:
+                if len(streams) < 2:
+                    raise ValueError("MCP stream pair required")
+                async with ClientSession(
+                    streams[0],
+                    streams[1],
+                    logging_callback=_discard_logging,
+                    message_handler=_discard_message,
+                ) as session:
+                    yield session
+        finally:
+            _SDK_LOG_SCOPE.reset(token)
 
     return open_session
 
@@ -222,15 +276,12 @@ class ServerWorker:
         close_timeout_s: float,
         max_result_copy_bytes: int,
         max_pending_commands: int = _DEFAULT_PENDING_COMMANDS,
+        on_dispatch: Callable[[str], None] | None = None,
     ) -> None:
         if not callable(session_factory):
             raise TypeError("session factory required")
         for timeout in (call_timeout_s, startup_timeout_s, close_timeout_s):
-            if (
-                type(timeout) not in (int, float)
-                or not math.isfinite(timeout)
-                or timeout <= 0
-            ):
+            if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
                 raise ValueError("positive finite worker timeouts required")
         if (
             type(max_result_copy_bytes) is not int
@@ -245,13 +296,12 @@ class ServerWorker:
         ):
             raise ValueError("bounded positive pending command limit required")
         self._session_factory = session_factory
+        self._on_dispatch = on_dispatch
         self._call_timeout_s = float(call_timeout_s)
         self._startup_timeout_s = float(startup_timeout_s)
         self._close_timeout_s = float(close_timeout_s)
         self._max_result_copy_bytes = max_result_copy_bytes
-        self._queue: asyncio.Queue[_Command | object] = asyncio.Queue(
-            maxsize=max_pending_commands
-        )
+        self._queue: asyncio.Queue[_Command | object] = asyncio.Queue(maxsize=max_pending_commands)
         self._state = _State.NEW
         self._owner: asyncio.Task[None] | None = None
         self._active: _Command | None = None
@@ -277,9 +327,7 @@ class ServerWorker:
     async def call(self, req: ResolvedRequest) -> RawResult:
         if self._state is not _State.READY:
             name = (
-                "WorkerNotReady"
-                if self._state in (_State.NEW, _State.STARTING)
-                else "WorkerClosed"
+                "WorkerNotReady" if self._state in (_State.NEW, _State.STARTING) else "WorkerClosed"
             )
             raise DispatchError(name)
         future: asyncio.Future[RawResult] = asyncio.get_running_loop().create_future()
@@ -342,9 +390,7 @@ class ServerWorker:
                         await self._execute(session, item)
                     finally:
                         if not item.future.done():
-                            item.future.set_exception(
-                                DispatchError("WorkerInterrupted")
-                            )
+                            item.future.set_exception(DispatchError("WorkerInterrupted"))
                         self._active = None
         finally:
             self._state = (
@@ -364,12 +410,12 @@ class ServerWorker:
         try:
             try:
                 async with asyncio.timeout(self._call_timeout_s):
+                    if self._on_dispatch is not None:
+                        self._on_dispatch(cmd.req.request_id)
                     result = await session.call_tool(
                         cmd.req.tool.tool_name, cmd.req.arguments.to_dict()
                     )
-                    await _check_result_budget(
-                        result, max_copy_bytes=self._max_result_copy_bytes
-                    )
+                    await _check_result_budget(result, max_copy_bytes=self._max_result_copy_bytes)
                 # This is a private, untrusted JSON copy for B's ResponseGate.
                 payload = FrozenJsonObject(
                     result.model_dump(mode="json", by_alias=True, exclude_none=True)
@@ -456,12 +502,11 @@ class McpTransport:
         close_timeout_s: float = 60.0,
         max_result_copy_bytes: int = _MAX_RESULT_COPY_BYTES,
         max_pending_commands: int = _DEFAULT_PENDING_COMMANDS,
+        on_dispatch: Callable[[str], None] | None = None,
     ) -> None:
         if not isinstance(server_streams, Mapping):
             raise TypeError("server stream mapping required")
-        if any(
-            type(server_id) is not str or not server_id for server_id in server_streams
-        ):
+        if any(type(server_id) is not str or not server_id for server_id in server_streams):
             raise ValueError("nonempty server IDs required")
         if (
             type(max_result_copy_bytes) is not int
@@ -483,6 +528,7 @@ class McpTransport:
                 close_timeout_s=close_timeout_s,
                 max_result_copy_bytes=max_result_copy_bytes,
                 max_pending_commands=max_pending_commands,
+                on_dispatch=on_dispatch,
             )
             for server_id, stream_factory in server_streams.items()
         }
@@ -503,17 +549,11 @@ class McpTransport:
                     raise DispatchError("WorkerClosed")
                 # Keep both live startups and pending asyncio tasks bounded.
                 # Each worker still owns its own session in its owner task.
-                while (
-                    next_index < len(workers) and len(starting) < _MAX_CONCURRENT_STARTS
-                ):
-                    task = asyncio.create_task(
-                        workers[next_index].start(), name="mcp-server-start"
-                    )
+                while next_index < len(workers) and len(starting) < _MAX_CONCURRENT_STARTS:
+                    task = asyncio.create_task(workers[next_index].start(), name="mcp-server-start")
                     starting[task] = next_index
                     next_index += 1
-                completed, _ = await asyncio.wait(
-                    starting, return_when=asyncio.FIRST_COMPLETED
-                )
+                completed, _ = await asyncio.wait(starting, return_when=asyncio.FIRST_COMPLETED)
                 # If several startups settle together, select a failure in
                 # registration order and do not launch the next window first.
                 for task in sorted(completed, key=starting.__getitem__):

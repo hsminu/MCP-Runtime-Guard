@@ -1,5 +1,6 @@
 # A06 · 설정·패키징·모델 환경 결정표
 
+> 2026-10-13 갱신: 이번 사용자 리뷰 수정 요청으로 A 앱·B 단위 검증용 pyproject.toml/uv.lock을 A가 추가했다. E2/E3의 개발 환경 범위는 실행 가능하며, 실제 AGT/Scanner 포함 공통 제품 lock은 계속 미확정이다. C fixture 대기는 정식 인수에만 적용하고 A07/A11 합성 SDK 스파이크는 독립 실행했다.
 기준: 2026-10-12, `feat/a-application`. [A06 실행 지시](a-prompts/01-contracts.md#a06)에 따른 **A의 결정 요청**이다. [기술 설계](../technical-design.md) 6.5·10.3·10.4절/부록 A, [공통 계약](../contracts.md), [A02 연동 기록](../integration-notes.md), [A03](a-port-review.md)·[A04](a-platform-review.md)·[A05](a-ui-contract-proposal.md)를 대조했다. 이 문서는 설정 구현·연동 시험 결과나 A·B·C의 합의 기록이 아니다.
 
 ## 확인된 출발점

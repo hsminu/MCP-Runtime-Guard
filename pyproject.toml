@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-runtime-guard"
+version = "0.1.0"
+description = "MCP Runtime Guard application and security core"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "mcp==1.29.0",
+  "pydantic==2.14.0",
+  "jsonschema==4.25.1",
+  "PySide6==6.12.0",
+]
+
+[project.scripts]
+guard-app = "guard_app.__main__:main"
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "hypothesis==6.169.0", "ruff==0.17.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+pythonpath = ["src"]
+addopts = "--strict-markers --strict-config"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100

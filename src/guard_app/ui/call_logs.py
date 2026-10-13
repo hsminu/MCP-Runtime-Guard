@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from guard_app.domain.enums import ToolKind
+
 from .models import LoadState, Surface
 from .presentation import (
     DECISIONS,
@@ -41,7 +43,7 @@ from .presentation import (
 from .widgets import KeyboardActionButton, PlainDetailDialog, StateMessage, plain_label
 
 _KST = timezone(timedelta(hours=9), name="KST")
-_KINDS = {"READ": "읽기 · READ", "SEND": "전송 · SEND"}
+_KINDS = {ToolKind.READ.value: "읽기 · READ", ToolKind.SEND.value: "전송 · SEND"}
 _APPROVAL = {
     "NOT_REQUIRED": "승인 불필요",
     "PENDING": "승인 대기",
