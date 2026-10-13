@@ -9,7 +9,7 @@
 - `CiscoMetadataAdapter`는 주입받은 Cisco 개별 분석기의 공개 `analyze`를 호출한다. YARA에는 전체 정의 JSON을, LLM에는 전체 JSON을 `description`에 넣은 전용 봉투를 전달한다. SDK가 직접 인자만 추출해 내용을 빠뜨리는 경로를 피하며 SDK의 무작위 untrusted 구간 안에 전체 내용이 들어간다. 이 구간은 공격 탐지를 보장한다는 뜻은 아니다.
 - B의 `FrozenJsonObject.to_dict()`를 구조적 인터페이스로 사용한다. B의 domain·ports·digest를 복제하거나 수정하지 않았다.
 - 이름·입력 스키마의 기본 구조, 유한 JSON 숫자·문자열 키·UTF-8, 순환과 직렬화 가능 여부를 확인한다. 실패는 원문 없는 `SCAN_METADATA_INVALID`다. 전체 JSON Schema의 의미 검증은 이 범위가 아니다.
-- 크기 상한은 생성자의 `max_definition_bytes`로 호출자가 명시한다. 상한 초과는 `SCAN_METADATA_TOO_LARGE`로 실패하고 분석기를 호출하지 않는다. 값·기본값·토큰 예산 정책은 미확정이며 테스트의 10,000은 제품 기본값이 아니다. 측정은 전체 정의 JSON의 UTF-8 바이트 수이며 LLM 봉투·프롬프트의 크기나 메모리 상한을 의미하지 않는다.
+- 크기 상한은 생성자의 `max_definition_bytes`로 호출자가 명시한다. 상한 초과는 `SCAN_METADATA_TOO_LARGE`로 실패하고 분석기를 호출하지 않는다. 구현 당시 값·기본값은 미확정이었다. 후속 사용자 결정으로 [도구당 기본 64KiB·설정 가능 정책](../contracts.md#scanner-입력-크기-사용자-결정)을 문서에 확정했으며 제품 기본값·경고 연결은 미반영이다. 테스트의 10,000은 제품 기본값이 아니다. 측정은 전체 정의 JSON의 UTF-8 바이트 수이며 LLM 봉투·프롬프트의 크기나 메모리 상한을 의미하지 않는다. 토큰 예산은 별도다.
 - JSON 사본은 메모리에 보관하고 기본 repr에서 숨긴다. 원래 이름은 JSON 안에 보존하고 SDK의 로그용 context에는 고정 이름을 넣는다. SDK가 던지는 예외·취소를 findings 0개로 바꾸지 않는다.
 
 생성자는 분석기 종류와 제한값을 명시적으로 받는다. 공통 Scanner 포트나 `ScanReport`를 대신하는 API가 아니라 그 포트의 구현에서 사용할 C 내부 구성요소다. SDK findings는 내부 원시 결과로만 반환하며 UI·로그 공개 또는 등록 허용을 뜻하지 않는다.

@@ -6,6 +6,7 @@
 
 | 실행일 | 검사 도구·버전 | 대상 커밋 / 범위 | 결과·산출물 | 담당 / 리뷰 |
 | --- | --- | --- | --- | --- |
+| 2026-10-13 | MCP SDK 1.30.0 실제 stdio/HTTP·Cisco 4.8.6·Luna low·YARA 4.5.4, 회귀·경계·timeout 실험 | C 현재 제품 소스·공개 MCP 정의 144변형·신규 synthetic 경계 fixture | 회귀 62개·20 subtest·Ruff/strict mypy 통과. 실제 API 144건 HTTP 200·YARA 144개 완료. stdio/HTTP 관찰 22개로 수신 상한·개수·깊이 미집행 확인, async timeout 무효·native 5초 확인. [검증 보고](tasks/c-scanner-operating-validation.md) | C / 실험이며 제품 병행 runner·A 수신 제한·Registry·Guard·B 리뷰 미완료 |
 | 2026-10-12 | 코드 검토·기존 테스트 대역을 사용한 결함 재현 / Python 3.12.3 | B `0c02b616f433d0a5c9b7a2815cf3f2bb3d3954cc`, 승인 Task 조회·상태 변경 경로 | C-B-01 재현. [실행·관측 근거](tasks/c-b-review.md). 자동 스캔·실제 SQLite·wire 검증 미실행 | C / B 리뷰 미완료 |
 | 2026-10-12 | 수정 코드 검토·pytest/Ruff/mypy 재실행 / Python 3.12.3 | B `f3c2d2bc225e0406c50731c9b63779a3d890cd70`, 승인 식별자 수정과 대역 회귀 | 864개 테스트·Ruff·포맷·mypy 통과. C-B-01 대역 회귀 확인. [후속 근거](tasks/c-b-review.md#후속-수정-f3c2d2b-확인). 자동 스캔·실제 SQLite·wire 검증 미실행 | C / 실제 SQLite 인수 미완료 |
 | 2026-10-12 | Cisco MCP Scanner 4.8.6 설치 코드 조사·SDK/CLI 오프라인 실행·matcher 결함 주입 / Python 3.12.3 | 공식 commit `5d147dc7e3635606e41104112fa297b45444b05c`와 동일한 wheel, 합성 도구 metadata | C-CISCO-01·02 재현. SDK 1.30.0·B lock 33개 일치, pip check·B 864개 테스트 통과. [보고·관측 자료](tasks/c-cisco-scanner-spike.md) | C / B 리뷰·제품 어댑터·Registry 인수 미완료 |

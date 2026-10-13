@@ -17,7 +17,7 @@ async def inspect_definition(tool_definition, *, max_definition_bytes):
         return await scanner.analyze_tool_definition(tool_definition)
 ```
 
-`max_definition_bytes`는 호출자가 정한다. 실험에서 사용한 100,000은 실험 상한이며 제품 기본값·전체 프롬프트 토큰 제한으로 확정한 값이 아니다. 도구 정의만 입력하고 실제 업무 문서·실행 인자·결과·연결 설정은 입력에 합치지 않는다.
+`max_definition_bytes`는 호출자가 정한다. 실험에서 사용한 100,000은 실험 상한이며 제품 기본값·전체 프롬프트 토큰 제한으로 확정한 값이 아니다. 후속 사용자 결정으로 [도구당 기본 64KiB·설정 가능 정책](../contracts.md#scanner-입력-크기-사용자-결정)을 문서에 확정했으며 제품 기본값·설정·경고 연결은 미반영이다. 도구 정의만 입력하고 실제 업무 문서·실행 인자·결과·연결 설정은 입력에 합치지 않는다.
 
 환경 파일을 명시적으로 읽고 프로세스 환경 설정을 우선한다. `${OPENAI_API_KEY}` 별칭은 병합한 값으로 확장하며, 다른 비밀 환경변수 참조는 거부한다. 키는 프로세스 환경으로 복사하거나 repr·로그에 공개하지 않는다. Python-dotenv 자동 파일 탐색도 사용하지 않는다.
 

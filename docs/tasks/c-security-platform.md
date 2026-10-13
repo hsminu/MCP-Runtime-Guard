@@ -39,6 +39,13 @@
 - [x] 사용자 결정으로 Scanner LLM을 Luna low로 선택. `.env`·공유 템플릿 반영과 임시 보정 코드의 실제 API 두 건 확인. 기존 28개 평가는 none이며 low 전체 회귀는 미실행이다. [다음 Cisco 작업](c-cisco-next-steps.md)에 계약 → 어댑터 → 실제 tools/list → 오류/회귀 → Registry·Guard 인수 순서를 기록했다.
 - [x] 후속 구현 지시로 [Cisco 도구 정의 입력·호출 어댑터](c-cisco-metadata-implementation.md)를 제품 소스에 반영. 루트·중첩 schema·annotations·추가 필드 보존, 23개 테스트·Ruff·strict mypy와 B 실제 FrozenJsonObject 입력 확인. 당시 모델 요청 보정·ScanReport 집계·Registry 연결·B 리뷰는 미완료였다.
 - [x] 후속 "연결해 b scanreport는 연결하지마" 지시로 [Luna low 제품 연결](c-cisco-luna-connection.md)을 구현. 62개 오프라인 테스트·Ruff·4개 소스 strict mypy 통과, 실제 API 28건 모두 HTTP 200·전체 정의 전달. 공격 16/16 탐지·교육용 인용 B06 오탐 1/12. SDK import의 암묵적 dotenv 로딩 차단·키 환경 비복사 확인. B ScanReport는 미연결이며 Registry·실제 MCP·B 리뷰는 남아 있다.
+- [x] 사용자 결정 [LLM 기본 + YARA 병행·위험/검사 실패 경고 정책](../contracts.md#scanner-정책-사용자-결정)을 문서에 기록. 위험 발견과 검사 실패·미완료 모두 경고 후 사용을 계속하며 그 Scanner 결과만으로 자동 차단하지 않는다. 원래 심각도·실패 상태·고정 오류 코드는 보존한다. 병행 실행·집계·경고 UI·Registry 정책은 미구현이다.
+- [x] [실제 MCP metadata 조사](c-real-mcp-metadata-survey.md): 공개 서버 6종·설정 7개의 stdio·원격 HTTP 목록 수집 189건, 현재 C 어댑터 전체 정의 보존 189/189. 최대 정의 8,360바이트·최대 페이지 result 259,485바이트. tools/call 0회·추가 모델 API 0건. 실제 정의의 LLM/YARA 검사·A 제품 transport·Registry·Guard·B 리뷰는 남아 있다.
+- [x] 사용자 결정 [도구당 기본 64KiB·설정 가능](../contracts.md#scanner-입력-크기-사용자-결정)을 문서에 확정. 전체 JSON UTF-8 바이트 기준, 초과 시 자르지 않고 검사 미완료 경고 후 사용 계속. 제품 기본값·설정·경고 연결은 미반영이다.
+- [x] 사용자 결정 [목록 페이지당 기본 1MiB·설정 가능](../contracts.md#mcp-목록-수신-크기-사용자-결정)을 문서에 확정. A transport가 파싱 전 수신 중 제한하고 초과 응답은 중단·목록 수집 미완료 경고로 처리. 제품 수신 제한·C 결함 검증·경고 연결은 미반영이다.
+- [x] 사용자 결정 [서버별 조회 누적 기본 8MiB·설정 가능](../contracts.md#mcp-목록-누적-수신량-사용자-결정)을 문서에 확정. 한 번의 전체 목록 조회에서 모든 페이지를 합산하고 초과하면 추가 수집 중단·전체 목록 미완료 경고. 제품 계수·설정·중단·C 다중 페이지 검증은 미반영이며 다음은 서버별 도구 수 상한이다.
+- [x] 사용자 요청으로 [Scanner 운영 설정 일괄 추천안 v1](c-scanner-operating-proposal.md) 작성. 개수·시간·동시성·입력·부분 실패·취소·재검사·캐시·경고 표시를 모았다. 현재 코드의 LLM 60초·4,096토큰·재시도 0과 기존 사용자 결정은 유지하며 새 추천값은 미확정·미구현이다.
+- [x] 사용자 요청의 [운영 추천안 검증](c-scanner-operating-validation.md): 기존 62개 회귀·20 subtest·B 설정 Ruff·제품 strict mypy 통과. 공개 MCP 재수집·실제 정의 144개 Luna low/YARA 완료·HTTP 200 144건·분석 배치 69.764초. stdio/HTTP 경계 관찰 22개에서 수신·개수·깊이 제한의 미집행 확인. YARA async timeout 결함 주입·native 5초 기능 확인. 제품 상한·병행 runner·경고 UI·Registry·Guard·B 리뷰는 남음.
 - [ ] C1.2–C1.4 요구 초안과 공통 API 계약 합의.
 - [ ] C2–C6 전체 구현·테스트·스캔·실험. C4의 Scanner 입력·Luna 요청 부분과 C2의 Scanner 키·SDK 로그 제한 부분을 구현·검증했다. C2 나머지·C3·C5·C6과 공통 연결은 미착수다.
 
