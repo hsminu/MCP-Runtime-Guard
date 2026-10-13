@@ -1,6 +1,7 @@
 """A18 adapter boundary: I1/I3/I7/I9, T08/T20/T21. Not C wire acceptance."""
 
 import asyncio
+import contextlib
 import re
 import threading
 from dataclasses import dataclass
@@ -323,6 +324,7 @@ async def test_timeout_replaces_stuck_worker_moves_queue_and_discards_late_allow
         assert (await asyncio.wait_for(queued, 2)).reason == "AGT_ALLOW"
         assert (await access.check_access(_request(), _context())).reason == "AGT_ALLOW"
         assert stuck.alive() and access._retired == [stuck]
+        assert access._admitted == 0  # The stuck slot moved into the retired budget.
         with pytest.raises(AgtShutdownError):
             await access.close()  # A stuck thread is reported, never hidden.
         release.set()
@@ -355,6 +357,76 @@ async def test_inherited_backlog_timeout_does_not_retire_the_fresh_worker(monkey
     finally:
         release.set()
         await access.close()
+
+
+@pytest.mark.asyncio
+async def test_burst_of_slow_but_healthy_sdk_calls_never_retires_or_closes(monkeypatch):
+    # QA 2026-10-13 Q07: 4 concurrent checks with a 0.3 s SDK call and a 1.0 s
+    # timeout gave [ALLOW, ALLOW, ALLOW, TIMEOUT] and one restart per burst, so a
+    # few bursts closed the instance until app restart. Same ratio, scaled down.
+    calls = []
+
+    def evaluate(*args, **kwargs):
+        calls.append(1)
+        threading.Event().wait(0.2)  # Slow but healthy: always returns.
+        return Decision()
+
+    access = checker(evaluation_timeout_s=0.7)
+    inject(monkeypatch, access, evaluate)
+    await access.start()
+    try:
+        for burst in range(3):  # Above the default max_stuck_workers=2.
+            results = await asyncio.gather(
+                *(access.check_access(_request(), _context()) for _ in range(4))
+            )
+            reasons = [r.reason for r in results]
+            assert reasons[0] == "AGT_ALLOW" and "AGT_TIMEOUT" in reasons
+            assert set(reasons) <= {"AGT_ALLOW", "AGT_TIMEOUT"}
+            # The late call keeps its slot until the SDK returns, then frees it.
+            await wait_for(lambda: access._admitted == 0)
+            assert access.restarts == 0 and not access._closed and access._retired == []
+        assert len(calls) == 12  # Every admitted request reached the SDK once.
+        assert (await access.check_access(_request(), _context())).reason == "AGT_ALLOW"
+    finally:
+        await access.close()
+    assert not access._worker.alive()
+
+
+@pytest.mark.asyncio
+async def test_queued_request_stuck_in_sdk_times_out_and_next_wait_retires_worker(monkeypatch):
+    release, calls = threading.Event(), []
+
+    def evaluate(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            threading.Event().wait(0.15)  # Slow first call keeps the next one queued.
+        elif len(calls) == 2:
+            assert release.wait(5)  # Then a genuinely stuck call.
+        return Decision()
+
+    access = checker(evaluation_timeout_s=0.4, close_timeout_s=0.05)
+    inject(monkeypatch, access, evaluate)
+    await access.start()
+    try:
+        first, behind = await asyncio.gather(
+            access.check_access(_request(), _context()),
+            access.check_access(_request(), _context()),
+        )
+        stuck = access._worker
+        assert first.reason == "AGT_ALLOW" and behind.reason == "AGT_TIMEOUT"
+        # It waited behind another job, so this timeout alone does not retire.
+        assert access.restarts == 0 and access._admitted == 1 and len(calls) == 2
+        # The next request waits its whole deadline on that one stuck call.
+        assert (await access.check_access(_request(), _context())).reason == "AGT_TIMEOUT"
+        assert access.restarts == 1 and access._worker is not stuck
+        assert access._retired == [stuck] and access._admitted == 0
+        assert (await access.check_access(_request(), _context())).reason == "AGT_ALLOW"
+        assert access._admitted == 0 and len(calls) == 3
+    finally:
+        release.set()
+        await wait_for(lambda: not any(w.alive() for w in access._retired))
+        await access.close()
+    assert not access._worker.alive()
 
 
 @pytest.mark.asyncio
@@ -433,6 +505,34 @@ async def test_late_sdk_start_is_closed_and_never_becomes_ready(monkeypatch, sto
         release.set()
         await access.close()
     assert not access._worker.ready.result()
+
+
+@pytest.mark.asyncio
+async def test_slow_build_startup_timeout_is_not_masked_by_cleanup_close(monkeypatch):
+    # QA 2026-10-13 R01: the caller's cleanup close() raised AgtShutdownError
+    # from None, hiding the AgtStartupError from an engine build slower than start.
+    entered, release, calls = threading.Event(), threading.Event(), []
+    access = checker(startup_timeout_s=0.05, close_timeout_s=0.05)
+
+    def create():
+        entered.set()
+        assert release.wait(3)
+        return Engine(lambda *args, **kwargs: calls.append(1) or Decision()), Decision
+
+    monkeypatch.setattr(access, "_create_engine", create)
+    try:
+        with pytest.raises(AgtStartupError):
+            async with contextlib.AsyncExitStack() as lifetime:  # synthetic_app's pattern
+                lifetime.push_async_callback(access.close)
+                await access.start()
+        assert entered.is_set() and access._worker.alive() and access.shutdown_unconfirmed
+        assert (await access.check_access(_request(), _context())).reason == "AGT_UNAVAILABLE"
+    finally:
+        release.set()
+    await wait_for(access._worker.finished.done)
+    await access.close()  # The late build stopped without evaluating anything.
+    assert not access.shutdown_unconfirmed and not access._worker.alive()
+    assert not access._worker.ready.result() and calls == []
 
 
 @pytest.mark.asyncio

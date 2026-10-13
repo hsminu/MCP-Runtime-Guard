@@ -69,11 +69,19 @@ def _tool_key(server: str, tool: str, kind: ToolKind) -> str:
     return hashlib.sha256(b"".join(len(p).to_bytes(4, "big") + p for p in parts)).hexdigest()
 
 
+def _now() -> float:
+    # High-resolution monotonic clock: the ordering of admission and SDK start
+    # decides retirement, and ``time.monotonic`` can tick at 15.6 ms on Windows.
+    return time.perf_counter()
+
+
 @dataclass(slots=True, eq=False)
 class _Job:
     key: str
+    # True when another job was queued or running ahead of it at admission.
+    behind: bool
     result: Future[AccessResult] = field(default_factory=Future)
-    admitted_at: float = field(default_factory=time.monotonic)
+    admitted_at: float = field(default_factory=_now)
     abandoned: bool = False  # Guarded by the checker lock.
 
 
@@ -93,7 +101,7 @@ class _Worker:
         self.finished: Future[None] = Future()
         self.thread: threading.Thread | None = None
         # Start of the engine build or of the running job; None while idle.
-        self.busy_since: float | None = time.monotonic()
+        self.busy_since: float | None = _now()
 
     def alive(self) -> bool:
         return self.thread is not None and self.thread.is_alive()
@@ -108,10 +116,14 @@ class AgentGovernanceAccessChecker:
     the SDK returns if it was already running.
 
     A timeout retires the current worker when it stayed on one engine build or
-    job for that request's whole wait: its running result is discarded, its
-    queued requests move to a fresh worker, and the stuck thread counts against
-    ``max_stuck_workers``. Past that bound, or on an SDK exception or a failed
-    restart, the instance stays closed. Nothing falls back to allow or mock.
+    job for that request's whole wait. A request with no job ahead of it counts
+    its own SDK call. Then its running result is discarded, its queued requests
+    move to a fresh worker, and the stuck thread counts against
+    ``max_stuck_workers``. A request that waited behind other jobs only times
+    out: once in the SDK it keeps its slot until the SDK returns, and that late
+    result is discarded. Past that bound, on an SDK exception, or on a
+    failed restart, the instance stays closed.
+    Nothing falls back to allow or mock.
     """
 
     mode = "real"
@@ -160,7 +172,10 @@ class AgentGovernanceAccessChecker:
         self._admitted = 0  # Jobs queued on or running in the current worker.
         self._worker: _Worker | None = None
         self._retired: list[_Worker] = []
+        self._start_failed = False
         self.restarts = 0
+        # Set by close() when a thread exit stayed unconfirmed after a failed start.
+        self.shutdown_unconfirmed = False
 
     @property
     def rule_version(self) -> str:
@@ -181,13 +196,16 @@ class AgentGovernanceAccessChecker:
                 asyncio.shield(asyncio.wrap_future(worker.ready)), self._startup_timeout
             )
         except TimeoutError:
+            self._start_failed = True
             self._shutdown()
             raise AgtStartupError() from None
         except asyncio.CancelledError:
+            self._start_failed = True
             self._shutdown()
             raise
         with self._lock:
             if not ready or self._closed:
+                self._start_failed = True
                 raise AgtStartupError()
             self._available = True
 
@@ -204,7 +222,7 @@ class AgentGovernanceAccessChecker:
                 return _error("AGT_UNAVAILABLE")
             if self._admitted >= self._max_pending:
                 return _error("AGT_BUSY")
-            job = _Job(key)
+            job = _Job(key, behind=bool(worker.jobs) or worker.running is not None)
             worker.jobs.append(job)
             self._admitted += 1
             worker.wake.notify()
@@ -239,11 +257,17 @@ class AgentGovernanceAccessChecker:
                 worker.jobs.remove(job)
                 self._admitted -= 1
                 job.result.set_result(_error("AGT_TIMEOUT"))
+            elif worker.running is job:
+                # Settle it now; the slot stays until the SDK returns and the
+                # late result is discarded there (or by retirement/close).
+                job.result.set_result(_error("AGT_TIMEOUT"))
             # Replace the worker only if it stayed on one build or job for this
-            # request's whole wait, not when it inherited an old backlog. Its
-            # late result is discarded; the instance itself stays usable.
+            # request's whole wait, not when it inherited an old backlog or the
+            # request reached the SDK late after queueing behind other jobs.
+            # Its late result is discarded; the instance itself stays usable.
             since = worker.busy_since
-            if worker.running is job or (since is not None and since <= job.admitted_at):
+            own_call = worker.running is job and not job.behind
+            if own_call or (since is not None and since <= job.admitted_at):
                 self._retire_locked(worker)
 
     def _retire_locked(self, worker: _Worker) -> None:
@@ -315,7 +339,14 @@ class AgentGovernanceAccessChecker:
             return tuple(w for w in (self._worker, *self._retired) if w is not None)
 
     async def close(self) -> None:
-        """Succeed only when every worker thread, retired ones included, exited."""
+        """Succeed only when every worker thread, retired ones included, exited.
+
+        Exception: after a failed ``start()`` the AgtStartupError already
+        reported the failure, and that never-ready worker only finishes its
+        engine build before it stops without evaluating. Its unconfirmed exit
+        sets ``shutdown_unconfirmed`` instead of masking the startup error with
+        AgtShutdownError during the caller's cleanup.
+        """
 
         workers = self._shutdown()
         loop = asyncio.get_running_loop()
@@ -327,13 +358,21 @@ class AgentGovernanceAccessChecker:
                     max(0.0, deadline - loop.time()),
                 )
             except TimeoutError:
-                raise AgtShutdownError() from None
+                self._exit_unconfirmed()
+                return
             # ``finished`` is the thread's last action, not its exit. Confirm
             # the exit itself so a successful close never leaves it running.
             while worker.alive():
                 if loop.time() >= deadline:
-                    raise AgtShutdownError()
+                    self._exit_unconfirmed()
+                    return
                 await asyncio.sleep(0.001)
+        self.shutdown_unconfirmed = False
+
+    def _exit_unconfirmed(self) -> None:
+        self.shutdown_unconfirmed = True
+        if not self._start_failed:
+            raise AgtShutdownError() from None
 
     def _create_engine(self) -> tuple[Any, type]:
         # Import, version check, policy construction and evaluation all remain
@@ -392,7 +431,7 @@ class AgentGovernanceAccessChecker:
                     return
                 job = worker.jobs.popleft()
                 worker.running = job
-                worker.busy_since = time.monotonic()
+                worker.busy_since = _now()
             result = self._translate(
                 engine.evaluate(_AGENT, {"tool": {"key": job.key}}, stage="pre_tool"),
                 decision_type,

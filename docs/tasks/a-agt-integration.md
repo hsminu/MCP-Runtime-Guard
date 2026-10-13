@@ -47,7 +47,10 @@ Guard가 최종 합성과 실행을 담당하므로 AGT 허용은 ASK·DENY를 �
 취소는 SDK가 돌아올 때까지 슬롯을 유지한다.
 
 시간초과는 더 이상 인스턴스를 영구 정지시키지 않는다. 해당 요청이 기다리는 내내 worker가
-같은 엔진 생성이나 같은 판정에 머물렀다면 그 worker를 퇴역시킨다. 실행 중이던 결과는
+같은 엔진 생성이나 같은 판정에 머물렀다면 그 worker를 퇴역시킨다. (2026-10-13 QA 2차) 앞 판정
+뒤에서 대기하다 늦게 SDK에 들어간 요청은 자기 시간초과만 확정하고 worker를 퇴역시키지 않는다.
+그 슬롯은 SDK가 돌아올 때 반납하고 늦은 결과는 버린다. 정상적으로 느린 판정 묶음이
+`max_stuck_workers`를 소진해 인스턴스를 닫던 결함을 고쳤다. 순서 비교에는 `perf_counter`를 쓴다. 실행 중이던 결과는
 `AGT_TIMEOUT`으로 확정하고 늦은 허용은 버린다. 대기열은 새 worker로 옮긴다. 아직 살아 있는
 퇴역 스레드는 `max_stuck_workers`(기본 2) 예산에 들어가고, 예산을 넘거나 새 스레드를 만들 수
 없으면 인스턴스를 닫는다(`AGT_UNAVAILABLE`). 같은 요청을 재시도하지 않으며 mock이나 허용으로
@@ -57,9 +60,13 @@ Guard가 최종 합성과 실행을 담당하므로 AGT 허용은 ASK·DENY를 �
 스레드는 강제로 종료할 수 없다. SDK가 멈추면 호출자를 제한시간 안에 차단하고
 종료 확인 실패를 `AgtShutdownError`로 전달한다. bridge는 이를 정리 미확인으로 다룬다.
 `close()`는 퇴역 worker를 포함한 모든 스레드가 실제로 끝난 뒤에만 성공한다.
+단, `start()`가 이미 `AgtStartupError`로 실패한 뒤의 정리 close는 종료 미확인을
+`shutdown_unconfirmed`로만 기록해 시작 실패 원인을 `AgtShutdownError`로 가리지 않는다.
 daemon은 프로세스 종료를 막지 않지만, 이 동작을 작업 스레드 종료 성공으로 보고하지 않는다.
 이후 늦은 허용 결과는 폐기한다. SDK 예외는 기존 `security.failclosed.fail_closed`
-경계에서 처리하며 새로운 넓은 예외 처리 경계를 추가하지 않았다.
+경계에서 처리하며 새로운 넓은 예외 처리 경계를 추가하지 않았다. 따라서 SDK가 Exception이
+아닌 `BaseException`을 내면 Python 기본 thread excepthook이 stderr에 traceback을 출력할 수 있다
+(인자 원문은 SDK에 전달되지 않는다). 막으려면 예외 경계 추가가 필요해 설계 결정으로 남긴다.
 
 ## 의존성과 재현
 
