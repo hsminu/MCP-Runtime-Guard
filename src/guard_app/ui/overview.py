@@ -38,6 +38,7 @@ from .presentation import (
     TRANSPORTS,
     fixed,
     format_kst,
+    public_display_text,
 )
 from .widgets import KeyboardActionButton, SecurityLabel, StateMessage, plain_label
 
@@ -135,9 +136,12 @@ class ServerCard(QFrame):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
         layout.addWidget(
-            _flex_label(server.display_name or server.server_id, name="cardTitle")
+            _flex_label(
+                public_display_text(server.display_name or server.server_id),
+                name="cardTitle",
+            )
         )
-        layout.addWidget(_flex_label(server.server_id, name="mono"))
+        layout.addWidget(_flex_label(public_display_text(server.server_id), name="mono"))
         layout.addWidget(SecurityLabel(server.max_label))
         layout.addWidget(_field("신뢰 경계 · tier", fixed(TIERS, server.tier)))
         layout.addWidget(
@@ -150,7 +154,7 @@ class ServerCard(QFrame):
         link = KeyboardActionButton("서버 상세 보기 →")
         self.link = link
         link.setObjectName("linkButton")
-        link.setAccessibleName(f"{server.server_id} 서버 상세 보기")
+        link.setAccessibleName(f"{public_display_text(server.server_id)} 서버 상세 보기")
         link.clicked.connect(
             lambda: self.navigate_requested.emit("servers", server.server_id)
         )
@@ -172,11 +176,11 @@ class AttentionCard(QFrame):
         layout.addWidget(_field("사유", fixed(REASONS, item.reason_code)))
         related = []
         if item.server_id:
-            related.append(f"MCP {item.server_id}")
+            related.append(f"MCP {public_display_text(item.server_id)}")
         if item.task_id:
-            related.append(f"Task {item.task_id}")
+            related.append(f"Task {public_display_text(item.task_id)}")
         if item.request_id:
-            related.append(f"요청 {item.request_id}")
+            related.append(f"요청 {public_display_text(item.request_id)}")
         layout.addWidget(
             _field("관련 항목", " · ".join(related) if related else MISSING)
         )
@@ -205,8 +209,16 @@ class RecentCallCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(17, 14, 17, 14)
         layout.setSpacing(6)
-        layout.addWidget(_flex_label(call.tool_name, name="cardTitle"))
-        layout.addWidget(_field("호출 / MCP", f"{call.call_id} · {call.server_id}"))
+        layout.addWidget(
+            _flex_label(public_display_text(call.tool_name), name="cardTitle")
+        )
+        layout.addWidget(
+            _field(
+                "호출 / MCP",
+                f"{public_display_text(call.call_id)} · "
+                f"{public_display_text(call.server_id)}",
+            )
+        )
         layout.addWidget(_field("일시", format_kst(call.occurred_at)))
         layout.addWidget(_field("최초 판정", fixed(DECISIONS, call.initial_decision)))
         layout.addWidget(

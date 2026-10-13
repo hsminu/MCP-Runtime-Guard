@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from PySide6.QtWidgets import QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QPlainTextEdit, QVBoxLayout, QWidget
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.services.bridge import (
@@ -19,12 +20,28 @@ from guard_app.services.bridge import (
 )
 
 from .approval_detail import visible_review_text
-from .presentation import APPROVAL_RESULTS, RUN_RESULTS
+from .presentation import APPROVAL_RESULTS, LIFECYCLE_MESSAGES, RUN_RESULTS
 from .task_status import status_title
 from .widgets import KeyboardActionButton, plain_label
 
 _STOP_NAMES = {ControlAction.CANCEL: "작업 취소", ControlAction.EMERGENCY_HALT: "긴급 차단"}
 _RUN = "run"
+# Fallback when the bridge reports a lifecycle code without a fixed message.
+_STATE_MESSAGES = {
+    BridgeState.STARTING: LIFECYCLE_MESSAGES["STARTING"],
+    BridgeState.READY: LIFECYCLE_MESSAGES["READY"],
+    BridgeState.FAILED: "백엔드 오류로 멈췄어 · 더 실행할 수 없어.",
+    BridgeState.CLOSING: LIFECYCLE_MESSAGES["CLOSING"],
+    BridgeState.CLOSED: LIFECYCLE_MESSAGES["CLOSED"],
+}
+_NO_TASK_SUMMARY: dict[BridgeState | None, str] = {
+    None: "백엔드 시작 중 · 아직 실행할 수 없어",
+    BridgeState.STARTING: "백엔드 시작 중 · 아직 실행할 수 없어",
+    BridgeState.READY: "백엔드 준비 완료 · 표시할 Task가 없어 실행할 수 없어",
+    BridgeState.FAILED: "백엔드 시작 실패 · 실행할 수 없어",
+    BridgeState.CLOSING: "백엔드 종료 중 · 실행할 수 없어",
+    BridgeState.CLOSED: "백엔드 종료됨 · 실행할 수 없어",
+}
 
 
 class RuntimePanel(QWidget):
@@ -38,7 +55,7 @@ class RuntimePanel(QWidget):
         self._reviewed: str | None = None
         self._commands: dict[str, ControlAction | str] = {}
         layout = QVBoxLayout(self)
-        self.summary = plain_label("백엔드 시작 중 · 아직 실행할 수 없어")
+        self.summary = plain_label(_NO_TASK_SUMMARY[None])
         self.message = plain_label("상태 확인 대기")
         layout.addWidget(self.summary)
         layout.addWidget(self.message)
@@ -50,7 +67,12 @@ class RuntimePanel(QWidget):
         self.halt_button = KeyboardActionButton("긴급 차단")
         for button in self.buttons:
             layout.addWidget(button)
+        for button in (self.cancel_button, self.halt_button):
+            # Irreversible stops are never triggered by a default-button Enter.
+            button.setAutoDefault(False)
+            button.setDefault(False)
         self.detail = QPlainTextEdit()
+        self.detail.setAccessibleName("승인 사본 상세")
         self.detail.setReadOnly(True)
         self.detail.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.detail.setMinimumHeight(180)
@@ -81,31 +103,36 @@ class RuntimePanel(QWidget):
     def _refresh(self):
         active = self._ready and self.current is not None
         waiting = active and self.current.status is TaskStatus.WAITING_APPROVAL
-        self.run_button.setEnabled(
-            bool(
+        stoppable = bool(
+            active and self.current.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+        )
+        enabled = {
+            self.run_button: bool(
                 active
                 and not self._busy
                 and self.current.status is TaskStatus.RUNNING
                 and self.current.can_advance
-            )
-        )
-        self.review_button.setEnabled(bool(waiting and not self._busy and self.current.approval_id))
-        self.approve_button.setEnabled(
-            bool(
+            ),
+            self.review_button: bool(waiting and not self._busy and self.current.approval_id),
+            self.approve_button: bool(
                 waiting
                 and not self._busy
                 and self._reviewed == self.current.approval_id
                 and self._reviewed
-            )
-        )
-        self.reject_button.setEnabled(bool(waiting and not self._busy and self.current.approval_id))
-        for button in (self.cancel_button, self.halt_button):
-            button.setEnabled(
-                bool(
-                    active
-                    and self.current.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
-                )
-            )
+            ),
+            self.reject_button: bool(waiting and not self._busy and self.current.approval_id),
+            self.cancel_button: stoppable,
+            self.halt_button: stoppable,
+        }
+        # Disabling the focused button lets Qt move focus to the next enabled
+        # button, which is 작업 취소 after run/review/approve. A repeated Enter
+        # would then irreversibly stop the Task, so park focus on the read-only
+        # detail first. Cancel and halt stay reachable by Tab and mouse.
+        focused = QApplication.focusWidget()
+        if focused in enabled and not enabled[focused]:
+            self.detail.setFocus(Qt.FocusReason.OtherFocusReason)
+        for button, value in enabled.items():
+            button.setEnabled(value)
 
     def _clear_review(self):
         self._review_command = None
@@ -147,7 +174,14 @@ class RuntimePanel(QWidget):
         self._ready = event.state is BridgeState.READY
         if not self._ready:
             self._clear_review()
-            self.message.setText(f"백엔드: {event.code}")
+        text = LIFECYCLE_MESSAGES.get(event.code) or _STATE_MESSAGES.get(
+            event.state, "백엔드 상태를 확인하지 못했어 · 아직 실행할 수 없어."
+        )
+        self.message.setText(f"{text}\n내부 코드: {event.code}")
+        if self.current is None:
+            # Without a Task snapshot the summary is the only status line, so it
+            # must follow the backend state instead of staying at "starting".
+            self.summary.setText(_NO_TASK_SUMMARY.get(event.state, _NO_TASK_SUMMARY[None]))
         self._refresh()
 
     def set_snapshot(self, snapshot: TaskProjection):
@@ -212,10 +246,10 @@ class RuntimePanel(QWidget):
         self._refresh()
 
     def _result_text(self, action: ControlAction | str, code: str) -> str:
-        if action in _STOP_NAMES:
+        name = _STOP_NAMES.get(action) if isinstance(action, ControlAction) else None
+        if name is not None:
             # Cancel and halt always return Denied; success is the Task state
             # the backend published before this command result.
-            name = _STOP_NAMES[action]
             stopped = self.current is not None and self.current.status in (
                 TaskStatus.HALTED,
                 TaskStatus.CLOSED,

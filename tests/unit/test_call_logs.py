@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import unicodedata
 from datetime import UTC, datetime, timedelta, timezone
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -15,7 +16,6 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QBoxLayout, QDialog
 
 from guard_app.domain.enums import ToolKind
-
 from guard_app.ui.call_logs import (
     CallLogPage,
     DetailRequest,
@@ -201,9 +201,66 @@ def test_public_detail_shows_control_characters_without_forged_status_lines(
     assert "\n현재 실행 상태: 실행 완료" not in shown
     assert "\n승인 상태: 승인됨" not in shown
     assert "\n" not in dialog.windowTitle()
-    assert "\n" not in page.table.item(0, 2).text().split("\n", 1)[0]
+    # Exact first line: a raw "\n" inside the call ID would end it at "call".
+    assert page.table.item(0, 2).text().split("\n")[0] == "call[U+000A]승인 상태: 승인됨"
     dialog.close()
     page.close()
+
+
+_RAW_HIDDEN = {"Cc", "Cf", "Cs", "Zl", "Zp"}
+
+
+def _assert_escaped_cell(text: str, lines: int) -> None:
+    """Only the UI's own separators may break a cell; no raw hidden chars."""
+
+    parts = text.split("\n")
+    assert len(parts) == lines, text
+    for part in parts:
+        raw = [f"U+{ord(c):04X}" for c in part if unicodedata.category(c) in _RAW_HIDDEN]
+        assert not raw, (text, raw)
+
+
+def test_table_cells_stay_escaped_after_filter_and_every_resize(app) -> None:
+    # QA 2026-10-13 Q10: _update_table_columns(force=True) rewrote cells with
+    # raw IDs after _apply_filter, undoing the escaped display text.
+    row = PublicCallSummary(
+        "call-1\u202e\r\n",
+        request_id="req\u2028-1\u200b",
+        server_id="evil\n신뢰-서버\u2066",
+        tool_name="send\n신뢰-서버\u200b\t",
+        current_status="UNKNOWN_OUTCOME",
+        occurred_at=datetime(2026, 10, 13, tzinfo=UTC),
+    )
+    other = PublicCallSummary("call-2", server_id="plain", tool_name="lookup")
+    page = CallLogPage()
+    page.set_calls(Surface(LoadState.READY, (row, other)))
+    page.show()
+
+    def check(mode: str) -> None:
+        app.processEvents()
+        QCoreApplication.sendPostedEvents()
+        app.processEvents()
+        assert page._column_mode == mode
+        index = next(i for i, r in enumerate(page._visible_rows) if r is row)
+        _assert_escaped_cell(page.table.item(index, 1).text(), 1 if mode == "narrow" else 2)
+        _assert_escaped_cell(page.table.item(index, 2).text(), 2 if mode == "full" else 1)
+        assert "[U+202E]" in page.table.item(index, 2).text()
+
+    try:
+        for width, mode in ((1200, "full"), (540, "medium"), (320, "narrow")):
+            page.resize(width, 700)
+            check(mode)
+            page.search.setText("call")  # _apply_filter -> forced column rewrite
+            check(mode)
+            page.search.setText("")
+            check(mode)
+        page.resize(1200, 700)
+        check("full")
+        assert page.table.item(0, 1).text() == (
+            "send[U+000A]신뢰-서버[U+200B][U+0009]\nevil[U+000A]신뢰-서버[U+2066]"
+        )
+    finally:
+        page.close()
 
 
 def test_csv_uses_only_public_fields_and_neutralizes_formula_prefixes(app) -> None:

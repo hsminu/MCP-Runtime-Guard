@@ -40,6 +40,7 @@ from .presentation import (
     fixed,
     format_kst,
 )
+from .presentation import public_display_text as _public_display_text
 from .widgets import KeyboardActionButton, PlainDetailDialog, StateMessage, plain_label
 
 _KST = timezone(timedelta(hours=9), name="KST")
@@ -140,16 +141,24 @@ def _safe_csv_cell(value: str) -> str:
     return value
 
 
-def _public_display_text(value: str | None) -> str:
-    """Render public identifiers on one line, exposing invisible controls."""
+def _cell_texts(row: PublicCallSummary, mode: str | None) -> tuple[str, ...]:
+    """Every table write uses these escaped texts; raw IDs never reach a cell."""
 
-    if not value:
-        return MISSING
-    return "".join(
-        f"[U+{ord(char):04X}]"
-        if unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
-        else char
-        for char in value
+    tool = _public_display_text(row.tool_name)
+    server = _public_display_text(row.server_id)
+    call = _public_display_text(row.call_id)
+    request = _public_display_text(row.request_id)
+    full = mode not in ("narrow", "medium")
+    return (
+        format_kst(row.occurred_at) if full else _short_time(row.occurred_at),
+        server if mode == "narrow" else f"{tool}\n{server}",
+        f"{call}\n{request}" if full else call,
+        fixed(_KINDS, row.kind),
+        fixed(DECISIONS, row.initial_decision),
+        fixed(_APPROVAL, row.approval_status),
+        "결과 불명\n수신측 확인 필요"
+        if not full and row.current_status == "UNKNOWN_OUTCOME"
+        else fixed(REQUEST_STATUSES, row.current_status),
     )
 
 
@@ -407,34 +416,10 @@ class CallLogPage(QWidget):
             return
         for index, row in enumerate(self._visible_rows):
             self.table.setRowHeight(index, 72 if mode != "full" else 58)
-            time_item = self.table.item(index, 0)
-            if time_item is not None:
-                timestamp = format_kst(row.occurred_at)
-                time_item.setText(
-                    _short_time(row.occurred_at) if mode != "full" else timestamp
-                )
-            server_item = self.table.item(index, 1)
-            if server_item is not None:
-                server_item.setText(
-                    row.server_id or MISSING
-                    if mode == "narrow"
-                    else f"{row.tool_name or MISSING}\n{row.server_id or MISSING}"
-                )
-            id_item = self.table.item(index, 2)
-            if id_item is not None:
-                id_item.setText(
-                    row.call_id
-                    if mode != "full"
-                    else f"{row.call_id}\n{row.request_id or MISSING}"
-                )
-            status_item = self.table.item(index, 6)
-            if status_item is not None:
-                status = fixed(REQUEST_STATUSES, row.current_status)
-                status_item.setText(
-                    "결과 불명\n수신측 확인 필요"
-                    if mode != "full" and row.current_status == "UNKNOWN_OUTCOME"
-                    else status
-                )
+            for column, value in enumerate(_cell_texts(row, mode)):
+                item = self.table.item(index, column)
+                if item is not None:
+                    item.setText(value)
 
     def set_calls(self, surface: Surface[tuple[PublicCallSummary, ...]]) -> None:
         """Replace only the supplied audit page; never invent totals or results."""
@@ -533,16 +518,7 @@ class CallLogPage(QWidget):
         self.table.setRowCount(0)
         for index, row in enumerate(self._visible_rows):
             self.table.insertRow(index)
-            columns = (
-                format_kst(row.occurred_at),
-                f"{_public_display_text(row.tool_name)}\n{_public_display_text(row.server_id)}",
-                f"{_public_display_text(row.call_id)}\n{_public_display_text(row.request_id)}",
-                fixed(_KINDS, row.kind),
-                fixed(DECISIONS, row.initial_decision),
-                fixed(_APPROVAL, row.approval_status),
-                fixed(REQUEST_STATUSES, row.current_status),
-            )
-            for column, value in enumerate(columns):
+            for column, value in enumerate(_cell_texts(row, self._column_mode)):
                 self.table.setItem(index, column, QTableWidgetItem(value))
             self.table.setRowHeight(index, 58)
             if row.call_id == selected:

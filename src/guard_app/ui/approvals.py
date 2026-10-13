@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 from guard_app.domain.enums import ApprovalStatus
 
 from .models import LoadState
-from .presentation import MISSING, format_kst
+from .presentation import MISSING, format_kst, public_display_text
 from .widgets import KeyboardActionButton, StateMessage, plain_label
 
 
@@ -448,10 +448,15 @@ class ApprovalListPage(QWidget):
         for index, row in enumerate(page.rows):
             self.table.insertRow(index)
             columns = (
-                row.approval_id,
-                row.server_id,
-                f"{row.task_id}\n{row.request_id}",
-                row.destination_summary or MISSING,
+                public_display_text(row.approval_id),
+                public_display_text(row.server_id),
+                "\n".join(
+                    (
+                        public_display_text(row.task_id),
+                        public_display_text(row.request_id),
+                    )
+                ),
+                public_display_text(row.destination_summary),
                 "",
                 f"{format_kst(row.created_at)}\n{format_kst(row.resolved_at)}",
             )

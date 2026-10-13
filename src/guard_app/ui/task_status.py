@@ -41,7 +41,8 @@ _UNKNOWN_TEXT = (
 
 
 def status_title(status: TaskStatus | None) -> str:
-    return (_STATUS_TEXT.get(status) or _UNKNOWN_TEXT)[0]
+    text = _STATUS_TEXT.get(status) if status is not None else None
+    return (text or _UNKNOWN_TEXT)[0]
 
 
 class TaskStatusCard(QFrame):

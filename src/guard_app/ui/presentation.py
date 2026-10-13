@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 # Current operational records use KST (UTC+09:00). This avoids a runtime tzdata
@@ -76,7 +77,7 @@ RUN_RESULTS = {
     "RUN_PENDING_QUERY_REQUIRED": "승인이 필요한 호출이 있어 · '승인 사본 확인' 후 승인하거나 거절해.",
     "RUN_DENIED_QUERY_REQUIRED": (
         "호출이 차단됐어 · Guard 정책 또는 AGT가 허용하지 않아 실행하지 않았어. "
-        "사유는 호출 로그에서 확인할 수 있어."
+        "차단 사유 조회는 아직 이 화면에 연결되지 않았어."
     ),
     "RUN_HALTED_QUERY_REQUIRED": "Task가 정지됐어 · 이어서 실행할 수 없어.",
     "RUN_OUTCOME_UNKNOWN_QUERY_REQUIRED": (
@@ -84,7 +85,19 @@ RUN_RESULTS = {
     ),
     "RUN_MODEL_ERROR_QUERY_REQUIRED": "모델 응답 형식 오류로 실행을 멈췄어.",
     "RUN_CLOSED_QUERY_REQUIRED": "실행기가 닫혀 이 Task는 더 진행할 수 없어.",
-    "RUN_STOPPED_QUERY_REQUIRED": "도구 설정 오류로 실행을 멈췄어.",
+    # The runner reports "stopped" for cancel, epoch replacement, Store
+    # failure, and tool configuration errors alike; do not name one cause.
+    "RUN_STOPPED_QUERY_REQUIRED": (
+        "실행이 정지됐어 · 이 Task는 더 진행할 수 없어. 계속하려면 새 Task가 필요할 수 있어."
+    ),
+    "RUN_GUARD_ERROR_QUERY_REQUIRED": (
+        "Guard 내부 오류로 이 Task 실행을 멈췄어 · 이어서 실행할 수 없어. "
+        "앱을 다시 시작하고 관리자에게 확인해."
+    ),
+    "RUN_WITHHELD_QUERY_REQUIRED": (
+        "도구 결과를 공개하지 않았어 · 모델에는 결과 대신 비공개 안내만 전달했어. "
+        "Task는 계속 실행 중이라 새 사용자 지시로 이어갈 수 있어."
+    ),
     "RUNNER_UNAVAILABLE": "실행기를 찾을 수 없어 · 이 Task는 실행할 수 없어.",
     "RUNNER_UNCONFIRMED": "실행 결과를 확인하지 못했어 · 위 Task 상태를 확인해.",
 }
@@ -96,8 +109,30 @@ APPROVAL_RESULTS = {
     "CONTROL_OUTCOME_UNKNOWN_QUERY_REQUIRED": (
         "전송 결과를 확인할 수 없어 · 수신측에서 실제 반영 여부를 확인해."
     ),
-    "REVIEW_READY": "승인 사본을 불러왔어 · 아래 전체 인자를 확인한 뒤 승인해.",
+    "CONTROL_GUARD_ERROR_QUERY_REQUIRED": (
+        "제어 처리 중 Guard 내부 오류가 발생했어 · 이 Task 실행은 이어갈 수 없어. "
+        "Task 상태는 위에 다시 조회된 표시를 기준으로 확인해."
+    ),
+    "REVIEW_READY":"승인 사본을 불러왔어 · 아래 전체 인자를 확인한 뒤 승인해.",
     "REVIEW_UNAVAILABLE": "승인 사본을 불러올 수 없어 · 이미 처리됐거나 만료됐을 수 있어.",
+}
+# Bridge lifecycle codes -> current backend state for the operator. The code
+# itself stays visible only as secondary text.
+LIFECYCLE_MESSAGES = {
+    "STARTING": "백엔드 시작 중 · 준비되면 실행할 수 있어.",
+    "READY": "백엔드 준비 완료.",
+    "CLOSING": "백엔드 종료 중 · 새 요청은 받지 않아.",
+    "CLOSED": "백엔드 종료됨 · 더 실행할 수 없어.",
+    "CLEANUP_UNCONFIRMED": "백엔드 종료됨 · 정리 완료는 확인하지 못했어.",
+    "START_THREAD_FAILED": "백엔드를 시작하지 못했어 · 앱을 다시 시작해야 해.",
+    "STARTUP_FAILED": "백엔드를 시작하지 못했어 · 앱을 다시 시작해야 해.",
+    "INITIAL_SNAPSHOT_FAILED": (
+        "백엔드를 시작하지 못했어 · Task 상태를 불러오지 못해 앱을 다시 시작해야 해."
+    ),
+    "STARTUP_CLEANUP_UNCONFIRMED": (
+        "백엔드를 시작하지 못했고 정리 완료도 확인하지 못했어 · 앱을 다시 시작해."
+    ),
+    "BACKEND_FAILURE": "백엔드 오류로 멈췄어 · 더 실행할 수 없어. 위 Task 상태를 확인해.",
 }
 REQUEST_STATUSES = {
     "DECIDED": "판정 완료",
@@ -136,3 +171,32 @@ def format_kst(value: datetime | None) -> str:
     if value is None or value.tzinfo is None or value.utcoffset() is None:
         return MISSING
     return value.astimezone(_KST).strftime("%Y년 %m월 %d일 %H:%M:%S KST")
+
+
+# Letters and symbols that render as blank space although Unicode does not
+# classify them as controls: Hangul fillers and the braille blank pattern.
+INVISIBLE_LETTERS = frozenset({0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800})
+
+
+def is_hidden_char(char: str) -> bool:
+    """Controls, format (bidi, zero-width), line separators, blank lookalikes."""
+
+    return (
+        unicodedata.category(char) in {"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"}
+        or ord(char) in INVISIBLE_LETTERS
+    )
+
+
+def public_display_text(value: str | None) -> str:
+    """Render a public identifier or name on one line, exposing hidden chars.
+
+    A newline, bidi override, or zero-width character must not look like a
+    separate row, reordered text, or a different ID in a cell or card. This is
+    display-only: the original value and navigation/selection IDs are unchanged.
+    """
+
+    if not value:
+        return MISSING
+    return "".join(
+        f"[U+{ord(char):04X}]" if is_hidden_char(char) else char for char in value
+    )

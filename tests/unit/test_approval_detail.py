@@ -61,6 +61,47 @@ def test_controls_bidi_and_confusables_have_unambiguous_visible_codes() -> None:
     assert source == "Aа\\u200B\u200b\u202e\x00\t\n한"
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        # Conjoining jamo compose a syllable pixel-identical to precomposed 홍.
+        ('{"to":"\u1112\u1169\u11bc길동"}', '{"to":"\u1112\\u1112\u1169\\u1169\u11bc\\u11BC길동"}'),
+        ("\ua960\ud7b0", "\ua960\\uA960\ud7b0\\uD7B0"),
+        # Blank-looking letters: codepoint only, like other invisible text.
+        ('{"to":"홍길동\u1160"}', '{"to":"홍길동\\u1160"}'),
+        ('{"to":"홍길동\u115f"}', '{"to":"홍길동\\u115F"}'),
+        ("a\u3164b\uffa0c", "a\\u3164b\\uFFA0c"),
+        ('{"memo":"a\u2800b"}', '{"memo":"a\\u2800b"}'),
+        # Separator lookalikes inside URLs keep glyph plus codepoint.
+        (
+            "https://bank.example.com\u2215login.evil.test",
+            "https://bank.example.com\u2215\\u2215login.evil.test",
+        ),
+        ("https://a.com\u2044x", "https://a.com\u2044\\u2044x"),
+        ("https://evil\u3002com", "https://evil\u3002\\u3002com"),
+        ("https://evil\uff61com", "https://evil\uff61\\uFF61com"),
+        ("https://a\u2010b.test", "https://a\u2010\\u2010b.test"),
+    ],
+)
+def test_composed_and_punctuation_lookalikes_are_marked(source: str, expected: str) -> None:
+    # QA 2026-10-13 Q11: these rendered identical to ordinary text, unmarked.
+    assert visible_review_text(source) == expected
+
+
+@pytest.mark.parametrize(
+    "source",
+    ['{"file":"보고서_v2.pdf"}', '{"to":"홍길동@corp.example"}', "https://corp.example/분기/보고서"],
+)
+def test_precomposed_korean_mixed_with_ascii_is_not_tagged(source: str) -> None:
+    # QA 2026-10-13 Q11: every precomposed syllable was followed by \\uXXXX.
+    assert visible_review_text(source) == source
+
+
+def test_korean_token_still_marks_a_non_hangul_lookalike() -> None:
+    # Cyrillic \u0430 next to Hangul is still a mixed-script lookalike of Latin a.
+    assert visible_review_text("홍길동\u0430") == "홍길동\u0430\\u0430"
+
+
 def test_cyrillic_hostname_is_visible_but_plain_korean_remains_readable():
     assert "\\u0430" in visible_review_text("https://аррӏе.com/분기")
     assert visible_review_text("분기 보고서") == "분기 보고서"

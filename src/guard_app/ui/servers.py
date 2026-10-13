@@ -29,6 +29,7 @@ from .presentation import (
     TIERS,
     TRANSPORTS,
     fixed,
+    public_display_text,
 )
 from .scan_status import ScanStatusCard, ScanStatusProjection
 from .widgets import (
@@ -61,7 +62,7 @@ class ServerDetailDialog(QDialog):
     def __init__(self, server: ServerSummary, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.server_id = server.server_id
-        self.setWindowTitle(f"MCP 서버 상세 · {server.server_id}")
+        self.setWindowTitle(f"MCP 서버 상세 · {public_display_text(server.server_id)}")
         self.setModal(True)
         self.setMinimumSize(240, 200)
         size_detail_for_viewport(self, 700, 560)
@@ -92,11 +93,11 @@ class ServerDetailDialog(QDialog):
         )
         layout.addWidget(self.tier_field)
         display_field, self._display_value = _detail_field(
-            "표시 이름", server.display_name or server.server_id
+            "표시 이름", public_display_text(server.display_name or server.server_id)
         )
         layout.addWidget(display_field)
         server_id_field, self._server_id_value = _detail_field(
-            "서버 식별자 · server_id", server.server_id
+            "서버 식별자 · server_id", public_display_text(server.server_id)
         )
         layout.addWidget(server_id_field)
         transport_field, self._transport_value = _detail_field(
@@ -120,7 +121,7 @@ class ServerDetailDialog(QDialog):
         """Refresh reused dialog fields before requesting a new scan snapshot."""
 
         self.server_id = server.server_id
-        self.setWindowTitle(f"MCP 서버 상세 · {server.server_id}")
+        self.setWindowTitle(f"MCP 서버 상세 · {public_display_text(server.server_id)}")
         self.max_label_badge.set_label(server.max_label)
         self._registry_status_value.setText(
             fixed(REGISTRY_STATUSES, server.registry_status)
@@ -129,8 +130,10 @@ class ServerDetailDialog(QDialog):
             fixed(SESSION_STATUSES, server.session_status)
         )
         self._tier_value.setText(fixed(TIERS, server.tier))
-        self._display_value.setText(server.display_name or server.server_id)
-        self._server_id_value.setText(server.server_id)
+        self._display_value.setText(
+            public_display_text(server.display_name or server.server_id)
+        )
+        self._server_id_value.setText(public_display_text(server.server_id))
         self._transport_value.setText(fixed(TRANSPORTS, server.transport))
         self.scan_status_card.set_snapshot(Surface(LoadState.LOADING))
 
@@ -336,7 +339,10 @@ class ServerListPage(QWidget):
         self.table.setRowCount(0)
         for row, server in enumerate(self._visible_servers):
             self.table.insertRow(row)
-            label = f"{server.server_id}\n{server.display_name or server.server_id}"
+            label = (
+                f"{public_display_text(server.server_id)}\n"
+                f"{public_display_text(server.display_name or server.server_id)}"
+            )
             columns = (
                 label,
                 fixed(TRANSPORTS, server.transport),

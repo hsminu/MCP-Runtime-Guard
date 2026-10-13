@@ -9,7 +9,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QWidget
 
 from examples.synthetic_app import bootstrap
 from guard_app.domain.enums import TaskStatus
@@ -17,6 +19,8 @@ from guard_app.services.bridge import (
     BackendBindings,
     BackendBridge,
     BridgeState,
+    CommandEvent,
+    CommandStage,
     ControlAction,
     TaskProjection,
 )
@@ -90,6 +94,10 @@ def test_agt_denial_explains_result_and_disabled_run_button():
         message = panel.message.text()
         assert message.startswith("호출이 차단됐어")
         assert message.endswith("내부 코드: RUN_DENIED_QUERY_REQUIRED")
+        # R11: the shipped app never feeds the call log page, so do not send
+        # the operator there for the reason.
+        assert "호출 로그에서" not in message
+        assert "아직 이 화면에 연결되지 않았어" in message
         assert panel.current.status is TaskStatus.RUNNING and panel.current.receiver_effect == 0
         assert not panel.run_button.isEnabled() and panel.cancel_button.isEnabled()
         assert "진행 중 · RUNNING" in panel.summary.text()
@@ -140,6 +148,50 @@ def test_stop_without_confirmed_halt_is_not_reported_as_success():
     panel.close()
 
 
+@pytest.mark.parametrize(
+    ("action", "code", "start", "fragment"),
+    [
+        ("run", "RUN_GUARD_ERROR_QUERY_REQUIRED", "Guard 내부 오류로", "이어서 실행할 수 없어"),
+        ("run", "RUN_WITHHELD_QUERY_REQUIRED", "도구 결과를 공개하지 않았어", "계속 실행 중"),
+        ("run", "RUN_STOPPED_QUERY_REQUIRED", "실행이 정지됐어", "새 Task"),
+        (
+            ControlAction.APPROVE,
+            "CONTROL_GUARD_ERROR_QUERY_REQUIRED",
+            "제어 처리 중 Guard 내부 오류",
+            "다시 조회된 표시",
+        ),
+        (
+            ControlAction.REJECT,
+            "CONTROL_GUARD_ERROR_QUERY_REQUIRED",
+            "제어 처리 중 Guard 내부 오류",
+            "다시 조회된 표시",
+        ),
+    ],
+)
+def test_runner_status_codes_have_korean_operator_text(action, code, start, fragment):
+    # Codes added with the runner's withheld/guard_error statuses; "stopped"
+    # also covers cancel, epoch replacement, and Store failure.
+    app = QApplication.instance() or QApplication([])
+    app.processEvents()
+
+    async def unused():
+        raise AssertionError("must not bootstrap")
+
+    bridge = BackendBridge(unused)
+    panel = RuntimePanel(bridge)
+    text = panel._result_text(action, code)
+    assert text.startswith(start) and fragment in text
+    assert "도구 설정 오류" not in text
+    assert code not in text  # the code stays a secondary line only
+    panel._commands["command"] = action
+    panel._command(
+        CommandEvent("command", "run", str(action), "task", CommandStage.BACKEND_RETURNED, code)
+    )
+    assert panel.message.text() == f"{text}\n내부 코드: {code}"
+    bridge.close()
+    panel.close()
+
+
 def test_immediate_rejection_does_not_leave_panel_busy():
     app = QApplication.instance() or QApplication([])
     app.processEvents()
@@ -155,6 +207,95 @@ def test_immediate_rejection_does_not_leave_panel_busy():
     assert not panel._busy
     assert not panel._commands
     assert "NOT_READY" in panel.message.text()
+    bridge.close()
+    panel.close()
+
+
+@pytest.mark.parametrize("target", ["run", "review", "approve"])
+def test_double_enter_on_safe_action_never_cancels_or_halts(target):
+    # QA 2026-10-13 Q06: disabling the focused button moved focus to 작업 취소,
+    # so a second Enter irreversibly stopped the Task.
+    app = QApplication.instance() or QApplication([])
+    bridge = BackendBridge(lambda: bootstrap(agt_mode="mock"))
+    sent: list[ControlAction] = []
+    request_control = bridge.request_control
+
+    def spy(action, target_id, **kwargs):
+        sent.append(action)
+        return request_control(action, target_id, **kwargs)
+
+    bridge.request_control = spy
+    host = QWidget()
+    panel = RuntimePanel(bridge, host)
+    host.show()
+    host.activateWindow()
+    try:
+        bridge.start()
+        wait_until(app, panel.run_button.isEnabled)
+        if target in ("review", "approve"):
+            panel.run_button.click()
+            wait_until(app, panel.review_button.isEnabled)
+        if target == "approve":
+            panel.review_button.click()
+            wait_until(app, panel.approve_button.isEnabled)
+        button = getattr(panel, f"{target}_button")
+        button.setFocus()
+        app.processEvents()
+        assert app.focusWidget() is button
+        QTest.keyClick(button, Qt.Key.Key_Return)
+        app.processEvents()
+        focused = app.focusWidget()
+        assert focused not in (panel.cancel_button, panel.halt_button)
+        assert focused is panel.detail
+        QTest.keyClick(focused, Qt.Key.Key_Return)
+        QTest.keyClick(focused, Qt.Key.Key_Enter)
+        wait_until(app, lambda: not panel._busy)
+        app.processEvents()
+        assert ControlAction.CANCEL not in sent
+        assert ControlAction.EMERGENCY_HALT not in sent
+        assert panel.current.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+        # Destructive controls remain keyboard-reachable on purpose.
+        assert panel.cancel_button.isEnabled()
+        assert panel.cancel_button.focusPolicy() & Qt.FocusPolicy.TabFocus
+        assert not panel.cancel_button.autoDefault() and not panel.halt_button.autoDefault()
+    finally:
+        bridge.close()
+        wait_until(app, lambda: bridge.thread_done)
+        host.close()
+
+
+def test_lifecycle_messages_are_current_korean_with_code_secondary():
+    # QA 2026-10-13 R10: READY still read "백엔드: STARTING"; a failed start kept
+    # the "시작 중" summary.
+    app = QApplication.instance() or QApplication([])
+    bridge = BackendBridge(lambda: bootstrap(agt_mode="mock"))
+    panel = RuntimePanel(bridge)
+    try:
+        assert panel.summary.text().startswith("백엔드 시작 중")
+        bridge.start()
+        wait_until(app, panel.run_button.isEnabled)
+        assert panel.message.text() == "백엔드 준비 완료.\n내부 코드: READY"
+        assert "STARTING" not in panel.message.text()
+    finally:
+        bridge.close()
+        wait_until(app, lambda: bridge.thread_done)
+    assert panel.message.text().startswith("백엔드 종료됨")
+    assert panel.message.text().endswith("내부 코드: CLOSED")
+    panel.close()
+
+    async def failing():
+        raise RuntimeError("RAW_MARKER")
+
+    bridge = BackendBridge(failing)
+    panel = RuntimePanel(bridge)
+    bridge.start()
+    wait_until(app, lambda: bridge.thread_done)
+    app.processEvents()
+    assert panel.summary.text() == "백엔드 시작 실패 · 실행할 수 없어"
+    assert panel.message.text().startswith("백엔드를 시작하지 못했어")
+    assert panel.message.text().endswith("내부 코드: STARTUP_FAILED")
+    assert "RAW_MARKER" not in panel.message.text()
+    assert not any(button.isEnabled() for button in panel.buttons)
     bridge.close()
     panel.close()
 

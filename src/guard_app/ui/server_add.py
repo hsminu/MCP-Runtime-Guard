@@ -7,8 +7,10 @@ security modules must validate every field again before creating PENDING.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -29,11 +31,80 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .presentation import is_hidden_char
 from .widgets import KeyboardActionButton, plain_label
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _MAX_ARGS_JSON_CHARS = 65_536
 _MAX_ARGS_COUNT = 256
+_MAX_SERVER_ID_CHARS = 128
+_MAX_DISPLAY_NAME_CHARS = 256
+# Numeric host spellings (decimal, octal, hex, dotted or not) that resolvers
+# may accept as an IPv4 address even though they are not dotted-quad text.
+_NUMERIC_HOST = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*\.?\Z")
+
+
+def _has_hidden_char(value: str) -> bool:
+    return any(is_hidden_char(char) for char in value)
+
+
+def _id_key(value: str) -> str:
+    """Compare IDs as an operator would read them: case and width folded."""
+
+    return unicodedata.normalize("NFKC", value).casefold()
+
+
+def _command_error(command: str) -> str | None:
+    if _has_hidden_char(command):
+        return "실행 파일 경로에 보이지 않는 문자나 제어 문자(NUL·방향 전환 등)를 넣지 마."
+    if command[:2] in ("\\\\", "//", "\\/", "/\\"):
+        return (
+            "네트워크 공유(UNC)·장치 경로의 실행 파일은 쓸 수 없어. "
+            "이 PC의 로컬 드라이브 경로를 입력해."
+        )
+    if not Path(command).is_absolute():
+        return "실행 파일은 절대 경로여야 해."
+    return None
+
+
+def _url_error(url: str) -> str | None:
+    if any(char.isspace() for char in url) or _has_hidden_char(url):
+        return "URL에는 공백, 제어 문자, 보이지 않는 문자를 넣지 마."
+    if "\\" in url:
+        return "URL에 역슬래시(\\)를 넣지 마. 주소창에서는 다른 호스트로 해석될 수 있어."
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+        host = parts.hostname or ""
+        valid = (
+            parts.scheme in ("http", "https")
+            and bool(host)
+            and "@" not in parts.netloc
+            and not parts.query
+            and not parts.fragment
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        return "http(s) 전체 URL만 입력해. 계정·암호·쿼리·fragment는 제외해."
+    if port == 0:
+        return "포트는 1–65535 사이로 입력해."
+    if not host.isascii():
+        return "호스트 이름은 ASCII로 입력해. 국제화 도메인은 xn-- 형식으로 바꿔 입력해."
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if _NUMERIC_HOST.fullmatch(host):
+            return "IP 주소는 점으로 구분한 네 개의 십진수(예: 10.0.0.1)로 입력해."
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if address.is_link_local or address.is_unspecified or address.is_multicast:
+        return (
+            "링크 로컬·클라우드 메타데이터(169.254.x.x 등)·미지정·멀티캐스트 주소는 "
+            "MCP endpoint로 쓸 수 없어."
+        )
+    return None
 
 
 def _parse_stdio_args(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
@@ -327,12 +398,28 @@ class ServerAddForm(QWidget):
         display_name = self.display_name.text().strip()
         if not server_id:
             errors["server_id"] = "서버 ID를 입력해."
+        elif len(server_id) > _MAX_SERVER_ID_CHARS:
+            errors["server_id"] = f"서버 ID는 {_MAX_SERVER_ID_CHARS}자 이하로 입력해."
+        elif _has_hidden_char(server_id):
+            errors["server_id"] = (
+                "서버 ID에 보이지 않는 문자나 제어 문자(NUL·방향 전환·zero-width 등)를 넣지 마."
+            )
         elif server_id in self._known_ids:
             errors["server_id"] = (
                 "현재 목록에 같은 ID가 있어. Registry에서도 다시 확인해야 해."
             )
+        elif any(_id_key(server_id) == _id_key(known) for known in self._known_ids):
+            errors["server_id"] = (
+                "현재 목록에 대소문자·전각 여부만 다른 같은 ID가 있어. 다른 ID를 입력해."
+            )
         if not display_name:
             errors["display_name"] = "표시 이름을 입력해."
+        elif len(display_name) > _MAX_DISPLAY_NAME_CHARS:
+            errors["display_name"] = (
+                f"표시 이름은 {_MAX_DISPLAY_NAME_CHARS}자 이하로 입력해."
+            )
+        elif _has_hidden_char(display_name):
+            errors["display_name"] = "표시 이름에 보이지 않는 문자나 제어 문자를 넣지 마."
         if self.tier.currentData() is None:
             errors["tier"] = "신뢰 경계를 선택해."
         if self.max_label.currentData() is None:
@@ -347,8 +434,12 @@ class ServerAddForm(QWidget):
             command = self.command.text().strip()
             if not command:
                 errors["command"] = "실행 파일 절대 경로를 입력해."
-            elif not Path(command).is_absolute():
-                errors["command"] = "실행 파일은 절대 경로여야 해."
+            elif len(command) >= self.command.maxLength():
+                errors["command"] = (
+                    "실행 파일 경로가 입력 칸 한도를 넘어 잘렸을 수 있어. 경로를 확인해."
+                )
+            elif (command_error := _command_error(command)) is not None:
+                errors["command"] = command_error
             args, args_error = _parse_stdio_args(self.args_json.toPlainText())
             if args_error is not None:
                 errors["args"] = args_error
@@ -369,25 +460,10 @@ class ServerAddForm(QWidget):
             url = self.url.text().strip()
             if not url:
                 errors["url"] = "전체 MCP endpoint URL을 입력해."
-            elif any(char.isspace() or ord(char) < 32 for char in url):
-                errors["url"] = "URL에는 공백이나 제어 문자를 넣지 마."
-            else:
-                try:
-                    parts = urlsplit(url)
-                    _port = parts.port
-                    valid = (
-                        parts.scheme in ("http", "https")
-                        and bool(parts.hostname)
-                        and "@" not in parts.netloc
-                        and not parts.query
-                        and not parts.fragment
-                    )
-                except ValueError:
-                    valid = False
-                if not valid:
-                    errors["url"] = (
-                        "http(s) 전체 URL만 입력해. 계정·암호·쿼리·fragment는 제외해."
-                    )
+            elif len(url) >= self.url.maxLength():
+                errors["url"] = "URL이 입력 칸 한도를 넘어 잘렸을 수 있어. 주소를 확인해."
+            elif (url_error := _url_error(url)) is not None:
+                errors["url"] = url_error
 
         if errors:
             return None, errors

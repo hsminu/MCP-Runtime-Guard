@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .presentation import INVISIBLE_LETTERS
 from .widgets import KeyboardActionButton, plain_label, size_detail_for_viewport
 
 
@@ -56,14 +57,52 @@ def _codepoint(char: str) -> str:
     return f"\\U{number:08X}"
 
 
+def _is_hangul_syllable(char: str) -> bool:
+    return 0xAC00 <= ord(char) <= 0xD7A3
+
+
+def _is_conjoining_jamo(char: str) -> bool:
+    number = ord(char)
+    return 0x1100 <= number <= 0x11FF or 0xA960 <= number <= 0xA97F or 0xD7B0 <= number <= 0xD7FF
+
+
+# Punctuation that renders like a URL/path separator, dot, colon, or hyphen
+# and is unchanged by NFKC (NFKC-changing lookalikes are marked separately).
+_CONFUSABLE_PUNCTUATION = frozenset(
+    {
+        0x02D0,  # MODIFIER LETTER TRIANGULAR COLON
+        0x0589,  # ARMENIAN FULL STOP
+        0x2010,  # HYPHEN
+        0x2012,  # FIGURE DASH
+        0x2013,  # EN DASH
+        0x2027,  # HYPHENATION POINT
+        0x2043,  # HYPHEN BULLET
+        0x2044,  # FRACTION SLASH
+        0x2212,  # MINUS SIGN
+        0x2215,  # DIVISION SLASH
+        0x2216,  # SET MINUS
+        0x2236,  # RATIO
+        0x29F5,  # REVERSE SOLIDUS OPERATOR
+        0x29F8,  # BIG SOLIDUS
+        0x3002,  # IDEOGRAPHIC FULL STOP
+        0xA789,  # MODIFIER LETTER COLON
+    }
+)
+
+
 def visible_review_text(value: str) -> str:
     """Show every original character without executing or hiding controls.
 
     Original backslashes are doubled, so an actual ``\\u200B`` cannot imitate
-    the codepoint notation used for an invisible U+200B. Printable non-ASCII
-    characters in mixed-script tokens keep their glyph plus codepoint. Controls, marks, spaces
-    with special width, and right-to-left runs use only codepoint notation.
-    This display-only conversion never changes the input or approval bytes.
+    the codepoint notation used for an invisible U+200B. Controls, marks,
+    spaces with special width, right-to-left runs, and blank-looking letters
+    (Hangul fillers, braille blank) use only codepoint notation. Lookalikes
+    keep their glyph plus codepoint: non-ASCII letters in mixed-script tokens,
+    conjoining Hangul jamo (which can compose a syllable that looks identical
+    to a precomposed one), separator-like punctuation, and NFKC-changing
+    characters. Precomposed Hangul syllables are never Latin lookalikes, so
+    ordinary Korean mixed with ASCII stays unmarked. This display-only
+    conversion never changes the input or approval bytes.
     """
 
     if type(value) is not str:
@@ -94,9 +133,17 @@ def visible_review_text(value: str) -> str:
             unicodedata.category(char)[0] in "CMZ"
             or unicodedata.bidirectional(char) in {"R", "AL", "AN"}
             or char.isspace()
+            or number in INVISIBLE_LETTERS
         ):
             pieces.append(_codepoint(char))
-        elif index in suspicious or unicodedata.normalize("NFKC", char) != char:
+        elif _is_hangul_syllable(char):
+            pieces.append(char)
+        elif (
+            index in suspicious
+            or _is_conjoining_jamo(char)
+            or number in _CONFUSABLE_PUNCTUATION
+            or unicodedata.normalize("NFKC", char) != char
+        ):
             pieces.append(f"{char}{_codepoint(char)}")
         else:
             pieces.append(char)

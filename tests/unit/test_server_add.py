@@ -251,3 +251,117 @@ def test_narrow_form_keeps_all_inputs_reachable_by_scrolling(
     form.prepare_button.setFocus()
     app.processEvents()
     assert form.prepare_button.hasFocus()
+
+
+# QA 2026-10-13 R12: each of these prepared a draft with no visible error.
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        (r"\\attacker.example\share\payload.exe", "UNC"),
+        (r"\\?\UNC\attacker.example\share\x.exe", "UNC"),
+        ("//attacker.example/share/x.exe", "UNC"),
+        ("C:/mcp/py\u202eexe.thon", "보이지 않는 문자"),
+        ("C:/mcp/py\x00thon.exe", "보이지 않는 문자"),
+        ("C:/mcp/py\u200bthon.exe", "보이지 않는 문자"),
+    ],
+)
+def test_remote_or_hidden_character_executable_is_rejected(
+    form: ServerAddForm, command: str, message: str
+) -> None:
+    _valid_stdio(form)
+    assert form.prepare_button.isEnabled()
+    form.command.setText(command)
+    assert message in form._errors["command"].text()
+    assert not form.prepare_button.isEnabled()
+    form.prepare_button.click()
+    assert form.validated_draft is None
+
+
+@pytest.mark.parametrize(
+    ("server_id", "message"),
+    [
+        ("docs\u202e", "보이지 않는 문자"),
+        ("do\u200bcs", "보이지 않는 문자"),
+        ("do\x00cs", "보이지 않는 문자"),
+        ("docs\u3164", "보이지 않는 문자"),
+        ("DOCS", "대소문자"),
+        ("\uff44\uff4f\uff43\uff53", "대소문자"),
+        ("a" * 129, "128자 이하"),
+    ],
+)
+def test_hidden_long_or_case_folded_duplicate_server_id_is_rejected(
+    form: ServerAddForm, server_id: str, message: str
+) -> None:
+    _valid_stdio(form)
+    form.set_known_ids({"docs"})
+    form.server_id.setText("docs-2")
+    assert form.prepare_button.isEnabled()
+    form.server_id.setText(server_id)
+    assert message in form._errors["server_id"].text()
+    assert not form.prepare_button.isEnabled()
+
+
+def test_truncated_paste_never_prepares_a_shorter_id(form: ServerAddForm) -> None:
+    _valid_stdio(form)
+    form.server_id.setText("a" * 40_000)
+    assert len(form.server_id.text()) == form.server_id.maxLength()
+    assert "128자 이하" in form._errors["server_id"].text()
+    assert not form.prepare_button.isEnabled()
+
+
+def test_hidden_characters_in_display_name_are_rejected(form: ServerAddForm) -> None:
+    _valid_stdio(form)
+    form.display_name.setText("Local\u202eDocs")
+    assert form._errors["display_name"].text()
+    assert not form.prepare_button.isEnabled()
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("http://good.example\\.evil.test/mcp", "역슬래시"),
+        ("http://127.0.0.1:0/mcp", "1–65535"),
+        ("https://\u0435\u0445.example/mcp", "ASCII"),
+        ("http://169.254.169.254/latest", "메타데이터"),
+        ("http://[fe80::1]/mcp", "링크 로컬"),
+        ("http://[::ffff:169.254.169.254]/mcp", "링크 로컬"),
+        ("http://0.0.0.0:8080/mcp", "미지정"),
+        ("http://2852039166/mcp", "네 개의 십진수"),
+        ("http://0xa9.254.169.254/mcp", "네 개의 십진수"),
+        ("https://x.test/\u202emcp", "보이지 않는 문자"),
+        ("https://x.test/m\u200bcp", "보이지 않는 문자"),
+    ],
+)
+def test_ambiguous_or_metadata_url_is_rejected_locally(
+    form: ServerAddForm, url: str, message: str
+) -> None:
+    form.server_id.setText("remote")
+    form.display_name.setText("Remote")
+    form.tier.setCurrentIndex(form.tier.findData("general_external"))
+    form.max_label.setCurrentIndex(form.max_label.findData("PUBLIC"))
+    form.transport.setCurrentIndex(form.transport.findData("streamable_http"))
+    form.url.setText("https://mcp.example.test/mcp")
+    assert form.prepare_button.isEnabled()
+    form.url.setText(url)
+    assert message in form._errors["url"].text()
+    assert not form.prepare_button.isEnabled()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8080/mcp",
+        "http://[::1]:8080/mcp",
+        "https://xn--h32b13v.example/mcp",
+        "https://mcp.example.test:443/분기",
+    ],
+)
+def test_ordinary_local_and_punycode_urls_remain_accepted(form: ServerAddForm, url: str) -> None:
+    form.server_id.setText("remote")
+    form.display_name.setText("Remote")
+    form.tier.setCurrentIndex(form.tier.findData("internal"))
+    form.max_label.setCurrentIndex(form.max_label.findData("PUBLIC"))
+    form.transport.setCurrentIndex(form.transport.findData("streamable_http"))
+    form.url.setText(url)
+    assert not form._errors["url"].text()
+    assert form.prepare_button.isEnabled()
