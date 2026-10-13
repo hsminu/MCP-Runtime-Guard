@@ -2,7 +2,7 @@
 
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-현재 B 브랜치에는 **B1 도메인·포트 계약 초안, B2 순수 정책·등급 누적, B3 Catalog, 해시·스냅샷·예외 처리, B4 Guard·응답 게이트, B5 승인 서비스와 단위·성질 테스트**가 있다. Python 3.12 가상환경에서 B 서비스를 검증했다. SQLite 구현은 B6로 이관됐으며 API 검토 단계다. Catalog의 실제 C 안전 경로·Registry, A의 transport·AGT·Runner·제어 큐와 B 저장소 연결, 공통 계약 합의·담당 리뷰·CI는 인수 대상이다. 아래 전체 시스템 동작은 구현 목표이며 실제 전송·DB·GUI 실행을 완료한 상태는 아니다.
+현재 B 브랜치에는 **B1 도메인·포트 계약 초안, B2 순수 정책·등급 누적, B3 Catalog, 해시·스냅샷·예외 처리, B4 Guard·응답 게이트, B5 승인 서비스와 단위·성질 테스트**가 있다. B6는 SQLite 연결·초기 v1 스키마/마이그레이션과 현행 Store **12/12개 메서드**를 구현했고 Python 3.12에서 전체 **1,395개** 단위·성질 테스트를 통과했다. 현행 분리 API의 승인 생성/종결 간격, 시작 복구·영속 순번·새 API 합의는 남아 있다. Catalog의 실제 C 안전 경로·Registry, A의 transport·AGT·Runner·제어 큐와 B 저장소 연결, 공통 계약 합의·담당 리뷰·CI는 인수 대상이다. 아래 전체 시스템 동작은 구현 목표이며 MCP·DB·GUI를 함께 연결한 제품 실행을 완료한 상태는 아니다.
 
 ## 개발 문서
 
@@ -14,6 +14,9 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | [B 구현 인수 안내](docs/b-handoff.md) | A·C 연결 위치, 구성 예시, 남은 합의와 환경 재현·인수 순서 |
 | [A·C 공동 계약 검토 요청](docs/ac-contract-review-request.md) | 항목별 목적·A/C 회신 질문·최신 AGT 요구·답변 형식과 합의 절차 |
 | [B6 계약 변경안](docs/b6-contract-proposal.md) | SQLite 승인 원자성·버전·오류/복구와 AGT 규칙·영속 감사 제안 |
+| [B6 SQLite 첫 단계](docs/b6-sqlite-foundation.md) | 실제 연결·v1 스키마·Task 생성/조회 구현과 74개 SQLite 단위 검사·남은 연결 |
+| [B6 상태·판정·예약](docs/b6-sqlite-decisions.md) | 3개 연산 추가·감사 원자성·같은 인스턴스 ALLOW 결속과 전체 1,193개 검사 |
+| [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md) | 남은 7개 추가·현행 12/12개 구현·전체 1,395개 검사와 제품 연결/복구 한계 |
 | [정규식 검증 연결안](docs/b-schema-validation-proposal.md) | A 모델 입력·B 검증 의미·C 프로세스 실행/종료 연결 검토 |
 | [B1 구현 초안과 검증](docs/b1-contract-draft.md) | 구현 범위, 포트 초안 선택, 설치·단위 검사, A·C 검토 항목 |
 | [B2 순수 정책과 등급 누적](docs/b2-policy-and-taint.md) | 경계·AGT 판정, READ 누적·비교 모드, 버전과 성질 검증 |

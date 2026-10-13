@@ -6,7 +6,7 @@
 현행 소유권은 [협업 규칙](team-workflow.md)을 따르며, 2026-10-12 사용자 결정에 따라
 SQLite 구현·영속 순번·감사 저장·시작 복구는 B6, 저장소 리뷰·독립 검증은 C가 맡는다.
 이 자료는 A·C가 B 코드와 연결할 위치, 확인할 계약, 검증 순서를 모은 인수 초안이다.
-A·C의 동의·리뷰·실제 MCP·SQLite 실행을 완료했다는 기록은 아니다.
+A·C의 동의·리뷰·MCP/SQLite 제품 통합 실행을 완료했다는 기록은 아니다.
 
 현재 회신 입구는 [A·C 계약 검토 요청 초안](ac-contract-review-request.md)이다.
 최신 브랜치 기준, 담당별 질문, 합의와 구현의 경계를 모았으며 실제 전달·동의 기록은 아니다.
@@ -21,11 +21,18 @@ A·C의 동의·리뷰·실제 MCP·SQLite 실행을 완료했다는 기록은 �
 | 해시·예외 | `core/snapshot.py`, `security/digest.py`, `failclosed.py` | 사본·양시계 만료·예약 전후 예외 처리 구현 |
 | B4 | `services/guard.py`, `response_gate.py` | Task 직렬화·검사·커밋 후 공개 구현. 실제 A·C 연결 필요 |
 | B5 | `services/approvals.py` | 사람 제어·상세 조회·재평가·소비 연계 구현. 긴급 차단 후 소비·전송 방지 보강. 실제 DB·제어 큐 연결 필요 |
-| B6 | `storage/*` 예정 | SQLite 담당 인수·API 검토 단계. 구현·저장소 단위 검증·C 독립 인수 미완료 |
+| B6 진행 | `storage/sqlite_store.py` | 연결·v1 초기 스키마/마이그레이션과 현행 Store 12/12개 메서드·B 단위 검증 완료. 분리 승인 생성/종결 간격·제품 연결·복구·새 계약·C 독립 인수는 남음 |
 
 담당 단위·성질 테스트는 `tests/unit`에 있다. 테스트 대역은 이 디렉터리에만 있으며
 운영용 가짜 Transport·Store·Registry나 보안 경로 우회 구현을 추가하지 않았다.
 B1–B5 전달물에는 MCP SDK·AGT·Scanner·GUI·SQLite 구현·C의 CI 규칙이 없다.
+후속 B6 첫 단계는 [SQLite 구현/검증 기록](b6-sqlite-foundation.md)을 따른다.
+후속 [상태·판정·ALLOW 예약](b6-sqlite-decisions.md) 3개, [승인·응답 저장](b6-sqlite-lifecycle.md)
+7개를 추가해 현재 **현행 12/12개 메서드·전체 1,395개 테스트 통과**다. DB 하나와 7개 테이블이다.
+감사 쓰기에는 신뢰 audit_id_factory가 필요하고 승인 만료 검사는 신뢰 utc_now도 사용한다.
+재개방한 옛 ALLOW/승인/예약에서 실행·응답 커밋 권한을 복원하지 않는다.
+시작 복구·새 open/finish 합의·A 구성 루트 연결·C 독립 인수가 남아 제품에 주입하지 않았다.
+이번 SQLite 변경은 로컬 add까지 검증한 뒤 후속 사용자 지시로 commit·push를 진행한다.
 A `5598009`의 transport·AGT mock·모델·Runner·bridge·Qt UI 기록과 `655aef5`의
 긴급 차단·승인 상세는 당시 상태의 근거다. `655aef5`의 B 소유 변경은 사용자 지시로
 선별 반영했고, 세 후속 보완을 포함한 B `29025e038f7e4beb6cdcce15305f8cafc9550897`을 공개했다.
@@ -258,7 +265,8 @@ Task ID·snapshot epoch를 검사하도록 보강했다. 다른 Task·교체된 
 근거는 [수정 커밋](https://github.com/hsminu/MCP-Runtime-Guard/commit/f3c2d2bc225e0406c50731c9b63779a3d890cd70)과
 [C의 후속 검토](tasks/c-b-review.md#후속-수정-f3c2d2b-확인)이다. 840개 최초 결과와
 864개 후속 결과는 서로 다른 커밋의 기록이다. 2026-10-13 문서 갱신 자체로 새 코드 시험을
-통과했다고 기록하지 않는다. 실제 SQLite·wire·수신 부작용 검증은 여전히 미완료다.
+통과했다고 기록하지 않는다. SQLite 승인/응답 원자 연산·wire·수신 부작용 검증은 미완료다.
+후속 연결·초기 스키마·Task 생성/조회 단위 검증은 [첫 단계 기록](b6-sqlite-foundation.md)으로 구분한다.
 
 ## 연결 후 인수 순서
 
