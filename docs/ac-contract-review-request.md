@@ -5,23 +5,26 @@
 > 요청 문서를 A에 반영했으며 계약 검토 회신·동의는 아직 아니다. 아래 B 작성 당시 근거는 보존한다.
 
 기준일: **2026-10-13**. 작성 B, 상태는 **요청 초안 작성·A/C 회신과 공동 합의 미기록**이다.
-초기 요청 문서는 B `3bf414c`로 공개했다. 이번에는 최신 A `cd75bf9`의 B 병합·코드·검증 기록·역할 결정 요청을 다시 대조해 갱신한다.
-문서 작성으로 팀원에게 전달·동의·SQLite 구현·제품 연결·독립 검증 완료를 기록하지 않는다.
+초기 요청 문서는 B `3bf414c`로 공개했다. 기존 A `cd75bf9` 검토 후 추가 기준은
+A `ab82919`, B SQLite 공개 기준 `9eb0560`이다. 후속 QA 요청과 B 내부 보완은
+[B QA 반영 기록](b-qa-fixes-2026-10-13.md)을 따른다.
+문서 작성으로 팀원에게 전달·동의·제품 연결·독립 검증 완료를 기록하지 않는다.
 
 ## 1. 검토 기준과 현재 연결 상태
 
 | 담당 | 확인한 기준 커밋 | 이번 검토에서 확인한 상태 |
 | --- | --- | --- |
-| B | [3bf414c](https://github.com/hsminu/MCP-Runtime-Guard/commit/3bf414cded1c7262f744dd4f282c0abe93109f4f) | 공동 검토 요청 문서 공개. 서비스는 29025e0과 동일하며 기존 B 단위·성질 테스트 971개 통과 기록 |
-| A | [cd75bf9](https://github.com/hsminu/MCP-Runtime-Guard/commit/cd75bf9fa2a96a76f84fc1ce17a746705265ae53) | 최신 B 3bf414c 병합. AGT 대기/실행 16개·worker 교체·실제 종료 확인·한국어 UI와 미결 역할 결정 요청 유지 |
+| B | [9eb0560](https://github.com/hsminu/MCP-Runtime-Guard/commit/9eb0560a8372cf23ad7f03b7a10d063af3af039f) + 로컬 QA 변경 | 기존 Store 12/12개 SQLite 구현 공개·당시 1,395개 통과. 후속 QA-01·02·05·07·08·09의 B 내부 보완. 공유 계약 동의와 제품 배선은 별도 |
+| A | [ab82919](https://github.com/hsminu/MCP-Runtime-Guard/commit/ab82919cbdc55492e1604a5aec41fec4fbedb33b) | B 문서 5f8a003 병합. 후속 Runner·transport·AGT·UI QA 수정과 B 소유 요청 10개 확인. SQLite 9eb0560과 이번 QA 보완은 아직 병합되지 않음 |
 | C / main | [4179f98](https://github.com/hsminu/MCP-Runtime-Guard/commit/4179f98b476b41e806c4a87b879cbdf95dc92b54) | SQLite 구현 B 이관·C 독립 검증 배정과 기존 Store 요구/처리 제안 |
 
-이번 추가 대조는 이전 A 기준 이후의 `6452b13`(AGT), `91b966b`(UI), `281cbae`(QA/역할 문서),
+아래는 기존 `cd75bf9` 검토 당시 기록이다. 이번 QA 보완 후 Guard·승인 소스가 A와 동일하다는 뜻이 아니다.
+당시 추가 대조는 이전 A 기준 이후의 `6452b13`(AGT), `91b966b`(UI), `281cbae`(QA/역할 문서),
 `cd75bf9`(최신 B 병합과 연결 검증)다. 실제 로컬 AGT·HTTP·Runner expected_epoch 전달은 유지된다.
 A `cd75bf9`에 B `3bf414c` 이력이 병합됐으며 B 서비스 `29025e0`의 승인 ID·상세 조회 마지막
-만료/현재성·늦은 AGT 추적 보완도 반영됐다. 현재 A/B의 `domain/*`·`ports.py`·Guard·승인
+만료/현재성·늦은 AGT 추적 보완도 반영됐다. 당시 A/B의 `domain/*`·`ports.py`·Guard·승인
 서비스 소스가 동일함을 정적 대조했다. [A 동기화 기록](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-b-sync-2026-10-13.md)도 확인했다.
-코드 동기화는 완료됐지만 새 공동 계약 동의와 C의 요청별 소비·host dispatch·wire·수신
+당시 코드 동기화는 완료됐지만 새 공동 계약 동의와 C의 요청별 소비·host dispatch·wire·수신
 부작용 독립 인수는 미완료다. 실제 SQLite·C 서비스·모델의 제품 연결도 별도다.
 
 A 최신 동기화 기록은 **A lock 전체 1,371 passed(48.87초)**, **별도 B lock 환경의 B 소유
@@ -50,7 +53,13 @@ SQLite·스키마·마이그레이션·단일 writer·영속 순번·감사·복
 기존 도메인·Store 12개 연산의 의미를 유지하는 SQLite 준비·구현·B 단위 검증은 먼저 진행할 수 있다.
 새 공유 API·DTO·오류·상태/버전·복구 규칙을 확정하거나 호출부를 교체하는 단계는 A·C 검토 후다.
 기존 두 커밋으로 조립한 승인 생성/종결을 새 원자 연산의 완료로 표시하지 않는다.
-이번 요청은 문서 정리이며 SQLite 소스를 구현한 작업은 아니다.
+초기 요청 작성 때는 문서 정리만 진행했다. 이후 기존 포트 안의 SQLite 12/12 구현은
+B `9eb0560`으로 공개했으며, 새 원자 승인 API·시작 복구·제품 배선·C 독립 인수는 남아 있다.
+
+QA-03/10의 전역 정지 가시성은 B6-05·복구/해제 조건과 함께 검토한다.
+QA-04의 확정 미전송 증거·결과 분류는 B6-03/04, QA-06의 일시 AGT 포화 구분·대기/TTL·
+Runner 처리는 AGT-03에 추가해 A·C 회신을 받아야 한다.
+이 연결은 검토 범위를 정리한 것이며 typed DTO·Reason·상태 규칙을 확정한 합의가 아니다.
 
 ## 3. B6: 먼저 회신할 항목
 

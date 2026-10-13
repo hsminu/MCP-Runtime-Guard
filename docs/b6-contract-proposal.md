@@ -6,6 +6,15 @@ SQLite 담당 이관은 확정됐지만 이 문서의 API·DTO·필드·상태 �
 이 문서는 구현 요구를 구체화하는 일반 저장소 문서다. domain·ports 소스 변경,
 SQLite 구현, 아래 검증 실행, A/C 동의 기록은 이 문서 작성으로 수행하지 않는다.
 
+후속 사용자 지시로 [SQLite 첫 단계](b6-sqlite-foundation.md)의 연결·빈 DB v0→v1
+마이그레이션·Task 생성/조회와 74개 SQLite 단위 검사를 구현했다. 기존 포트 중 2개 연산의
+독립 구현이며, 이 문서의 새 원자 승인 API·DTO·오류·복구 규칙 확정/검증은 미완료다.
+이후 [Task 상태·판정 감사·ALLOW 예약](b6-sqlite-decisions.md)으로 5/12개를 구현했고,
+[승인·응답 저장](b6-sqlite-lifecycle.md) 추가 후 현재 현행 12/12개·전체 1,395개를 검증했다.
+현행 승인 생성/종결의 두 커밋 간격은 남아 있으며 새 open/finish 계약 완료가 아니다.
+정상 상태 전이 보안 버전 유지·재개방 ALLOW 예약 거부 등은 검토용 adapter 선택이며,
+아래 B6-02 버전 규칙·영속 epoch 결속·감사 공급 계약의 공동 동의를 대신하지 않는다.
+
 2026-10-13 사용자 결정은 **A·C 검토를 받은 뒤 확정**이다. B가 새 Store API·DTO·오류·
 버전·복구 규칙을 먼저 확정하지 않는다. 검토 대상과 회신 항목은 10·11절 및
 [A·C 계약 검토 요청](ac-contract-review-request.md)에 정리했다.
@@ -248,7 +257,7 @@ DISPATCHING READ는 WITHHELD/HALTED, SEND는 UNKNOWN_OUTCOME으로 기록하고 
 | U7 | 시작 정리·승인 복원/자동 dispatch 없음 | 8절 recovery epoch와 A 시작 게이트 |
 | U8 | open/finish 원자성·terminal Task 재개 금지 | 제어/응답 경쟁·실제 SQLite 식별자 회귀 |
 
-이 문서의 새 Store 계약·SQLite 검증은 아직 실행하지 않았다. B 단위 계획은 원자 단계 실패·버전·관계/epoch/CAS·중복 소비·만료,
+이 문서의 새 Store 계약에 대한 SQLite 검증은 아직 실행하지 않았다. B 단위 계획은 원자 단계 실패·버전·관계/epoch/CAS·중복 소비·만료,
 READ 미공개·SEND 등급 불변·복구·원문 기록 제한이다(I3–I9, T07·T09–T12·T19·T35–T37·S03/S04).
 C가 독립 계약·통합·결함·실제 계수를 검증하고 A가 상세/T18·시작 게이트를 연결한다.
 A의 expected_epoch 전달은 최신 코드에 있으며 C의 실제 교체 경합 인수는 남아 있다.

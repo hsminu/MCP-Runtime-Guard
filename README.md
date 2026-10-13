@@ -48,6 +48,9 @@ A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_
 최신 B 병합·AGT 기준 차이·분리된 B 검사 환경은 [A 동기화 기록](docs/tasks/a-b-sync-2026-10-13.md)을 따른다.
 `requirements.lock`은 B 코어 검사 전용이며 A 실행 환경은 `uv.lock`을 사용한다.
 
+B 브랜치 `6115fa6`까지 병합해 B6의 SQLite Store(현행 12/12개 메서드)와 B QA 보완이 A 브랜치에 들어왔다.
+B 범위·검증은 [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md)과 [B QA 반영 기록](docs/b-qa-fixes-2026-10-13.md)을 따른다.
+시작 복구·영속 순번·새 공동 API 합의는 B 후속이며, 앱 연결 상태는 [A 작업 현황](docs/tasks/a-progress.md)을 따른다.
 
 ## 개발 문서
 
@@ -57,8 +60,13 @@ A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_
 | [3인 협업 규칙](docs/team-workflow.md) | 모듈 소유권, 리뷰 담당, 개발 순서, 브랜치 사용법 |
 | [공통 계약 체크리스트](docs/contracts.md) | B가 정의하고 A·C와 합의해야 하는 모델·포트·이벤트 계약 |
 | [B 구현 인수 안내](docs/b-handoff.md) | A·C 연결 위치, 구성 예시, 남은 합의와 환경 재현·인수 순서 |
+| [B QA 요청 반영](docs/b-qa-fixes-2026-10-13.md) | A 최신 요청 01·02·05·07·08 수정·실제 B 검증과 미결 계약/복구 |
+| [B QA-09 Task 수명](docs/b-qa09-task-lifecycle.md) | 사용 중 lock 보존·확정 종결 자원 정리·늦은 AGT와 미확정 stop 보존 |
 | [A·C 공동 계약 검토 요청](docs/ac-contract-review-request.md) | 항목별 목적·A/C 회신 질문·최신 AGT 요구·답변 형식과 합의 절차 |
 | [B6 계약 변경안](docs/b6-contract-proposal.md) | SQLite 승인 원자성·버전·오류/복구와 AGT 규칙·영속 감사 제안 |
+| [B6 SQLite 첫 단계](docs/b6-sqlite-foundation.md) | 실제 연결·v1 스키마·Task 생성/조회 구현과 74개 SQLite 단위 검사·남은 연결 |
+| [B6 상태·판정·예약](docs/b6-sqlite-decisions.md) | 3개 연산 추가·감사 원자성·같은 인스턴스 ALLOW 결속과 전체 1,193개 검사 |
+| [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md) | 남은 7개 추가·현행 12/12개 구현·전체 1,395개 검사와 제품 연결/복구 한계 |
 | [정규식 검증 연결안](docs/b-schema-validation-proposal.md) | A 모델 입력·B 검증 의미·C 프로세스 실행/종료 연결 검토 |
 | [B1 구현 초안과 검증](docs/b1-contract-draft.md) | 구현 범위, 포트 초안 선택, 설치·단위 검사, A·C 검토 항목 |
 | [B2 순수 정책과 등급 누적](docs/b2-policy-and-taint.md) | 경계·AGT 판정, READ 누적·비교 모드, 버전과 성질 검증 |
@@ -67,9 +75,11 @@ A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_
 | [공통 에이전트 지침](AGENTS.md) | 모든 브랜치에 적용하는 작업 지침 |
 | [A 작업 현황](docs/tasks/a-progress.md) | 현재 구현, 실제 검증, 미완료 조건과 커밋 추적 |
 
-2026-10-13 현재 A 재검토 기준은 **`cd75bf9`**다. A의 최신 B 서비스 병합, AGT 대기/worker
-교체·실제 종료 확인, 한국어 UI와 미결 역할/규칙 관리 요청을 공동 검토 문서에 반영했다.
-A 자체 보고(전체 1,371개·별도 B 971개·합성 32경로)와 이번 정적 대조, 미합의 계약·C 독립 인수를 구분한다.
+2026-10-13 현재 A 재검토 기준은 **`ab82919`**, B 구현 시작 기준은 `9eb0560`이다.
+후속 QA-09까지 반영 후 B 전체 **1,614개 테스트·Ruff·포맷·mypy·의존성 검사**를 통과했다.
+A의 후속 Runner·transport·AGT·UI 수정과 B QA 요청은 [B 반영 기록](docs/b-qa-fixes-2026-10-13.md)에 정리했다.
+A 자체 보고(전체 1,485개·합성 32경로), B 단위 검증, 미합의 계약·C 독립 인수를 구분한다.
+이전 `cd75bf9` 기준의 AGT/연동 기록은 해당 시점의 근거로 보존한다.
 
 각 작업 브랜치에는 루트 `AGENT.md`와 `docs/tasks/` 아래 담당별 작업 문서가 추가로 있다. `AGENTS.md`에서 `AGENT.md`를 읽도록 연결했다. 브랜치의 `AGENT.md`는 현재 브랜치 이름으로 담당 문서를 선택한다.
 

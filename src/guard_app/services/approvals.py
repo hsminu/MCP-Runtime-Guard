@@ -15,6 +15,7 @@ from typing import Literal, Protocol
 
 from pydantic import ValidationError
 
+from guard_app.core.approval_time import approval_event_time
 from guard_app.core.snapshot import ApprovalSnapshot, make_snapshot
 from guard_app.domain.contracts import ApprovalRecord, Denied, Outcome
 from guard_app.domain.enums import ApprovalStatus, Decision, Label, TaskStatus
@@ -25,6 +26,7 @@ from guard_app.ports import Store
 from guard_app.security.digest import canonical_json, json_digest
 from guard_app.security.failclosed import fail_closed
 from guard_app.services.catalog import Catalog
+from guard_app.services.state_checks import checked_status_change
 
 
 class ApprovalConfigError(ValueError):
@@ -86,6 +88,14 @@ class _Reserved:
     monotonic_deadline: float
 
 
+@dataclass(frozen=True, slots=True)
+class _ClosingApproval:
+    """원문 없이 종결 중 승인의 Task lock 소유 관계만 유지한다."""
+
+    task_id: str
+    epoch: int
+
+
 _LIVE = (ApprovalStatus.PENDING, ApprovalStatus.APPROVED)
 _CONFIG_REASONS = (
     Reason.POLICY_CHANGED,
@@ -135,6 +145,7 @@ class ApprovalService:
         self._monotonic = monotonic
         self._ttl_seconds = ttl_seconds
         self._memory_snapshots: dict[str, ApprovalSnapshot] = {}
+        self._closing_approvals: dict[str, _ClosingApproval] = {}
         self._inflight_tasks: dict[str, str] = {}
         self._channel_key = object()
 
@@ -204,7 +215,7 @@ class ApprovalService:
             created_at_utc=now,
             expires_at_utc=snapshot.expires_at_utc,
         )
-        if approval.approval_id in self._memory_snapshots:
+        if self._approval_task_id(approval.approval_id) is not None:
             raise StoreError(Reason.APPROVAL_RACE)
         await self._store.create_approval(approval)
         self._memory_snapshots[approval.approval_id] = snapshot
@@ -213,16 +224,26 @@ class ApprovalService:
     async def invalidate_task(self, task_id: str, reason: Reason) -> None:
         """호출자가 이미 잡은 lock 안에서 원문 사본과 살아 있는 승인을 폐기한다."""
         approval_ids = tuple(
-            approval_id
-            for approval_id, snap in self._memory_snapshots.items()
-            if snap.task_id == task_id
+            dict.fromkeys(
+                [
+                    approval_id
+                    for approval_id, snap in self._memory_snapshots.items()
+                    if snap.task_id == task_id
+                ]
+                + [
+                    approval_id
+                    for approval_id, owner in self._closing_approvals.items()
+                    if owner.task_id == task_id
+                ]
+            )
         )
         for approval_id in approval_ids:
-            self._memory_snapshots.pop(approval_id, None)
+            self._discard_snapshot(approval_id)
         for approval_id in approval_ids:
             record = await self._load_approval(approval_id)
             if record is not None and record.status in _LIVE:
                 await self._transition(record, self._invalid_status(record), reason)
+            self._closing_approvals.pop(approval_id, None)
 
     async def _review(self, approval_id: str, operator_id: str) -> ApprovalSnapshot | None:
         """살아 있는 승인 사본을 사람 채널에만 읽기 전용으로 전달한다.
@@ -275,18 +296,13 @@ class ApprovalService:
         return await fail_closed(operation, on_error=on_error, on_containment_error=fallback)
 
     async def _approve(self, approval_id: str, operator_id: str) -> Outcome:
-        snapshot = self._memory_snapshots.get(approval_id)
-        task_id = self._inflight_tasks.get(approval_id) if snapshot is None else snapshot.task_id
+        task_id = self._approval_task_id(approval_id)
         if task_id is None:
-            prepared = await self._pre_boundary(
-                lambda: self._prepare_approval(approval_id, operator_id),
+            return await self._pre_boundary(
+                lambda: self._unknown_approval(approval_id),
                 approval_id=approval_id,
                 task_id=None,
             )
-            if isinstance(prepared, Denied):
-                return prepared
-            self._host.global_halt()
-            return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
         lock = await self._acquire_task_lock(task_id)
         if isinstance(lock, Denied):
             return lock
@@ -319,7 +335,6 @@ class ApprovalService:
             self._memory_snapshots.pop(approval_id, None)
             return self._denied(record, Reason.APPROVAL_RACE)
         if snapshot is None:
-            await self._transition(record, ApprovalStatus.EXPIRED, Reason.APPROVAL_CONTEXT_LOST)
             return self._denied(record, Reason.APPROVAL_CONTEXT_LOST)
         if (
             operator_id != self._approver_id
@@ -429,7 +444,7 @@ class ApprovalService:
             request_id=req.request_id,
             task_id=state.task_id,
             expected_security_version=state.security_version,
-            now_utc=now,
+            now_utc=approval_event_time(record, now),
         )
         if type(consumed) is not bool:
             raise StoreError(Reason.APPROVAL_RACE)
@@ -446,14 +461,15 @@ class ApprovalService:
             else:
                 self._memory_snapshots.pop(approval_id, None)
             return self._denied(record, Reason.APPROVAL_RACE)
+        # 예약 ACK 후에도 dispatch 위임까지 lock 소유 관계에 공백을 만들지 않는다.
+        self._inflight_tasks[approval_id] = snapshot.task_id
         self._memory_snapshots.pop(approval_id, None)
         return _Reserved(req, state, snapshot.expires_at_utc, snapshot.monotonic_deadline)
 
     async def _reject_or_expire(
         self, approval_id: str, operator_id: str, *, expire: bool
     ) -> Denied:
-        snapshot = self._memory_snapshots.get(approval_id)
-        task_id = None if snapshot is None else snapshot.task_id
+        task_id = self._approval_task_id(approval_id)
 
         async def operation() -> Denied:
             record = await self._load_approval(approval_id)
@@ -467,13 +483,8 @@ class ApprovalService:
                         record, snap, self._invalid_status(record), Reason.APPROVAL_CONTEXT_LOST
                     )
                     await self._halt_snapshot_task(snap, Reason.APPROVAL_CONTEXT_LOST)
-                else:
-                    await self._transition(
-                        record, self._invalid_status(record), Reason.APPROVAL_CONTEXT_LOST
-                    )
                 return self._denied(record, Reason.APPROVAL_CONTEXT_LOST)
             if snap is None:
-                await self._transition(record, ApprovalStatus.EXPIRED, Reason.APPROVAL_CONTEXT_LOST)
                 return self._denied(record, Reason.APPROVAL_CONTEXT_LOST)
             if (
                 record.request_id != snap.request.request_id
@@ -494,7 +505,11 @@ class ApprovalService:
             return self._denied(record, Reason.OK)
 
         if task_id is None:
-            return await self._pre_boundary(operation, approval_id=approval_id, task_id=None)
+            return await self._pre_boundary(
+                lambda: self._unknown_approval(approval_id),
+                approval_id=approval_id,
+                task_id=None,
+            )
         lock = await self._acquire_task_lock(task_id)
         if isinstance(lock, Denied):
             return lock
@@ -502,6 +517,39 @@ class ApprovalService:
             return await self._pre_boundary(operation, approval_id=approval_id, task_id=task_id)
         finally:
             lock.release()
+
+    def _has_task_context(self, task_id: str) -> bool:
+        """직접 조회 부재와 이미 알려진 승인 관계의 유실을 구분한다."""
+        return (
+            task_id in self._inflight_tasks.values()
+            or any(snapshot.task_id == task_id for snapshot in self._memory_snapshots.values())
+            or any(owner.task_id == task_id for owner in self._closing_approvals.values())
+        )
+
+    def _approval_task_id(self, approval_id: str) -> str | None:
+        snapshot = self._memory_snapshots.get(approval_id)
+        if snapshot is not None:
+            return snapshot.task_id
+        owner = self._closing_approvals.get(approval_id)
+        return self._inflight_tasks.get(approval_id) if owner is None else owner.task_id
+
+    def _discard_snapshot(self, approval_id: str) -> None:
+        snapshot = self._memory_snapshots.get(approval_id)
+        if snapshot is not None:
+            self._closing_approvals[approval_id] = _ClosingApproval(
+                snapshot.task_id, snapshot.request.epoch
+            )
+            self._memory_snapshots.pop(approval_id, None)
+
+    async def _unknown_approval(self, approval_id: str) -> Denied:
+        """Task 소유 관계를 추측하지 않고 재시작 후 행은 복구 처리에 남긴다."""
+        record = await self._load_approval(approval_id)
+        reason = (
+            Reason.APPROVAL_CONTEXT_LOST
+            if record is not None and record.status in _LIVE
+            else Reason.APPROVAL_RACE
+        )
+        return self._denied(record, reason)
 
     async def _cancel(self, task_id: str, operator_id: str) -> Denied:
         if operator_id != self._approver_id:
@@ -518,6 +566,22 @@ class ApprovalService:
         async def operation() -> Denied:
             if operator_id != self._approver_id:
                 return Denied(request_id=None, reasons=(Reason.APPROVAL_CONTEXT_LOST,))
+            try:
+                loaded = await self._store.load_task(task_id)
+            except StoreError as error:
+                if (
+                    type(error) is StoreError
+                    and error.reason is Reason.STATE_MISSING
+                    and not self._has_task_context(task_id)
+                ):
+                    return Denied(request_id=None, reasons=(Reason.STATE_MISSING,))
+                raise
+            try:
+                state = TaskState.model_validate(loaded)
+            except ValidationError:
+                raise _ApprovalTaskMismatchError() from None
+            if state.task_id != task_id:
+                raise _ApprovalTaskMismatchError()
             await self.invalidate_task(task_id, Reason.TASK_NOT_RUNNING)
             await self._host.halt_task(task_id, Reason.TASK_NOT_RUNNING)
             return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
@@ -539,33 +603,53 @@ class ApprovalService:
         *,
         resume: bool = False,
     ) -> None:
-        self._memory_snapshots.pop(record.approval_id, None)
+        self._discard_snapshot(record.approval_id)
         await self._transition(record, status, reason)
         if resume:
             state = await self._load_snapshot_task(snapshot)
             if not self._host.policy_matches(state):
                 await self._halt_snapshot_task(snapshot, Reason.POLICY_CHANGED)
             elif self._task_matches(snapshot, state):
-                await self._store.set_task_status(
+                returned = await self._store.set_task_status(
                     state.task_id,
                     TaskStatus.RUNNING,
                     expected_row_revision=state.row_revision,
                     at_utc=self._times()[0],
                     reason=reason,
                 )
+                try:
+                    checked_status_change(returned, state, TaskStatus.RUNNING)
+                except StoreError:
+                    raise _ApprovalTaskMismatchError() from None
+        self._closing_approvals.pop(record.approval_id, None)
 
     async def _transition(
         self, record: ApprovalRecord, status: ApprovalStatus, reason: Reason
     ) -> ApprovalRecord:
+        event_time = approval_event_time(record, self._times()[0])
         changed = await self._store.transition_approval(
             record.approval_id,
             status,
             expected_row_revision=record.row_revision,
             approver_id=self._approver_id,
-            now_utc=self._times()[0],
+            now_utc=event_time,
             reason=reason,
         )
-        return self._checked_approval(changed, record.approval_id)
+        result = self._checked_approval(changed, record.approval_id)
+        if (
+            result.request_id != record.request_id
+            or result.snapshot_hash != record.snapshot_hash
+            or result.approver_id != record.approver_id
+            or result.created_at_utc != record.created_at_utc
+            or result.expires_at_utc != record.expires_at_utc
+            or result.consumed_at_utc != record.consumed_at_utc
+            or result.status is not status
+            or result.row_revision != record.row_revision + 1
+            or result.decided_at_utc is None
+            or result.decided_at_utc < event_time
+        ):
+            raise _ApprovalRecordMismatchError()
+        return result
 
     async def _pre_boundary[T](
         self,
@@ -583,7 +667,7 @@ class ApprovalService:
                 self._host.global_halt()
                 for known_id, snap in tuple(self._memory_snapshots.items()):
                     if known_id == approval_id or (task_id is not None and snap.task_id == task_id):
-                        self._memory_snapshots.pop(known_id, None)
+                        self._discard_snapshot(known_id)
                 if task_id is None:
                     return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
                 return await self._host.pre_dispatch_failure(task_id, exc)
@@ -594,7 +678,7 @@ class ApprovalService:
                 self._host.global_halt()
             if task_id is None:
                 if approval_id is not None:
-                    self._memory_snapshots.pop(approval_id, None)
+                    self._discard_snapshot(approval_id)
                 self._host.global_halt()
                 return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
             await self.invalidate_task(task_id, Reason.INTERNAL_ERROR)

@@ -9,6 +9,7 @@ __pycache__/
 .hypothesis/
 build/
 dist/
+.test-artifacts/
 .mypy_cache/
 .ruff_cache/
 .env
