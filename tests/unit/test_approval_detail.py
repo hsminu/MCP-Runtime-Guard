@@ -54,10 +54,16 @@ def test_controls_bidi_and_confusables_have_unambiguous_visible_codes() -> None:
     assert "\\x00" in rendered
     assert "\\t" in rendered
     assert "\\n\n" in rendered
-    assert "한\\uD55C" in rendered
+    assert rendered.endswith("한")
+    assert visible_review_text("분기 보고서 한글") == "분기 보고서 한글"
     assert "\u200b" not in rendered
     assert "\u202e" not in rendered
     assert source == "Aа\\u200B\u200b\u202e\x00\t\n한"
+
+
+def test_cyrillic_hostname_is_visible_but_plain_korean_remains_readable():
+    assert "\\u0430" in visible_review_text("https://аррӏе.com/분기")
+    assert visible_review_text("분기 보고서") == "분기 보고서"
 
 
 def test_markup_links_and_remote_images_remain_literal_plain_text(

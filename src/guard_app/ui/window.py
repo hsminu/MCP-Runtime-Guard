@@ -193,6 +193,7 @@ class GuardWindow(QMainWindow):
         )
         self.task_status_card = TaskStatusCard()
         task_layout.addWidget(self.task_status_card)
+        self.runtime_layout = task_layout
         task_layout.addStretch(1)
         self._page_indices["runs"] = self.stack.addWidget(_scroll_page(task_page))
         for page in PAGES:

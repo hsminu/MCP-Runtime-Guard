@@ -1,5 +1,6 @@
 # 공통 계약 체크리스트
 
+> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
 담당은 B, 사용자는 A·C다. `domain/*`와 `ports.py` 변경은 3인 합의 대상이다. 이 문서는 [개발문서](technical-design.md) 0.5·3·7–12장의 계약 요구를 정리한 **미확정 체크리스트**다. 실제 코드의 모든 메서드·반환형을 이미 정의했다는 뜻은 아니다.
 
 ## 합의할 계약
@@ -11,7 +12,7 @@
 | Transport | B / A | 서버별 세션 소유 worker, 명령 future의 성공·예외 확정, 원시 결과 격리, 쓰기 자동 재전송 금지 | 9장 |
 | AccessChecker | B / A | 요청·신뢰 맥락 입력, `AccessResult` 반환, 거절·오류는 DENY, 형식 불명·시간초과는 `error=True` | 10.3절 |
 | Scanner | B / C | 정의 metadata만 입력, 필수·완료·skip·failed 분석기와 지문 집합을 명시 | 10.2절 |
-| Store | B / C | 상태·감사·예약·승인 조회와 아래 세 원자적 연산 | 8.3·11장 |
+| Store | B / B | 상태·감사·예약·승인 조회와 아래 세 원자적 연산 | 8.3·11장 |
 | ModelClient | B / A | 대화와 ACTIVE 등록 ToolView 입력, ModelTurn 반환, 새 Task에서 대화·캐시 분리 | 6.5·10.4절 |
 | Registry 조회 | B와 C 합의 / C | status·fingerprint는 저장된 등록 레코드가 근거, 변경 시 PENDING·승인 무효 | 10.1절 |
 | UI 명령·이벤트 | B와 A·C 합의 / A | 불변 메시지, 실행·제어 큐 분리, 상태 확정은 백엔드, 원시 결과 공개 금지 | 8.5·12장 |
@@ -81,3 +82,17 @@
 | --- | --- | --- | --- | --- | --- |
 
 해결되지 않은 사항은 미확정 상태로 남기고, 구현 중 발견한 설계 충돌은 근거 절과 영향을 적어 합의한다. 제공받은 원본 사본을 조용히 고쳐 합의된 것으로 만들지 않는다.
+
+## 2026-10-13 A 리뷰 수정 연결
+
+- B 기준 `f22968c`: `GuardService.submit(..., expected_epoch=runner.epoch)`를 연결한다.
+- 사람용 `HumanControl.review(approval_id)`는 같은 메모리 승인 사본만 반환한다.
+  운영자·상태·만료·해시·Task 맥락을 검증하며 일반 모델/API에 노출하지 않는다.
+- Guard와 ApprovalService 내부 stop 협력 함수는 잠금 이전 요청 기록과 예약 전 재검사를 연결한다.
+- A bridge 내부 TaskProjection·ApprovalReview는 불변이고 command/Task/epoch로 오래된 응답을 배제한다.
+  domain·ports 공통 DTO를 동결하거나 C 조회 API를 대신한 것이 아니다.
+- SQLite·영속 감사는 B6 소유다. `agt_mode`와 rule version의 영속 저장은 B6 계약/스키마 후속이다.
+- AGT 입력 최소화·경계·규칙 담당·timeout의 제안은 [리뷰 반영 기록](tasks/a-review-fixes.md#agt-경계와-남은-결정)을 따른다.
+- 사용자 요청으로 A 개발 명세·lock을 추가했다. 실제 AGT/Scanner까지 검증한 제품 lock은 아니다.
+
+이 절은 이번 사용자 수정 요청과 구현 연결을 기록한다. A·B·C의 별도 합의 서명은 여전히 미확정이다.

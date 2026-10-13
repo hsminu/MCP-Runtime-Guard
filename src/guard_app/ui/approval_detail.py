@@ -7,6 +7,7 @@ does not fetch, serialize, hash, approve, or retain that snapshot.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
 
@@ -60,15 +61,24 @@ def visible_review_text(value: str) -> str:
 
     Original backslashes are doubled, so an actual ``\\u200B`` cannot imitate
     the codepoint notation used for an invisible U+200B. Printable non-ASCII
-    characters keep their glyph plus their codepoint. Controls, marks, spaces
+    characters in mixed-script tokens keep their glyph plus codepoint. Controls, marks, spaces
     with special width, and right-to-left runs use only codepoint notation.
     This display-only conversion never changes the input or approval bytes.
     """
 
     if type(value) is not str:
         raise TypeError("approval detail text has invalid type")
+    suspicious: set[int] = set()
+    # Keep hostname labels and URL/path segments together: a Cyrillic-only
+    # label followed by Latin .com is still a mixed-script receiving target.
+    for token in re.finditer(r"[\w./:@-]+", value, re.UNICODE):
+        scripts = {
+            unicodedata.name(char, "UNKNOWN").split()[0] for char in token.group() if char.isalpha()
+        }
+        if len(scripts) > 1:
+            suspicious.update(range(token.start(), token.end()))
     pieces: list[str] = []
-    for char in value:
+    for index, char in enumerate(value):
         number = ord(char)
         if char == "\\":
             pieces.append("\\\\")
@@ -86,8 +96,10 @@ def visible_review_text(value: str) -> str:
             or char.isspace()
         ):
             pieces.append(_codepoint(char))
-        else:
+        elif index in suspicious or unicodedata.normalize("NFKC", char) != char:
             pieces.append(f"{char}{_codepoint(char)}")
+        else:
+            pieces.append(char)
     return "".join(pieces)
 
 

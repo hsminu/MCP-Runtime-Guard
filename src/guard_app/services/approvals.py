@@ -40,6 +40,10 @@ class ApprovalHost(Protocol):
 
     def task_lock(self, task_id: str) -> asyncio.Lock: ...
 
+    def request_stop(self, task_id: str) -> None: ...
+
+    def check_stop(self, task_id: str) -> None: ...
+
     def policy_matches(self, state: TaskState) -> bool: ...
 
     def effective_task_label(self, state: TaskState) -> Label: ...
@@ -216,6 +220,33 @@ class ApprovalService:
             if record is not None and record.status in _LIVE:
                 await self._transition(record, self._invalid_status(record), reason)
 
+    async def _review(self, approval_id: str, operator_id: str) -> ApprovalSnapshot | None:
+        """Human-only memory view; never rebuild arguments from audit storage."""
+        if operator_id != self._approver_id:
+            return None
+        snapshot = self._memory_snapshots.get(approval_id)
+        if snapshot is None:
+            return None
+        async with self._host.task_lock(snapshot.task_id):
+            record = await self._store.get_approval(approval_id)
+            if (
+                self._memory_snapshots.get(approval_id) is not snapshot
+                or record is None
+                or record.status is not ApprovalStatus.PENDING
+                or record.approver_id != operator_id
+                or snapshot.approver_id != operator_id
+                or record.snapshot_hash != snapshot.hash
+                or record.request_id != snapshot.request.request_id
+                or record.expires_at_utc != snapshot.expires_at_utc
+                or self._expired(snapshot)
+            ):
+                return None
+            state = await self._load_snapshot_task(snapshot)
+            self._host.check_stop(snapshot.task_id)
+            if not self._host.policy_matches(state) or not self._task_matches(snapshot, state):
+                return None
+            return snapshot
+
     async def _approve(self, approval_id: str, operator_id: str) -> Outcome:
         snapshot = self._memory_snapshots.get(approval_id)
         task_id = self._inflight_tasks.get(approval_id) if snapshot is None else snapshot.task_id
@@ -364,6 +395,7 @@ class ApprovalService:
                 record, snapshot, ApprovalStatus.EXPIRED, Reason.APPROVAL_STALE, resume=True
             )
             return self._denied(record, Reason.APPROVAL_STALE)
+        self._host.check_stop(state.task_id)
         consumed = await self._store.consume_and_reserve(
             approval_id=record.approval_id,
             snapshot_hash=current.hash,
@@ -445,6 +477,11 @@ class ApprovalService:
             lock.release()
 
     async def _cancel(self, task_id: str, operator_id: str) -> Denied:
+        if operator_id != self._approver_id:
+            return Denied(request_id=None, reasons=(Reason.APPROVAL_CONTEXT_LOST,))
+        # Record intent before acquiring the lock held by an AGT recheck.
+        self._host.request_stop(task_id)
+
         async def operation() -> Denied:
             if operator_id != self._approver_id:
                 return Denied(request_id=None, reasons=(Reason.APPROVAL_CONTEXT_LOST,))
@@ -625,6 +662,9 @@ class HumanControl:
             raise ApprovalConfigError("승인 제어 채널은 신뢰 초기화 경로에서만 만든다")
         self._service = service
         self._operator_id = operator_id
+
+    async def review(self, approval_id: str) -> ApprovalSnapshot | None:
+        return await self._service._review(approval_id, self._operator_id)
 
     async def approve(self, approval_id: str) -> Outcome:
         return await self._service._approve(approval_id, self._operator_id)

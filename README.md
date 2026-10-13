@@ -1,8 +1,35 @@
 # MCP Runtime Guard
 
+> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](docs/tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-`feat/a-application`에는 B 보안 코어 초안 사본과 A의 transport·Runner·bridge·Qt 읽기 화면, 단위 테스트가 있다. 전체 앱을 시작하는 조립 경로와 C의 Registry·저장소·fixture·CI는 아직 연결되지 않았다. **작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/tasks/a-progress.md)**이다. 아래 설계 설명은 전체 제품의 목표이며, A 단위 구현을 제품 인수 완료로 해석하지 않는다.
+현재 A 브랜치에는 보안 코어·transport·Runner·Qt 앱의 **합성 개발 경로**가 있다.
+실제 stdio MCP 서버와 왕복하지만 Store·Registry는 B 단위 대역이며 AGT·모델은 mock이다.
+제품용 SQLite·C launcher·HTTP·실제 AGT/모델 인수는 아직 완료하지 않았다.
+작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/tasks/a-progress.md)이다.
+
+## 설치와 실행
+
+Python 3.12와 [uv](https://docs.astral.sh/uv/)를 사용한다. winget의 특정 패치 버전을 요구하지 않는다.
+uv가 `.python-version`의 3.12를 설치하며 이번 검증은 CPython 3.12.15에서 실행했다.
+
+```powershell
+uv sync --locked
+uv run python -m guard_app --demo
+uv run python -m guard_app --demo --scenario deny
+uv run python -m examples.verify_stdio_spike
+uv run pytest -q
+```
+
+저장소 루트에서 실행한다. `--demo` 없는 제품 시작은 아직 제공하지 않는다.
+실행 탭에서 실행 → 승인 사본 확인 → 승인 → 다음 모델 단계를 누른다.
+합성 INTERNAL 읽기 후 ASK, 승인 뒤 SEND 한 번이 기본 경로다.
+`--scenario allow`는 PUBLIC, `--scenario deny`는 CONFIDENTIAL 읽기를 사용한다.
+실제 외부 목적지로 보내지 않고 합성 서버 내부 계수만 올린다.
+
+B 기준 갱신 시 소스와 B 테스트를 함께 대조한 뒤 `uv run pytest -q`를 실행한다.
+A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_approvals.py`로 분리했다.
+
 
 ## 개발 문서
 
@@ -21,8 +48,8 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | 담당 | 작업 브랜치 | 주요 책임 | 브랜치별 작업 문서 |
 | --- | --- | --- | --- |
 | A · 애플리케이션 | `feat/a-application` | MCP transport, AGT 연결, 모델·Runner, Qt↔asyncio bridge, GUI | `docs/tasks/a-application.md` |
-| B · 보안 코어 | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트 | `docs/tasks/b-security-core.md` |
-| C · 보안 기반·검증 | `feat/c-security-platform` | SQLite, 위험 연산 모듈, 서버 등록·Scanner, fixture·계수, 통합·공격·실험, CI | `docs/tasks/c-security-platform.md` |
+| B · 보안 코어 | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트·SQLite | `docs/tasks/b-security-core.md` |
+| C · 보안 기반·검증 | `feat/c-security-platform` | 위험 연산 모듈, 서버 등록·Scanner, fixture·계수, 통합·공격·실험, CI | `docs/tasks/c-security-platform.md` |
 
 브랜치 이름은 담당 범위를 나타낸다. 실제 담당자 이름은 아직 지정하지 않았다. `main`은 공통 기준 문서와 리뷰를 마친 변경을 모으는 브랜치다.
 
@@ -79,7 +106,7 @@ flowchart LR
 | `services` | Guard·승인·응답 게이트(B), Runner·bridge(A), registry(C) | 역할별 분담 |
 | `adapters` | MCP·AGT·모델(A), Cisco Scanner(C) | 역할별 분담 |
 | `security` | 위험 연산(C), 예외 판정 변환·승인 해시(B) | 역할별 분담 |
-| `storage` | SQLite와 원자적 트랜잭션 | C |
+| `storage` | SQLite와 원자적 트랜잭션 | B, C 검증 |
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
 | `fixtures`, 테스트, CI | 실제 수신 계수로 집행을 검증 | C 주도 |
 
@@ -104,15 +131,7 @@ flowchart LR
 
 ## 개발 환경과 진행 순서
 
-설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. 현재 A 개발 환경의 설치 버전은 [연동 기록](docs/integration-notes.md)에 있다. 전체 제품의 의존성 조합과 lock은 실제 stdio·HTTP 왕복 및 AGT·Scanner 호환 검증 뒤 확정한다.
-
-현재 A 작업 디렉터리에 준비된 `.venv`로 단위 테스트를 실행하는 명령은 다음과 같다. 이 검사는 합성 대역을 포함하며 실제 MCP 왕복이나 C 수신 계수를 대신하지 않는다.
-
-```powershell
-$env:PYTHONPATH='src'
-$env:QT_QPA_PLATFORM='offscreen'
-.\.venv\Scripts\python.exe -m pytest tests -q
-```
+설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. A 앱·B 단위 검증 조합은 pyproject.toml과 uv.lock에 고정했고, AGT·Scanner 실제 조합은 미확정이다. 개발문서 부록 A의 실제 stdio·HTTP 왕복과 AGT·Scanner 호환 검증을 거친 조합만 고정한다.
 
 1. 세 사람이 공통 문서와 각자의 `AGENT.md`·작업 문서를 읽는다.
 2. B가 모델·포트·명령·이벤트 계약을 제안하고 A·C와 확정한다.

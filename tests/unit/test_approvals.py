@@ -1,498 +1,968 @@
-"""A33 page boundaries and stale read-only approval presentation."""
+"""B5 I2/I3/I6/I7/I9/T09–T12/T20/T37의 서비스 단위 검증.
 
-from __future__ import annotations
+Store·Host는 이 파일 전용 대역이다. SQLite 원자성, UI 제어 큐나 실제 wire
+계수를 검증하지 않는다. dispatch 목록은 Host 위임 횟수만 뜻한다.
+"""
 
-import os
-from dataclasses import replace
+import asyncio
 from datetime import UTC, datetime, timedelta
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from typing import cast
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QBoxLayout, QPushButton, QScrollArea
 
-from guard_app.domain.enums import ApprovalStatus
-from guard_app.ui.approvals import (
-    PAGE_SIZE,
-    ApprovalLane,
-    ApprovalListPage,
-    ApprovalPage,
-    ApprovalSort,
-    ApprovalSummary,
+from guard_app.core.policy import evaluate
+from guard_app.domain.contracts import ApprovalRecord, Denied, RegisteredServer, Withheld
+from guard_app.domain.enums import (
+    ApprovalStatus,
+    Decision,
+    Label,
+    RegStatus,
+    TaskStatus,
+    ToolKind,
+    TrustTier,
 )
-from guard_app.ui.models import LoadState
+from guard_app.domain.errors import StoreError
+from guard_app.domain.models import (
+    AccessResult,
+    Boundary,
+    PolicyDecision,
+    PolicyInput,
+    ProposedCall,
+    ResolvedRequest,
+    TaskState,
+    ToolSpec,
+)
+from guard_app.domain.reasons import Reason
+from guard_app.ports import Store
+from guard_app.services.approvals import ApprovalConfigError, ApprovalService, HumanControl
+from guard_app.services.catalog import Catalog
 
-NOW = datetime(2026, 10, 12, 5, 0, tzinfo=UTC)
-
-
-@pytest.fixture(scope="module")
-def app() -> QApplication:
-    instance = QApplication.instance()
-    return instance if instance is not None else QApplication([])
-
-
-def summary(
-    number: int,
-    *,
-    status: ApprovalStatus = ApprovalStatus.PENDING,
-    created_at: datetime | None = None,
-    destination: str = "내부 저장소",
-) -> ApprovalSummary:
-    return ApprovalSummary(
-        approval_id=f"approval-{number:03}",
-        task_id=f"task-{number:03}",
-        request_id=f"request-{number:03}",
-        server_id="server-a",
-        destination_summary=destination,
-        status=status,
-        created_at=created_at or NOW - timedelta(minutes=number),
-        resolved_at=NOW if status is not ApprovalStatus.PENDING else None,
-    )
+_NO_OVERRIDE = object()
 
 
-def result(
-    page: ApprovalListPage,
-    rows: tuple[ApprovalSummary, ...],
-    total: int,
-) -> ApprovalPage:
-    query = page.current_query
-    assert query is not None
-    return ApprovalPage(query=query, rows=rows, total_count=total, as_of=NOW)
+class _Clock:
+    def __init__(self) -> None:
+        self.utc = datetime(2026, 10, 11, tzinfo=UTC)
+        self.mono = 100.0
+
+    def utc_now(self) -> datetime:
+        return self.utc
+
+    def monotonic(self) -> float:
+        return self.mono
 
 
-def test_empty_error_and_loading_are_not_reported_as_zero(app: QApplication) -> None:
-    view = ApprovalListPage()
-    requested = []
-    view.query_requested.connect(requested.append)
-    assert view.state is LoadState.UNAVAILABLE
-    assert "미제공" in view.count_label.text()
+class _Registry:
+    def __init__(self, registration: RegisteredServer) -> None:
+        self.record = registration
+        self.current_status = RegStatus.ACTIVE
+        self.current_fingerprint = registration.tools[0].fingerprint
 
-    view.refresh()
-    query = requested[-1]
-    assert query.page == 1
-    assert query.page_size == PAGE_SIZE
-    assert query.lane is ApprovalLane.PENDING
-    assert query.sort is ApprovalSort.OLDEST
-    assert view.state is LoadState.LOADING
-    assert "미제공" in view.count_label.text()
-    assert view.set_error(query)
-    assert view.state is LoadState.ERROR
-    assert "불러오지 못함" in view.state_message.message.text()
-    assert "미제공" in view.count_label.text()
+    def registration(self, server_id: str) -> RegisteredServer | None:
+        return self.record if server_id == self.record.server_id else None
 
-    view.refresh()
-    assert not view.set_error(query)  # previous response must not replace new query
-    assert view.set_page(result(view, (), 0), display_now=NOW)
-    assert view.state is LoadState.READY
-    assert view.count_label.text() == "전체 0건 · 현재 페이지 0건"
-    assert view.page_label.text() == "1 / 1"
-    assert "대기 중인 승인 요청이 없어" in view.state_message.message.text()
-    assert not view.previous_button.isEnabled()
-    assert not view.next_button.isEnabled()
+    def status(self, server_id: str) -> RegStatus | None:
+        return self.current_status if server_id == self.record.server_id else None
+
+    def fingerprint(self, tool: ToolSpec) -> str | None:
+        return self.current_fingerprint
 
 
-@pytest.mark.parametrize("total", [1, 6, 7, 122])
-def test_page_counts_and_boundaries(app: QApplication, total: int) -> None:
-    view = ApprovalListPage()
-    view.refresh()
-    pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
-    for page_number in range(1, pages + 1):
-        query = view.current_query
-        assert query is not None and query.page == page_number
-        # Every page uses the backend's global oldest-first order.
-        start = (page_number - 1) * PAGE_SIZE
-        count = min(PAGE_SIZE, total - start)
-        rows = tuple(
-            summary(number, created_at=NOW + timedelta(seconds=number))
-            for number in range(start, start + count)
+class _Store:
+    def __init__(self, state: TaskState, *, bump_status_version: bool = False) -> None:
+        self.state = state
+        self.approvals: dict[str, ApprovalRecord] = {}
+        self.consumed: list[str] = []
+        self.statuses: list[TaskStatus] = []
+        self.fail: str | None = None
+        self.consume_result = True
+        self.bump_status_version = bump_status_version
+        self.mutate_waiting: dict[str, object] = {}
+        self.on_consume = None
+        self.transition_errors = 0
+        self.consume_return_override = _NO_OVERRIDE
+
+    async def load_task(self, task_id: str) -> TaskState:
+        if self.fail == "load":
+            raise StoreError()
+        assert task_id == self.state.task_id
+        return self.state
+
+    async def set_task_status(self, task_id, status, *, expected_row_revision, at_utc, reason):
+        if self.fail == "set_status":
+            raise StoreError()
+        assert task_id == self.state.task_id
+        assert expected_row_revision == self.state.row_revision
+        assert self.state.status not in (TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME)
+        update = {"status": status, "row_revision": self.state.row_revision + 1}
+        if self.bump_status_version:
+            update["security_version"] = self.state.security_version + 1
+        if status is TaskStatus.WAITING_APPROVAL:
+            update.update(self.mutate_waiting)
+        self.state = self.state.model_copy(update=update)
+        self.statuses.append(status)
+        return self.state
+
+    async def create_approval(self, approval: ApprovalRecord):
+        if self.fail == "create":
+            raise StoreError()
+        assert approval.approval_id not in self.approvals
+        self.approvals[approval.approval_id] = approval
+
+    async def get_approval(self, approval_id):
+        if self.fail == "get":
+            raise StoreError()
+        return self.approvals.get(approval_id)
+
+    async def transition_approval(
+        self, approval_id, status, *, expected_row_revision, approver_id, now_utc, reason
+    ):
+        if self.fail == "transition":
+            raise StoreError()
+        if self.transition_errors:
+            self.transition_errors -= 1
+            raise ValueError("RAW_ARGUMENT_MARKER")
+        record = self.approvals[approval_id]
+        assert record.row_revision == expected_row_revision
+        allowed = {
+            ApprovalStatus.PENDING: {
+                ApprovalStatus.APPROVED,
+                ApprovalStatus.REJECTED,
+                ApprovalStatus.EXPIRED,
+                ApprovalStatus.CANCELLED,
+            },
+            ApprovalStatus.APPROVED: {ApprovalStatus.INVALIDATED, ApprovalStatus.EXPIRED},
+        }
+        assert status in allowed[record.status]
+        record = record.model_copy(
+            update={
+                "status": status,
+                "row_revision": record.row_revision + 1,
+                "decided_at_utc": now_utc,
+            }
         )
-        assert view.set_page(result(view, rows, total), display_now=NOW)
-        assert view.table.rowCount() == count
-        assert view.count_label.text() == (f"전체 {total:,}건 · 현재 페이지 {count}건")
-        assert view.page_label.text() == f"{page_number} / {pages}"
-        assert view.previous_button.isEnabled() is (page_number > 1)
-        assert view.next_button.isEnabled() is (page_number < pages)
-        view.next_page()
-    assert view.current_query is not None
-    assert view.current_query.page == pages
-    if pages > 1:
-        view.previous_page()
-        assert view.current_query.page == pages - 1
+        self.approvals[approval_id] = record
+        return record
+
+    async def consume_and_reserve(
+        self,
+        *,
+        approval_id,
+        snapshot_hash,
+        request_id,
+        task_id,
+        expected_security_version,
+        now_utc,
+    ):
+        if self.fail == "consume":
+            raise StoreError()
+        record = self.approvals[approval_id]
+        assert record.status is ApprovalStatus.APPROVED
+        assert record.snapshot_hash == snapshot_hash
+        assert record.request_id == request_id
+        assert self.state.task_id == task_id
+        assert self.state.status is TaskStatus.WAITING_APPROVAL
+        assert self.state.security_version == expected_security_version
+        assert record.expires_at_utc > now_utc
+        if self.consume_return_override is not _NO_OVERRIDE:
+            return self.consume_return_override
+        if self.on_consume is not None:
+            self.on_consume()
+        if not self.consume_result:
+            return False
+        self.approvals[approval_id] = record.model_copy(
+            update={
+                "status": ApprovalStatus.CONSUMED,
+                "consumed_at_utc": now_utc,
+                "row_revision": record.row_revision + 1,
+            }
+        )
+        self.state = self.state.model_copy(
+            update={"status": TaskStatus.RUNNING, "row_revision": self.state.row_revision + 1}
+        )
+        self.consumed.append(approval_id)
+        return True
 
 
-def test_stale_response_filter_change_and_disappearing_last_page(
-    app: QApplication,
-) -> None:
-    view = ApprovalListPage()
-    requests = []
-    view.query_requested.connect(requests.append)
-    view.refresh()
-    old_query = requests[-1]
-    view.search.setText("task-")
-    view.search.editingFinished.emit()
-    assert view.current_query is not None
-    assert view.current_query.search == "task-"
-    assert not view.set_page(ApprovalPage(old_query, (summary(1),), 1), display_now=NOW)
-    assert view.table.rowCount() == 0
-    first_six = tuple(summary(number) for number in range(6, 0, -1))
-    assert view.set_page(result(view, first_six, 7), display_now=NOW)
-    view.next_page()
-    old_last = requests[-1]
-    assert old_last.page == 2
-    # A concurrent resolution shrank the result to one page.
-    assert not view.set_page(ApprovalPage(old_last, (), 6), display_now=NOW)
-    assert requests[-1].page == 1
-    assert requests[-1].token > old_last.token
-    assert view.state is LoadState.LOADING
-    assert not view.set_error(old_last)
+class _Host:
+    def __init__(self, store: _Store, registry: _Registry, clock: _Clock) -> None:
+        self.store, self.registry, self.clock = store, registry, clock
+        self.lock = asyncio.Lock()
+        self.policy_version = "policy-1"
+        self.profile_id = "default"
+        self.dispatched: list[ResolvedRequest] = []
+        self.phases: list[str] = []
+        self.halted: list[Reason] = []
+        self.globally_halted = False
+        self.force_decision: Decision | None = None
+        self.fail: str | None = None
+        self.recheck_hook = None
+        self.dispatch_started = None
+        self.dispatch_finish = None
+        self.service: ApprovalService | None = None
+        self.dispatch_expiry: tuple[datetime, float] | None = None
+
+    def task_lock(self, task_id: str) -> asyncio.Lock:
+        assert task_id == self.store.state.task_id
+        return self.lock
+
+    def request_stop(self, task_id):
+        self.stopped = task_id
+
+    def check_stop(self, task_id):
+        if getattr(self, "stopped", None) == task_id:
+            raise StoreError(Reason.TASK_NOT_RUNNING)
+
+    def policy_matches(self, state: TaskState) -> bool:
+        return (
+            not self.globally_halted
+            and state.policy_version == self.policy_version
+            and state.profile_id == self.profile_id
+        )
+
+    def effective_task_label(self, state: TaskState) -> Label:
+        return state.high_watermark
+
+    async def evaluate_request(self, req, state, *, phase):
+        assert self.lock.locked()
+        self.phases.append(phase)
+        if self.fail == "evaluate":
+            raise ValueError("RAW_ARGUMENT_MARKER")
+        if self.recheck_hook is not None:
+            self.recheck_hook()
+        decision = evaluate(
+            PolicyInput(
+                request=req,
+                state=state,
+                effective_label=state.high_watermark,
+                registration_status=self.registry.current_status,
+                registered_fingerprint=self.registry.current_fingerprint,
+                access=AccessResult(allowed=True, error=False, reason=""),
+                policy_version=self.policy_version,
+                phase=phase,
+            )
+        )
+        if self.force_decision is not None:
+            return decision.model_copy(update={"decision": self.force_decision})
+        return decision
+
+    async def dispatch_reserved(self, req, state, *, expires_at_utc=None, monotonic_deadline=None):
+        assert self.lock.locked()
+        assert self.store.approvals["approval-1"].status is ApprovalStatus.CONSUMED
+        assert self.service is not None
+        assert not self.service._memory_snapshots
+        assert type(expires_at_utc) is datetime
+        assert type(monotonic_deadline) is float
+        self.dispatch_expiry = (expires_at_utc, monotonic_deadline)
+        self.dispatched.append(req)
+        if self.dispatch_started is not None:
+            self.dispatch_started.set()
+        if self.dispatch_finish is not None:
+            await self.dispatch_finish.wait()
+        return Withheld(request_id=req.request_id, reasons=(Reason.POST_DISPATCH_ERROR,))
+
+    async def halt_task(self, task_id, reason, *, expected_epoch=None):
+        if expected_epoch is not None and (
+            task_id != self.store.state.task_id or self.store.state.epoch != expected_epoch
+        ):
+            raise StoreError(Reason.APPROVAL_STALE)
+        self.halted.append(reason)
+        self.store.state = self.store.state.model_copy(
+            update={
+                "status": TaskStatus.HALTED,
+                "security_version": self.store.state.security_version + 1,
+                "row_revision": self.store.state.row_revision + 1,
+            }
+        )
+        return self.store.state
+
+    def global_halt(self):
+        self.globally_halted = True
+
+    async def pre_dispatch_failure(self, task_id, exc):
+        if self.fail == "containment":
+            raise StoreError()
+        if isinstance(exc, StoreError):
+            self.global_halt()
+        return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
 
 
-def test_pending_and_history_are_separate_and_selection_is_not_reassigned(
-    app: QApplication,
-) -> None:
-    view = ApprovalListPage()
-    selected = []
-    view.summary_selected.connect(selected.append)
-    view.refresh()
-    initial = (summary(2), summary(1))
-    assert view.set_page(result(view, initial, 2), display_now=NOW)
-    view.table.selectRow(0)
-    assert view.selected_summary == initial[0]
-
-    view.refresh()
-    assert selected[-1] is None
-    assert view.selected_summary is None
-    assert view.set_page(result(view, (summary(1),), 1), display_now=NOW)
-    assert view.selected_summary is None
-    assert view.table.currentRow() == -1
-
-    view.lane_tabs.setCurrentIndex(1)
-    assert view.current_query is not None
-    assert view.current_query.lane is ApprovalLane.HISTORY
-    assert view.table.rowCount() == 0
-    history = summary(4, status=ApprovalStatus.REJECTED)
-    assert view.set_page(result(view, (history,), 1), display_now=NOW)
-    assert "거절됨" in view.table.item(0, 4).text()
-    assert not view.set_page(result(view, (summary(5),), 1), display_now=NOW)
-    assert view.state is LoadState.ERROR  # pending status in history is invalid
-
-
-def test_clearing_selection_does_not_retain_current_row(app: QApplication) -> None:
-    view = ApprovalListPage()
-    selected = []
-    view.summary_selected.connect(selected.append)
-    view.refresh()
-    rows = (summary(2), summary(1))
-    assert view.set_page(result(view, rows, 2), display_now=NOW)
-    view.table.selectRow(0)
-    assert view.selected_summary == rows[0]
-    assert selected[-1] == rows[0]
-
-    view.table.clearSelection()
-    assert view.table.currentRow() == 0  # Qt retains a current index.
-    assert view.selected_summary is None
-    assert selected[-1] is None
-
-
-def test_target_selection_stays_within_loaded_page(app: QApplication) -> None:
-    view = ApprovalListPage()
-    requests = []
-    view.query_requested.connect(requests.append)
-    assert not view.select_approval("approval-001")
-    view.refresh()
-    rows = (summary(2), summary(1))
-    assert view.set_page(result(view, rows, 2), display_now=NOW)
-    assert view.select_approval("approval-001")
-    assert view.selected_summary == rows[1]
-    assert not view.select_approval("approval-999")
-    assert view.selected_summary is None
-    assert len(requests) == 1
-    assert view.current_query is requests[0]
-
-
-@pytest.mark.parametrize("rows", [(), (summary(1),)])
-def test_incomplete_backend_page_is_error_not_empty_success(
-    app: QApplication, rows: tuple[ApprovalSummary, ...]
-) -> None:
-    view = ApprovalListPage()
-    view.refresh()
-    assert not view.set_page(result(view, rows, 7), display_now=NOW)
-    assert view.state is LoadState.ERROR
-    assert view.table.rowCount() == 0
-    assert "미제공" in view.count_label.text()
-    assert "불러오지 못함" in view.state_message.message.text()
-    assert "대기 중인 승인 요청이 없어" not in view.state_message.message.text()
-
-
-def test_equal_time_ties_require_stable_id_order_and_no_raw_actions(
-    app: QApplication,
-) -> None:
-    view = ApprovalListPage()
-    view.refresh()
-    rows = (
-        summary(1, created_at=NOW),
-        summary(2, created_at=NOW),
+def _setup(*, bump_status_version=False, ttl_seconds=300):
+    state = TaskState(
+        task_id="task-1",
+        epoch=2,
+        profile_id="default",
+        policy_version="policy-1",
+        high_watermark=Label.INTERNAL,
+        status=TaskStatus.RUNNING,
     )
-    assert not view.set_page(result(view, tuple(reversed(rows)), 2), display_now=NOW)
-    assert view.state is LoadState.ERROR
-    view.refresh()
-    assert view.set_page(result(view, rows, 2), display_now=NOW)
-    assert view.table.item(0, 0).text() == "approval-001"
-    assert not hasattr(rows[0], "arguments")
-    assert not hasattr(rows[0], "arguments_bytes")
-    buttons = [button.text() for button in view.findChildren(QPushButton)]
-    assert "승인" not in buttons
-    assert "거절" not in buttons
-
-
-def test_filter_and_newest_sort_request_backend_wide_order(app: QApplication) -> None:
-    view = ApprovalListPage()
-    requests = []
-    view.query_requested.connect(requests.append)
-    view.refresh()
-    view.server_filter.setText("server-a")
-    view.server_filter.editingFinished.emit()
-    view.sort.setCurrentIndex(1)
-    newest = requests[-1]
-    assert newest.server_id == "server-a"
-    assert newest.sort is ApprovalSort.NEWEST
-    rows = (
-        summary(2, created_at=NOW),
-        summary(1, created_at=NOW),
+    tool = ToolSpec(
+        server_id="sender",
+        tool_name="send",
+        kind=ToolKind.SEND,
+        input_schema={
+            "type": "object",
+            "required": ["destination", "body"],
+            "properties": {"destination": {"type": "string"}, "body": {"type": "string"}},
+        },
+        destination_arg="destination",
+        resource_arg=None,
+        fingerprint="a" * 64,
     )
-    assert view.set_page(result(view, rows, 2), display_now=NOW)
-    assert view.table.item(0, 0).text() == "approval-002"
-    assert view.current_query is not None
-    assert view.current_query.page == 1
+    registry = _Registry(
+        RegisteredServer(
+            server_id="sender",
+            status=RegStatus.ACTIVE,
+            boundary=Boundary(
+                boundary_id="server", tier=TrustTier.INTERNAL, max_label=Label.CONFIDENTIAL
+            ),
+            tools=(tool,),
+        )
+    )
+    catalog = Catalog(
+        registry,
+        profile_id="default",
+        destinations=(
+            Boundary(
+                boundary_id="external", tier=TrustTier.GENERAL_EXTERNAL, max_label=Label.INTERNAL
+            ),
+        ),
+    )
+    req = catalog.resolve(
+        state,
+        ProposedCall(
+            tool_ref="sender__send",
+            arguments={
+                "destination": "external",
+                "body": "RAW_ARGUMENT_MARKER",
+            },
+            model_call_id="model-untrusted",
+        ),
+        request_id="request-1",
+        call_seq=9,
+    )
+    decision = PolicyDecision(
+        decision=Decision.ASK,
+        reasons=(Reason.INTERNAL_TO_EXTERNAL,),
+        verdicts=(),
+        policy_version="policy-1",
+        security_version=0,
+    )
+    store, clock = _Store(state, bump_status_version=bump_status_version), _Clock()
+    host = _Host(store, registry, clock)
+    service = ApprovalService(
+        cast(Store, store),
+        catalog,
+        host,
+        approver_id="operator-1",
+        approval_id_factory=lambda: "approval-1",
+        utc_now=clock.utc_now,
+        monotonic=clock.monotonic,
+        ttl_seconds=ttl_seconds,
+    )
+    host.service = service
+    return service, store, host, clock, registry, req, state, decision
+
+
+async def _open(setup):
+    service, _, host, _, _, req, state, decision = setup
+    async with host.lock:
+        return await service.open(req, state, decision)
+
+
+@pytest.mark.parametrize("bump", [False, True])
+def test_open_freezes_waiting_returned_version_and_only_persists_metadata(bump):
+    async def scenario():
+        setup = _setup(bump_status_version=bump)
+        service, store, host, _, _, req, _, _ = setup
+        approval = await _open(setup)
+        snapshot = service._memory_snapshots[approval.approval_id]
+        assert snapshot.state.status is TaskStatus.WAITING_APPROVAL
+        assert snapshot.state.security_version == store.state.security_version == int(bump)
+        assert snapshot.decision.security_version == snapshot.state.security_version
+        assert snapshot.request == req
+        assert snapshot.hash == approval.snapshot_hash
+        assert "RAW_ARGUMENT_MARKER" not in approval.model_dump_json()
+        assert "RAW_ARGUMENT_MARKER" not in repr(snapshot)
+        assert not host.dispatched
+        assert not store.consumed
+        assert not host.lock.locked()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("decision", [Decision.ALLOW, Decision.DENY])
+def test_open_only_accepts_running_ask(decision):
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, req, state, initial = setup
+        async with host.lock:
+            with pytest.raises(StoreError):
+                await service.open(req, state, initial.model_copy(update={"decision": decision}))
+        assert store.state.status is TaskStatus.RUNNING
+        assert not store.approvals
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
-    ("width", "visible_columns", "stacked"),
+    ("field", "value"),
     [
-        (320, (0, 1, 4), True),
-        (540, (0, 1, 4), True),
-        (760, (0, 1, 4, 5), False),
-        (980, (0, 1, 2, 3, 4, 5), False),
+        ("high_watermark", Label.CONFIDENTIAL),
+        ("profile_id", "other"),
+        ("policy_version", "changed"),
+        ("epoch", 3),
+        ("unclassified", True),
     ],
 )
-def test_table_and_controls_fit_viewport_at_multiple_widths(
-    app: QApplication,
-    width: int,
-    visible_columns: tuple[int, ...],
-    stacked: bool,
-) -> None:
-    view = ApprovalListPage()
-    view.resize(width, 580)
-    view.show()
-    try:
-        view.refresh()
-        rows = tuple(summary(number) for number in range(6, 0, -1))
-        assert view.set_page(result(view, rows, 6), display_now=NOW)
-        app.processEvents()
-        QTest.qWait(20)
-        app.processEvents()
-        assert view.width() == width
-        assert (
-            tuple(i for i in range(6) if not view.table.isColumnHidden(i))
-            == visible_columns
+def test_open_rejects_security_context_mutation_during_waiting_transition(field, value):
+    async def scenario():
+        setup = _setup()
+        setup[1].mutate_waiting[field] = value
+        with pytest.raises(StoreError):
+            await _open(setup)
+        assert not setup[1].approvals
+        assert not setup[0]._memory_snapshots
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("bump", [False, True])
+def test_approved_ask_rechecks_consumes_and_dispatches_same_request_once(bump):
+    async def scenario():
+        setup = _setup(bump_status_version=bump)
+        service, store, host, _, _, req, _, _ = setup
+        approval = await _open(setup)
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Withheld)
+        assert store.consumed == [approval.approval_id]
+        assert host.dispatched == [req]
+        assert host.phases == ["approval_recheck"]
+        assert host.dispatch_expiry == (approval.expires_at_utc, 400.0)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.CONSUMED
+        assert not service._memory_snapshots
+        assert not host.lock.locked()
+        again = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(again, Denied)
+        assert again.reasons == (Reason.APPROVAL_RACE,)
+        assert len(host.dispatched) == len(store.consumed) == 1
+
+    asyncio.run(scenario())
+
+
+def test_double_click_is_serialized_and_waits_through_dispatch_completion():
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, _, _ = setup
+        host.dispatch_started, host.dispatch_finish = asyncio.Event(), asyncio.Event()
+        approval = await _open(setup)
+        control = service.human_channel("operator-1")
+        first = asyncio.create_task(control.approve(approval.approval_id))
+        await host.dispatch_started.wait()
+        second = asyncio.create_task(control.approve(approval.approval_id))
+        await asyncio.sleep(0)
+        assert host.lock.locked()
+        assert not second.done()
+        assert len(store.consumed) == len(host.dispatched) == 1
+        host.dispatch_finish.set()
+        result1, result2 = await asyncio.gather(first, second)
+        assert isinstance(result1, Withheld)
+        assert isinstance(result2, Denied)
+        assert len(store.consumed) == len(host.dispatched) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("which", ["utc", "monotonic", "both"])
+def test_either_clock_expires_pending_before_approval(which):
+    async def scenario():
+        setup = _setup()
+        service, store, host, clock, _, _, _, _ = setup
+        approval = await _open(setup)
+        if which in ("utc", "both"):
+            clock.utc += timedelta(seconds=300)
+        if which in ("monotonic", "both"):
+            clock.mono += 300
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Denied)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.EXPIRED
+        assert store.state.status is TaskStatus.RUNNING
+        assert not host.phases
+        assert not host.dispatched
+        assert not store.consumed
+        assert not service._memory_snapshots
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("which", ["utc", "monotonic"])
+def test_expiry_during_recheck_prevents_consume(which):
+    async def scenario():
+        setup = _setup()
+        service, store, host, clock, _, _, _, _ = setup
+        approval = await _open(setup)
+
+        def cross_deadline():
+            if which == "utc":
+                clock.utc += timedelta(seconds=300)
+            else:
+                clock.mono += 300
+
+        host.recheck_hook = cross_deadline
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Denied)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.EXPIRED
+        assert not host.dispatched
+        assert not store.consumed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["reject", "expire"])
+def test_reject_or_expire_discards_memory_and_safely_resumes(mode):
+    async def scenario():
+        setup = _setup(bump_status_version=True)
+        service, store, host, clock, _, _, _, _ = setup
+        approval = await _open(setup)
+        control = service.human_channel("operator-1")
+        if mode == "expire":
+            clock.mono += 300
+            await control.expire(approval.approval_id)
+            expected = ApprovalStatus.EXPIRED
+        else:
+            await control.reject(approval.approval_id)
+            expected = ApprovalStatus.REJECTED
+        assert store.approvals[approval.approval_id].status is expected
+        assert store.state.status is TaskStatus.RUNNING
+        assert not service._memory_snapshots
+        assert not host.dispatched
+        await control.approve(approval.approval_id)
+        assert not host.dispatched
+
+    asyncio.run(scenario())
+
+
+def test_expire_command_cannot_force_early_expiry():
+    async def scenario():
+        setup = _setup()
+        approval = await _open(setup)
+        result = await setup[0].human_channel("operator-1").expire(approval.approval_id)
+        assert result.reasons == (Reason.APPROVAL_RACE,)
+        assert setup[1].approvals[approval.approval_id].status is ApprovalStatus.PENDING
+        assert setup[1].state.status is TaskStatus.WAITING_APPROVAL
+        assert setup[0]._memory_snapshots
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("action", ["cancel", "emergency_halt"])
+def test_cancel_and_emergency_halt_do_not_wait_for_human_or_resume(action):
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, state, _ = setup
+        approval = await _open(setup)
+        await getattr(service.human_channel("operator-1"), action)(state.task_id)
+        assert store.state.status is TaskStatus.HALTED
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.CANCELLED
+        assert not service._memory_snapshots
+        assert not host.lock.locked()
+        await service.human_channel("operator-1").approve(approval.approval_id)
+        assert not host.dispatched
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("decision", [Decision.ALLOW, Decision.DENY])
+def test_recheck_allow_or_deny_invalidates_and_never_consumes(decision):
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, _, _ = setup
+        approval = await _open(setup)
+        host.force_decision = decision
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Denied)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.INVALIDATED
+        assert not store.consumed
+        assert not host.dispatched
+        assert store.state.status is TaskStatus.RUNNING
+        assert not service._memory_snapshots
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["profile", "policy", "fingerprint", "registration", "version"])
+def test_security_or_registration_change_halts_and_invalidates(change):
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, registry, _, _, _ = setup
+        approval = await _open(setup)
+        if change == "profile":
+            host.profile_id = "changed"
+        elif change == "policy":
+            host.policy_version = "changed"
+        elif change == "fingerprint":
+            registry.current_fingerprint = "b" * 64
+        elif change == "registration":
+            registry.current_status = RegStatus.PENDING
+        else:
+            store.state = store.state.model_copy(update={"security_version": 9})
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Denied)
+        assert store.approvals[approval.approval_id].status in (
+            ApprovalStatus.CANCELLED,
+            ApprovalStatus.INVALIDATED,
         )
-        assert view.table.horizontalScrollBar().maximum() == 0
-        direction = (
-            QBoxLayout.Direction.TopToBottom
-            if stacked
-            else QBoxLayout.Direction.LeftToRight
+        assert store.state.status is TaskStatus.HALTED
+        assert not host.dispatched
+        assert not store.consumed
+        assert not service._memory_snapshots
+
+    asyncio.run(scenario())
+
+
+def test_changed_destination_with_same_id_changes_snapshot_hash_and_cannot_execute():
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, registry, _, _, _ = setup
+        approval = await _open(setup)
+        service._catalog = Catalog(
+            registry,
+            profile_id="default",
+            destinations=(
+                Boundary(
+                    boundary_id="external",
+                    tier=TrustTier.APPROVED_EXTERNAL,
+                    max_label=Label.INTERNAL,
+                ),
+            ),
         )
-        assert view.filters.direction() == direction
-        assert view.pager.direction() == direction
-        for control in (
-            view.search,
-            view.server_filter,
-            view.sort,
-            view.previous_button,
-            view.next_button,
-            view.refresh_button,
-        ):
-            assert control.geometry().right() < width
-    finally:
-        view.close()
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert result.reasons == (Reason.APPROVAL_STALE,)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.INVALIDATED
+        assert not store.consumed
+        assert not host.dispatched
+
+    asyncio.run(scenario())
 
 
-def test_narrow_keyboard_selection_shows_only_public_summary(app: QApplication) -> None:
-    view = ApprovalListPage()
-    view.resize(320, 580)
-    view.show()
-    try:
-        view.refresh()
-        row = summary(1)
-        assert view.set_page(result(view, (row,), 1), display_now=NOW)
-        view.table.setFocus()
-        QTest.keyClick(view.table, Qt.Key.Key_Down)
-        QTest.keyClick(view.table, Qt.Key.Key_Space)
-        assert view.selected_summary == row
-        assert view.selection_detail.isVisible()
-        detail = view.selection_detail.toPlainText()
-        assert row.approval_id in detail
-        assert row.task_id in detail
-        assert row.server_id in detail
-        assert "요청 시각" in detail
-        assert not hasattr(row, "arguments")
-        view.table.setFocus()
-        QTest.keyClick(view.table, Qt.Key.Key_Tab)
-        assert not view.table.hasFocus()
-    finally:
-        view.close()
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("snapshot_hash", "b" * 64),
+        ("request_id", "other-request"),
+        ("approver_id", "other-operator"),
+    ],
+)
+def test_persisted_approval_metadata_mismatch_fails_closed(field, value):
+    async def scenario():
+        setup = _setup()
+        approval = await _open(setup)
+        setup[1].approvals[approval.approval_id] = approval.model_copy(update={field: value})
+        result = await setup[0].human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Denied)
+        assert setup[1].state.status is TaskStatus.HALTED
+        assert not setup[1].consumed
+        assert not setup[2].dispatched
+
+    asyncio.run(scenario())
 
 
-def test_public_summary_cannot_spoof_status_line(app: QApplication) -> None:
-    view = ApprovalListPage()
-    view.resize(320, 580)
-    view.show()
-    try:
-        view.refresh()
-        row = replace(
-            summary(1, destination="대상\n상태: 승인됨\u202e"),
-            server_id="server\r\n상태: 승인됨",
+def test_restart_context_is_not_restored_from_hash_only_record():
+    async def scenario():
+        setup = _setup()
+        approval = await _open(setup)
+        service, store, host, clock, _, _, _, _ = setup
+        restarted = ApprovalService(
+            cast(Store, store),
+            service._catalog,
+            host,
+            approver_id="operator-1",
+            approval_id_factory=lambda: "unused",
+            utc_now=clock.utc_now,
+            monotonic=clock.monotonic,
         )
-        assert view.set_page(result(view, (row,), 1), display_now=NOW)
-        view.table.selectRow(0)
-        lines = view.selection_detail.toPlainText().splitlines()
-        assert len(lines) == 6
-        assert lines[1] == "상태: 승인 대기"
-        assert "\\u000A" in lines[0]
-        assert "\\u000A" in lines[3]
-        assert "\\u202E" in lines[3]
-        assert all(line != "상태: 승인됨" for line in lines)
-    finally:
-        view.close()
+        result = await restarted.human_channel("operator-1").approve(approval.approval_id)
+        assert result.reasons == (Reason.APPROVAL_CONTEXT_LOST,)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.EXPIRED
+        assert not restarted._memory_snapshots
+        assert not host.dispatched
+        assert not store.consumed
+        assert store.state.status is TaskStatus.WAITING_APPROVAL
+
+    asyncio.run(scenario())
 
 
-def test_scroll_host_can_shrink_from_full_to_narrow_without_page_overflow(
-    app: QApplication,
-) -> None:
-    view = ApprovalListPage()
-    host = QScrollArea()
-    host.setWidgetResizable(True)
-    host.setWidget(view)
-    host.resize(1050, 650)
-    host.show()
-    try:
-        app.processEvents()
-        assert view.filters.direction() == QBoxLayout.Direction.LeftToRight
-        host.resize(320, 580)
-        app.processEvents()
-        QTest.qWait(20)
-        app.processEvents()
-        assert view.filters.direction() == QBoxLayout.Direction.TopToBottom
-        assert host.horizontalScrollBar().maximum() == 0
-        assert view.table.horizontalScrollBar().maximum() == 0
-    finally:
-        host.close()
+def test_consume_conflict_invalidates_without_dispatch():
+    async def scenario():
+        setup = _setup()
+        approval = await _open(setup)
+        setup[1].consume_result = False
+        result = await setup[0].human_channel("operator-1").approve(approval.approval_id)
+        assert result.reasons == (Reason.APPROVAL_RACE,)
+        assert setup[1].approvals[approval.approval_id].status is ApprovalStatus.INVALIDATED
+        assert not setup[1].consumed
+        assert not setup[2].dispatched
+        assert not setup[0]._memory_snapshots
+
+    asyncio.run(scenario())
 
 
-def test_waiting_hint_does_not_expire_or_interpret_markup(app: QApplication) -> None:
-    view = ApprovalListPage()
-    view.refresh()
-    long_wait = summary(
-        1,
-        created_at=NOW - timedelta(minutes=31),
-        destination='<img src="https://bad.invalid/pixel">',
-    )
-    assert view.set_page(result(view, (long_wait,), 1), display_now=NOW)
-    assert "30분 이상 대기(참고)" in view.table.item(0, 4).text()
-    assert "승인 대기" in view.table.item(0, 4).text()
-    assert view.table.item(0, 3).text() == long_wait.destination_summary
-    assert view.selected_summary is None
+@pytest.mark.parametrize("failure", ["get", "load", "transition", "consume", "evaluate"])
+def test_preconsume_exception_never_dispatches_and_discards_raw_memory(failure):
+    async def scenario():
+        setup = _setup()
+        approval = await _open(setup)
+        if failure == "evaluate":
+            setup[2].fail = "evaluate"
+        else:
+            setup[1].fail = failure
+        result = await setup[0].human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Denied)
+        assert result.reasons == (Reason.INTERNAL_ERROR,)
+        assert "RAW_ARGUMENT_MARKER" not in result.model_dump_json()
+        assert not setup[1].consumed
+        assert not setup[2].dispatched
+        assert not setup[0]._memory_snapshots
+        if setup[1].state.status is not TaskStatus.HALTED:
+            assert setup[2].globally_halted
+
+    asyncio.run(scenario())
 
 
-def test_320_by_400_approval_row_shows_bounded_age_with_identity_and_status(
-    app: QApplication,
-) -> None:
-    view = ApprovalListPage()
-    host = QScrollArea()
-    host.setWidgetResizable(True)
-    host.setWidget(view)
-    host.resize(320, 400)
-    host.show()
-    try:
-        view.refresh()
-        row = summary(1, created_at=NOW - timedelta(minutes=31))
-        assert view.set_page(result(view, (row,), 1), display_now=NOW)
-        app.processEvents()
-        QTest.qWait(20)
-        app.processEvents()
+def test_containment_failure_activates_global_halt_and_returns_fixed_denial():
+    async def scenario():
+        setup = _setup()
+        approval = await _open(setup)
+        setup[1].fail, setup[2].fail = "get", "containment"
+        result = await setup[0].human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Denied)
+        assert setup[2].globally_halted
+        assert not setup[2].dispatched
+        assert not setup[0]._memory_snapshots
 
-        assert host.width() == 320 and host.height() == 400
-        assert tuple(i for i in range(6) if not view.table.isColumnHidden(i)) == (
-            0,
-            1,
-            4,
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("operator", ["", "other-operator", 1, True])
+def test_only_preconfigured_human_operator_gets_control_capability(operator):
+    setup = _setup()
+    with pytest.raises(ApprovalConfigError):
+        setup[0].human_channel(operator)
+    assert not hasattr(setup[0], "approve")
+    with pytest.raises(ApprovalConfigError):
+        HumanControl(setup[0], "operator-1", object())
+
+
+@pytest.mark.parametrize("ttl", [0, -1, True, 1.5, "300"])
+def test_ttl_configuration_is_strict_positive_integer(ttl):
+    with pytest.raises(ApprovalConfigError):
+        _setup(ttl_seconds=ttl)
+
+
+def test_unknown_approval_returns_fixed_denial_without_execution():
+    async def scenario():
+        setup = _setup()
+        control = setup[0].human_channel("operator-1")
+        for command in (control.approve, control.reject, control.expire):
+            result = await command("unknown")
+            assert isinstance(result, Denied)
+            assert result.request_id is None
+        assert not setup[1].consumed
+        assert not setup[2].dispatched
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("command", ["approve", "reject", "cancel"])
+def test_cancellation_while_waiting_for_task_lock_is_contained(command):
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, state, _ = setup
+        approval = await _open(setup)
+        await host.lock.acquire()
+        control = service.human_channel("operator-1")
+        identifier = state.task_id if command == "cancel" else approval.approval_id
+        queued = asyncio.create_task(getattr(control, command)(identifier))
+        await asyncio.sleep(0)
+        assert not queued.done()
+        queued.cancel()
+        result = await queued
+        assert isinstance(result, Denied)
+        assert host.globally_halted
+        assert store.state.status is TaskStatus.WAITING_APPROVAL
+        assert not host.dispatched
+        assert not store.consumed
+        host.lock.release()
+
+    asyncio.run(scenario())
+
+
+def test_known_resolution_error_during_recheck_invalidates_approved_and_halts():
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, _, _ = setup
+        approval = await _open(setup)
+
+        async def changed_definition(req, state, *, phase):
+            from guard_app.domain.errors import ResolutionError
+
+            raise ResolutionError(Reason.TOOL_FINGERPRINT_CHANGED)
+
+        host.evaluate_request = changed_definition
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Denied)
+        assert result.reasons == (Reason.TOOL_FINGERPRINT_CHANGED,)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.INVALIDATED
+        assert store.state.status is TaskStatus.HALTED
+        assert not service._memory_snapshots
+        assert not host.dispatched
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("which", ["security", "policy", "task", "epoch", "unclassified"])
+def test_open_rejects_stale_initial_decision_or_request_before_waiting_transition(which):
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, req, state, decision = setup
+        if which == "security":
+            decision = decision.model_copy(update={"security_version": 2})
+        elif which == "policy":
+            decision = decision.model_copy(update={"policy_version": "other-policy"})
+        elif which == "task":
+            req = req.model_copy(update={"task_id": "other-task"})
+        elif which == "epoch":
+            req = req.model_copy(update={"epoch": 99})
+        else:
+            state = state.model_copy(update={"unclassified": True})
+        async with host.lock:
+            with pytest.raises(StoreError):
+                await service.open(req, state, decision)
+        assert store.state.status is TaskStatus.RUNNING
+        assert not store.statuses
+        assert not store.approvals
+        assert not service._memory_snapshots
+
+    asyncio.run(scenario())
+
+
+def test_global_halt_raised_during_recheck_prevents_consume():
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, _, _ = setup
+        approval = await _open(setup)
+        host.recheck_hook = host.global_halt
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert result.reasons == (Reason.POLICY_CHANGED,)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.INVALIDATED
+        assert store.state.status is TaskStatus.HALTED
+        assert not store.consumed
+        assert not host.dispatched
+
+    asyncio.run(scenario())
+
+
+def test_last_read_experiment_metadata_alone_does_not_invalidate_accumulate_snapshot():
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, _, _ = setup
+        approval = await _open(setup)
+        store.state = store.state.model_copy(update={"last_read_label": Label.PUBLIC})
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Withheld)
+        assert len(store.consumed) == len(host.dispatched) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("command", ["reject", "expire"])
+def test_termination_command_cannot_resume_with_mismatched_persisted_request(command):
+    async def scenario():
+        setup = _setup()
+        service, store, host, clock, _, _, _, _ = setup
+        approval = await _open(setup)
+        store.approvals[approval.approval_id] = approval.model_copy(
+            update={"request_id": "other-request"}
         )
-        assert view.table.item(0, 0).text() == row.approval_id
-        assert view.table.item(0, 1).text() == row.server_id
-        status = view.table.item(0, 4)
-        assert status.text() == "승인 대기\n31분 대기"
-        assert "요청 시각: 2026년 10월 12일 13:29:00 KST" in status.toolTip()
-        assert "요청 시각: 2026년 10월 12일 13:29:00 KST" in status.data(
-            Qt.ItemDataRole.AccessibleTextRole
-        )
-        metrics = view.table.fontMetrics()
-        assert view.table.viewport().height() >= 2 * metrics.lineSpacing() + 4
-        assert view.table.columnWidth(4) >= max(
-            metrics.horizontalAdvance(line) + 8 for line in status.text().splitlines()
-        )
-        assert view.table.horizontalScrollBar().maximum() == 0
-        assert host.horizontalScrollBar().maximum() == 0
+        clock.mono += 300
+        result = await getattr(service.human_channel("operator-1"), command)(approval.approval_id)
+        assert result.reasons == (Reason.APPROVAL_STALE,)
+        assert store.state.status is TaskStatus.HALTED
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.CANCELLED
+        assert not store.consumed
+        assert not host.dispatched
 
-        host.resize(980, 700)
-        app.processEvents()
-        QTest.qWait(20)
-        app.processEvents()
-        assert "30분 이상 대기(참고)" in status.text()
-        assert "31분 대기" not in status.text()
-        assert view.table.horizontalScrollBar().maximum() == 0
-    finally:
-        host.close()
+    asyncio.run(scenario())
 
 
-def test_narrow_row_does_not_invent_elapsed_time_from_future_request(
-    app: QApplication,
-) -> None:
-    view = ApprovalListPage()
-    view.resize(320, 580)
-    view.show()
-    try:
-        view.refresh()
-        future = summary(1, created_at=NOW + timedelta(minutes=5))
-        assert view.set_page(result(view, (future,), 1), display_now=NOW)
-        app.processEvents()
-        status = view.table.item(0, 4)
-        assert status.text() == "승인 대기\n요청 시각 확인"
-        assert "2026년 10월 12일 14:05:00 KST" in status.toolTip()
-        assert view.table.horizontalScrollBar().maximum() == 0
+def test_error_after_snapshot_removal_still_terminalizes_live_approval():
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, _, _ = setup
+        approval = await _open(setup)
+        store.transition_errors = 1
+        result = await service.human_channel("operator-1").reject(approval.approval_id)
+        assert result.reasons == (Reason.INTERNAL_ERROR,)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.CANCELLED
+        assert store.state.status is TaskStatus.HALTED
+        assert not service._memory_snapshots
+        assert not host.dispatched
 
-        view.refresh()
-        missing = replace(summary(1), created_at=None)
-        assert not view.set_page(result(view, (missing,), 1), display_now=NOW)
-        assert view.state is LoadState.ERROR
-        assert view.table.rowCount() == 0
-    finally:
-        view.close()
+    asyncio.run(scenario())
 
 
-def test_narrow_approved_row_does_not_imply_tool_execution(app: QApplication) -> None:
-    view = ApprovalListPage()
-    view.resize(320, 400)
-    view.show()
-    try:
-        view.lane_tabs.setCurrentIndex(1)
-        row = summary(1, status=ApprovalStatus.APPROVED)
-        assert view.set_page(result(view, (row,), 1), display_now=NOW)
-        app.processEvents()
-        status = view.table.item(0, 4)
-        assert status.text() == "승인됨\n결과 별도 확인"
-        assert "실행 결과 별도 확인" in status.toolTip()
-        assert view.table.horizontalScrollBar().maximum() == 0
-    finally:
-        view.close()
+def test_removed_destination_invalidates_approval_and_halts_waiting_task():
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, registry, _, _, _ = setup
+        approval = await _open(setup)
+        service._catalog = Catalog(registry, profile_id="default", destinations=())
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert result.reasons == (Reason.UNKNOWN_DESTINATION,)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.INVALIDATED
+        assert store.state.status is TaskStatus.HALTED
+        assert not service._memory_snapshots
+        assert not store.consumed
+        assert not host.dispatched
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reason", [Reason.INVALID_ARGUMENTS, Reason.INTERNAL_ERROR])
+def test_known_recheck_resolution_failure_never_leaves_orphan_waiting_task(reason):
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, _, _ = setup
+        approval = await _open(setup)
+
+        async def unresolved(req, state, *, phase):
+            from guard_app.domain.errors import ResolutionError
+
+            raise ResolutionError(reason)
+
+        host.evaluate_request = unresolved
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert result.reasons == (reason,)
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.INVALIDATED
+        assert store.state.status is TaskStatus.HALTED
+        assert not service._memory_snapshots
+        assert not store.consumed
+        assert not host.dispatched
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("ack", [None, 0, 1, "false"])
+def test_consume_ack_requires_exact_boolean_before_dispatch(ack):
+    async def scenario():
+        setup = _setup()
+        service, store, host, _, _, _, _, _ = setup
+        approval = await _open(setup)
+        store.consume_return_override = ack
+        result = await service.human_channel("operator-1").approve(approval.approval_id)
+        assert isinstance(result, Denied)
+        assert host.globally_halted
+        assert not host.dispatched
+        assert not service._memory_snapshots
+
+    asyncio.run(scenario())

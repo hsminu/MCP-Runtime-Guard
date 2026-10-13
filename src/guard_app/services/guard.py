@@ -135,6 +135,7 @@ class GuardService:
         self._access_timeout = float(access_timeout_seconds)
         self._locks: dict[str, asyncio.Lock] = {}
         self._global_halt = False
+        self._stop_requests: dict[str, asyncio.Event] = {}
         self._gate = ResponseGate(
             store,
             catalog,
@@ -157,22 +158,28 @@ class GuardService:
         """A의 인증된 제어 채널에만 전달한다. 모델 ToolView에 포함하지 않는다."""
         return self._approvals.human_channel(operator_id)
 
-    async def submit(self, task_id: str, call: ProposedCall) -> Outcome:
-        """I1·I4·I5: WAITING 중에는 반환하며 사람을 기다리는 lock은 없다."""
+    async def submit(
+        self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
+    ) -> Outcome:
+        """I1·I4·I5·I7: 신뢰 호출자의 epoch를 lock 안에서 확인한다."""
         return await fail_closed(
-            lambda: self._submit_locked(task_id, call),
+            lambda: self._submit_locked(task_id, call, expected_epoch=expected_epoch),
             lambda exc: self._pre_dispatch_failure(task_id, exc),
             on_containment_error=self._pre_failure_fallback,
         )
 
-    async def _submit_locked(self, task_id: str, call: ProposedCall) -> Outcome:
+    async def _submit_locked(
+        self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
+    ) -> Outcome:
         if type(task_id) is not str or not task_id:
+            raise ResolutionError(Reason.STATE_MISSING)
+        if expected_epoch is not None and (type(expected_epoch) is not int or expected_epoch < 0):
             raise ResolutionError(Reason.STATE_MISSING)
         if self._global_halt:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
         async with self._task_lock(task_id):
             decided = await fail_closed(
-                lambda: self._decide(task_id, call),
+                lambda: self._decide(task_id, call, expected_epoch=expected_epoch),
                 lambda exc: self._pre_dispatch_failure(task_id, exc),
                 on_containment_error=self._pre_failure_fallback,
             )
@@ -183,6 +190,17 @@ class GuardService:
     def _task_lock(self, task_id: str) -> asyncio.Lock:
         return self._locks.setdefault(task_id, asyncio.Lock())
 
+    def _request_stop(self, task_id: str) -> None:
+        """Authenticated control only; latch before waiting for the Task lock."""
+        if type(task_id) is not str or not task_id:
+            raise ResolutionError(Reason.STATE_MISSING)
+        self._stop_requests.setdefault(task_id, asyncio.Event()).set()
+
+    def _check_stop(self, task_id: str) -> None:
+        event = self._stop_requests.get(task_id)
+        if event is not None and event.is_set():
+            raise ResolutionError(Reason.TASK_NOT_RUNNING)
+
     def _policy_matches(self, state: TaskState) -> bool:
         return (
             not self._global_halt
@@ -190,12 +208,17 @@ class GuardService:
             and state.policy_version == self._policy_version
         )
 
-    async def _decide(self, task_id: str, call: ProposedCall) -> _Allowed | Denied | Pending:
+    async def _decide(
+        self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
+    ) -> _Allowed | Denied | Pending:
+        self._check_stop(task_id)
         if self._global_halt:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
         state = TaskState.model_validate(await self._store.load_task(task_id))
         if state.task_id != task_id:
             raise StoreError(Reason.STATE_MISSING)
+        if expected_epoch is not None and state.epoch != expected_epoch:
+            return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
         if not self._policy_matches(state):
             await self._halt_task(task_id, Reason.POLICY_CHANGED)
             await self._approvals.invalidate_task(task_id, Reason.POLICY_CHANGED)
@@ -218,6 +241,7 @@ class GuardService:
             arguments_digest=json_digest(req.arguments.to_dict()),
             at_utc=self._utc_now(),
         )
+        self._check_stop(task_id)
         if decision.decision is Decision.DENY:
             return Denied(request_id=req.request_id, reasons=decision.reasons)
         if decision.decision is Decision.ASK:
@@ -237,6 +261,7 @@ class GuardService:
         *,
         phase: Literal["submit", "approval_recheck"],
     ) -> PolicyDecision:
+        self._check_stop(req.task_id)
         if self._global_halt:
             raise ResolutionError(Reason.INTERNAL_ERROR)
         if not self._policy_matches(state):
@@ -260,13 +285,8 @@ class GuardService:
         )
         if preliminary.decision is Decision.DENY:
             return preliminary
-        try:
-            async with asyncio.timeout(self._access_timeout):
-                access = await self._access_checker.check_access(
-                    req, TrustedContext(state=state, operator_id=self._operator_id)
-                )
-        except TimeoutError:
-            access = AccessResult(allowed=False, reason="", error=True)
+        access = await self._wait_for_access(req, state)
+        self._check_stop(req.task_id)
         # await 중 등록 상태나 지문이 바뀌어도 현재 값을 다시 검사한다.
         fingerprint = self._registry.fingerprint(req.tool)
         if fingerprint is None:
@@ -283,6 +303,39 @@ class GuardService:
                 phase=phase,
             )
         )
+
+    async def _wait_for_access(self, req: ResolvedRequest, state: TaskState) -> AccessResult:
+        stop = self._stop_requests.setdefault(req.task_id, asyncio.Event())
+        work = asyncio.create_task(
+            self._access_checker.check_access(
+                req, TrustedContext(state=state, operator_id=self._operator_id)
+            )
+        )
+        interrupted = asyncio.create_task(stop.wait())
+        # A checker that suppresses cancellation must not keep the Task lock.
+        # Its late value is discarded and its exception never reaches a logger.
+        work.add_done_callback(self._discard_access_result)
+        try:
+            done, _ = await asyncio.wait(
+                {work, interrupted},
+                timeout=self._access_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            self._check_stop(req.task_id)
+            if work not in done:
+                return AccessResult(allowed=False, reason="", error=True)
+            try:
+                return work.result()
+            except TimeoutError:
+                return AccessResult(allowed=False, reason="", error=True)
+        finally:
+            work.cancel()
+            interrupted.cancel()
+
+    @staticmethod
+    def _discard_access_result(work: asyncio.Task[AccessResult]) -> None:
+        if not work.cancelled():
+            work.exception()
 
     async def _dispatch_reserved(
         self,
@@ -351,6 +404,7 @@ class GuardService:
                 or self._utc_now() >= expires_at_utc
             ):
                 raise ResolutionError(Reason.APPROVAL_STALE)
+        self._check_stop(req.task_id)
         raw = await self._transport.call(req)
         return await self._gate.handle(req, raw, expected_state=state)
 
@@ -451,6 +505,12 @@ class _ApprovalHost:
 
     def task_lock(self, task_id: str) -> asyncio.Lock:
         return self._guard._task_lock(task_id)
+
+    def request_stop(self, task_id: str) -> None:
+        self._guard._request_stop(task_id)
+
+    def check_stop(self, task_id: str) -> None:
+        self._guard._check_stop(task_id)
 
     def policy_matches(self, state: TaskState) -> bool:
         return self._guard._policy_matches(state)

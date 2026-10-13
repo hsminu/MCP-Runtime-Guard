@@ -116,9 +116,7 @@ class TaskRunner:
         self._catalog = catalog
         self._store = store
         self._server_ids = server_ids
-        self._conversation = [
-            ConversationMessage(role="system", content=system_message)
-        ]
+        self._conversation = [ConversationMessage(role="system", content=system_message)]
         self._seen_call_ids: set[str] = set()
         self._pending: Pending | None = None
         self._pending_call_id: str | None = None
@@ -128,6 +126,16 @@ class TaskRunner:
         self._stopped = False
         self._closed = False
         self._lock = asyncio.Lock()
+
+    @property
+    def can_advance(self) -> bool:
+        return not (
+            self._closed
+            or self._stopped
+            or self._pending
+            or self._awaiting_user
+            or self._lock.locked()
+        )
 
     def add_user_message(self, content: str) -> None:
         if (
@@ -182,9 +190,7 @@ class TaskRunner:
                 self._stopped = True
                 return self._update("model_error")
             self._conversation.append(
-                ConversationMessage(
-                    role="assistant", content=turn.text or "", calls=turn.calls
-                )
+                ConversationMessage(role="assistant", content=turn.text or "", calls=turn.calls)
             )
             self._seen_call_ids.update(call.model_call_id for call in turn.calls)
             if not turn.calls:
@@ -243,9 +249,7 @@ class TaskRunner:
                     return self._update("closed")
                 if task_status != "running":
                     return self._update(task_status)
-                self._conversation[message_index] = self._released_message(
-                    call_id, outcome
-                )
+                self._conversation[message_index] = self._released_message(call_id, outcome)
                 return await self._dispatch(remaining)
             if isinstance(outcome, Denied):
                 self._conversation[message_index] = ConversationMessage(
@@ -318,7 +322,7 @@ class TaskRunner:
                 return self._update("closed")
             if task_status != "running":
                 return self._update(task_status)
-            outcome = await self._guard.submit(self.task_id, call)
+            outcome = await self._guard.submit(self.task_id, call, expected_epoch=self.epoch)
             if self._closed:
                 # Closing the local conversation cannot reclassify a call that
                 # Guard already reserved. In particular, a SEND uncertainty
@@ -329,9 +333,7 @@ class TaskRunner:
                     return self._update("halted")
                 return self._update("closed")
             if isinstance(outcome, Released):
-                self._conversation.append(
-                    self._released_message(call.model_call_id, outcome)
-                )
+                self._conversation.append(self._released_message(call.model_call_id, outcome))
                 continue
             if isinstance(outcome, Pending):
                 self._pending = outcome
@@ -368,9 +370,7 @@ class TaskRunner:
             if isinstance(outcome, (Withheld, OutcomeUnknown)):
                 self._stopped = True
                 return self._update(
-                    "outcome_unknown"
-                    if isinstance(outcome, OutcomeUnknown)
-                    else "halted"
+                    "outcome_unknown" if isinstance(outcome, OutcomeUnknown) else "halted"
                 )
             self._stopped = True
             return self._update("halted")

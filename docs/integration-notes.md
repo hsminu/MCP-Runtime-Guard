@@ -1,16 +1,32 @@
 # 외부 연동·호환성 기록
 
-담당 A, 리뷰 B·C. 아래 로컬 환경의 설치·import·API 시그니처 확인은 실행했다. **stdio·HTTP 실제 왕복, AGT·Scanner 호환성 및 보안 동작 검증은 미실행**이다. [개발문서](technical-design.md) 9·10·12장과 부록 A에 따라 실제 환경에서 확인한 내용만 기록한다. 정확한 버전, SDK 메서드, 지원 기능을 문서 예시만 보고 확정하지 않는다.
+담당 A, 리뷰 B·C. 2026-10-13 현재 stdio 합성 MCP 왕복·Qt 제어 smoke를 실행했다.
+HTTP·실제 AGT/Scanner·B6 SQLite·C launcher 인수는 미실행이다.
+아래 날짜별 기록은 당시의 증거이며 현재 상태와 혼동하지 않는다.
+
+## 2026-10-13 · 리뷰 후 실행 골격과 실제 stdio
+
+- CPython 3.12.15, uv 0.13.0, MCP 1.29.0, PySide6 6.12.0, pydantic 2.14.0,
+  jsonschema 4.25.1. pyproject.toml과 uv.lock으로 설치했다.
+- SDK 설치 코드 확인: `stdio_client(server, errlog=sys.stderr)` 기본값을 쓰지 않고
+  A stdio factory의 필수 errlog로 격리한다. SDK 파서·shared session의 root logging도
+  worker context의 LogRecord에서 메시지·인자·traceback을 제거해 공개 표식을 막는다.
+- `python -m examples.verify_stdio_spike`: 6경로 통과. allow/approve 수신 효과 1,
+  deny/reject/cancel/emergency_halt 효과 0. 동일 승인 재요청에도 SEND 1회.
+- `tests/unit/test_runtime.py`: 실제 Qt 버튼 → bridge → Guard → stdio 서버,
+  승인 사본 확인·중복 클릭·종료와 초기 조회 실패/중지 시 자원 정리 검증.
+- 정확한 관측 위치·명령·한계는 [리뷰 반영 기록](tasks/a-review-fixes.md)에 있다.
+  mock을 실제 AGT나 실제 모델 실행으로 기록하지 않는다.
 
 ## 호환성 확인표
 
 | 항목 | 확인할 내용 | 상태 | 실제 버전 / 근거 / 재현 결과 |
 | --- | --- | --- | --- |
 | Python·MCP SDK | Python 3.12, 클라이언트·fixture의 동일 SDK 조합 | 설치·import 확인, 왕복 미실행 | 2026-10-12 A02: CPython 3.12.15, `mcp 1.29.0`. fixture의 SDK는 아직 확인하지 않음 |
-| stdio READ | 세션 진입·호출·종료, 구조화 결과·resource_id | 미실행 | 미확정 |
+| stdio READ | 세션 진입·호출·종료 | A 합성 왕복 실행 | 2026-10-13, MCP 1.29.0. C resource fixture는 별도 |
 | HTTP SEND | Streamable HTTP 왕복, tools/call·부작용 계수 | 미실행 | 미확정 |
 | redirect·retry | 307·308, 재연결, 쓰기 요청 자동 재전송 없음 | 설치 코드 조사, 동작 미실행 | SDK 기본 HTTP 팩토리는 redirect를 따름. A02 조사와 A12·A16·A39 실측 필요 |
-| 원시 출력 격리 | stderr·로그·progress 콜백과 형식 변환 예외 | 원문 누출 재현, 격리 미완료 | A14에서 MCP 1.29.0의 잘못된 알림이 callback 밖 root logger에 남는 것을 합성 표지로 확인. C 공개 handler 정책·격리 sink와 A39 검증 필요 |
+| 원시 출력 격리 | stderr·SDK 파서 로그 | A 격리·회귀 검증 | A14에서 MCP 1.29.0의 잘못된 알림이 callback 밖 root logger에 남는 것을 합성 표지로 확인. C 공개 handler 정책·격리 sink와 A39 검증 필요 |
 | AGT | pre-call 거부권, 실행 분리, AccessResult 번역, 의존성 충돌 | 현재 환경 미설치·미실행 | 실제 AGT 연결·충돌 여부 미확인 |
 | Cisco Scanner | MCP SDK 의존성 충돌 여부, C의 별도 환경 결정과 연계 | 현재 환경 미설치·미실행 | C의 설치 환경·버전 미확인 |
 | 모델 제공자 | Task별 대화·핸들·캐시 분리, 시연 환경 승인 상태 | 미실행 | 미확정 |

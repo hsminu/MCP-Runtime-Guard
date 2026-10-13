@@ -32,11 +32,11 @@ QFrame#recentCard, QFrame#flowCard, QFrame#placeholderCard {
 QFrame#securityBadge { border-radius: 8px; border: 1px solid #d4dbe6; background: #f2f4f8; }
 QFrame#securityBadge[labelLevel="public"] { border: 1px solid #c1d9ed; border-left: 4px solid #175e88; background: #eaf5ff; }
 QFrame#securityBadge[labelLevel="internal"] { border: 1px solid #ead09c; border-left: 4px solid #855b16; background: #fff4dc; }
-QFrame#securityBadge[labelLevel="confidential"] { border: 1px solid #d6c2f4; border-left: 4px solid #6443ae; background: #f2ecff; }
+QFrame#securityBadge[labelLevel="confidential"] { border: 1px solid #edbec8; border-left: 4px solid #9b263f; background: #fff0f3; }
 QLabel#securityValue { font-size: 16pt; font-weight: 700; }
 QLabel#securityValue[labelLevel="public"] { color: #175e88; }
 QLabel#securityValue[labelLevel="internal"] { color: #855b16; }
-QLabel#securityValue[labelLevel="confidential"] { color: #6443ae; }
+QLabel#securityValue[labelLevel="confidential"] { color: #9b263f; }
 QWidget#infoField { background: transparent; }
 QWidget#detailBody { background: #ffffff; }
 QPushButton {

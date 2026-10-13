@@ -1,5 +1,7 @@
 # 3인 협업 규칙
 
+> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
+
 기준 문서는 [기술 설계 및 개발 문서](technical-design.md)다. 아래 역할·리뷰는 원문 0.5절을 따른다. 이 문서는 작업 배정과 인수 조건을 정한다. 현재 A 구현·검증·미완료 조건은 [A 작업 현황](tasks/a-progress.md)을 기준으로 확인한다.
 
 ## 브랜치와 작업 문서
@@ -24,7 +26,8 @@
 | `services/approvals.py`, `services/response_gate.py` | B | C |
 | `security/failclosed.py`, `security/digest.py` | B | C |
 | `security/paths.py`, `endpoints.py`, `ids.py`, `secrets.py`, `redact.py`, `launcher.py` | C | B |
-| `storage/*`, `services/registry.py`, `adapters/cisco.py` | C | B |
+| `storage/*` | B | C |
+| `services/registry.py`, `adapters/cisco.py` | C | B |
 | `adapters/mcp_transport.py` | A | B |
 | `adapters/agt.py` 연결·번역 | A | B, 합성 규칙은 B 담당 |
 | `adapters/model_client.py`, `services/runner.py` | A | B |
@@ -41,8 +44,8 @@
 | 단계 | A | B | C | 완료 조건 |
 | --- | --- | --- | --- | --- |
 | 0 · 공통 계약 | Transport·AccessChecker·ModelClient·UI 이벤트 요구 제공 | domain·ports·결과·상태 계약 초안 | Store·Scanner·Registry·계수 요구 제공 | 세 사람이 계약 및 미확정 항목 확인 |
-| 1 · 독립 구현 | SDK stdio·HTTP·AGT 호환 확인, 어댑터 구현 | 순수 정책·등급 병합·Catalog 구현 | 안전 연산·SQLite·fixture·수신 계수 구현 | 동일 SDK 조합과 계약 테스트 기반 확보 |
-| 2 · 실행 경로 | worker·Runner를 Guard에 연결 | Guard·승인·응답 게이트 구현 | 원자적 저장소·등록을 연결하고 통합·결함 주입 | ALLOW/ASK/DENY와 커밋 후 공개를 계수로 증명 |
+| 1 · 독립 구현 | SDK stdio·HTTP·AGT 호환 확인, 어댑터 구현 | 순수 정책·등급 병합·Catalog·SQLite 구현 | 안전 연산·fixture·수신 계수 구현 | 동일 SDK 조합과 계약 테스트 기반 확보 |
+| 2 · 실행 경로 | worker·Runner를 Guard에 연결 | Guard·승인·응답 게이트 구현 | B 저장소와 C 등록을 연결해 독립 통합·결함 주입 | ALLOW/ASK/DENY와 커밋 후 공개를 계수로 증명 |
 | 3 · 화면과 공격 | bridge·GUI·승인 렌더링, T18 | 공격·경쟁 실패 수정, 계약 유지 | T/S 검증·replay·CI·약점 관리대장 | 담당 리뷰, 불변식 검증, 제한과 과잉 제한 보고 |
 
 상세 태스크는 각 브랜치의 `docs/tasks/`에 있다. 다른 담당의 구현이 아직 없으면 필요한 계약 초안·문서·담당 모듈의 독립 작업을 진행한다. 임시로 보안 경로를 우회해 연결하지 않는다.

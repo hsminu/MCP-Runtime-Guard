@@ -1,5 +1,6 @@
 # MCP Runtime Guard 기술 설계 및 개발 문서
 
+> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
 - 대상 독자: 구현 담당 3인(A 애플리케이션, B 보안 코어, C 보안 기반·검증). 역할 상세는 0.5절
 - 기준 환경: Python 3.12, MCP Python SDK 1.x, PySide6, SQLite, pytest
 - 문서 성격: 구현 기준서. 코드 블록은 설계 의도를 보여주는 골격이며, 외부 라이브러리 API는 버전 고정 시점에 실제 시그니처를 확인한 뒤 맞춘다.
@@ -79,12 +80,12 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 | --- | --- | --- |
 | A 애플리케이션 | MCP 서버 연결과 호출 실행, AGT 연동, 모델 연동과 Runner, Qt↔asyncio 다리, GUI | 요청이 Guard를 거쳐 실제 서버에 닿고, 사람이 그 과정을 보고 통제할 수 있는가 |
 | B 보안 코어 | 도메인 모델과 포트 계약, 정책 판정, 등급 병합, 요청 해석(Catalog), GuardService, 승인 프로토콜, 응답 게이트 | 이 호출을 보내도 되는가, 보낸 뒤 Task 상태는 어떻게 바뀌는가 |
-| C 보안 기반·검증 | SQLite 저장소, 위험 연산 모듈(경로·URL·프로세스·ID·비밀값·로그), 서버 등록·검사, fixture와 수신 계수, 통합·공격·실험·결함 주입 테스트, CI | 판정이 실제로 집행되었음을 측정으로 증명할 수 있는가, 코드에 진단 대상 약점이 남지 않는가 |
+| C 보안 기반·검증 | 저장소 독립 검증, 위험 연산 모듈(경로·URL·프로세스·ID·비밀값·로그), 서버 등록·검사, fixture와 수신 계수, 통합·공격·실험·결함 주입 테스트, CI | 판정이 실제로 집행되었음을 측정으로 증명할 수 있는가, 코드에 진단 대상 약점이 남지 않는가 |
 
 분담 원칙:
 
 - **판정을 구현하는 사람과 집행을 검증하는 사람을 분리한다.** B가 만든 승인·공개 경로의 통합·공격 테스트는 C가 작성하고, 통과 여부는 구현 코드가 아니라 수신 계수(9.4절)로 판정한다.
-- **위험 연산의 구현과 그 사용을 강제하는 규칙을 한 사람이 가진다.** `security/`의 경로·URL·프로세스 모듈과 `storage/`를 구현하는 C가 Semgrep·import-linter 규칙도 관리한다. 규칙이 막는 것과 모듈이 허용하는 것이 어긋나지 않게 하기 위해서다.
+- **위험 연산의 구현과 그 사용을 강제하는 규칙을 한 사람이 가진다.** `security/`의 경로·URL·프로세스 모듈은 C가 구현하고 정적 강제 규칙도 관리한다. SQLite는 B가 구현하며 C가 SQL 경계 규칙과 독립 검증을 맡는다. 규칙이 막는 것과 모듈이 허용하는 것이 어긋나지 않게 하기 위해서다.
 - **판정의 의미를 정하는 코드는 B에 둔다.** `failclosed.py`와 `digest.py`는 `security/`에 있지만, 각각 예외를 판정·상태로 바꾸는 규칙과 승인 사본의 해시를 정하므로 B가 소유한다.
 - **계약은 B가 정의하고, 변경은 3인 합의로만 한다.** 대상은 `domain/*`과 `ports.py`다.
 
@@ -98,7 +99,7 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 | `services/approvals.py`, `response_gate.py` | B | **C** | 승인·공개 경로는 공격 관점으로 리뷰 |
 | `security/failclosed.py`, `digest.py` | B | C | 예외 → 판정·상태 변환, 승인 사본 해시 |
 | `security/paths.py`, `endpoints.py`, `ids.py`, `secrets.py`, `redact.py`, `launcher.py` | C | B | S01~S04로 검증 |
-| `storage/*` | C | B | B는 트랜잭션 경계와 원자성 관점으로 리뷰 |
+| `storage/*` | B | C | C는 트랜잭션·원자성·복구를 독립 검증 |
 | `services/registry.py` | C | B | 등록 상태 전이, 검사 결과 판정 규칙 |
 | `adapters/cisco.py` | C | B | |
 | `adapters/mcp_transport.py` | A | B | |
@@ -118,7 +119,7 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 | 승인 제어 API | B | A(UI 제어 큐) | 사람 전용 채널에서만 호출(8.5절) |
 | `Transport` 포트 | A | B | 명령마다 future를 성공 또는 예외로 반드시 해결. 명령 하나의 실패로 worker가 종료되지 않음(9.2절) |
 | `AccessChecker` 포트 | A | B | 형식 불명·시간초과는 `error=True`로 반환 |
-| `Store` 포트 | C | B | `commit_observation`·`commit_send_outcome`·`consume_and_reserve`는 각각 단일 트랜잭션(8.3절, 11장) |
+| `Store` 포트 | B | B·A, C 검증 | `commit_observation`·`commit_send_outcome`·`consume_and_reserve`는 각각 단일 트랜잭션(8.3절, 11장) |
 | `Registry` 조회 | C | B | `status()`, `fingerprint()`는 저장된 등록 레코드만 근거로 함 |
 | `security` 함수 | C | 전원 | 거부 시 전용 예외. 기본값으로 통과시키지 않음 |
 | 수신 계수 | C | 전원 | 테스트 판정의 근거. 화면 메시지로 대체하지 않음(9.4절) |
@@ -287,8 +288,8 @@ mcp-runtime-guard/
       launcher.py              〔C〕 외부 프로세스 실행
       failclosed.py            〔B〕 fail_closed(예외 → DENY), after_dispatch(예외 → 정지·결과 불명)
     storage/
-      schema.sql               〔C〕
-      sqlite_store.py          〔C〕 SQL은 이 파일에만
+      schema.sql               〔B〕
+      sqlite_store.py          〔B〕 SQL은 이 파일에만
     ui/                        〔A〕
   fixtures/                    〔C〕 정상 테스트 서버(제출 소스와 함께 관리)
     local_docs/                stdio 문서 서버 + 합성 자료
@@ -1287,6 +1288,14 @@ class ScanReport(Frozen):
 
 ### 10.3 AGT 어댑터 〔A 연결 / B 판정 합성 / C 검증〕
 
+2026-10-13 경계 명확화: 현재 앱은 동일 프로세스의 명시적 mock만 연결한다.
+로컬 ASK가 나왔다는 이유로 전체 인자를 원격 AGT에 먼저 보내지 않는다.
+실제 후보는 별도 수신 경계·최소 입력·규칙 담당·mode 감사·취소 정리를 확정한 뒤 연결한다.
+상세 목적·선정 기준·담당 제안·착수 전 결정 조건은 [AGT 결정표](tasks/a-review-fixes.md#agt-경계와-남은-결정)를 따른다.
+Guard access_timeout_seconds가 총 상한이고 adapter I/O 상한은 그보다 짧게 파생한다.
+AGT 취소가 늦어도 Guard는 late 결과를 폐기하고 제어 큐를 진행시킨다.
+
+
 ```python
 class AccessChecker(Protocol):                  # ports.py, B 소유
     async def check_access(self, req: ResolvedRequest, ctx: TrustedContext) -> AccessResult: ...
@@ -1326,7 +1335,7 @@ class ModelClient(Protocol):
 
 ---
 
-## 11. 저장소 〔C〕
+## 11. 저장소 〔B 구현 / C 검증〕
 
 ### 11.1 연결 설정
 
@@ -1464,6 +1473,12 @@ async def commit_send_outcome(self, req):
 ## 12. GUI 아키텍처 〔A〕
 
 ### 12.1 스레드 모델
+
+2026-10-13 구현 보정: cancel/emergency_halt는 인증 후 Task lock 밖에서 stop 요청을 먼저
+기록한다. AGT 대기는 stop과 함께 기다리며, 예약 전과 실제 전송 직전에 다시 검사한다.
+예약 이후 실패는 기존 READ 미공개 / SEND 결과 불명 의미를 유지한다.
+UI 버튼 클릭은 요청됨이며 Store 조회 확인 전까지 적용됨으로 표시하지 않는다.
+
 
 ```
 ┌──────────── Qt 메인 스레드 ────────────┐      ┌──────── 백엔드 스레드 (asyncio) ────────┐
