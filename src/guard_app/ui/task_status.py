@@ -40,6 +40,10 @@ _UNKNOWN_TEXT = (
 )
 
 
+def status_title(status: TaskStatus | None) -> str:
+    return (_STATUS_TEXT.get(status) or _UNKNOWN_TEXT)[0]
+
+
 class TaskStatusCard(QFrame):
     """Present a confirmed TaskStatus without creating a control path.
 

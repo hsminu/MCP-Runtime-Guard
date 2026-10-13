@@ -19,7 +19,12 @@ from guard_app.services.bridge import (
 )
 
 from .approval_detail import visible_review_text
+from .presentation import APPROVAL_RESULTS, RUN_RESULTS
+from .task_status import status_title
 from .widgets import KeyboardActionButton, plain_label
+
+_STOP_NAMES = {ControlAction.CANCEL: "작업 취소", ControlAction.EMERGENCY_HALT: "긴급 차단"}
+_RUN = "run"
 
 
 class RuntimePanel(QWidget):
@@ -31,7 +36,7 @@ class RuntimePanel(QWidget):
         self._busy = False
         self._review_command: str | None = None
         self._reviewed: str | None = None
-        self._commands: set[str] = set()
+        self._commands: dict[str, ControlAction | str] = {}
         layout = QVBoxLayout(self)
         self.summary = plain_label("백엔드 시작 중 · 아직 실행할 수 없어")
         self.message = plain_label("상태 확인 대기")
@@ -115,7 +120,7 @@ class RuntimePanel(QWidget):
         self.message.setText("실행 요청됨 · 백엔드 결과 대기")
         self._refresh()
         command_id = uuid4().hex
-        self._commands.add(command_id)
+        self._commands[command_id] = _RUN
         self.bridge.request_run(self.current.task_id, command_id=command_id)
 
     def _control(self, action):
@@ -133,7 +138,7 @@ class RuntimePanel(QWidget):
         self.message.setText("제어 요청됨 · 적용 여부 확인 중")
         self._refresh()
         command_id = uuid4().hex
-        self._commands.add(command_id)
+        self._commands[command_id] = action
         if action is ControlAction.REVIEW:
             self._review_command = command_id
         self.bridge.request_control(action, target, command_id=command_id)
@@ -148,11 +153,18 @@ class RuntimePanel(QWidget):
     def set_snapshot(self, snapshot: TaskProjection):
         self._clear_review()
         self.current = snapshot
-        self.summary.setText(
-            f"Task: {snapshot.task_id} · {snapshot.status.value}\n"
-            f"AGT: {snapshot.agt_mode} · 모델: {snapshot.model_mode}\n"
-            f"호스트 dispatch: {snapshot.host_dispatch} · 수신 부작용: {snapshot.receiver_effect}"
-        )
+        lines = [
+            f"Task: {snapshot.task_id} · {status_title(snapshot.status)}",
+            f"AGT: {snapshot.agt_mode} · 모델: {snapshot.model_mode}",
+            f"호스트 dispatch: {snapshot.host_dispatch} · 수신 부작용: {snapshot.receiver_effect}",
+        ]
+        if snapshot.status is TaskStatus.RUNNING and not snapshot.can_advance:
+            # RUNNING with a disabled run button must not look like a stuck UI.
+            lines.append(
+                "다음 사용자 지시를 기다리는 중이라 실행할 모델 단계가 없어. "
+                "여기서 끝내려면 '작업 취소'를 눌러."
+            )
+        self.summary.setText("\n".join(lines))
         self._refresh()
 
     def _review(self, review: ApprovalReview):
@@ -176,7 +188,8 @@ class RuntimePanel(QWidget):
         self._refresh()
 
     def _command(self, event: CommandEvent):
-        if event.command_id not in self._commands:
+        action = self._commands.get(event.command_id)
+        if action is None:
             return
         if event.stage not in (
             CommandStage.REJECTED,
@@ -184,11 +197,34 @@ class RuntimePanel(QWidget):
             CommandStage.BACKEND_RETURNED,
         ):
             return
-        self._commands.discard(event.command_id)
+        del self._commands[event.command_id]
         self._busy = bool(self._commands)
         if event.stage is CommandStage.BACKEND_RETURNED:
-            self.message.setText(f"백엔드 응답 확인 · {event.code} · 위 Task 상태가 확정값이야")
+            text = self._result_text(action, event.code)
+        elif event.stage is CommandStage.REJECTED:
+            self._clear_review()
+            text = "요청이 처리되지 않았어 · 백엔드 상태를 확인한 뒤 다시 시도해."
         else:
             self._clear_review()
-            self.message.setText(f"적용 미확인 · {event.code}")
+            text = "적용 여부를 확인하지 못했어 · 위 Task 상태를 확인해."
+        # Internal codes stay available for support, never as the message itself.
+        self.message.setText(f"{text}\n내부 코드: {event.code}")
         self._refresh()
+
+    def _result_text(self, action: ControlAction | str, code: str) -> str:
+        if action in _STOP_NAMES:
+            # Cancel and halt always return Denied; success is the Task state
+            # the backend published before this command result.
+            name = _STOP_NAMES[action]
+            stopped = self.current is not None and self.current.status in (
+                TaskStatus.HALTED,
+                TaskStatus.CLOSED,
+            )
+            if code.startswith("CONTROL_") and stopped:
+                return (
+                    f"{name} 완료 · Task를 정지해 이후 호출은 실행되지 않아. "
+                    "이미 전송된 쓰기는 수신됐을 수 있어."
+                )
+            return f"{name} 적용을 확인하지 못했어 · 위 Task 상태를 확인해."
+        results = RUN_RESULTS if action == _RUN else APPROVAL_RESULTS
+        return results.get(code, "백엔드 응답을 해석하지 못했어 · 위 Task 상태를 확인해.")
