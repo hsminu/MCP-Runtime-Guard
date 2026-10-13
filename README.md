@@ -2,7 +2,7 @@
 
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-현재 역할 브랜치에서 개발을 진행 중이다. B의 보안 코어 구현 초안은 B 브랜치에 있고, C 브랜치에는 [Cisco 도구 정의 입력 어댑터](docs/tasks/c-cisco-metadata-implementation.md)와 [Luna low API 연결](docs/tasks/c-cisco-luna-connection.md)을 구현했다. 사용자 지시로 B ScanReport는 연결하지 않았다. 실제 SQLite·MCP 연결과 통합 인수는 남아 있다. 아래 전체 구성과 동작은 구현 목표이며, 설치·실행 명령은 전체 연결 후 검증해서 추가한다.
+현재 역할 브랜치에서 개발을 진행 중이다. B의 보안 코어 구현 초안은 B 브랜치에 있고, C 브랜치에는 [Cisco 도구 정의 입력 어댑터](docs/tasks/c-cisco-metadata-implementation.md), [Luna low API 연결](docs/tasks/c-cisco-luna-connection.md), [LLM·YARA 내부 집계](docs/tasks/c-cisco-internal-aggregation.md)를 구현했다. 사용자 지시로 B ScanReport는 연결하지 않았다. 실제 SQLite·MCP 제품 연결과 통합 인수는 남아 있다. 아래 전체 구성과 동작은 구현 목표이며, 설치·실행 명령은 전체 연결 후 검증해서 추가한다.
 
 ## 개발 문서
 
@@ -15,6 +15,7 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | [Scanner OpenAI 모델 설정](docs/tasks/c-openai-scanner-setup.md) | 선택한 모델·전용 가상환경·`.env` 키 입력과 검증 범위 |
 | [Luna Scanner 확장 평가](docs/tasks/c-luna-scanner-evaluation.md) | 정상·공격 28개, metadata 누락과 전체 입력 경로의 실제 API 결과 |
 | [Cisco Scanner 남은 작업](docs/tasks/c-cisco-next-steps.md) | Luna low 선택 후 계약·어댑터·실제 MCP 수집·실패/등록 인수 순서 |
+| [Cisco 내부 집계 구현](docs/tasks/c-cisco-internal-aggregation.md) | 같은 정의의 LLM·YARA 병행 검사, 부분 실패·불변 결과·실제 JSON 산출물 |
 
 각 작업 브랜치에는 루트 `AGENT.md`와 `docs/tasks/` 아래 담당별 작업 문서가 추가로 있다. `AGENTS.md`에서 `AGENT.md`를 읽도록 연결했다. 브랜치의 `AGENT.md`는 현재 브랜치 이름으로 담당 문서를 선택한다.
 

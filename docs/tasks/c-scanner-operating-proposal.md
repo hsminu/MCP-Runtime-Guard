@@ -9,10 +9,10 @@
 | 항목 | 확정값 / 동작 | 현재 상태 |
 | --- | --- | --- |
 | LLM | `openai/gpt-6-luna`, reasoning effort `low` | C 제품 요청 연결 구현 |
-| 분석기 | LLM 기본 + YARA 보조, 같은 전체 정의를 각각 검사 | 병행 실행·집계 미구현 |
+| 분석기 | LLM 기본 + YARA 보조, 같은 전체 정의를 각각 검사 | [C 내부 병행·집계 구현](c-cisco-internal-aggregation.md), 전역 작업 예산은 남음 |
 | 위험 발견 | 경고 표시, 원래 코드·심각도 보존, Scanner 위험만으로 자동 사용 차단하지 않음 | 경고 UI·Registry 연결 미구현 |
-| 검사 실패·미완료 | 경고 후 사용 계속, 실패를 findings 0개·완료·안전으로 바꾸지 않음 | 제품 집계·경고 연결 미구현 |
-| 도구 하나 입력 | 기본 64KiB(65,536바이트), 설정 가능 | 명시적 상한·초과 오류 구현, 기본값·설정 연결 미반영 |
+| 검사 실패·미완료 | 경고 후 사용 계속, 실패를 findings 0개·완료·안전으로 바꾸지 않음 | 내부 실패·부분 결과 집계 구현, 경고 UI·Registry 연결 남음 |
+| 도구 하나 입력 | 기본 64KiB(65,536바이트), 설정 가능 | 내부 집계 기본값·인자 설정·초과 오류 구현, 앱 설정 로딩 남음 |
 | 목록 페이지 수신 | 기본 1MiB(1,048,576바이트), 설정 가능 | A 수신 제한·C 검증 미구현 |
 | 서버별 전체 목록 조회 누적 | 조회 한 번당 기본 8MiB(8,388,608바이트), 설정 가능 | A 누적 수신 제한·C 검증 미구현 |
 | B ScanReport | 현재 연결하지 않음 | 제외 지시 유지 |
@@ -75,7 +75,7 @@ MCP 목록 시간 제한은 업무 `tools/call` 시간 제한을 바꾸지 않�
 
 두 분석기 모두 개별 도구에서 완료했을 때만 그 도구의 검사를 완료로 표시한다. 한쪽만 완료하면 다른 쪽의 실패·미실행 상태와 함께 부분 완료로 표시한다. 전체 입력 준비를 못 한 도구에는 분석기를 실행한 것처럼 기록하지 않는다. 유효한 완료 결과의 Finding 0개와 검사 미완료는 구분한다. 위험·미완료 경고는 기존 결정대로 Scanner만을 이유로 자동 사용 차단하지 않으며, 수집되지 않은 새 정의를 추정해 등록·호출하는 의미는 아니다.
 
-현재 Cisco 4.8.6 YARA `analyze`는 `async` 함수 안에서 `self._rules.match(data=content)`를 동기로 호출하며 timeout을 넘기지 않는다. YARA 공식 Python API에는 `match(..., timeout=...)`와 timeout 예외가 있지만, 현재 C/Cisco 경로에는 5초 제한을 연결하지 않았다. worker·SDK 호출 보정·오류 집계는 구현과 검증이 필요하다. [YARA Python 공식 문서](https://yara.readthedocs.io/en/stable/yarapython.html).
+현재 Cisco 4.8.6 YARA `analyze`는 `async` 함수 안에서 `self._rules.match(data=content)`를 동기로 호출하며 timeout을 넘기지 않는다. C 내부 집계는 별도 thread에서 실행하고 native 오류·timeout 예외를 고정 실패 코드로 집계한다. YARA 공식 Python API에는 `match(..., timeout=...)`와 timeout 예외가 있지만, 현재 C/Cisco 경로에는 5초 제한을 연결하지 않았다. native timeout 전달·전역 worker 예산·취소 시 실제 종료는 후속 구현과 검증이 필요하다. [YARA Python 공식 문서](https://yara.readthedocs.io/en/stable/yarapython.html).
 
 OpenAI SDK의 `max_retries=0`은 자동 재시도를 끄는 설정이며 현재 설치된 OpenAI 2.54.0과 C 코드에서도 명시했다. HTTP timeout과 작업 전체 deadline은 별도 개념이므로 둘 다 유지한다. [OpenAI Python SDK 공식 문서](https://developers.openai.com/api/reference/python). 모델 선택은 사용자가 정한 Luna low를 유지하며 모델 교체·프롬프트 변경·API 방식 변경은 이 제안에 포함하지 않는다.
 

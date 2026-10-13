@@ -2,8 +2,8 @@
 
 정의 전체를 보존한다. SDK의 직접 인자 추출은 검사 범위를 보장하지 않으므로
 LLM에는 전체 JSON을 description에 넣은 별도 봉투를 전달한다.
-이 모듈의 SDK findings는 내부 결과다. ScanReport 번역·완료 집계·등록 판단은
-별도 연결 작업이며, 빈 findings를 검사 완료나 활성화 허용으로 해석하지 않는다.
+이 모듈의 SDK findings는 내부 결과다. 완료 집계는 cisco_aggregation에서 맡으며,
+ScanReport 번역·등록 판단은 별도다. 빈 findings만으로 활성화를 허용하지 않는다.
 """
 
 from __future__ import annotations
@@ -72,6 +72,19 @@ class CiscoMetadataAdapter[FindingT]:
         prepared = prepare_tool_definition(
             definition, max_definition_bytes=self._max_definition_bytes
         )
+        return await self.analyze_prepared(prepared)
+
+    async def analyze_prepared(self, prepared: PreparedToolDefinition) -> list[FindingT]:
+        """여러 분석기가 같은 사본을 검사한다. 직접 만든 사본도 검증한다."""
+        if not isinstance(prepared, PreparedToolDefinition):
+            raise DefinitionInputError("SCAN_METADATA_INVALID")
+        try:
+            value = json.loads(prepared.definition_json)
+        except (ValueError, TypeError, RecursionError):
+            raise DefinitionInputError("SCAN_METADATA_INVALID") from None
+        checked = prepare_tool_definition(value, max_definition_bytes=self._max_definition_bytes)
+        if checked.definition_json != prepared.definition_json:
+            raise DefinitionInputError("SCAN_METADATA_INVALID")
         content = (
             prepared.llm_content() if self._input_format == "llm" else prepared.definition_json
         )

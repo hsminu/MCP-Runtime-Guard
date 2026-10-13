@@ -1,0 +1,303 @@
+{
+  "format_status": "implemented C internal result; not B ScanReport or agreed shared API",
+  "llm_execution": "actual SDK with synthetic HTTP MockTransport responses; no live model API",
+  "yara_execution": "actual Cisco packaged rules and native YARA",
+  "examples": {
+    "completed_no_findings": {
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 1,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 1,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        }
+      ],
+      "duration_seconds": 0.18091598595492542,
+      "max_definition_bytes": 65536,
+      "scope": "provided_definitions",
+      "server_id": "synthetic_server",
+      "summary": {
+        "completed": 1,
+        "completion": "completed",
+        "definitions_total": 1,
+        "failed": 0,
+        "known_findings_count": 0,
+        "maximum_observed_severity": null,
+        "not_scanned": 0,
+        "partial": 0,
+        "tools_with_warnings": 0
+      },
+      "tools": [
+        {
+          "analyzers": [
+            {
+              "analyzer": "LLM",
+              "duration_seconds": 0.1807818680536002,
+              "error_code": null,
+              "findings": [],
+              "status": "completed"
+            },
+            {
+              "analyzer": "YARA",
+              "duration_seconds": 0.000554917030967772,
+              "error_code": null,
+              "findings": [],
+              "status": "completed"
+            }
+          ],
+          "completion": "completed",
+          "definition_bytes": 44,
+          "index": 0,
+          "input_error_code": null,
+          "tool_name": "synthetic_normal"
+        }
+      ]
+    },
+    "completed_both_warn": {
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 1,
+          "failed": 0,
+          "known_findings_count": 1,
+          "not_run": 0,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 1,
+          "failed": 0,
+          "known_findings_count": 1,
+          "not_run": 0,
+          "setup_error_code": null
+        }
+      ],
+      "duration_seconds": 0.0012637280160561204,
+      "max_definition_bytes": 65536,
+      "scope": "provided_definitions",
+      "server_id": "synthetic_server",
+      "summary": {
+        "completed": 1,
+        "completion": "completed",
+        "definitions_total": 1,
+        "failed": 0,
+        "known_findings_count": 2,
+        "maximum_observed_severity": "HIGH",
+        "not_scanned": 0,
+        "partial": 0,
+        "tools_with_warnings": 1
+      },
+      "tools": [
+        {
+          "analyzers": [
+            {
+              "analyzer": "LLM",
+              "duration_seconds": 0.000943399965763092,
+              "error_code": null,
+              "findings": [
+                {
+                  "analyzer": "LLM",
+                  "category": "PROMPT INJECTION",
+                  "code": "PROMPT INJECTION",
+                  "severity": "HIGH"
+                }
+              ],
+              "status": "completed"
+            },
+            {
+              "analyzer": "YARA",
+              "duration_seconds": 0.00025786401238292456,
+              "error_code": null,
+              "findings": [
+                {
+                  "analyzer": "YARA",
+                  "category": "PROMPT INJECTION",
+                  "code": "PROMPT INJECTION",
+                  "severity": "HIGH"
+                }
+              ],
+              "status": "completed"
+            }
+          ],
+          "completion": "completed",
+          "definition_bytes": 137,
+          "index": 0,
+          "input_error_code": null,
+          "tool_name": "synthetic_joint_warning"
+        }
+      ]
+    },
+    "llm_failed_yara_warns": {
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 0,
+          "failed": 1,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 1,
+          "failed": 0,
+          "known_findings_count": 1,
+          "not_run": 0,
+          "setup_error_code": null
+        }
+      ],
+      "duration_seconds": 0.001149473013356328,
+      "max_definition_bytes": 65536,
+      "scope": "provided_definitions",
+      "server_id": "synthetic_server",
+      "summary": {
+        "completed": 0,
+        "completion": "partial",
+        "definitions_total": 1,
+        "failed": 0,
+        "known_findings_count": 1,
+        "maximum_observed_severity": "HIGH",
+        "not_scanned": 0,
+        "partial": 1,
+        "tools_with_warnings": 1
+      },
+      "tools": [
+        {
+          "analyzers": [
+            {
+              "analyzer": "LLM",
+              "duration_seconds": 0.0008193830726668239,
+              "error_code": "SCAN_LLM_RATE_LIMITED",
+              "findings": null,
+              "status": "failed"
+            },
+            {
+              "analyzer": "YARA",
+              "duration_seconds": 0.00027454597875475883,
+              "error_code": null,
+              "findings": [
+                {
+                  "analyzer": "YARA",
+                  "category": "PROMPT INJECTION",
+                  "code": "PROMPT INJECTION",
+                  "severity": "HIGH"
+                }
+              ],
+              "status": "completed"
+            }
+          ],
+          "completion": "partial",
+          "definition_bytes": 123,
+          "index": 0,
+          "input_error_code": null,
+          "tool_name": "synthetic_rate_limit"
+        }
+      ]
+    },
+    "input_too_large": {
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 0,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 1,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 0,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 1,
+          "setup_error_code": null
+        }
+      ],
+      "duration_seconds": 9.264308027923107e-05,
+      "max_definition_bytes": 65536,
+      "scope": "provided_definitions",
+      "server_id": "synthetic_server",
+      "summary": {
+        "completed": 0,
+        "completion": "not_scanned",
+        "definitions_total": 1,
+        "failed": 0,
+        "known_findings_count": 0,
+        "maximum_observed_severity": null,
+        "not_scanned": 1,
+        "partial": 0,
+        "tools_with_warnings": 0
+      },
+      "tools": [
+        {
+          "analyzers": [
+            {
+              "analyzer": "LLM",
+              "duration_seconds": 0.0,
+              "error_code": null,
+              "findings": null,
+              "status": "not_run"
+            },
+            {
+              "analyzer": "YARA",
+              "duration_seconds": 0.0,
+              "error_code": null,
+              "findings": null,
+              "status": "not_run"
+            }
+          ],
+          "completion": "not_scanned",
+          "definition_bytes": null,
+          "index": 0,
+          "input_error_code": "SCAN_METADATA_TOO_LARGE",
+          "tool_name": null
+        }
+      ]
+    }
+  },
+  "public_metadata_excerpt": {
+    "server_id": "github",
+    "scope": "provided_definitions",
+    "note": "Previously collected real Tool definition; synthetic HTTP LLM response, actual native YARA",
+    "tool": {
+      "analyzers": [
+        {
+          "analyzer": "LLM",
+          "duration_seconds": 0.0008118590340018272,
+          "error_code": null,
+          "findings": [],
+          "status": "completed"
+        },
+        {
+          "analyzer": "YARA",
+          "duration_seconds": 0.0005709159886464477,
+          "error_code": null,
+          "findings": [
+            {
+              "analyzer": "YARA",
+              "category": "PROMPT INJECTION",
+              "code": "PROMPT INJECTION",
+              "severity": "HIGH"
+            }
+          ],
+          "status": "completed"
+        }
+      ],
+      "completion": "completed",
+      "definition_bytes": 2896,
+      "index": 5,
+      "input_error_code": null,
+      "tool_name": "create_or_update_file"
+    }
+  }
+}

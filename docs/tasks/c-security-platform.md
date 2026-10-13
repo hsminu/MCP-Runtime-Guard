@@ -4,7 +4,7 @@
 
 ## 담당 범위
 
-제품 경로는 `src/guard_app/` 기준이다. 현재 Cisco 입력 부분을 구현했고 나머지 경로는 각 담당의 구현 목표다.
+제품 경로는 `src/guard_app/` 기준이다. 현재 Cisco 입력·Luna low 연결·LLM/YARA 내부 집계와 Scanner 비밀값·로그 부분을 구현했고 나머지 경로는 각 담당의 구현 목표다.
 
 | 파일 / 영역 | 구현 책임 | 리뷰 |
 | --- | --- | --- |
@@ -39,7 +39,7 @@
 - [x] 사용자 결정으로 Scanner LLM을 Luna low로 선택. `.env`·공유 템플릿 반영과 임시 보정 코드의 실제 API 두 건 확인. 기존 28개 평가는 none이며 low 전체 회귀는 미실행이다. [다음 Cisco 작업](c-cisco-next-steps.md)에 계약 → 어댑터 → 실제 tools/list → 오류/회귀 → Registry·Guard 인수 순서를 기록했다.
 - [x] 후속 구현 지시로 [Cisco 도구 정의 입력·호출 어댑터](c-cisco-metadata-implementation.md)를 제품 소스에 반영. 루트·중첩 schema·annotations·추가 필드 보존, 23개 테스트·Ruff·strict mypy와 B 실제 FrozenJsonObject 입력 확인. 당시 모델 요청 보정·ScanReport 집계·Registry 연결·B 리뷰는 미완료였다.
 - [x] 후속 "연결해 b scanreport는 연결하지마" 지시로 [Luna low 제품 연결](c-cisco-luna-connection.md)을 구현. 62개 오프라인 테스트·Ruff·4개 소스 strict mypy 통과, 실제 API 28건 모두 HTTP 200·전체 정의 전달. 공격 16/16 탐지·교육용 인용 B06 오탐 1/12. SDK import의 암묵적 dotenv 로딩 차단·키 환경 비복사 확인. B ScanReport는 미연결이며 Registry·실제 MCP·B 리뷰는 남아 있다.
-- [x] 사용자 결정 [LLM 기본 + YARA 병행·위험/검사 실패 경고 정책](../contracts.md#scanner-정책-사용자-결정)을 문서에 기록. 위험 발견과 검사 실패·미완료 모두 경고 후 사용을 계속하며 그 Scanner 결과만으로 자동 차단하지 않는다. 원래 심각도·실패 상태·고정 오류 코드는 보존한다. 병행 실행·집계·경고 UI·Registry 정책은 미구현이다.
+- [x] 사용자 결정 [LLM 기본 + YARA 병행·위험/검사 실패 경고 정책](../contracts.md#scanner-정책-사용자-결정)을 문서에 기록. 위험 발견과 검사 실패·미완료 모두 경고 후 사용을 계속하며 그 Scanner 결과만으로 자동 차단하지 않는다. 원래 심각도·실패 상태·고정 오류 코드는 보존한다. 후속 내부 병행·집계 구현은 아래에 기록하며 경고 UI·Registry 정책은 남아 있다.
 - [x] [실제 MCP metadata 조사](c-real-mcp-metadata-survey.md): 공개 서버 6종·설정 7개의 stdio·원격 HTTP 목록 수집 189건, 현재 C 어댑터 전체 정의 보존 189/189. 최대 정의 8,360바이트·최대 페이지 result 259,485바이트. tools/call 0회·추가 모델 API 0건. 실제 정의의 LLM/YARA 검사·A 제품 transport·Registry·Guard·B 리뷰는 남아 있다.
 - [x] 사용자 결정 [도구당 기본 64KiB·설정 가능](../contracts.md#scanner-입력-크기-사용자-결정)을 문서에 확정. 전체 JSON UTF-8 바이트 기준, 초과 시 자르지 않고 검사 미완료 경고 후 사용 계속. 제품 기본값·설정·경고 연결은 미반영이다.
 - [x] 사용자 결정 [목록 페이지당 기본 1MiB·설정 가능](../contracts.md#mcp-목록-수신-크기-사용자-결정)을 문서에 확정. A transport가 파싱 전 수신 중 제한하고 초과 응답은 중단·목록 수집 미완료 경고로 처리. 제품 수신 제한·C 결함 검증·경고 연결은 미반영이다.
@@ -47,7 +47,8 @@
 - [x] 사용자 요청으로 [Scanner 운영 설정 일괄 추천안 v1](c-scanner-operating-proposal.md) 작성. 개수·시간·동시성·입력·부분 실패·취소·재검사·캐시·경고 표시를 모았다. 현재 코드의 LLM 60초·4,096토큰·재시도 0과 기존 사용자 결정은 유지하며 새 추천값은 미확정·미구현이다.
 - [x] 사용자 요청의 [운영 추천안 검증](c-scanner-operating-validation.md): 기존 62개 회귀·20 subtest·B 설정 Ruff·제품 strict mypy 통과. 공개 MCP 재수집·실제 정의 144개 Luna low/YARA 완료·HTTP 200 144건·분석 배치 69.764초. stdio/HTTP 경계 관찰 22개에서 수신·개수·깊이 제한의 미집행 확인. YARA async timeout 결함 주입·native 5초 기능 확인. 제품 상한·병행 runner·경고 UI·Registry·Guard·B 리뷰는 남음.
 - [ ] C1.2–C1.4 요구 초안과 공통 API 계약 합의.
-- [ ] C2–C6 전체 구현·테스트·스캔·실험. C4의 Scanner 입력·Luna 요청 부분과 C2의 Scanner 키·SDK 로그 제한 부분을 구현·검증했다. C2 나머지·C3·C5·C6과 공통 연결은 미착수다.
+- [x] 사용자 지시의 [Cisco 내부 집계](c-cisco-internal-aggregation.md): 기본 64KiB·인자 설정, 전체 입력 사본 고정, LLM/YARA 병행·독립 실패·출처/심각도 보존·불변 결과/JSON. 96개 회귀·20 subtest·Ruff·제품 strict mypy 통과. 이전 실제 수집 정의 144개를 HTTP 대역+실제 SDK/native YARA로 확인. B ScanReport·공통 계약·전역 작업 예산·native YARA timeout·Registry·UI·B 리뷰는 남음.
+- [ ] C2–C6 전체 구현·테스트·스캔·실험. C4의 Scanner 입력·Luna 요청·LLM/YARA 내부 집계와 C2의 Scanner 키·SDK 로그 제한 부분을 구현·검증했다. C2 나머지·C3·공통 계수 기반 C5·전체 C6과 공통 연결은 남아 있다.
 
 Docker는 선택 도구다. 마지막 로컬 확인에서 CLI·Compose 설치와 서비스 실행은 확인했으나 소켓 접근 권한 오류가 있었고, 컨테이너 실행은 검증하지 않았다. 기본 가상환경 작업의 선행 조건으로 두지 않는다.
 
@@ -61,7 +62,7 @@ P0는 계약·환경 준비, P1은 담당 모듈 구현, P2는 연결된 실행 
 | 환경 후속 · 의존성 호환 검증 | P0 / Scanner 4.8.6 조사·실험 완료, 전체 조합 미확정 | 패키징·lock 편집 담당 합의. A의 MCP·AGT 연결 확인과 C의 Scanner 확인 | 동일 SDK로 stdio·HTTP 실제 왕복, AGT·Scanner 호환 근거, 검증된 버전 조합과 재설치 확인 |
 | C2 · 위험 연산·정적 강제 | P1 / Scanner 키 로딩·SDK 로그 제한 부분 구현, 나머지 미착수 | 사용할 domain 모델·전용 오류 계약 확인. B의 failclosed·digest 경계와 규칙 검토 | 경로·URL·프로세스·ID·비밀값·로그 모듈, S01–S04, 플랫폼·TOCTOU 한계, 정적 규칙 검증 |
 | C3 · B SQLite 리뷰·독립 검증 | P1 / 미착수, 구현은 B 이관 | B6의 Store·스키마·원자 연산, 공통 API 계약 | 저장소 리뷰·계약·rollback·경쟁·감사 실패·복구 결함 주입. C 작성 테스트는 B 리뷰, T07·T12·T35·T37 |
-| C4 · Registry·Scanner | P1 / 입력 어댑터 구현·검증, 전체 연결 미완료 | Scanner·Registry 및 B 저장소 영속화 계약, B의 digest, A의 도구 metadata·변경 알림 | 등록 상태 전이·지문 변경·필수 검사·관리자 활성화, T17 및 연결 후 T10, B 리뷰 |
+| C4 · Registry·Scanner | P1 / 입력·Luna low·LLM/YARA 내부 집계 구현·검증, 전체 연결 미완료 | Scanner·Registry 및 B 저장소 영속화 계약, B의 digest, A의 도구 metadata·변경 알림 | 등록 상태 전이·지문 변경·필수 검사·관리자 활성화, T17 및 연결 후 T10, B 리뷰 |
 | C5 · fixture·계수 | P1 / 미착수 | 공통 MCP SDK, C2 안전 경로, A의 host_dispatch 관측 방식 | 합성 stdio·HTTP 서버, 요청별 네 계수, 악성 변형, A 리뷰. 관찰 불가 경로는 명시 |
 | C6 · 통합·공격·결함 주입 | P2 / 미착수 | B6 저장소·C3 검증·C4–C5와 A transport·Runner, B Guard·승인·응답 게이트 연결 | 아래 C 담당 T/S 검증, dispatch·wire·부작용 및 미공개 증거, 모듈 담당 리뷰 |
 | C6 · replay·지연 | P2 / 미착수 | 공통 실행 경로, 사전 정답·기대 판정·동일 설정·시계 | T23·T24·T28·T34, 모드별 최소 10회 반복, 판정·제한·과잉 제한·완료율·p50/p95 원자료 |
