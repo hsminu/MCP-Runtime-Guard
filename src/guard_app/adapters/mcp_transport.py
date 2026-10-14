@@ -407,11 +407,11 @@ def _exception_name(exc: Exception) -> str:
     return name if name.isascii() and name.isidentifier() and len(name) <= 64 else "Exception"
 
 
-async def _discard_logging(_params: object) -> None:
+async def _discard_logging(params: object) -> None:
     """Server notifications stay out of UI/model/logs until A14's sink exists."""
 
 
-async def _discard_message(_message: object) -> None:
+async def _discard_message(message: object) -> None:
     """Server notifications stay out of UI/model/logs until A14's sink exists."""
 
 
