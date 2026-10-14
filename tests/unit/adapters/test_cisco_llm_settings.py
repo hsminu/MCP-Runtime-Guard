@@ -9,6 +9,7 @@ from guard_app.security.secrets import (
     SecretLoadError,
     load_scanner_environment,
     scanner_sdk_import_environment,
+    scanner_tokenizer_cache_dir,
 )
 
 
@@ -111,10 +112,14 @@ def test_sdk_implicit_env_loading_is_disabled_and_flag_is_restored(monkeypatch, 
     else:
         monkeypatch.setenv("PYTHON_DOTENV_DISABLED", previous)
     monkeypatch.delenv("SCANNER_IMPORT_SECRET_MARKER", raising=False)
+    monkeypatch.delenv("CUSTOM_TIKTOKEN_CACHE_DIR", raising=False)
+    for name in ("LOCALAPPDATA", "XDG_CACHE_HOME"):
+        monkeypatch.setenv(name, str(tmp_path / "cache"))
     file = tmp_path / "scanner.env"
     file.write_text("SCANNER_IMPORT_SECRET_MARKER=synthetic_value\n", encoding="utf-8")
     with scanner_sdk_import_environment():
         assert not load_dotenv(file)
         assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "True"
+        assert os.environ["CUSTOM_TIKTOKEN_CACHE_DIR"] == str(scanner_tokenizer_cache_dir())
     assert os.environ.get("PYTHON_DOTENV_DISABLED") == previous
     assert "SCANNER_IMPORT_SECRET_MARKER" not in os.environ

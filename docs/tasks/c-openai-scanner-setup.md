@@ -43,7 +43,7 @@ OPENAI_API_KEY=발급받은_OpenAI_API_키
 
 `MCP_SCANNER_LLM_API_KEY=${OPENAI_API_KEY}`를 python-dotenv가 확장해 Scanner에 전달한다. `.env`는 파일 권한 `0600`이며 `.gitignore`에서 제외했다. 공유하는 [.env.example](../../.env.example)에는 빈 키와 기본값만 있다.
 
-**키와 설정을 읽은 뒤 Scanner를 import해야 한다.** C의 `connect_luna_scanner`는 명시한 파일을 읽어 설정을 구성하고 Config·OpenAI 요청에 직접 전달한다. 프로세스 설정을 우선하며 키를 환경변수로 복사하지 않는다. SDK import의 자동 dotenv 로딩은 제한하고 가격표 조회도 import 전에 차단한다. Scanner CLI는 일부 의존성을 import한 뒤 `.env`를 읽어서 초기 상수가 반영되지 않을 수 있다. CLI에서는 아래처럼 dotenv 실행기를 먼저 사용한다.
+**키와 설정을 읽은 뒤 Scanner를 import해야 한다.** C의 `connect_luna_scanner`는 명시한 파일을 읽어 설정을 구성하고 Config·OpenAI 요청에 직접 전달한다. 프로세스 설정을 우선하며 키를 환경변수로 복사하지 않는다. SDK import의 자동 dotenv 로딩은 제한하고 가격표 조회도 import 전에 차단한다. LiteLLM이 import 때 읽는 tokenizer는 해시를 검증한 사용자 캐시 사본을 쓴다. 1.93.2 Windows wheel의 내장 파일은 해시가 맞지 않아 외부에서 다시 받기 때문이다([C-CISCO-05](../weakness_register.md#발견-항목과-조치)). Scanner CLI는 일부 의존성을 import한 뒤 `.env`를 읽어서 초기 상수가 반영되지 않을 수 있다. CLI에서는 아래처럼 dotenv 실행기를 먼저 사용한다.
 
 ```bash
 .venv-scanner/bin/python -m dotenv -f .env run -- .venv-scanner/bin/mcp-scanner --help
