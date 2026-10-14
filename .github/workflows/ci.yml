@@ -1,0 +1,49 @@
+name: ci
+
+# 설계 13.5절 파이프라인 중 현재 통과 가능한 단계만 실행한다.
+# import-linter 규칙·Bandit·Semgrep·pip-audit·통합 테스트는 C 후속(docs/integration-a-b.md).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    # 팀이 개발·검증하는 플랫폼과 같은 Windows에서 Qt를 offscreen으로 실행한다.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.0"
+          enable-cache: true
+      - name: Install locked environment
+        run: uv sync --locked
+      - name: requirements.lock matches uv.lock
+        run: |
+          uv export --locked --all-groups --no-emit-project -o requirements.lock > /dev/null
+          git diff --exit-code -- requirements.lock
+      - name: Ruff check
+        run: uv run --no-sync ruff check .
+      - name: Ruff format
+        run: uv run --no-sync ruff format --check .
+      - name: mypy
+        run: uv run --no-sync mypy
+      - name: Unit tests
+        run: uv run --no-sync pytest -q

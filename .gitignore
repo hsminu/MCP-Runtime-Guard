@@ -1,13 +1,18 @@
-# Local credentials and virtual environments
+# Local development environment
+.venv/
+.venv-scanner/
+.devtools/
+.cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.hypothesis/
+build/
+dist/
+.test-artifacts/
+.mypy_cache/
+.ruff_cache/
 .env
 .env.*
 !.env.example
-.venv/
-.venv-scanner/
-
-# Python and verification caches
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
