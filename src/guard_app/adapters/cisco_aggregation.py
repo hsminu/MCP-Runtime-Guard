@@ -450,7 +450,8 @@ async def connect_metadata_scanner(
         except ScannerLLMError as error:
             errors["LLM"] = _error_code(error, "LLM")
         try:
-            yara = _build_yara_provider(max_definition_bytes)
+            # SDK import와 규칙 컴파일은 동기 작업이라 이벤트 루프 밖에서 한다.
+            yara = await asyncio.to_thread(_build_yara_provider, max_definition_bytes)
         except ScannerAggregationError as error:
             errors["YARA"] = _error_code(error, "YARA")
         yield InternalMetadataScanner(

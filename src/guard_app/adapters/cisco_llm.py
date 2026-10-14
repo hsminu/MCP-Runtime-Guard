@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -273,14 +274,23 @@ async def connect_luna_scanner(
 
     environ은 프로세스 설정 위임·테스트용, transport는 실제 SDK의 HTTP 대역
     검증용이다. SDK 원시 Finding만 반환하며 B ScanReport를 만들지 않는다.
+
+    SDK import(첫 연결 수 초~수십 초), TLS 인증서 로딩(매 연결 수백 ms), OpenAI
+    리소스 지연 import(첫 연결 약 1초)는 동기 작업이다. 호출한 이벤트 루프를
+    멈추지 않도록 작업 스레드에서 실행한다.
     """
     settings = ScannerLLMSettings.load(env_file, environ=environ)
-    sdk_analyzer, known_threats = _build_sdk_analyzer(settings)
+    sdk_analyzer, known_threats = await asyncio.to_thread(_build_sdk_analyzer, settings)
+    verify: ssl.SSLContext | bool = True
+    if transport is None:
+        # AsyncClient(trust_env=False)가 루프 안에서 만들 기본 문맥과 같다.
+        verify = await asyncio.to_thread(httpx.create_ssl_context, trust_env=False)
     async with (
         httpx.AsyncClient(
             timeout=settings.timeout_seconds,
             follow_redirects=False,
             trust_env=False,
+            verify=verify,
             transport=transport,
         ) as http_client,
         AsyncOpenAI(
@@ -291,6 +301,8 @@ async def connect_luna_scanner(
             http_client=http_client,
         ) as client,
     ):
+        # chat 속성은 첫 접근 때 openai.resources 전체를 import한다.
+        await asyncio.to_thread(lambda: client.chat.completions)
         analyzer = _ConnectedLunaAnalyzer(sdk_analyzer, client, settings, known_threats)
         yield CiscoMetadataAdapter(
             analyzer, input_format="llm", max_definition_bytes=max_definition_bytes
