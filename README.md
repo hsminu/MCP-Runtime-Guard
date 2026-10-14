@@ -1,8 +1,60 @@
 # MCP Runtime Guard
 
+> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](docs/tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-현재 B 브랜치에는 **B1 도메인·포트 계약 초안, B2 순수 정책·등급 누적, B3 Catalog, 해시·스냅샷·예외 처리, B4 Guard·응답 게이트, B5 승인 서비스와 단위·성질 테스트**가 있다. B6는 SQLite 연결·초기 v1 스키마/마이그레이션과 현행 Store **12/12개 메서드**를 구현했고, SQLite 추가 당시 전체 **1,395개** 단위·성질 테스트를 통과했다. 후속 A QA 요청 중 01·02·05·07·08의 B 내부 보완은 [최신 QA 반영 기록](docs/b-qa-fixes-2026-10-13.md)을 따른다. 현행 분리 API의 승인 생성/종결 간격, 시작 복구·영속 순번·새 API 합의는 남아 있다. Catalog의 실제 C 안전 경로·Registry, A의 transport·AGT·Runner·제어 큐와 B 저장소 연결, 공통 계약 합의·담당 리뷰·CI는 인수 대상이다. 아래 전체 시스템 동작은 구현 목표이며 MCP·DB·GUI를 함께 연결한 제품 실행을 완료한 상태는 아니다.
+현재 A 브랜치에는 보안 코어·transport·Runner·Qt 앱의 **합성 개발 경로**가 있다.
+실제 stdio·로컬 HTTP MCP 서버와 로컬 AGT 판정을 연결했고, AGT는 명시적으로 real/mock을 선택한다.
+Store는 기본 메모리 대역 또는 B SQLiteStore를 선택하고, Registry는 B 단위 대역이며 모델은 mock이다.
+SQLite는 새 Task 실행만 연결했다. 시작 복구·C launcher/endpoint 검증·실제 모델 및 C 독립 인수는 아직 완료하지 않았다.
+작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/tasks/a-progress.md)이다.
+
+## 설치와 실행
+
+Python 3.12와 [uv](https://docs.astral.sh/uv/)를 사용한다. winget의 특정 패치 버전을 요구하지 않는다.
+uv가 `.python-version`의 3.12를 설치하며 이번 검증은 CPython 3.12.15에서 실행했다.
+
+```powershell
+uv sync --locked
+uv run python -m guard_app --demo --agt-mode real
+uv run python -m guard_app --demo --agt-mode real --mcp-transport http
+uv run python -m guard_app --demo --agt-mode real --scenario deny
+uv run python -m guard_app --demo --agt-mode real --agt-policy deny-send
+uv run python -m guard_app --demo --agt-mode mock
+uv run python -m guard_app --demo --agt-mode mock --store sqlite --db-path <파일>
+uv run python -m examples.verify_stdio_spike --agt-mode real
+uv run python -m examples.verify_http_spike --agt-mode real
+uv run pytest -q
+```
+
+SQLite의 부모 디렉터리는 미리 있어야 한다. 같은 DB에 새 Task만 생성하며 이전 실행·승인·결과 불명 SEND 복구와 영속 call_seq는 미지원이다.
+
+저장소 루트에서 실행한다. `--demo` 없는 제품 시작은 아직 제공하지 않는다.
+실행 탭에서 실행 → 승인 사본 확인 → 승인 → 다음 모델 단계를 누른다.
+합성 INTERNAL 읽기 후 ASK, 승인 뒤 SEND 한 번이 기본 경로다.
+`--scenario allow`는 PUBLIC, `--scenario deny`는 CONFIDENTIAL 읽기를 사용한다.
+실제 외부 목적지로 보내지 않고 합성 서버 내부 계수만 올린다.
+
+`--mcp-transport http`는 앱이 띄운 `127.0.0.1` 합성 서버와 실제 TCP로 통신한다.
+기본값은 `stdio`다. HTTP는 JSON·SSE 응답을 지원하고 redirect·자동 인증·POST 재시도를
+사용하지 않는다. 응답 유실·timeout 뒤 SEND는 결과 불명으로 처리한다.
+현재 CLI는 임의 외부 서버 URL·인증정보를 받지 않는다. 제품 endpoint 검증·등록 연결은
+C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/tasks/a-http-integration.md)을 따른다.
+
+`--agt-mode`는 필수다. real은 `agent-governance-toolkit-core==5.0.0`의 로컬
+`PolicyEngine`으로 판정하며, 시작 실패·판정 오류·시간초과 시 차단한다.
+자동 mock 전환은 없다. `--agt-policy deny-send`는 SEND만, `deny-all`은 READ부터 막는다.
+실행 탭과 창 제목에 확인된 AGT 모드를 표시한다. AGT 허용은 Guard의 ASK·DENY를 완화하지 않는다.
+[배포판 선정](docs/tasks/a-agt-selection.md)과 [실제 연결·검증 범위](docs/tasks/a-agt-integration.md)를 참고한다.
+
+B 기준 갱신 시 소스와 B 테스트를 함께 대조한 뒤 `uv run pytest -q`를 실행한다.
+A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_approvals.py`로 분리했다.
+최신 B 병합·AGT 기준 차이·분리된 B 검사 환경은 [A 동기화 기록](docs/tasks/a-b-sync-2026-10-13.md)을 따른다.
+`requirements.lock`은 B 코어 검사 전용이며 A 실행 환경은 `uv.lock`을 사용한다.
+
+B 브랜치 `6115fa6`까지 병합해 B6의 SQLite Store(현행 12/12개 메서드)와 B QA 보완이 A 브랜치에 들어왔다.
+B 범위·검증은 [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md)과 [B QA 반영 기록](docs/b-qa-fixes-2026-10-13.md)을 따른다.
+시작 복구·영속 순번·새 공동 API 합의는 B 후속이며, 앱 연결 상태는 [A 작업 현황](docs/tasks/a-progress.md)을 따른다.
 
 ## 개발 문서
 
@@ -28,6 +80,7 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | [B3 Catalog 구현과 연동 경계](docs/b3-catalog.md) | 고정 스키마·namespace·출처·목적지 해석, C 안전 경로 연결 조건 |
 | [B4·B5 실행·응답·승인 구현](docs/b4-b5-execution.md) | 해시·예외, Task 직렬화, 커밋 후 공개, 사람 승인·재평가·소비와 A·C 연결 조건 |
 | [공통 에이전트 지침](AGENTS.md) | 모든 브랜치에 적용하는 작업 지침 |
+| [A 작업 현황](docs/tasks/a-progress.md) | 현재 구현, 실제 검증, 미완료 조건과 커밋 추적 |
 
 2026-10-13 현재 문서 대조 기준은 **A `ab82919`, B 공개 `6115fa6`**이다.
 후속 QA-09까지 반영 후 B 전체 **1,614개 테스트·Ruff·포맷·mypy·의존성 검사**를 통과했다.
@@ -95,7 +148,7 @@ flowchart LR
 
 `ASK`는 요청 사본의 해시가 일치하고, 현재 상태로 재평가를 통과하며, 승인 1건을 원자적으로 소비했을 때 최대 1회 실행한다. 쓰기 호출의 결과가 불명이면 `UNKNOWN_OUTCOME`으로 작업을 잠그고 자동 재전송하지 않는다.
 
-## 구현할 구성
+## 구성과 담당
 
 | 구성 | 책임 | 담당 |
 | --- | --- | --- |
@@ -108,7 +161,7 @@ flowchart LR
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
 | `fixtures`, 테스트, CI | 실제 수신 계수로 집행을 검증 | C 주도 |
 
-위 경로는 전체 예정 모듈 목록이다. B 담당의 `domain`·`ports.py`·`core`, Catalog·Guard·승인·응답 게이트 서비스, `security/digest.py`·`failclosed.py`와 단위·성질 테스트가 존재한다. 다른 담당 디렉터리는 해당 작업을 구현할 때 만든다. 전체 예정 구조는 개발문서 2.1절에 있다.
+표는 전체 제품의 소유권이다. 현재 존재하는 모듈과 미구현 항목은 [A 작업 현황](docs/tasks/a-progress.md)에서 구분한다. 전체 예정 구조는 개발문서 2.1절에 있다.
 
 ## 보안 불변식
 
@@ -129,7 +182,7 @@ flowchart LR
 
 ## 개발 환경과 진행 순서
 
-설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. B 서비스·개발 도구의 버전은 `pyproject.toml`·`requirements.lock`에 고정했으며 환경 재현과 최신 검증 결과는 [B 인수 안내](docs/b-handoff.md)에 있다. 전체 외부 연동 버전과 API 시그니처는 아직 확정하지 않았다. 개발문서 부록 A의 실제 stdio·HTTP 왕복과 AGT·Scanner 호환 검증을 거친 조합만 전체 연동 기준으로 고정한다.
+설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. A 앱·B 단위 검증·로컬 AGT 조합은 pyproject.toml과 uv.lock에 고정했다. Scanner와 HTTP를 포함한 공통 제품 조합은 추가 검증 대상이다.
 
 1. 세 사람이 공통 문서와 각자의 `AGENT.md`·작업 문서를 읽는다.
 2. B가 모델·포트·명령·이벤트 계약을 제안하고 A·C와 확정한다.
