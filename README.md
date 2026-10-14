@@ -2,7 +2,7 @@
 
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-현재 역할 브랜치에서 개발을 진행 중이다. B의 보안 코어 구현 초안은 B 브랜치에 있으며, 실제 SQLite·MCP 연결과 통합 인수는 남아 있다. 아래 구성과 동작은 구현 목표이며, 설치·실행 명령은 전체 연결 후 검증해서 추가한다.
+현재 B 브랜치에는 **B1 도메인·포트 계약 초안, B2 순수 정책·등급 누적, B3 Catalog, 해시·스냅샷·예외 처리, B4 Guard·응답 게이트, B5 승인 서비스와 단위·성질 테스트**가 있다. B6는 SQLite 연결·초기 v1 스키마/마이그레이션과 현행 Store **12/12개 메서드**를 구현했고, SQLite 추가 당시 전체 **1,395개** 단위·성질 테스트를 통과했다. 후속 A QA 요청 중 01·02·05·07·08의 B 내부 보완은 [최신 QA 반영 기록](docs/b-qa-fixes-2026-10-13.md)을 따른다. 현행 분리 API의 승인 생성/종결 간격, 시작 복구·영속 순번·새 API 합의는 남아 있다. Catalog의 실제 C 안전 경로·Registry, A의 transport·AGT·Runner·제어 큐와 B 저장소 연결, 공통 계약 합의·담당 리뷰·CI는 인수 대상이다. 아래 전체 시스템 동작은 구현 목표이며 MCP·DB·GUI를 함께 연결한 제품 실행을 완료한 상태는 아니다.
 
 ## 개발 문서
 
@@ -11,7 +11,31 @@ MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적
 | [기술 설계 및 개발 문서](docs/technical-design.md) | 제공받은 개발문서 원본 사본. 상세 설계, 테스트 T01–T38·S01–S05, ADR 기준 |
 | [3인 협업 규칙](docs/team-workflow.md) | 모듈 소유권, 리뷰 담당, 개발 순서, 브랜치 사용법 |
 | [공통 계약 체크리스트](docs/contracts.md) | B가 정의하고 A·C와 합의해야 하는 모델·포트·이벤트 계약 |
+| [B 구현 인수 안내](docs/b-handoff.md) | A·C 연결 위치, 구성 예시, 남은 합의와 환경 재현·인수 순서 |
+| [B QA 요청 반영](docs/b-qa-fixes-2026-10-13.md) | A 최신 요청 01·02·05·07·08 수정·실제 B 검증과 미결 계약/복구 |
+| [B QA-09 Task 수명](docs/b-qa09-task-lifecycle.md) | 사용 중 lock 보존·확정 종결 자원 정리·늦은 AGT와 미확정 stop 보존 |
+| [A·C 공동 계약 검토 요청](docs/ac-contract-review-request.md) | 항목별 목적·A/C 회신 질문·최신 AGT 요구·답변 형식과 합의 절차 |
+| [B6 계약 변경안](docs/b6-contract-proposal.md) | SQLite 승인 원자성·버전·오류/복구와 AGT 규칙·영속 감사 제안 |
+| [B6 SQLite 첫 단계](docs/b6-sqlite-foundation.md) | 실제 연결·v1 스키마·Task 생성/조회 구현과 74개 SQLite 단위 검사·남은 연결 |
+| [B6 상태·판정·예약](docs/b6-sqlite-decisions.md) | 3개 연산 추가·감사 원자성·같은 인스턴스 ALLOW 결속과 전체 1,193개 검사 |
+| [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md) | 남은 7개 추가·현행 12/12개 구현·전체 1,395개 검사와 제품 연결/복구 한계 |
+| [B6 영속 순번·복구 설계안](docs/b6-sequence-recovery-design.md) | 계수/migration·시작 게이트·복구 상태/epoch·A/C 회신 8항목 |
+| [B6 순번·복구 검증 계획](docs/b6-sequence-recovery-validation.md) | B 단위·C 독립·A 시작 연결의 50개 미실행 시나리오와 crash 지점 |
+| [B6 내부 시작 점검기](docs/b6-startup-preflight.md) | B 단독 구현: v1 사실·관계·기록 MAX의 읽기 전용 점검, 새 배정/복구 권한 없음 |
+| [정규식 검증 연결안](docs/b-schema-validation-proposal.md) | A 모델 입력·B 검증 의미·C 프로세스 실행/종료 연결 검토 |
+| [B1 구현 초안과 검증](docs/b1-contract-draft.md) | 구현 범위, 포트 초안 선택, 설치·단위 검사, A·C 검토 항목 |
+| [B2 순수 정책과 등급 누적](docs/b2-policy-and-taint.md) | 경계·AGT 판정, READ 누적·비교 모드, 버전과 성질 검증 |
+| [B3 Catalog 구현과 연동 경계](docs/b3-catalog.md) | 고정 스키마·namespace·출처·목적지 해석, C 안전 경로 연결 조건 |
+| [B4·B5 실행·응답·승인 구현](docs/b4-b5-execution.md) | 해시·예외, Task 직렬화, 커밋 후 공개, 사람 승인·재평가·소비와 A·C 연결 조건 |
 | [공통 에이전트 지침](AGENTS.md) | 모든 브랜치에 적용하는 작업 지침 |
+
+2026-10-13 현재 문서 대조 기준은 **A `ab82919`, B 공개 `6115fa6`**이다.
+후속 QA-09까지 반영 후 B 전체 **1,614개 테스트·Ruff·포맷·mypy·의존성 검사**를 통과했다.
+후속 로컬 [읽기 전용 사전 점검기](docs/b6-startup-preflight.md) 추가 후 전체 **1,683개**와
+동일 코드 검사를 통과했다. 영속 배정/상태 복구·공유 계약·제품 연결은 아직 완료되지 않았다.
+A의 후속 Runner·transport·AGT·UI 수정과 B QA 요청은 [B 반영 기록](docs/b-qa-fixes-2026-10-13.md)에 정리했다.
+A 자체 보고(전체 1,485개·합성 32경로), B 단위 검증, 미합의 계약·C 독립 인수를 구분한다.
+이전 `cd75bf9` 기준의 AGT/연동 기록은 해당 시점의 근거로 보존한다.
 
 각 작업 브랜치에는 루트 `AGENT.md`와 `docs/tasks/` 아래 담당별 작업 문서가 추가로 있다. `AGENTS.md`에서 `AGENT.md`를 읽도록 연결했다. 브랜치의 `AGENT.md`는 현재 브랜치 이름으로 담당 문서를 선택한다.
 
@@ -84,7 +108,7 @@ flowchart LR
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
 | `fixtures`, 테스트, CI | 실제 수신 계수로 집행을 검증 | C 주도 |
 
-위 경로는 예정된 모듈 목록이다. 실제 디렉터리와 파일은 담당 작업을 구현할 때 만든다. 전체 예정 구조는 개발문서 2.1절에 있다.
+위 경로는 전체 예정 모듈 목록이다. B 담당의 `domain`·`ports.py`·`core`, Catalog·Guard·승인·응답 게이트 서비스, `security/digest.py`·`failclosed.py`와 단위·성질 테스트가 존재한다. 다른 담당 디렉터리는 해당 작업을 구현할 때 만든다. 전체 예정 구조는 개발문서 2.1절에 있다.
 
 ## 보안 불변식
 
@@ -105,7 +129,7 @@ flowchart LR
 
 ## 개발 환경과 진행 순서
 
-설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. 정확한 의존성 버전과 외부 API 시그니처는 아직 확정하지 않았다. 개발문서 부록 A의 실제 stdio·HTTP 왕복과 AGT·Scanner 호환 검증을 거친 조합만 고정한다.
+설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. B 서비스·개발 도구의 버전은 `pyproject.toml`·`requirements.lock`에 고정했으며 환경 재현과 최신 검증 결과는 [B 인수 안내](docs/b-handoff.md)에 있다. 전체 외부 연동 버전과 API 시그니처는 아직 확정하지 않았다. 개발문서 부록 A의 실제 stdio·HTTP 왕복과 AGT·Scanner 호환 검증을 거친 조합만 전체 연동 기준으로 고정한다.
 
 1. 세 사람이 공통 문서와 각자의 `AGENT.md`·작업 문서를 읽는다.
 2. B가 모델·포트·명령·이벤트 계약을 제안하고 A·C와 확정한다.
