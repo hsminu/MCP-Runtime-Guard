@@ -7,9 +7,8 @@ completion만 대역으로 바꾼다. 실제 모델 API·MCP 서버는 호출하
 import asyncio
 import json
 import re
-import socket
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,20 +16,13 @@ from guard_app.adapters.cisco import CiscoMetadataAdapter, prepare_tool_definiti
 
 
 @pytest.fixture
-def scanner_sdk(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
-    connect = Mock(side_effect=AssertionError("Unexpected network access in offline SDK test"))
-    monkeypatch.setattr(socket.socket, "connect", connect)
-    monkeypatch.setattr(socket.socket, "connect_ex", connect)
+def scanner_sdk():
+    # 차단·import 환경은 conftest가 맡는다. SDK는 세션 시작 때 이미 불러왔다.
     from mcpscanner.config import Config
     from mcpscanner.core.analyzers import llm_analyzer
     from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 
-    yield SimpleNamespace(
-        config=Config, llm_module=llm_analyzer, yara_type=YaraAnalyzer, connect=connect
-    )
-    assert connect.call_count == 0
+    return SimpleNamespace(config=Config, llm_module=llm_analyzer, yara_type=YaraAnalyzer)
 
 
 @pytest.mark.parametrize("location", ["root_schema", "annotations", "nested_schema", "extra"])
