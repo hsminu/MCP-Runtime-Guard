@@ -1,0 +1,146 @@
+"""Scanner 환경 파일·키 로딩 경계(I9). 키를 프로세스 환경이나 로그에 복사하지 않는다."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import uuid
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from importlib.metadata import distribution
+from pathlib import Path
+
+from dotenv import dotenv_values
+
+# tiktoken 0.14.0의 캐시 키(sha1(URL)) → 기대 SHA-256(tiktoken_ext.openai_public).
+# 순서대로 cl100k_base, o200k_base, p50k_base. litellm은 import 때 cl100k_base를 읽는다.
+_TOKENIZER_SHA256 = {
+    "9b5ad71b2ce5302211f9c61530b329a4922fc6a4": (
+        "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7"
+    ),
+    "fb374d419588a4632f3f557e76b4b70aebbca790": (
+        "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d"
+    ),
+    "ec7223a39ce59f226a68acc30dc1af2788490e15": (
+        "94b5ca7dff4d00767bc256fdd1b27e5b17361d7b8a5f968547f9f23eb70d2069"
+    ),
+}
+
+_SCANNER_KEYS = (
+    "OPENAI_API_KEY",
+    "MCP_SCANNER_LLM_API_KEY",
+    "MCP_SCANNER_LLM_MODEL",
+    "MCP_SCANNER_LLM_REASONING_EFFORT",
+    "MCP_SCANNER_LLM_BASE_URL",
+    "MCP_SCANNER_LLM_TIMEOUT",
+    "MCP_SCANNER_DEFAULT_LLM_MAX_TOKENS",
+)
+
+
+class SecretLoadError(ValueError):
+    """경로·파일 내용·키를 노출하지 않는 설정 로딩 오류."""
+
+
+class TokenizerCacheError(ValueError):
+    """경로·파일 내용을 노출하지 않는 tokenizer 사본 검증 오류."""
+
+
+def scanner_tokenizer_cache_dir() -> Path:
+    """사용자별 앱 캐시 아래의 tokenizer 사본 위치. site-packages에는 쓰지 않는다."""
+    name = "LOCALAPPDATA" if os.name == "nt" else "XDG_CACHE_HOME"
+    base = os.environ.get(name, "")
+    root = Path(base) if base and Path(base).is_absolute() else Path.home() / ".cache"
+    return root / "mcp-runtime-guard" / "tiktoken"
+
+
+def _bundled_tokenizer(cache_key: str) -> bytes:
+    # 경로만 찾는다. litellm 패키지를 import하면 바로 tokenizer를 읽으므로 피한다.
+    located = distribution("litellm").locate_file(
+        f"litellm/litellm_core_utils/tokenizers/{cache_key}"
+    )
+    return Path(str(located)).read_bytes()
+
+
+def prepare_tokenizer_cache(
+    cache_dir: Path, *, read_bundled: Callable[[str], bytes] = _bundled_tokenizer
+) -> None:
+    """litellm 내장 tokenizer를 기대 해시로 검증해 cache_dir에 둔다.
+
+    litellm 1.93.2 Windows wheel의 내장 파일은 줄끝이 CRLF라 tiktoken 해시 검사에
+    실패한다. 그러면 tiktoken이 파일을 지우고 외부에서 다시 받는다. 여기서는 CRLF만
+    LF로 되돌려 같은 해시가 될 때만 쓰고, 맞지 않으면 다운로드 대신 실패한다.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    for cache_key, expected in _TOKENIZER_SHA256.items():
+        target = cache_dir / cache_key
+        if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == expected:
+            continue
+        data = read_bundled(cache_key)
+        if hashlib.sha256(data).hexdigest() != expected:
+            data = data.replace(b"\r\n", b"\n")
+            if hashlib.sha256(data).hexdigest() != expected:
+                raise TokenizerCacheError("SCAN_SDK_TOKENIZER_INVALID")
+        temporary = cache_dir / f"{cache_key}.{uuid.uuid4().hex}.tmp"
+        try:
+            temporary.write_bytes(data)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+@contextmanager
+def scanner_sdk_import_environment() -> Iterator[None]:
+    """SDK 첫 import의 암묵적 load_dotenv·외부 조회를 제한하고 기존 플래그를 복원한다.
+
+    Cisco 4.8.6의 패키지 import는 HTTP 서버 모듈도 불러오며 그 모듈이
+    load_dotenv를 실행한다. 같은 import가 litellm을 불러와 가격표와 tokenizer를
+    읽으므로 둘 다 로컬 자료로 고정한다. litellm은 tokenizer 위치를 프로세스 동안
+    유지하므로 두 설정은 복원하지 않는다. 이 동기 구간에는 await를 넣지 않는다.
+    """
+    cache_dir = scanner_tokenizer_cache_dir()
+    prepare_tokenizer_cache(cache_dir)
+    previous = os.environ.get("PYTHON_DOTENV_DISABLED")
+    os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    os.environ["CUSTOM_TIKTOKEN_CACHE_DIR"] = str(cache_dir)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("PYTHON_DOTENV_DISABLED", None)
+        else:
+            os.environ["PYTHON_DOTENV_DISABLED"] = previous
+
+
+def load_scanner_environment(
+    env_file: Path | None = None, *, environ: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """명시한 파일 위에 프로세스 설정을 적용한다. 자동 파일 탐색은 하지 않는다.
+
+    키 별칭은 병합한 OPENAI_API_KEY로 확장한다. 임의 환경변수 참조나 외부
+    명령 확장은 허용하지 않는다. 반환값은 비밀값이므로 로그에 공개하지 않는다.
+    """
+    values: dict[str, str] = {}
+    if env_file is not None:
+        try:
+            if not env_file.is_file():
+                raise SecretLoadError("SCAN_LLM_ENV_UNAVAILABLE")
+            file_values = dotenv_values(env_file, interpolate=False, encoding="utf-8")
+        except (OSError, UnicodeError):
+            raise SecretLoadError("SCAN_LLM_ENV_UNAVAILABLE") from None
+        values.update(
+            {
+                key: value
+                for key, value in file_values.items()
+                if key in _SCANNER_KEYS and value is not None
+            }
+        )
+    source = os.environ if environ is None else environ
+    values.update({key: source[key] for key in _SCANNER_KEYS if key in source})
+    alias = values.get("MCP_SCANNER_LLM_API_KEY", "${OPENAI_API_KEY}")
+    if alias == "${OPENAI_API_KEY}":
+        alias = values.get("OPENAI_API_KEY", "")
+    if "${" in alias:
+        raise SecretLoadError("SCAN_LLM_KEY_REFERENCE_INVALID")
+    values["MCP_SCANNER_LLM_API_KEY"] = alias
+    return values

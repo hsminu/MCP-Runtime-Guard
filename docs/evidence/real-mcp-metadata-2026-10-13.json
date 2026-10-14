@@ -1,0 +1,3301 @@
+{
+  "observed_at_utc": "2026-10-13T10:54:53.052939+00:00",
+  "mcp_python_sdk": "1.30.0",
+  "python": "3.12.3",
+  "measurement": "canonical compact sorted UTF-8 JSON of actual tools/list tool objects before SDK Tool normalization",
+  "real_credentials_used": false,
+  "model_api_called": false,
+  "servers": [
+    {
+      "id": "filesystem",
+      "transport": "stdio",
+      "package": "@modelcontextprotocol/server-filesystem@1.0.0",
+      "methods": {
+        "initialize": 1,
+        "notifications/initialized": 1,
+        "tools/list": 1
+      },
+      "forbidden_attempts": [],
+      "server_info": {
+        "name": "secure-filesystem-server",
+        "version": "1.0.0"
+      },
+      "protocol_version": "2025-11-25",
+      "server_instructions_bytes": 0,
+      "metrics": {
+        "tool_count": 14,
+        "pages": 1,
+        "all_definitions_total_bytes": 13098,
+        "max_definition_bytes": 1272,
+        "median_definition_bytes": 922.0,
+        "max_page_canonical_result_bytes": 13123,
+        "over_64kib_count": 0,
+        "top_level_field_counts": {
+          "name": 14,
+          "title": 14,
+          "description": 14,
+          "inputSchema": 14,
+          "annotations": 14,
+          "execution": 14,
+          "outputSchema": 14
+        },
+        "nested_input_schema_tools": 4,
+        "adapter_full_definition_preserved_count": 14,
+        "largest_tool": "read_media_file"
+      },
+      "tools": [
+        {
+          "name": "read_file",
+          "bytes": 780,
+          "sha256": "0bc49bde1f574b29bce123a907964cf2a091a5db3e49ca0a3a01d0e97ebf0e8e",
+          "description_bytes": 85,
+          "input_schema_bytes": 327,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 259,
+          "four_field_bytes": 522,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "read_text_file",
+          "bytes": 1149,
+          "sha256": "4989adfe8677fa95fd422e141994c4c2d5e0603d08d5441a9ad28c3983063bc0",
+          "description_bytes": 457,
+          "input_schema_bytes": 327,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 251,
+          "four_field_bytes": 899,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "read_media_file",
+          "bytes": 1272,
+          "sha256": "6acd4d585ed8471d96d40b9f6ffb89941fabb7ca3ecb1e5df84eecdbe7590fcc",
+          "description_bytes": 234,
+          "input_schema_bytes": 134,
+          "output_schema_bytes": 706,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 789,
+          "four_field_bytes": 484,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "read_multiple_files",
+          "bytes": 998,
+          "sha256": "daf14e127e7f2c4a68977f31407359881fb49d0b7831138c5a91feb49f0bdf60",
+          "description_bytes": 324,
+          "input_schema_bytes": 299,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 256,
+          "four_field_bytes": 743,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "write_file",
+          "bytes": 803,
+          "sha256": "08cc3b2d959a9b7b8386806f041c01f9b15651742caf4e986d59d58260576027",
+          "description_bytes": 228,
+          "input_schema_bytes": 172,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 247,
+          "four_field_bytes": 557,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "edit_file",
+          "bytes": 1081,
+          "sha256": "9c89e36a6d382a35422dcb9c05b2fec0e31ae5efa276df1480e1f5af499318a6",
+          "description_bytes": 185,
+          "input_schema_bytes": 494,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 246,
+          "four_field_bytes": 836,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_directory",
+          "bytes": 860,
+          "sha256": "ecde066ddf888c41f4fc102a2b88c0d9909b7e2b82c23ccb66373aac568b6861",
+          "description_bytes": 310,
+          "input_schema_bytes": 134,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 253,
+          "four_field_bytes": 608,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_directory",
+          "bytes": 808,
+          "sha256": "bedadcf5dda5914e561fee551fce2ad9ba2b6e22be5d2f4a6342e9b8bccc0e9d",
+          "description_bytes": 309,
+          "input_schema_bytes": 134,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 251,
+          "four_field_bytes": 558,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_directory_with_sizes",
+          "bytes": 956,
+          "sha256": "b382a67332cb8f65a96272a48e639ca126b164dac269338b4b96608073f10fba",
+          "description_bytes": 323,
+          "input_schema_bytes": 246,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 262,
+          "four_field_bytes": 695,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "directory_tree",
+          "bytes": 933,
+          "sha256": "dda6a67d3e78a0536468d7c5380287104d3bcc24309c4fd489e998d528856edc",
+          "description_bytes": 360,
+          "input_schema_bytes": 208,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 251,
+          "four_field_bytes": 683,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "move_file",
+          "bytes": 911,
+          "sha256": "2d292a14c0ff91cb3a33e8258554bf32c2aa31c18685c19e53f1528086553e83",
+          "description_bytes": 325,
+          "input_schema_bytes": 184,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 246,
+          "four_field_bytes": 666,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_files",
+          "bytes": 1031,
+          "sha256": "845f260b2d94f0248d3365b623e18b6d3749d03fb13b8c9f467c04b7c5aa378d",
+          "description_bytes": 424,
+          "input_schema_bytes": 246,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 249,
+          "four_field_bytes": 783,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_file_info",
+          "bytes": 793,
+          "sha256": "29b5952316e6640a51ca829dfc87eb69764a3caa96b85c2fb40371060185c04e",
+          "description_bytes": 296,
+          "input_schema_bytes": 134,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 250,
+          "four_field_bytes": 544,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_allowed_directories",
+          "bytes": 723,
+          "sha256": "6a8e6478ce5a5f6e89cf2afe2296fbd8c195deb32873cd81573eaea6bc9d82f0",
+          "description_bytes": 248,
+          "input_schema_bytes": 90,
+          "output_schema_bytes": 169,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 261,
+          "four_field_bytes": 463,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        }
+      ],
+      "managed_tools_call_count": 0,
+      "complete": true,
+      "raw_tools_artifact_sha256": "66cad13677935a974bceb248ced5d0fe7a048fa3103a8d58b544ffc2d41ab81f",
+      "native_startup_network_or_os_side_effects": "not_measured",
+      "guard_host_dispatch_count": null,
+      "receiver_effect_count": null
+    },
+    {
+      "id": "memory",
+      "transport": "stdio",
+      "package": "@modelcontextprotocol/server-memory@1.0.0",
+      "methods": {
+        "initialize": 1,
+        "notifications/initialized": 1,
+        "tools/list": 1
+      },
+      "forbidden_attempts": [],
+      "server_info": {
+        "name": "memory-server",
+        "version": "1.0.0"
+      },
+      "protocol_version": "2025-11-25",
+      "server_instructions_bytes": 0,
+      "metrics": {
+        "tool_count": 9,
+        "pages": 1,
+        "all_definitions_total_bytes": 11055,
+        "max_definition_bytes": 1639,
+        "median_definition_bytes": 1302,
+        "max_page_canonical_result_bytes": 11075,
+        "over_64kib_count": 0,
+        "top_level_field_counts": {
+          "name": 9,
+          "title": 9,
+          "description": 9,
+          "inputSchema": 9,
+          "annotations": 9,
+          "execution": 9,
+          "outputSchema": 9
+        },
+        "nested_input_schema_tools": 7,
+        "adapter_full_definition_preserved_count": 9,
+        "largest_tool": "create_entities"
+      },
+      "tools": [
+        {
+          "name": "create_entities",
+          "bytes": 1639,
+          "sha256": "a6b964c0ffc7840f447e8effb6a75740741f2f6b9ccb11e4fccd9ab87681da44",
+          "description_bytes": 296,
+          "input_schema_bytes": 493,
+          "output_schema_bytes": 604,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 687,
+          "four_field_bytes": 953,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_relations",
+          "bytes": 1350,
+          "sha256": "65123f62aa4a7c0721aea42a0b0e5bbf449744c9a74e0dd6f4b9927233668102",
+          "description_bytes": 106,
+          "input_schema_bytes": 469,
+          "output_schema_bytes": 527,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 611,
+          "four_field_bytes": 740,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "add_observations",
+          "bytes": 1114,
+          "sha256": "feac7d8089a1ebc8a23d7dfb2938f24b3a3c8f105d791cb52f622f3819323ee7",
+          "description_bytes": 64,
+          "input_schema_bytes": 429,
+          "output_schema_bytes": 373,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 457,
+          "four_field_bytes": 658,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "delete_entities",
+          "bytes": 746,
+          "sha256": "9e6b66f291d08f0884590fb213f5022ebc753a4bddd5bb5abbaf4180c9d1b2f5",
+          "description_bytes": 80,
+          "input_schema_bytes": 219,
+          "output_schema_bytes": 203,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 286,
+          "four_field_bytes": 461,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "delete_observations",
+          "bytes": 947,
+          "sha256": "28ea265b802faf8a6ee03a1badc3a162f430cf29b6fc229234344f72588432bb",
+          "description_bytes": 65,
+          "input_schema_bytes": 427,
+          "output_schema_bytes": 203,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 290,
+          "four_field_bytes": 658,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "delete_relations",
+          "bytes": 1016,
+          "sha256": "69686b10b9484d6f2bfc65a9c199593c2a4b454dc1cd9987f4ade7ac863a72dc",
+          "description_bytes": 50,
+          "input_schema_bytes": 517,
+          "output_schema_bytes": 203,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 287,
+          "four_field_bytes": 730,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "read_graph",
+          "bytes": 1302,
+          "sha256": "5a96ef6ebd66fc2e42a03b638f940e31f785619032e9baf8d00d87ca4abe5c4d",
+          "description_bytes": 31,
+          "input_schema_bytes": 85,
+          "output_schema_bytes": 952,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 1030,
+          "four_field_bytes": 273,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_nodes",
+          "bytes": 1489,
+          "sha256": "4978f12d4ec20004e2a0b9945c72a8850c652d8f9b6d4fa03463929df0d82510",
+          "description_bytes": 56,
+          "input_schema_bytes": 243,
+          "output_schema_bytes": 952,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 1032,
+          "four_field_bytes": 458,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "open_nodes",
+          "bytes": 1452,
+          "sha256": "dcfcf782aa784a7085bc37a719362f88b0270764a15c381a303aa64c2b64ff56",
+          "description_bytes": 57,
+          "input_schema_bytes": 209,
+          "output_schema_bytes": 952,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 1030,
+          "four_field_bytes": 423,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        }
+      ],
+      "managed_tools_call_count": 0,
+      "complete": true,
+      "raw_tools_artifact_sha256": "17899ac9a25dfb8158c81561309dfdc3b152e8a639136bf4d9febfa724baa933",
+      "native_startup_network_or_os_side_effects": "not_measured",
+      "guard_host_dispatch_count": null,
+      "receiver_effect_count": null
+    },
+    {
+      "id": "sequential-thinking",
+      "transport": "stdio",
+      "package": "@modelcontextprotocol/server-sequential-thinking@1.0.0",
+      "methods": {
+        "initialize": 1,
+        "notifications/initialized": 1,
+        "tools/list": 1
+      },
+      "forbidden_attempts": [],
+      "server_info": {
+        "name": "sequential-thinking-server",
+        "version": "1.0.0"
+      },
+      "protocol_version": "2025-11-25",
+      "server_instructions_bytes": 0,
+      "metrics": {
+        "tool_count": 1,
+        "pages": 1,
+        "all_definitions_total_bytes": 4640,
+        "max_definition_bytes": 4640,
+        "median_definition_bytes": 4640,
+        "max_page_canonical_result_bytes": 4652,
+        "over_64kib_count": 0,
+        "top_level_field_counts": {
+          "name": 1,
+          "title": 1,
+          "description": 1,
+          "inputSchema": 1,
+          "annotations": 1,
+          "execution": 1,
+          "outputSchema": 1
+        },
+        "nested_input_schema_tools": 0,
+        "adapter_full_definition_preserved_count": 1,
+        "largest_tool": "sequentialthinking"
+      },
+      "tools": [
+        {
+          "name": "sequentialthinking",
+          "bytes": 4640,
+          "sha256": "a77af865252772c93e3897ae5bebbbcf6d94a6d811dfdfd781e4dbf7335e002a",
+          "description_bytes": 2781,
+          "input_schema_bytes": 1137,
+          "output_schema_bytes": 414,
+          "extra_fields": [
+            "execution",
+            "outputSchema",
+            "title"
+          ],
+          "extra_fields_bytes": 501,
+          "four_field_bytes": 4140,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        }
+      ],
+      "managed_tools_call_count": 0,
+      "complete": true,
+      "raw_tools_artifact_sha256": "b93df50fa94cadfa92b9c95d9f4e106b6e7e3f9aef19bc1e9a02dc94c6b5a342",
+      "native_startup_network_or_os_side_effects": "not_measured",
+      "guard_host_dispatch_count": null,
+      "receiver_effect_count": null
+    },
+    {
+      "id": "playwright",
+      "transport": "stdio",
+      "package": "@playwright/mcp@0.0.83",
+      "methods": {
+        "initialize": 1,
+        "notifications/initialized": 1,
+        "tools/list": 1
+      },
+      "forbidden_attempts": [],
+      "server_info": {
+        "name": "Playwright",
+        "version": "1.64.0-alpha-1790635538000"
+      },
+      "protocol_version": "2025-11-25",
+      "server_instructions_bytes": 0,
+      "metrics": {
+        "tool_count": 25,
+        "pages": 1,
+        "all_definitions_total_bytes": 20260,
+        "max_definition_bytes": 1629,
+        "median_definition_bytes": 923,
+        "max_page_canonical_result_bytes": 20296,
+        "over_64kib_count": 0,
+        "top_level_field_counts": {
+          "name": 25,
+          "description": 25,
+          "inputSchema": 25,
+          "annotations": 25
+        },
+        "nested_input_schema_tools": 6,
+        "adapter_full_definition_preserved_count": 25,
+        "largest_tool": "browser_take_screenshot"
+      },
+      "tools": [
+        {
+          "name": "browser_close",
+          "bytes": 294,
+          "sha256": "18868ca1f33fd27b2a1f0211c529d4a7f1683ad08e66b1157e4706bc7cfd6579",
+          "description_bytes": 14,
+          "input_schema_bytes": 119,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 294,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_resize",
+          "bytes": 485,
+          "sha256": "2277fab0c2ab0b0b9b7fbd500850b4291d736bf07f0e30508e4aa236097600e0",
+          "description_bytes": 25,
+          "input_schema_bytes": 290,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 485,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_console_messages",
+          "bytes": 923,
+          "sha256": "3a1a018a7071ab6803578a9c04ef113251e4a8d6377c637c9182c8d4e5f80eda",
+          "description_bytes": 28,
+          "input_schema_bytes": 716,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 923,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_handle_dialog",
+          "bytes": 498,
+          "sha256": "331eb3f2593afa4ce3c55d6aed7ca8caabd59f3548f86e190de03de8e9bb7182",
+          "description_bytes": 15,
+          "input_schema_bytes": 312,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 498,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_emulate_media",
+          "bytes": 1197,
+          "sha256": "ef95b9edfa12477df640e31d33dc0691b36262641be086a41c62cb3bf8a9cf15",
+          "description_bytes": 164,
+          "input_schema_bytes": 855,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 1197,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_evaluate",
+          "bytes": 928,
+          "sha256": "97848f2a604105761b56bf2005f6b8393b846e3a284db4dbe590046378dc13d0",
+          "description_bytes": 49,
+          "input_schema_bytes": 709,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 928,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_file_upload",
+          "bytes": 499,
+          "sha256": "9e8e74cdd1fac5724e7ea189e02ac80531fa879f8d868b0798ecd7457a2b0de2",
+          "description_bytes": 28,
+          "input_schema_bytes": 305,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 499,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_drop",
+          "bytes": 1086,
+          "sha256": "db23ae456891feb051a199ef6b53c7cbf61caf9a44abbcac2bca2c222395c3c2",
+          "description_bytes": 135,
+          "input_schema_bytes": 766,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 1086,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_find",
+          "bytes": 1219,
+          "sha256": "d073ef6d42c09e6bab83b137e8ffcb01f101cf528be461cee4932618bb57c4cd",
+          "description_bytes": 340,
+          "input_schema_bytes": 711,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 1219,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_fill_form",
+          "bytes": 1154,
+          "sha256": "ef327cbc10d69306bd38a4a2e638ead74e5946b7d8f72ddfe75f9865c9ec858b",
+          "description_bytes": 25,
+          "input_schema_bytes": 968,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 1154,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_press_key",
+          "bytes": 447,
+          "sha256": "6dd1346a210f1c54fa0a05611880d42fb30d781a60cae43cad9ac6bd6d986233",
+          "description_bytes": 27,
+          "input_schema_bytes": 257,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 447,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_type",
+          "bytes": 939,
+          "sha256": "65f884c10e6adb4c1111bfed19cd07ab6264e4fa21f9ef907762d4b75ff8bcb8",
+          "description_bytes": 31,
+          "input_schema_bytes": 752,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 939,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_navigate",
+          "bytes": 385,
+          "sha256": "4bd2f88138e75bb639e57c781bacc3465723eff08879f84976b76d21a4a66295",
+          "description_bytes": 17,
+          "input_schema_bytes": 200,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 385,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_navigate_back",
+          "bytes": 325,
+          "sha256": "101ff9ce8491987712fbd41eff005159dcf1827cf44e7693d7a613d8a2465033",
+          "description_bytes": 43,
+          "input_schema_bytes": 119,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 325,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_network_requests",
+          "bytes": 927,
+          "sha256": "183c5f2aeef7a6e0cf07e412ea6b548699414c6b3863032d809450b6407d0f69",
+          "description_bytes": 132,
+          "input_schema_bytes": 615,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 927,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_network_request",
+          "bytes": 995,
+          "sha256": "019d6bbde12c166c2cf99c5039d8019227a96f2c5715f848d53071e7977042c4",
+          "description_bytes": 149,
+          "input_schema_bytes": 660,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 995,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_run_code_unsafe",
+          "bytes": 948,
+          "sha256": "f1e14c831be76078a166ce9a64fb6d7fa44f1977af5019a17ce1e6e55355e469",
+          "description_bytes": 124,
+          "input_schema_bytes": 638,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 948,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_take_screenshot",
+          "bytes": 1629,
+          "sha256": "1a9d0225f8f563895ef229bc75afadb231fa24b3b0afd252b9a4d36095a86508",
+          "description_bytes": 123,
+          "input_schema_bytes": 1331,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 1629,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_snapshot",
+          "bytes": 944,
+          "sha256": "d0c0868f6bb745196a77c5c3cf49377c68cecd6c43e9cf63b072044ed4e76f0b",
+          "description_bytes": 82,
+          "input_schema_bytes": 698,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 944,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_click",
+          "bytes": 950,
+          "sha256": "b2af2a07007d74a220a2b5b0ed68d3cc864106682f2403de79a9d5fbe569bc69",
+          "description_bytes": 27,
+          "input_schema_bytes": 770,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 950,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_drag",
+          "bytes": 916,
+          "sha256": "43839d2dcae9a4105ec7a56960cb2c18b2fb08b3545c759e5977e1374bf5ed5e",
+          "description_bytes": 42,
+          "input_schema_bytes": 717,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 916,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_hover",
+          "bytes": 586,
+          "sha256": "7ed508c65fbafadf67a804ff54bf157c623a9edbc1eae7fc5ee709ec004efd3c",
+          "description_bytes": 26,
+          "input_schema_bytes": 401,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 586,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_select_option",
+          "bytes": 767,
+          "sha256": "39519dca96a2fabfc94df910ffc418204ac13efffb0d1913b2b5b519c3c91e6d",
+          "description_bytes": 30,
+          "input_schema_bytes": 568,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 767,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_tabs",
+          "bytes": 656,
+          "sha256": "4668dd615d73617235e242931431a896d10084cf112d655d5fac8bd59a3c21c6",
+          "description_bytes": 45,
+          "input_schema_bytes": 453,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 656,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "browser_wait_for",
+          "bytes": 563,
+          "sha256": "2f3519d9818a230d70b028853d81901adb824511a27351dab1cd9fb9ef8da0f3",
+          "description_bytes": 64,
+          "input_schema_bytes": 340,
+          "output_schema_bytes": 0,
+          "extra_fields": [],
+          "extra_fields_bytes": 2,
+          "four_field_bytes": 563,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        }
+      ],
+      "managed_tools_call_count": 0,
+      "complete": true,
+      "raw_tools_artifact_sha256": "673eb1f0ac29a3edd229f8c6e5ba7f9e7f84223f072ad3063798982c69ae8602",
+      "native_startup_network_or_os_side_effects": "not_measured",
+      "guard_host_dispatch_count": null,
+      "receiver_effect_count": null
+    },
+    {
+      "id": "github-default",
+      "transport": "stdio",
+      "package": "github/github-mcp-server@v2.0.2",
+      "methods": {
+        "initialize": 1,
+        "notifications/initialized": 1,
+        "tools/list": 1
+      },
+      "forbidden_attempts": [],
+      "server_info": {
+        "name": "github-mcp-server",
+        "title": "GitHub MCP Server",
+        "version": "2.0.2",
+        "icon_count": 2,
+        "icons_canonical_bytes": 2092,
+        "icons_sha256": "1a5be05f3d30521e34fce0925b22cf968b865d90802d4e261c6f9a10f6936479"
+      },
+      "protocol_version": "2025-11-25",
+      "server_instructions_bytes": 1802,
+      "metrics": {
+        "tool_count": 46,
+        "pages": 1,
+        "all_definitions_total_bytes": 126553,
+        "max_definition_bytes": 5768,
+        "median_definition_bytes": 2615.5,
+        "max_page_canonical_result_bytes": 126642,
+        "over_64kib_count": 0,
+        "top_level_field_counts": {
+          "annotations": 46,
+          "description": 46,
+          "inputSchema": 46,
+          "name": 46,
+          "icons": 46,
+          "_meta": 5
+        },
+        "nested_input_schema_tools": 12,
+        "adapter_full_definition_preserved_count": 46,
+        "largest_tool": "issue_write"
+      },
+      "tools": [
+        {
+          "name": "add_comment_to_pending_review",
+          "bytes": 3519,
+          "sha256": "356c79d4c33df05d104b737eae963d6b42a7e33a8c954d3327bbde9d983581c3",
+          "description_bytes": 161,
+          "input_schema_bytes": 1294,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 1670,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "add_issue_comment",
+          "bytes": 3279,
+          "sha256": "a63ff8bad823c7e29f58a25863ac760082c7727e3ebc43c1fad83c51b2b531b6",
+          "description_bytes": 314,
+          "input_schema_bytes": 869,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 1350,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "add_reply_to_pull_request_comment",
+          "bytes": 3101,
+          "sha256": "f914f4f4ef46d928fb4a848478bb3212c9e7f7e69012639755bedc6a23aa3734",
+          "description_bytes": 244,
+          "input_schema_bytes": 828,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 1252,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "assign_copilot_to_issue",
+          "bytes": 3203,
+          "sha256": "bfbebeb052342e88f7419c8ab8d3248e662695fbc335c47d63c03ea1f6ec939d",
+          "description_bytes": 298,
+          "input_schema_bytes": 713,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2026,
+          "four_field_bytes": 1178,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_branch",
+          "bytes": 1697,
+          "sha256": "bb4eff4ebd0ce2309a64ccd14a83135fcb2456610b977acc4829bf0ecce3eec5",
+          "description_bytes": 42,
+          "input_schema_bytes": 382,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 564,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_or_update_file",
+          "bytes": 2896,
+          "sha256": "da073b0093a12d703fd9c77545726f5b1dfe5f1910ee8f851f8831396f088ba6",
+          "description_bytes": 532,
+          "input_schema_bytes": 1069,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1763,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_pull_request",
+          "bytes": 2913,
+          "sha256": "c1c5c929cbd880161c60d472ffbcaa4a5e7ffb786d03eb7c8a0dc714d0760168",
+          "description_bytes": 49,
+          "input_schema_bytes": 767,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 1944,
+          "four_field_bytes": 970,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_repository",
+          "bytes": 1877,
+          "sha256": "d28e5dbd7f6df4bad4c631358be0b2004184a78e3cf32afe1528705ea497895a",
+          "description_bytes": 72,
+          "input_schema_bytes": 524,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 744,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "delete_file",
+          "bytes": 1805,
+          "sha256": "2edc882cbcb39ef9c2cce33d6fb9ab08bdbf91744ec789680ed8cd49f8623b4c",
+          "description_bytes": 38,
+          "input_schema_bytes": 475,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 672,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "fork_repository",
+          "bytes": 2341,
+          "sha256": "301c23ccb710e33f2e819520e570c4ad3488f3d6ee4c4bc6619a24fe70ddd55c",
+          "description_bytes": 66,
+          "input_schema_bytes": 294,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1838,
+          "four_field_bytes": 504,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_commit",
+          "bytes": 2265,
+          "sha256": "f5f0698dfbf42dadc6d18702d54459588c2b569f39061dfbc898ef61147c8e64",
+          "description_bytes": 49,
+          "input_schema_bytes": 942,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1132,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_file_contents",
+          "bytes": 2368,
+          "sha256": "37ab6d6cd6da6cb17c63534cdcfd55759e5dbc48d5c91cbba49c64cf9f4526d6",
+          "description_bytes": 64,
+          "input_schema_bytes": 1011,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1235,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_label",
+          "bytes": 2441,
+          "sha256": "59415fd47031eac027e58d6a99cb5415f9a20cb1a556eda881561bcb628852a0",
+          "description_bytes": 39,
+          "input_schema_bytes": 313,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 512,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_latest_release",
+          "bytes": 1548,
+          "sha256": "d27ca415830ed787118788fff4e76f4f111ea94d29650f70a16b3ebb2600416c",
+          "description_bytes": 45,
+          "input_schema_bytes": 221,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 415,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_me",
+          "bytes": 2047,
+          "sha256": "e296e488fcd44f31ecdce94894c5312a321fbbdc8bc725ec062e0ce670e95b09",
+          "description_bytes": 171,
+          "input_schema_bytes": 33,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 1706,
+          "four_field_bytes": 342,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_release_by_tag",
+          "bytes": 1643,
+          "sha256": "f45841a264a91152b0d5ea102568d6ed41ac8878ec09a0d57ef724efd9c9ce5d",
+          "description_bytes": 61,
+          "input_schema_bytes": 293,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 510,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_tag",
+          "bytes": 1603,
+          "sha256": "c01afc122ecd4cf829ea9d727af53c5e051ad4ad6eee308c139fdd32f8ba861e",
+          "description_bytes": 59,
+          "input_schema_bytes": 276,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 470,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_team_members",
+          "bytes": 2088,
+          "sha256": "6bae5a810b2223b992efc5463a9270303c60bce63d169057554f8d3bf4a7fe4c",
+          "description_bytes": 120,
+          "input_schema_bytes": 210,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1614,
+          "four_field_bytes": 475,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_teams",
+          "bytes": 2000,
+          "sha256": "ea2536a17700157ff37c0492f199fdcbf44935d3cc20c17335de5b5e9c2ae497",
+          "description_bytes": 110,
+          "input_schema_bytes": 146,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1614,
+          "four_field_bytes": 387,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "issue_read",
+          "bytes": 3396,
+          "sha256": "f6e785464d9e479d02d8d11ad683152d547bd9028d129c588e827097269edf56",
+          "description_bytes": 62,
+          "input_schema_bytes": 1265,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 1467,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "issue_write",
+          "bytes": 5768,
+          "sha256": "5b8acc6d1c2d5961d52bb58699a8b0d1bdbcdfa17f205ce9a9404803ebf912a5",
+          "description_bytes": 64,
+          "input_schema_bytes": 3518,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 2027,
+          "four_field_bytes": 3742,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_branches",
+          "bytes": 1736,
+          "sha256": "dc682d42d124840ab59909184ecb1033765100451468e8b1316fe1d8326e1a15",
+          "description_bytes": 36,
+          "input_schema_bytes": 428,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 603,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_commits",
+          "bytes": 2875,
+          "sha256": "1319cb12f7de449dcedb8e909cc45c655b5201cf8e8dce621e8b7feb97d34bfc",
+          "description_bytes": 178,
+          "input_schema_bytes": 1427,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1742,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_issue_fields",
+          "bytes": 2766,
+          "sha256": "27ec9b04a4f198275365519ea2531548352473c71184344f6cdcbef1e53d342c",
+          "description_bytes": 253,
+          "input_schema_bytes": 437,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 837,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_issue_types",
+          "bytes": 2597,
+          "sha256": "0855003f1809b55c9cae9d1cfd64908aefc1070d693eca49a732eec70f9706a7",
+          "description_bytes": 132,
+          "input_schema_bytes": 381,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 668,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_issues",
+          "bytes": 4350,
+          "sha256": "57cc557cd2eb39e27028b0d554854f9d2c682988f44463195cbe5a21312188cf",
+          "description_bytes": 137,
+          "input_schema_bytes": 2149,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 2421,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_pull_requests",
+          "bytes": 3566,
+          "sha256": "0e6642a2e1ca69a4d109c48dc80b7db8db9333b13144f016d47b8ec48ca1da54",
+          "description_bytes": 148,
+          "input_schema_bytes": 1420,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 1717,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_releases",
+          "bytes": 2116,
+          "sha256": "9960f6c48fb0ab4ebec546b9d427edbbf61741f75e6b1dbc6d7a96d62f662b3e",
+          "description_bytes": 36,
+          "input_schema_bytes": 808,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 983,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_repository_collaborators",
+          "bytes": 2233,
+          "sha256": "cd997376de91c17f4cee52254a7230e67141297d12c3e30238b31e5e1407d99f",
+          "description_bytes": 219,
+          "input_schema_bytes": 710,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1100,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_tags",
+          "bytes": 1728,
+          "sha256": "30fff089318ec544ee2730163b569b7583e80ef48bb988094739cbcf2589dde6",
+          "description_bytes": 36,
+          "input_schema_bytes": 428,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 595,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "merge_pull_request",
+          "bytes": 2570,
+          "sha256": "a05d26714f48799f7cafa23686b648d07ded39c54bca3813d737b000c91ddde5",
+          "description_bytes": 44,
+          "input_schema_bytes": 651,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1726,
+          "four_field_bytes": 845,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "pull_request_read",
+          "bytes": 4518,
+          "sha256": "6faeb8c4918da63dd5df0b50aabb58de6397ec9fd07e6ed20c0d1d35218eb21e",
+          "description_bytes": 64,
+          "input_schema_bytes": 2438,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 2669,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "pull_request_review_write",
+          "bytes": 4158,
+          "sha256": "cd3af24546ce2ccaf2a0933bdbad5d6e689a23acc4216a5c742939395157a4a4",
+          "description_bytes": 1115,
+          "input_schema_bytes": 970,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 2309,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "push_files",
+          "bytes": 2049,
+          "sha256": "b7d814b57db43ab2c4151c1e509ba3bd55374330bbf1d833ff80a60c7fd3d02d",
+          "description_bytes": 61,
+          "input_schema_bytes": 707,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 916,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "request_copilot_review",
+          "bytes": 2634,
+          "sha256": "b304a4b93819ead01223ba8ea206d980d012ec0c16ac1aa5e67ffc76feb5d584",
+          "description_bytes": 150,
+          "input_schema_bytes": 301,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2026,
+          "four_field_bytes": 609,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_code",
+          "bytes": 2754,
+          "sha256": "3d90a0857b8fefb2d1c5f08213bedc8f86268b8bf42591185adf3906d7918633",
+          "description_bytes": 175,
+          "input_schema_bytes": 1311,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1621,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_commits",
+          "bytes": 2690,
+          "sha256": "3896215908d0ed12648bc1af45c8ee39eb439015dab407b6f004421b72e2712f",
+          "description_bytes": 207,
+          "input_schema_bytes": 1209,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1557,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_issues",
+          "bytes": 3961,
+          "sha256": "ad55983aa344f5fee67f3c816460d82472bd7ac6dadae2fc81791b58648484e5",
+          "description_bytes": 169,
+          "input_schema_bytes": 1722,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 2032,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_pull_requests",
+          "bytes": 3731,
+          "sha256": "16734a3ca98c23f19a7ca82695adecc19b9239b66d477733fc098dd4ca8d831a",
+          "description_bytes": 98,
+          "input_schema_bytes": 1631,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 1882,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_repositories",
+          "bytes": 2459,
+          "sha256": "26550cacfbfe193ee8fddffb5e8617893a9e112e436a0a8ceab0969d9fdc6cac",
+          "description_bytes": 182,
+          "input_schema_bytes": 993,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1326,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_users",
+          "bytes": 3078,
+          "sha256": "32e56d38be758ea45bc5328ef16ff36136b419688b03551c7c3102f2b0ec4c65",
+          "description_bytes": 134,
+          "input_schema_bytes": 674,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2134,
+          "four_field_bytes": 945,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "sub_issue_write",
+          "bytes": 3562,
+          "sha256": "4247ad4d0187d5fd07fbfa85993d3feecce947d38ca68807dfa71879db7d88f8",
+          "description_bytes": 57,
+          "input_schema_bytes": 1431,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 1633,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "ui_get",
+          "bytes": 2382,
+          "sha256": "f5339ecbba11bffd733ddd58b15d53186369c0e3b59476b191ebdf3668dece1b",
+          "description_bytes": 107,
+          "input_schema_bytes": 494,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 1652,
+          "four_field_bytes": 731,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "update_issue_comment",
+          "bytes": 2708,
+          "sha256": "30ca4a0ac3ff4c122bce7d7dffedebe1491eb94b958603a06b8e0f54abfb079e",
+          "description_bytes": 128,
+          "input_schema_bytes": 497,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 779,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "update_pull_request",
+          "bytes": 3037,
+          "sha256": "304a21e1d7277c568a0932e2b9a052995b2e6504209ad77092e15ba9148224f0",
+          "description_bytes": 55,
+          "input_schema_bytes": 890,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 1943,
+          "four_field_bytes": 1095,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "update_pull_request_branch",
+          "bytes": 2497,
+          "sha256": "b47eb854b79ee6509122a327807ab4bb848204178a1bf9b5b70abe7ab16bedb1",
+          "description_bytes": 81,
+          "input_schema_bytes": 401,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 648,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        }
+      ],
+      "managed_tools_call_count": 0,
+      "complete": true,
+      "raw_tools_artifact_sha256": "59a551535d81570b20e9dffb137ad8fb8b8c94524381c4b8a500260e68923048",
+      "native_startup_network_or_os_side_effects": "not_measured",
+      "guard_host_dispatch_count": null,
+      "receiver_effect_count": null
+    },
+    {
+      "id": "github-all",
+      "transport": "stdio",
+      "package": "github/github-mcp-server@v2.0.2",
+      "methods": {
+        "initialize": 1,
+        "notifications/initialized": 1,
+        "tools/list": 1
+      },
+      "forbidden_attempts": [],
+      "server_info": {
+        "name": "github-mcp-server",
+        "title": "GitHub MCP Server",
+        "version": "2.0.2",
+        "icon_count": 2,
+        "icons_canonical_bytes": 2092,
+        "icons_sha256": "1a5be05f3d30521e34fce0925b22cf968b865d90802d4e261c6f9a10f6936479"
+      },
+      "protocol_version": "2025-11-25",
+      "server_instructions_bytes": 6763,
+      "metrics": {
+        "tool_count": 91,
+        "pages": 1,
+        "all_definitions_total_bytes": 259351,
+        "max_definition_bytes": 8360,
+        "median_definition_bytes": 2626,
+        "max_page_canonical_result_bytes": 259485,
+        "over_64kib_count": 0,
+        "top_level_field_counts": {
+          "annotations": 91,
+          "description": 91,
+          "inputSchema": 91,
+          "name": 91,
+          "icons": 91,
+          "_meta": 5
+        },
+        "nested_input_schema_tools": 20,
+        "adapter_full_definition_preserved_count": 91,
+        "largest_tool": "projects_write"
+      },
+      "tools": [
+        {
+          "name": "actions_get",
+          "bytes": 2664,
+          "sha256": "601dfa84296fe6358ac8035ad28c60ae35d73544936318f0fba02265f273dca2",
+          "description_bytes": 166,
+          "input_schema_bytes": 964,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1322,
+          "four_field_bytes": 1343,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "actions_list",
+          "bytes": 4108,
+          "sha256": "94b870ab985189c090638b1d37be7f0fd3c53ad6c3b6006dd675d5836a1762a2",
+          "description_bytes": 177,
+          "input_schema_bytes": 2438,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1322,
+          "four_field_bytes": 2787,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "actions_run_trigger",
+          "bytes": 2615,
+          "sha256": "45bf02ec37d288e298a167acae452add5f06a7b83477da4a8c8058b3d58e2daf",
+          "description_bytes": 132,
+          "input_schema_bytes": 967,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1322,
+          "four_field_bytes": 1294,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "add_comment_to_pending_review",
+          "bytes": 3519,
+          "sha256": "356c79d4c33df05d104b737eae963d6b42a7e33a8c954d3327bbde9d983581c3",
+          "description_bytes": 161,
+          "input_schema_bytes": 1294,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 1670,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "add_issue_comment",
+          "bytes": 3279,
+          "sha256": "a63ff8bad823c7e29f58a25863ac760082c7727e3ebc43c1fad83c51b2b531b6",
+          "description_bytes": 314,
+          "input_schema_bytes": 869,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 1350,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "add_reply_to_pull_request_comment",
+          "bytes": 3101,
+          "sha256": "f914f4f4ef46d928fb4a848478bb3212c9e7f7e69012639755bedc6a23aa3734",
+          "description_bytes": 244,
+          "input_schema_bytes": 828,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 1252,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "assign_copilot_to_issue",
+          "bytes": 3203,
+          "sha256": "bfbebeb052342e88f7419c8ab8d3248e662695fbc335c47d63c03ea1f6ec939d",
+          "description_bytes": 298,
+          "input_schema_bytes": 713,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2026,
+          "four_field_bytes": 1178,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "assign_copilot_to_issue_with_intent",
+          "bytes": 4030,
+          "sha256": "e1f1a90be3179e3858d8187ac7fb53f7a0cca2031674d2171f57838676512c63",
+          "description_bytes": 360,
+          "input_schema_bytes": 1454,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2026,
+          "four_field_bytes": 2005,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_branch",
+          "bytes": 1697,
+          "sha256": "bb4eff4ebd0ce2309a64ccd14a83135fcb2456610b977acc4829bf0ecce3eec5",
+          "description_bytes": 42,
+          "input_schema_bytes": 382,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 564,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_gist",
+          "bytes": 3119,
+          "sha256": "3a831ae2dea18e75260ddd0b271da0ff8371c9c1d1c8e0d0387ee6d70f94cf5f",
+          "description_bytes": 17,
+          "input_schema_bytes": 405,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2562,
+          "four_field_bytes": 558,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_or_update_file",
+          "bytes": 2896,
+          "sha256": "da073b0093a12d703fd9c77545726f5b1dfe5f1910ee8f851f8831396f088ba6",
+          "description_bytes": 532,
+          "input_schema_bytes": 1069,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1763,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_pull_request",
+          "bytes": 2913,
+          "sha256": "c1c5c929cbd880161c60d472ffbcaa4a5e7ffb786d03eb7c8a0dc714d0760168",
+          "description_bytes": 49,
+          "input_schema_bytes": 767,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 1944,
+          "four_field_bytes": 970,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_repository",
+          "bytes": 1877,
+          "sha256": "d28e5dbd7f6df4bad4c631358be0b2004184a78e3cf32afe1528705ea497895a",
+          "description_bytes": 72,
+          "input_schema_bytes": 524,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 744,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "create_repository_ruleset",
+          "bytes": 5420,
+          "sha256": "f98412afe3337a1b9657411582371c51463487d1e499445d9354aad476f08ce0",
+          "description_bytes": 73,
+          "input_schema_bytes": 3170,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2014,
+          "four_field_bytes": 3407,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "custom_properties_read",
+          "bytes": 3392,
+          "sha256": "efbc5a64cc3b572c8e5682ec2be201dd9e4e048805b59ee8c5c34f087281a5e5",
+          "description_bytes": 292,
+          "input_schema_bytes": 930,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2014,
+          "four_field_bytes": 1379,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "custom_properties_write",
+          "bytes": 6162,
+          "sha256": "5559f378f0e3d9d479a14dfee3a2f06bfb73536d1597908576d3e6996a8b1238",
+          "description_bytes": 459,
+          "input_schema_bytes": 3532,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2014,
+          "four_field_bytes": 4149,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "delete_file",
+          "bytes": 1805,
+          "sha256": "2edc882cbcb39ef9c2cce33d6fb9ab08bdbf91744ec789680ed8cd49f8623b4c",
+          "description_bytes": 38,
+          "input_schema_bytes": 475,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 672,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "discussion_comment_write",
+          "bytes": 3075,
+          "sha256": "1b8cbd4f97a3e30e50aee1cc14f111efe0b6d60a220048092b0003f2a2df21a8",
+          "description_bytes": 202,
+          "input_schema_bytes": 1400,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1286,
+          "four_field_bytes": 1790,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "dismiss_notification",
+          "bytes": 2041,
+          "sha256": "9fd76ac9400002667f8148bad1e5efcc0972e9e3a95397f6f4d90e4ae5515960",
+          "description_bytes": 52,
+          "input_schema_bytes": 254,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1582,
+          "four_field_bytes": 460,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "fork_repository",
+          "bytes": 2341,
+          "sha256": "301c23ccb710e33f2e819520e570c4ad3488f3d6ee4c4bc6619a24fe70ddd55c",
+          "description_bytes": 66,
+          "input_schema_bytes": 294,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1838,
+          "four_field_bytes": 504,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_code_quality_finding",
+          "bytes": 1914,
+          "sha256": "244619c828e4b4edccc498b9a3dbb068bd8a9387f0ee085f4fdb400605ebae9d",
+          "description_bytes": 70,
+          "input_schema_bytes": 338,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1346,
+          "four_field_bytes": 569,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_code_scanning_alert",
+          "bytes": 2717,
+          "sha256": "20f48794329b9184078ce66539fd8f67830c457de5fe8807ea62c70b34f5a5fe",
+          "description_bytes": 69,
+          "input_schema_bytes": 332,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2158,
+          "four_field_bytes": 560,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_commit",
+          "bytes": 2265,
+          "sha256": "f5f0698dfbf42dadc6d18702d54459588c2b569f39061dfbc898ef61147c8e64",
+          "description_bytes": 49,
+          "input_schema_bytes": 942,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1132,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_dependabot_alert",
+          "bytes": 1720,
+          "sha256": "a4ace7167912bd27b130e51cf121cf907ba4a801b7677ba4ec0f7c3c0dca1230",
+          "description_bytes": 66,
+          "input_schema_bytes": 332,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1170,
+          "four_field_bytes": 551,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_discussion",
+          "bytes": 1768,
+          "sha256": "343ddc0859f0f4dcdce09b37fb9d18ec20a0044b796346f774d860c84743efdf",
+          "description_bytes": 31,
+          "input_schema_bytes": 311,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1286,
+          "four_field_bytes": 483,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_discussion_comments",
+          "bytes": 2225,
+          "sha256": "673ad92166e9897fd06ec52cbf0b222fddb96beede0fc163dd6ef103a7d61468",
+          "description_bytes": 30,
+          "input_schema_bytes": 751,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1286,
+          "four_field_bytes": 940,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_file_contents",
+          "bytes": 2368,
+          "sha256": "37ab6d6cd6da6cb17c63534cdcfd55759e5dbc48d5c91cbba49c64cf9f4526d6",
+          "description_bytes": 64,
+          "input_schema_bytes": 1011,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1235,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_gist",
+          "bytes": 2865,
+          "sha256": "870d34125e3b38f33ab704ec591f725395df3892a6b3f122721c7d92a3bfc3ca",
+          "description_bytes": 49,
+          "input_schema_bytes": 118,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2562,
+          "four_field_bytes": 304,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_global_security_advisory",
+          "bytes": 2202,
+          "sha256": "8538b9ea8c356cf7fd9950a0c06878a0bc64046f3256d8026507e29d8a06ff68",
+          "description_bytes": 30,
+          "input_schema_bytes": 156,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1846,
+          "four_field_bytes": 357,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_job_logs",
+          "bytes": 2606,
+          "sha256": "25333cbc9c4ca59b24aa4ee5f0923412955483d53f2c92a7c34337dba8bd73ae",
+          "description_bytes": 236,
+          "input_schema_bytes": 885,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1322,
+          "four_field_bytes": 1285,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_label",
+          "bytes": 1721,
+          "sha256": "d653919cd8c1da90ddbb0028b0b338cade7a8a74e2405c40eb812b30246bb13d",
+          "description_bytes": 39,
+          "input_schema_bytes": 313,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1210,
+          "four_field_bytes": 512,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_latest_release",
+          "bytes": 1548,
+          "sha256": "d27ca415830ed787118788fff4e76f4f111ea94d29650f70a16b3ebb2600416c",
+          "description_bytes": 45,
+          "input_schema_bytes": 221,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 415,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_me",
+          "bytes": 2047,
+          "sha256": "e296e488fcd44f31ecdce94894c5312a321fbbdc8bc725ec062e0ce670e95b09",
+          "description_bytes": 171,
+          "input_schema_bytes": 33,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 1706,
+          "four_field_bytes": 342,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_notification_details",
+          "bytes": 2077,
+          "sha256": "00372698aea075ec1fc6555fab1603c266c50064b292791a4ec52ec228dff8c9",
+          "description_bytes": 195,
+          "input_schema_bytes": 140,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1582,
+          "four_field_bytes": 496,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_release_by_tag",
+          "bytes": 1643,
+          "sha256": "f45841a264a91152b0d5ea102568d6ed41ac8878ec09a0d57ef724efd9c9ce5d",
+          "description_bytes": 61,
+          "input_schema_bytes": 293,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 510,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_repository_tree",
+          "bytes": 2717,
+          "sha256": "2624555af2ff5a518776567b665f93b26106386c29406baabac01d88cd90f45f",
+          "description_bytes": 94,
+          "input_schema_bytes": 711,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1762,
+          "four_field_bytes": 956,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_secret_scanning_alert",
+          "bytes": 2523,
+          "sha256": "6783d3b83613279e6252774d6315ec02a39c85b9d17cd94bc3a082e937c686a6",
+          "description_bytes": 71,
+          "input_schema_bytes": 332,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1958,
+          "four_field_bytes": 566,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_tag",
+          "bytes": 1603,
+          "sha256": "c01afc122ecd4cf829ea9d727af53c5e051ad4ad6eee308c139fdd32f8ba861e",
+          "description_bytes": 59,
+          "input_schema_bytes": 276,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 470,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_team_members",
+          "bytes": 2088,
+          "sha256": "6bae5a810b2223b992efc5463a9270303c60bce63d169057554f8d3bf4a7fe4c",
+          "description_bytes": 120,
+          "input_schema_bytes": 210,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1614,
+          "four_field_bytes": 475,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "get_teams",
+          "bytes": 2000,
+          "sha256": "ea2536a17700157ff37c0492f199fdcbf44935d3cc20c17335de5b5e9c2ae497",
+          "description_bytes": 110,
+          "input_schema_bytes": 146,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1614,
+          "four_field_bytes": 387,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "issue_read",
+          "bytes": 3396,
+          "sha256": "f6e785464d9e479d02d8d11ad683152d547bd9028d129c588e827097269edf56",
+          "description_bytes": 62,
+          "input_schema_bytes": 1265,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 1467,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "issue_write",
+          "bytes": 5768,
+          "sha256": "5b8acc6d1c2d5961d52bb58699a8b0d1bdbcdfa17f205ce9a9404803ebf912a5",
+          "description_bytes": 64,
+          "input_schema_bytes": 3518,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 2027,
+          "four_field_bytes": 3742,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "label_write",
+          "bytes": 2358,
+          "sha256": "a734815f2f702f1be84e2cef548433edd4c8578bc24e45dfb4ed09b644e03681",
+          "description_bytes": 100,
+          "input_schema_bytes": 864,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1210,
+          "four_field_bytes": 1149,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_branches",
+          "bytes": 1736,
+          "sha256": "dc682d42d124840ab59909184ecb1033765100451468e8b1316fe1d8326e1a15",
+          "description_bytes": 36,
+          "input_schema_bytes": 428,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 603,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_code_scanning_alerts",
+          "bytes": 3315,
+          "sha256": "95c5b014e4e6543dab52fa6e69a4241ded41b749fa1d573d6b1a088404a98c01",
+          "description_bytes": 49,
+          "input_schema_bytes": 946,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2158,
+          "four_field_bytes": 1158,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_commits",
+          "bytes": 2875,
+          "sha256": "1319cb12f7de449dcedb8e909cc45c655b5201cf8e8dce621e8b7feb97d34bfc",
+          "description_bytes": 178,
+          "input_schema_bytes": 1427,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1742,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_dependabot_alerts",
+          "bytes": 2132,
+          "sha256": "9c6c9755884d727ab3a2a0185e89623626b69a602d4a865ba3609d95ffa54faa",
+          "description_bytes": 46,
+          "input_schema_bytes": 760,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1170,
+          "four_field_bytes": 963,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_discussion_categories",
+          "bytes": 1831,
+          "sha256": "14405604ffd96f0e4e1666e844d49856e87898f69dbf02dd1c82a67381092ade",
+          "description_bytes": 84,
+          "input_schema_bytes": 297,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1286,
+          "four_field_bytes": 546,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_discussions",
+          "bytes": 2391,
+          "sha256": "c44ad5728915c1339c1ca67c880298105b626ecca96060bbea7b3095406b83e0",
+          "description_bytes": 50,
+          "input_schema_bytes": 911,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1286,
+          "four_field_bytes": 1106,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_gists",
+          "bytes": 3151,
+          "sha256": "fa383fd61388c55f27944560755a12d18b51d9922d2e9aa146ed43902df8d7a2",
+          "description_bytes": 21,
+          "input_schema_bytes": 436,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2562,
+          "four_field_bytes": 590,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_global_security_advisories",
+          "bytes": 3382,
+          "sha256": "ad7a76d8a19c92154080605f70f582625aa931f967722c4a0247d3a2f18f7245",
+          "description_bytes": 44,
+          "input_schema_bytes": 1318,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1846,
+          "four_field_bytes": 1537,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_issue_fields",
+          "bytes": 2766,
+          "sha256": "27ec9b04a4f198275365519ea2531548352473c71184344f6cdcbef1e53d342c",
+          "description_bytes": 253,
+          "input_schema_bytes": 437,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 837,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_issue_types",
+          "bytes": 2597,
+          "sha256": "0855003f1809b55c9cae9d1cfd64908aefc1070d693eca49a732eec70f9706a7",
+          "description_bytes": 132,
+          "input_schema_bytes": 381,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 668,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_issues",
+          "bytes": 4350,
+          "sha256": "57cc557cd2eb39e27028b0d554854f9d2c682988f44463195cbe5a21312188cf",
+          "description_bytes": 137,
+          "input_schema_bytes": 2149,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 2421,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_label",
+          "bytes": 1783,
+          "sha256": "0e5ca72b0e59572ef15024cfc871c821e88565973e5ece5d96ad567e1f991b00",
+          "description_bytes": 109,
+          "input_schema_bytes": 313,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1210,
+          "four_field_bytes": 574,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_notifications",
+          "bytes": 3472,
+          "sha256": "a1f60cf32410ef345612142138527572a32ef6f3a3566889419c3c9890dc51c0",
+          "description_bytes": 557,
+          "input_schema_bytes": 1185,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1582,
+          "four_field_bytes": 1891,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_org_repository_security_advisories",
+          "bytes": 2506,
+          "sha256": "013b189b3087706723ee0dc1b99b9b8a76b22cda644b2f1d57c66ac5a5904c7a",
+          "description_bytes": 62,
+          "input_schema_bytes": 408,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1846,
+          "four_field_bytes": 661,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_pull_requests",
+          "bytes": 3566,
+          "sha256": "0e6642a2e1ca69a4d109c48dc80b7db8db9333b13144f016d47b8ec48ca1da54",
+          "description_bytes": 148,
+          "input_schema_bytes": 1420,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 1717,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_releases",
+          "bytes": 2116,
+          "sha256": "9960f6c48fb0ab4ebec546b9d427edbbf61741f75e6b1dbc6d7a96d62f662b3e",
+          "description_bytes": 36,
+          "input_schema_bytes": 808,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 983,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_repository_collaborators",
+          "bytes": 2233,
+          "sha256": "cd997376de91c17f4cee52254a7230e67141297d12c3e30238b31e5e1407d99f",
+          "description_bytes": 219,
+          "input_schema_bytes": 710,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1100,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_repository_security_advisories",
+          "bytes": 2626,
+          "sha256": "98a4c15a6cb4c2d438a9169939db86ec28dfb1ee2b28b943837783a02954da04",
+          "description_bytes": 60,
+          "input_schema_bytes": 538,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1846,
+          "four_field_bytes": 781,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_secret_scanning_alerts",
+          "bytes": 3087,
+          "sha256": "ebf02e3045bdaf5a6ca7e1bc518347bc9e3dc3110ed5b2cdfc87f9cf66b12e15",
+          "description_bytes": 51,
+          "input_schema_bytes": 912,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1958,
+          "four_field_bytes": 1130,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_starred_repositories",
+          "bytes": 2746,
+          "sha256": "28706f9d81c4169efb459b76dee8474d2225314a6a8f7092c319fb9dceed4b62",
+          "description_bytes": 25,
+          "input_schema_bytes": 677,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1882,
+          "four_field_bytes": 865,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "list_tags",
+          "bytes": 1728,
+          "sha256": "30fff089318ec544ee2730163b569b7583e80ef48bb988094739cbcf2589dde6",
+          "description_bytes": 36,
+          "input_schema_bytes": 428,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 595,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "manage_notification_subscription",
+          "bytes": 2188,
+          "sha256": "b91f8bf015d0754d490086c513ef70519f00f2d2ed537bddf2a6a27af089822b",
+          "description_bytes": 96,
+          "input_schema_bytes": 310,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1582,
+          "four_field_bytes": 607,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "manage_repository_notification_subscription",
+          "bytes": 2368,
+          "sha256": "ce6cdd9e1464c2343379e3102c87c6ecb27e34a87956299d580e5535ff8226b5",
+          "description_bytes": 138,
+          "input_schema_bytes": 426,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1582,
+          "four_field_bytes": 787,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "mark_all_notifications_read",
+          "bytes": 2289,
+          "sha256": "ac636db5f973b2c3c1d8cc1074be5e9a5ac082fb65ff09c23f874786258057c1",
+          "description_bytes": 30,
+          "input_schema_bytes": 507,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1582,
+          "four_field_bytes": 708,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "merge_pull_request",
+          "bytes": 2570,
+          "sha256": "a05d26714f48799f7cafa23686b648d07ded39c54bca3813d737b000c91ddde5",
+          "description_bytes": 44,
+          "input_schema_bytes": 651,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1726,
+          "four_field_bytes": 845,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "projects_get",
+          "bytes": 3164,
+          "sha256": "802688c53264d6211103504d54c00b94ca575cf272fec0e044ea8c6feb672e2d",
+          "description_bytes": 180,
+          "input_schema_bytes": 1836,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 982,
+          "four_field_bytes": 2183,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "projects_list",
+          "bytes": 3349,
+          "sha256": "aa09026787ec0ed0c07d282c4ab217d0b6c09c5577936a249c3ff255999716e0",
+          "description_bytes": 185,
+          "input_schema_bytes": 2025,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 982,
+          "four_field_bytes": 2368,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "projects_write",
+          "bytes": 8360,
+          "sha256": "0a770cb1b7e4ac6f9404b0d544352e325026315120bd6db2f3a0d21077c58971",
+          "description_bytes": 171,
+          "input_schema_bytes": 7035,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 982,
+          "four_field_bytes": 7379,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "pull_request_read",
+          "bytes": 4518,
+          "sha256": "6faeb8c4918da63dd5df0b50aabb58de6397ec9fd07e6ed20c0d1d35218eb21e",
+          "description_bytes": 64,
+          "input_schema_bytes": 2438,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 2669,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "pull_request_review_write",
+          "bytes": 4158,
+          "sha256": "cd3af24546ce2ccaf2a0933bdbad5d6e689a23acc4216a5c742939395157a4a4",
+          "description_bytes": 1115,
+          "input_schema_bytes": 970,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 2309,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "push_files",
+          "bytes": 2049,
+          "sha256": "b7d814b57db43ab2c4151c1e509ba3bd55374330bbf1d833ff80a60c7fd3d02d",
+          "description_bytes": 61,
+          "input_schema_bytes": 707,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 916,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "repository_ruleset_read",
+          "bytes": 5598,
+          "sha256": "f3a75b564b2fc46b6765bbe088d8dff4f148db0e09c5759b8ef641d95b746b0a",
+          "description_bytes": 215,
+          "input_schema_bytes": 3210,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2014,
+          "four_field_bytes": 3585,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "request_copilot_review",
+          "bytes": 2634,
+          "sha256": "b304a4b93819ead01223ba8ea206d980d012ec0c16ac1aa5e67ffc76feb5d584",
+          "description_bytes": 150,
+          "input_schema_bytes": 301,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2026,
+          "four_field_bytes": 609,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_code",
+          "bytes": 2754,
+          "sha256": "3d90a0857b8fefb2d1c5f08213bedc8f86268b8bf42591185adf3906d7918633",
+          "description_bytes": 175,
+          "input_schema_bytes": 1311,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1621,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_commits",
+          "bytes": 2690,
+          "sha256": "3896215908d0ed12648bc1af45c8ee39eb439015dab407b6f004421b72e2712f",
+          "description_bytes": 207,
+          "input_schema_bytes": 1209,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1557,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_issues",
+          "bytes": 3961,
+          "sha256": "ad55983aa344f5fee67f3c816460d82472bd7ac6dadae2fc81791b58648484e5",
+          "description_bytes": 169,
+          "input_schema_bytes": 1722,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 2032,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_orgs",
+          "bytes": 2240,
+          "sha256": "287ddc523c0a0d2de3ecf1c984caf723872bc659269a27514732bbd53bdfef76",
+          "description_bytes": 144,
+          "input_schema_bytes": 627,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1326,
+          "four_field_bytes": 915,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_pull_requests",
+          "bytes": 3731,
+          "sha256": "16734a3ca98c23f19a7ca82695adecc19b9239b66d477733fc098dd4ca8d831a",
+          "description_bytes": 98,
+          "input_schema_bytes": 1631,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 1882,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_repositories",
+          "bytes": 2459,
+          "sha256": "26550cacfbfe193ee8fddffb5e8617893a9e112e436a0a8ceab0969d9fdc6cac",
+          "description_bytes": 182,
+          "input_schema_bytes": 993,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1134,
+          "four_field_bytes": 1326,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "search_users",
+          "bytes": 3078,
+          "sha256": "32e56d38be758ea45bc5328ef16ff36136b419688b03551c7c3102f2b0ec4c65",
+          "description_bytes": 134,
+          "input_schema_bytes": 674,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2134,
+          "four_field_bytes": 945,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "star_repository",
+          "bytes": 1862,
+          "sha256": "ad45ad21f18031bfd3fc6a5d693f35e50223646f645c98a79db832a893b0f18d",
+          "description_bytes": 24,
+          "input_schema_bytes": 221,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1474,
+          "four_field_bytes": 389,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "sub_issue_write",
+          "bytes": 3562,
+          "sha256": "4247ad4d0187d5fd07fbfa85993d3feecce947d38ca68807dfa71879db7d88f8",
+          "description_bytes": 57,
+          "input_schema_bytes": 1431,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 1633,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "ui_get",
+          "bytes": 2382,
+          "sha256": "f5339ecbba11bffd733ddd58b15d53186369c0e3b59476b191ebdf3668dece1b",
+          "description_bytes": 107,
+          "input_schema_bytes": 494,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 1652,
+          "four_field_bytes": 731,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "unstar_repository",
+          "bytes": 2276,
+          "sha256": "c4a14d16e7e3bfd8d9ca5b3b65fe4f3a0396e2c6de9f3db840a414885fa16538",
+          "description_bytes": 26,
+          "input_schema_bytes": 221,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1882,
+          "four_field_bytes": 395,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "update_gist",
+          "bytes": 3084,
+          "sha256": "ee99bb90d1126d96f16f375ae5013ef38eea53f337a304353461772727ef0977",
+          "description_bytes": 23,
+          "input_schema_bytes": 364,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 2562,
+          "four_field_bytes": 523,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "update_issue_comment",
+          "bytes": 2708,
+          "sha256": "30ca4a0ac3ff4c122bce7d7dffedebe1491eb94b958603a06b8e0f54abfb079e",
+          "description_bytes": 128,
+          "input_schema_bytes": 497,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1930,
+          "four_field_bytes": 779,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "update_pull_request",
+          "bytes": 3037,
+          "sha256": "304a21e1d7277c568a0932e2b9a052995b2e6504209ad77092e15ba9148224f0",
+          "description_bytes": 55,
+          "input_schema_bytes": 890,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "_meta",
+            "icons"
+          ],
+          "extra_fields_bytes": 1943,
+          "four_field_bytes": 1095,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "update_pull_request_branch",
+          "bytes": 2497,
+          "sha256": "b47eb854b79ee6509122a327807ab4bb848204178a1bf9b5b70abe7ab16bedb1",
+          "description_bytes": 81,
+          "input_schema_bytes": 401,
+          "output_schema_bytes": 0,
+          "extra_fields": [
+            "icons"
+          ],
+          "extra_fields_bytes": 1850,
+          "four_field_bytes": 648,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        }
+      ],
+      "managed_tools_call_count": 0,
+      "complete": true,
+      "raw_tools_artifact_sha256": "7555c4ad27dc6c56659c2ee74ff1e09386b27342f2b648ee3cb65dc1526b6994",
+      "native_startup_network_or_os_side_effects": "not_measured",
+      "guard_host_dispatch_count": null,
+      "receiver_effect_count": null
+    },
+    {
+      "id": "deepwiki",
+      "transport": "streamable_http",
+      "endpoint": "https://mcp.deepwiki.com/mcp",
+      "methods": {
+        "initialize": 1,
+        "notifications/initialized": 1,
+        "tools/list": 1
+      },
+      "forbidden_attempts": [],
+      "server_info": {
+        "name": "DeepWiki",
+        "version": "2.14.3"
+      },
+      "protocol_version": "2025-11-25",
+      "server_instructions_bytes": 3494,
+      "metrics": {
+        "tool_count": 3,
+        "pages": 1,
+        "all_definitions_total_bytes": 1534,
+        "max_definition_bytes": 655,
+        "median_definition_bytes": 447,
+        "max_page_canonical_result_bytes": 1548,
+        "over_64kib_count": 0,
+        "top_level_field_counts": {
+          "name": 3,
+          "description": 3,
+          "inputSchema": 3,
+          "outputSchema": 3,
+          "_meta": 3
+        },
+        "nested_input_schema_tools": 1,
+        "adapter_full_definition_preserved_count": 3,
+        "largest_tool": "ask_wiki_question"
+      },
+      "tools": [
+        {
+          "name": "ask_wiki_question",
+          "bytes": 655,
+          "sha256": "d9a292d4a04af2afd0545f2a723be7e0d73fe15287ce788870f1ccd71c36230b",
+          "description_bytes": 108,
+          "input_schema_bytes": 327,
+          "output_schema_bytes": 110,
+          "extra_fields": [
+            "_meta",
+            "outputSchema"
+          ],
+          "extra_fields_bytes": 160,
+          "four_field_bytes": 496,
+          "nested_schema": true,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "read_wiki_contents",
+          "bytes": 432,
+          "sha256": "de70407bb5e6ebc12b7910e26fe351cf7134db6da29dc6dd2fb39cd2c12223d8",
+          "description_bytes": 45,
+          "input_schema_bytes": 167,
+          "output_schema_bytes": 110,
+          "extra_fields": [
+            "_meta",
+            "outputSchema"
+          ],
+          "extra_fields_bytes": 160,
+          "four_field_bytes": 273,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        },
+        {
+          "name": "read_wiki_structure",
+          "bytes": 447,
+          "sha256": "1bdd3c805d690e49e061a9fd5e565c7efb49d19738e619427e84f0e2ab4d1b01",
+          "description_bytes": 59,
+          "input_schema_bytes": 167,
+          "output_schema_bytes": 110,
+          "extra_fields": [
+            "_meta",
+            "outputSchema"
+          ],
+          "extra_fields_bytes": 160,
+          "four_field_bytes": 288,
+          "nested_schema": false,
+          "definition_preserved_by_current_adapter_at_64kib": true
+        }
+      ],
+      "managed_tools_call_count": 0,
+      "complete": true,
+      "raw_tools_artifact_sha256": "e8f6b40097f27bd4c5b72889df85796fe068fc8c528e8bb0e600f160e853d29c",
+      "native_startup_network_or_os_side_effects": "not_measured",
+      "guard_host_dispatch_count": null,
+      "receiver_effect_count": null
+    }
+  ],
+  "github_release": {
+    "version": "v2.0.2",
+    "url": "https://github.com/github/github-mcp-server/releases/download/v2.0.2/github-mcp-server_Linux_x86_64.tar.gz",
+    "archive_sha256": "815e27d931c796af0c97f24fd211e14f8a4607d4528377719a5ad2352086b0b0",
+    "binary_sha256": "721ffbb573397d8e95b847f7a1908359fd2973784ca8a8d5d3182db6f9fcb5b6",
+    "archive_members": [
+      "LICENSE",
+      "README.md",
+      "github-mcp-server"
+    ]
+  },
+  "summary": {
+    "server_types": 6,
+    "server_configurations": 7,
+    "collected_tool_entries_including_repeated_github_names": 189,
+    "distinct_server_type_and_tool_name_pairs": 143,
+    "distinct_server_type_and_tool_name_and_definition_hash_variants": 144,
+    "maximum_tool_definition_bytes": 8360,
+    "over_64kib_count": 0,
+    "adapter_preserved_count": 189,
+    "mcp_tools_call_count": 0,
+    "github_shared_definition_changes_between_profiles": [
+      {
+        "name": "get_label",
+        "changed_fields": [
+          "icons"
+        ]
+      }
+    ]
+  },
+  "serialization": {
+    "ensure_ascii": false,
+    "sort_keys": true,
+    "separators": [
+      ",",
+      ":"
+    ],
+    "allow_nan": false,
+    "encoding": "UTF-8",
+    "unit": "bytes",
+    "canonical_result_sizes_are_wire_body_sizes": false
+  },
+  "adapter": {
+    "module": "src/guard_app/adapters/cisco.py",
+    "function": "prepare_tool_definition",
+    "parameter": {
+      "max_definition_bytes": 65536
+    },
+    "validation": "json.loads(prepared.definition_json) equals complete original parsed Tool object",
+    "source_sha256": "74599481de5f1e7c99f8f07f457f39a5af23b5ab1e184738316915bca6b3ed95",
+    "repository_commit": "7f885128acf6aabc439171a00b6ed05a3053e843"
+  },
+  "npm_installation": {
+    "node": "20.20.2",
+    "npm": "10.8.2",
+    "isolated_temporary_directory": true,
+    "lifecycle_scripts_disabled": true,
+    "install_flags": [
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund"
+    ],
+    "lock_sha256": "ddb2329dfd828d4224e8eb62316e3e381281cc586206457bb930450bbdb2332e",
+    "selected_packages": [
+      {
+        "name": "@modelcontextprotocol/server-filesystem",
+        "version": "1.0.0",
+        "resolved": "https://registry.npmjs.org/@modelcontextprotocol/server-filesystem/-/server-filesystem-1.0.0.tgz",
+        "integrity": "sha512-2fN6qhpsiPSBAe0ev1qDPk4sCWdULCZQTuYc4ZY7+BDWQ1XCxLB+7dqStF2ZflgG4G/9vTwQsjxh7pjFqrrpcg=="
+      },
+      {
+        "name": "@modelcontextprotocol/server-memory",
+        "version": "1.0.0",
+        "resolved": "https://registry.npmjs.org/@modelcontextprotocol/server-memory/-/server-memory-1.0.0.tgz",
+        "integrity": "sha512-UDMtMrw2xeI16mcn7O4fesp9Pf3hYh91thuU5KSz0BxKqwnTwEytZKjHfkrqxxmKp0r4QHoiEkMV99UmadmODw=="
+      },
+      {
+        "name": "@modelcontextprotocol/server-sequential-thinking",
+        "version": "1.0.0",
+        "resolved": "https://registry.npmjs.org/@modelcontextprotocol/server-sequential-thinking/-/server-sequential-thinking-1.0.0.tgz",
+        "integrity": "sha512-ykTmeS4Eejs+FESDrD73mDBNYCkb+cCZJ1MWuv7/vwucbVgGfEbBL5HVt2nVw0/vNF8jz+o9sO/WmxxfXt0J6w=="
+      },
+      {
+        "name": "@playwright/mcp",
+        "version": "0.0.83",
+        "resolved": "https://registry.npmjs.org/@playwright/mcp/-/mcp-0.0.83.tgz",
+        "integrity": "sha512-oNcl+Ae2/IAjhfPeP46BfIkSakfmprY+aOtkv5MjrQ4lPav4/yNtPhL0iq8SlIM90oApWgBDUxaNKvktazUKOg=="
+      },
+      {
+        "name": "@modelcontextprotocol/sdk",
+        "version": "1.32.1",
+        "resolved": "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.1.tgz",
+        "integrity": "sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw=="
+      }
+    ]
+  },
+  "scope": {
+    "protocol_only": [
+      "initialize",
+      "notifications/initialized",
+      "tools/list"
+    ],
+    "model_api_calls": 0,
+    "yara_scans": 0,
+    "b_scanreport_connected": false,
+    "product_mcp_transport_used": false,
+    "multi_page_responses_observed": false,
+    "real_github_authentication_verified": false,
+    "github_token_mode": "synthetic placeholder, not a real credential",
+    "full_third_party_metadata_persisted_in_repository": false
+  },
+  "official_sources": {
+    "mcp_negotiated_protocol_tools": "https://modelcontextprotocol.io/specification/2025-11-25/server/tools",
+    "mcp_newer_protocol_tools_reviewed_not_tested": "https://modelcontextprotocol.io/specification/2026-07-28/server/tools",
+    "filesystem": "https://github.com/modelcontextprotocol/servers/blob/main/src/filesystem/README.md",
+    "memory": "https://github.com/modelcontextprotocol/servers/blob/main/src/memory/README.md",
+    "sequential_thinking": "https://github.com/modelcontextprotocol/servers/blob/main/src/sequentialthinking/README.md",
+    "playwright": "https://github.com/microsoft/playwright-mcp",
+    "github_release": "https://github.com/github/github-mcp-server/releases/tag/v2.0.2",
+    "github_pinned_main": "https://github.com/github/github-mcp-server/blob/v2.0.2/cmd/github-mcp-server/main.go",
+    "deepwiki": "https://docs.devin.ai/work-with-devin/deepwiki-mcp"
+  }
+}

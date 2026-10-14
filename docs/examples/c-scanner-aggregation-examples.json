@@ -1,0 +1,249 @@
+{
+  "format_status": "C internal proposal, not implemented or agreed as a shared API",
+  "source_artifact": "../evidence/scanner-operating-validation-2026-10-13.json",
+  "scope_note": "Diagnostic results only. Guard decisions, activation status and B ScanReport are not produced.",
+  "actual_experiment_excerpts": {
+    "summary": {
+      "tool_variants": 144,
+      "llm_completed": 144,
+      "yara_completed": 144,
+      "http_200": 144,
+      "llm_requests_per_variant": 1,
+      "llm_warning_tool_variants": 5,
+      "yara_warning_tool_variants": 1,
+      "warning_tool_variants_union": 6,
+      "fixture_observations": 22,
+      "fixture_tools_call": 0,
+      "public_server_tools_call": 0,
+      "whole_joint_product_runner_verified": false,
+      "a_product_receiver_limits_verified": false,
+      "guard_dispatch_count": null,
+      "receiver_business_effect_count": null
+    },
+    "normal_tool": {
+      "id": 0,
+      "server": "filesystem",
+      "name": "read_file",
+      "sha256": "0bc49bde1f574b29bce123a907964cf2a091a5db3e49ca0a3a01d0e97ebf0e8e",
+      "bytes": 780,
+      "yara": {
+        "complete": true,
+        "findings": [],
+        "seconds": 0.18376791302580386
+      },
+      "llm": {
+        "complete": true,
+        "findings": [],
+        "seconds": 3.8963349889963865
+      }
+    },
+    "llm_warning_tool": {
+      "id": 23,
+      "server": "sequential-thinking",
+      "name": "sequentialthinking",
+      "sha256": "a77af865252772c93e3897ae5bebbbcf6d94a6d811dfdfd781e4dbf7335e002a",
+      "bytes": 4640,
+      "yara": {
+        "complete": true,
+        "findings": [],
+        "seconds": 0.0011678539449349046
+      },
+      "llm": {
+        "complete": true,
+        "findings": [
+          {
+            "severity": "HIGH",
+            "analyzer": "LLM",
+            "category": "PROMPT INJECTION"
+          }
+        ],
+        "seconds": 4.688630057033151
+      }
+    },
+    "yara_warning_tool": {
+      "id": 54,
+      "server": "github",
+      "name": "create_or_update_file",
+      "sha256": "da073b0093a12d703fd9c77545726f5b1dfe5f1910ee8f851f8831396f088ba6",
+      "bytes": 2896,
+      "yara": {
+        "complete": true,
+        "findings": [
+          {
+            "severity": "HIGH",
+            "analyzer": "YARA",
+            "category": "PROMPT INJECTION"
+          }
+        ],
+        "seconds": 0.0005521000130102038
+      },
+      "llm": {
+        "complete": true,
+        "findings": [],
+        "seconds": 3.1668660789728165
+      }
+    }
+  },
+  "proposed_views": {
+    "actual_batch": {
+      "data_origin": "computed from actual experiment, field names proposed",
+      "result": {
+        "scope": "experiment_batch",
+        "completion": "completed",
+        "summary": {
+          "definition_variants_total": 144,
+          "definition_variants_completed": 144,
+          "definition_variants_partial": 0,
+          "definition_variants_with_findings": 6,
+          "known_finding_count": 6,
+          "max_observed_severity": "HIGH"
+        },
+        "analyzers": {
+          "LLM": {
+            "completed": 144,
+            "failed": 0,
+            "known_finding_count": 5
+          },
+          "YARA": {
+            "completed": 144,
+            "failed": 0,
+            "known_finding_count": 1
+          }
+        },
+        "findings": [
+          {
+            "source_server": "sequential-thinking",
+            "tool_name": "sequentialthinking",
+            "severity": "HIGH",
+            "analyzer": "LLM",
+            "category": "PROMPT INJECTION"
+          },
+          {
+            "source_server": "github",
+            "tool_name": "create_or_update_file",
+            "severity": "HIGH",
+            "analyzer": "YARA",
+            "category": "PROMPT INJECTION"
+          },
+          {
+            "source_server": "github",
+            "tool_name": "list_pull_requests",
+            "severity": "HIGH",
+            "analyzer": "LLM",
+            "category": "PROMPT INJECTION"
+          },
+          {
+            "source_server": "github",
+            "tool_name": "assign_copilot_to_issue_with_intent",
+            "severity": "HIGH",
+            "analyzer": "LLM",
+            "category": "PROMPT INJECTION"
+          },
+          {
+            "source_server": "github",
+            "tool_name": "get_notification_details",
+            "severity": "HIGH",
+            "analyzer": "LLM",
+            "category": "PROMPT INJECTION"
+          },
+          {
+            "source_server": "github",
+            "tool_name": "list_notifications",
+            "severity": "HIGH",
+            "analyzer": "LLM",
+            "category": "PROMPT INJECTION"
+          }
+        ]
+      }
+    },
+    "actual_normal_tool": {
+      "data_origin": "actual experiment case 0, field names proposed",
+      "result": {
+        "source_server": "filesystem",
+        "tool_name": "read_file",
+        "definition_sha256": "0bc49bde1f574b29bce123a907964cf2a091a5db3e49ca0a3a01d0e97ebf0e8e",
+        "completion": "completed",
+        "analyzers": {
+          "LLM": {
+            "status": "completed",
+            "findings": []
+          },
+          "YARA": {
+            "status": "completed",
+            "findings": []
+          }
+        }
+      }
+    },
+    "actual_llm_warning_tool": {
+      "data_origin": "actual experiment case 23, field names proposed",
+      "result": {
+        "source_server": "sequential-thinking",
+        "tool_name": "sequentialthinking",
+        "definition_sha256": "a77af865252772c93e3897ae5bebbbcf6d94a6d811dfdfd781e4dbf7335e002a",
+        "completion": "completed",
+        "analyzers": {
+          "LLM": {
+            "status": "completed",
+            "findings": [
+              {
+                "severity": "HIGH",
+                "analyzer": "LLM",
+                "category": "PROMPT INJECTION"
+              }
+            ]
+          },
+          "YARA": {
+            "status": "completed",
+            "findings": []
+          }
+        }
+      }
+    },
+    "synthetic_partial_tool": {
+      "data_origin": "illustrative failure, not executed; retained YARA warning from actual case 54",
+      "result": {
+        "source_server": "github",
+        "tool_name": "create_or_update_file",
+        "definition_sha256": "da073b0093a12d703fd9c77545726f5b1dfe5f1910ee8f851f8831396f088ba6",
+        "completion": "partial",
+        "analyzers": {
+          "LLM": {
+            "status": "failed",
+            "error_code": "SCAN_LLM_RATE_LIMITED",
+            "findings": null
+          },
+          "YARA": {
+            "status": "completed",
+            "findings": [
+              {
+                "severity": "HIGH",
+                "analyzer": "YARA",
+                "category": "PROMPT INJECTION"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "oversize_input_rendering": {
+      "data_origin": "proposed rendering of actual 65537-byte input rejection; joint not_run state is illustrative",
+      "result": {
+        "definition_bytes": 65537,
+        "max_definition_bytes": 65536,
+        "completion": "not_scanned",
+        "input_error_code": "SCAN_METADATA_TOO_LARGE",
+        "analyzers": {
+          "LLM": {
+            "status": "not_run",
+            "findings": null
+          },
+          "YARA": {
+            "status": "not_run",
+            "findings": null
+          }
+        }
+      }
+    }
+  }
+}

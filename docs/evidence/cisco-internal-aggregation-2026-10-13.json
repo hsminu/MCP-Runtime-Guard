@@ -1,0 +1,257 @@
+{
+  "observed_at_utc": "2026-10-13T12:42:33.314987+00:00",
+  "llm_execution": "actual SDK with synthetic HTTP MockTransport responses; no live model API",
+  "yara_execution": "actual Cisco packaged rules and native YARA",
+  "versions": {
+    "cisco-ai-mcp-scanner": "4.8.6",
+    "openai": "2.54.0",
+    "yara-python": "4.5.4",
+    "mcp": "1.30.0",
+    "httpx": "0.28.1"
+  },
+  "mock_http_requests": 147,
+  "public_definitions_total": 144,
+  "public_server_summaries": {
+    "filesystem": {
+      "summary": {
+        "completed": 14,
+        "completion": "completed",
+        "definitions_total": 14,
+        "failed": 0,
+        "known_findings_count": 0,
+        "maximum_observed_severity": null,
+        "not_scanned": 0,
+        "partial": 0,
+        "tools_with_warnings": 0
+      },
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 14,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 14,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        }
+      ]
+    },
+    "memory": {
+      "summary": {
+        "completed": 9,
+        "completion": "completed",
+        "definitions_total": 9,
+        "failed": 0,
+        "known_findings_count": 0,
+        "maximum_observed_severity": null,
+        "not_scanned": 0,
+        "partial": 0,
+        "tools_with_warnings": 0
+      },
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 9,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 9,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        }
+      ]
+    },
+    "sequential-thinking": {
+      "summary": {
+        "completed": 1,
+        "completion": "completed",
+        "definitions_total": 1,
+        "failed": 0,
+        "known_findings_count": 0,
+        "maximum_observed_severity": null,
+        "not_scanned": 0,
+        "partial": 0,
+        "tools_with_warnings": 0
+      },
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 1,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 1,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        }
+      ]
+    },
+    "playwright": {
+      "summary": {
+        "completed": 25,
+        "completion": "completed",
+        "definitions_total": 25,
+        "failed": 0,
+        "known_findings_count": 0,
+        "maximum_observed_severity": null,
+        "not_scanned": 0,
+        "partial": 0,
+        "tools_with_warnings": 0
+      },
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 25,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 25,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        }
+      ]
+    },
+    "github": {
+      "summary": {
+        "completed": 92,
+        "completion": "completed",
+        "definitions_total": 92,
+        "failed": 0,
+        "known_findings_count": 1,
+        "maximum_observed_severity": "HIGH",
+        "not_scanned": 0,
+        "partial": 0,
+        "tools_with_warnings": 1
+      },
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 92,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 92,
+          "failed": 0,
+          "known_findings_count": 1,
+          "not_run": 0,
+          "setup_error_code": null
+        }
+      ]
+    },
+    "deepwiki": {
+      "summary": {
+        "completed": 3,
+        "completion": "completed",
+        "definitions_total": 3,
+        "failed": 0,
+        "known_findings_count": 0,
+        "maximum_observed_severity": null,
+        "not_scanned": 0,
+        "partial": 0,
+        "tools_with_warnings": 0
+      },
+      "analyzer_summary": [
+        {
+          "analyzer": "LLM",
+          "completed": 3,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        },
+        {
+          "analyzer": "YARA",
+          "completed": 3,
+          "failed": 0,
+          "known_findings_count": 0,
+          "not_run": 0,
+          "setup_error_code": null
+        }
+      ]
+    }
+  },
+  "mcp_connections_in_this_run": 0,
+  "live_model_api_calls": 0,
+  "guard_dispatch_count": null,
+  "receiver_business_effect_count": null,
+  "scope": "previously collected public definitions; MCP collection completeness not inferred",
+  "branch": "feat/c-security-platform",
+  "implementation_scope": "C internal aggregation only; B ScanReport, Registry, A transport/UI unconnected",
+  "invariants": [
+    "I6",
+    "I9"
+  ],
+  "design_tests": [
+    "T17 partial input/completion/error",
+    "T19 metadata/log privacy"
+  ],
+  "unit_new": 24,
+  "sdk_contract_new": 10,
+  "regression": {
+    "passed": 96,
+    "subtests_passed": 20,
+    "seconds": 1.75
+  },
+  "ruff": {
+    "lint": "passed",
+    "format": "passed",
+    "files": 14,
+    "config_sha256": "d482a1c8bc902c78d0fcfc64577021b651c4776d07dfb5b3725443f133947cca"
+  },
+  "mypy": {
+    "strict": "passed",
+    "product_source_files": 5,
+    "namespace_package_options": true
+  },
+  "external_socket_attempts": 0,
+  "source_sha256": {
+    "src/guard_app/adapters/cisco.py": "bab5e8b70f40e6fa077e1023f739589a0d8c0989f92c06d4d094c32c1ea60ea6",
+    "src/guard_app/adapters/cisco_aggregation.py": "3f66b2a506e37ca9c909ba49aeda7b95f5c74cd98d0834c2111d3051623e5ded",
+    "src/guard_app/adapters/cisco_llm.py": "5117fb1862e6d42b714ae49047cdba8b016b83c2f2844f1436f22bee8b88f9b2",
+    "src/guard_app/security/redact.py": "b7f68b339625e9d3bca003eea977046e3c9e7d650bac572bc4f3c144d4c137d0",
+    "src/guard_app/security/secrets.py": "794cc7810ffc3abde9ff81e331b939afa0cc6cda23bd049b10a3afa38e6cbc99"
+  },
+  "regression_source_sha256": {
+    "tests/unit/adapters/test_cisco_aggregation.py": "be0fca18e6c1d7eee487d94f1b71d6215567c64fafd285fb2e63515f5bddb3ba",
+    "tests/contract/test_cisco_aggregation_sdk.py": "b3dcd360b41377ed908782928ffec4f6152e5551c0a4b2e59265348ca90df392",
+    "tests/experiments/scanner_aggregation_probe.py": "7124038e46d8fc4d6ddcf11e8e2edc16b97c3e31371e59c430bd3367a737f8a1"
+  },
+  "examples_sha256": "9bd56a3407250d85cdb79329f68966a439f486459533d14c30451fe8ecab2e9f",
+  "limitations": [
+    "native YARA 5s timeout not wired",
+    "no app-global concurrency/queue/deadline",
+    "thread cancellation does not kill running native matcher",
+    "MCP collection completeness not inferred",
+    "Guard dispatch and business effects unobserved",
+    "B review pending"
+  ]
+}

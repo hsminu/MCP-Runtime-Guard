@@ -1,0 +1,465 @@
+{
+  "versions": {
+    "cisco-ai-mcp-scanner": "4.8.6",
+    "mcp": "1.30.0",
+    "pydantic": "2.14.0",
+    "litellm": "1.93.2",
+    "yara-python": "4.5.4"
+  },
+  "scanner_public_analyze": false,
+  "signatures": {
+    "StaticAnalyzer.scan_tools_file": "(self, file_path: Union[str, pathlib.Path]) -> List[Dict[str, Any]]",
+    "YaraAnalyzer.analyze": "(self, content: str, context: Optional[Dict[str, Any]] = None) -> List[mcpscanner.core.analyzers.base.SecurityFinding]",
+    "ReadinessAnalyzer": "(config=None, max_capabilities: int = 10, min_description_length: int = 20, enable_opa: bool = False, opa_policies_dir: Optional[str] = None, enable_llm_judge: bool = False, llm_model: Optional[str] = None, llm_api_key: Optional[str] = None)",
+    "PromptDefenseAnalyzer.analyze": "(self, content: str, context: Optional[Dict[str, Any]] = None) -> List[mcpscanner.core.analyzers.base.SecurityFinding]"
+  },
+  "direct": {
+    "yara_benign": {
+      "count": 0,
+      "severities": [],
+      "analyzers": [],
+      "details_keys": []
+    },
+    "yara_malicious": {
+      "count": 0,
+      "severities": [],
+      "analyzers": [],
+      "details_keys": []
+    },
+    "yara_positive_control": {
+      "count": 1,
+      "severities": [
+        "HIGH"
+      ],
+      "analyzers": [
+        "YARA"
+      ],
+      "details_keys": [
+        "content_type",
+        "evidence",
+        "raw_response",
+        "threat_type",
+        "tool_name"
+      ]
+    },
+    "readiness_benign": {
+      "count": 9,
+      "severities": [
+        "HIGH",
+        "INFO",
+        "LOW",
+        "MEDIUM"
+      ],
+      "analyzers": [
+        "READINESS"
+      ],
+      "details_keys": [
+        "is_production_ready",
+        "location",
+        "properties_without_validation",
+        "readiness_score",
+        "recommendation",
+        "rule_id",
+        "tool_name",
+        "total_properties"
+      ]
+    },
+    "prompt_defense_benign": {
+      "count": 12,
+      "severities": [
+        "HIGH",
+        "LOW",
+        "MEDIUM"
+      ],
+      "analyzers": [
+        "PromptDefense"
+      ],
+      "details_keys": [
+        "defense_id",
+        "defense_score",
+        "entity_name",
+        "evidence",
+        "patterns_checked",
+        "patterns_matched",
+        "threat_type",
+        "tool_name"
+      ]
+    }
+  },
+  "static": {
+    "benign": [
+      {
+        "status": "completed",
+        "is_safe": true,
+        "analyzers": [
+          "YARA"
+        ],
+        "findings": {
+          "count": 0,
+          "severities": [],
+          "analyzers": [],
+          "details_keys": []
+        }
+      }
+    ],
+    "malicious": [
+      {
+        "status": "completed",
+        "is_safe": true,
+        "analyzers": [
+          "YARA"
+        ],
+        "findings": {
+          "count": 0,
+          "severities": [],
+          "analyzers": [],
+          "details_keys": []
+        }
+      }
+    ],
+    "positive_control": [
+      {
+        "status": "completed",
+        "is_safe": false,
+        "analyzers": [
+          "YARA"
+        ],
+        "findings": {
+          "count": 1,
+          "severities": [
+            "HIGH"
+          ],
+          "analyzers": [
+            "YARA"
+          ],
+          "details_keys": [
+            "content_type",
+            "evidence",
+            "raw_response",
+            "threat_type",
+            "tool_name"
+          ]
+        }
+      }
+    ],
+    "failure_all": [
+      {
+        "status": "completed",
+        "is_safe": true,
+        "analyzers": [
+          "YARA"
+        ],
+        "findings_count": 0,
+        "has_analyzer_errors": false,
+        "invocations": 2
+      }
+    ],
+    "failure_parameters": [
+      {
+        "status": "completed",
+        "is_safe": true,
+        "analyzers": [
+          "YARA"
+        ],
+        "findings_count": 0,
+        "has_analyzer_errors": false,
+        "invocations": 2
+      }
+    ],
+    "no_analyzers": [
+      {
+        "status": "completed",
+        "is_safe": true,
+        "analyzers": [],
+        "findings_count": 0
+      }
+    ],
+    "malformed": {
+      "exception_type": "JSONDecodeError"
+    },
+    "missing_tools": {
+      "exception_type": "ValueError"
+    },
+    "wrong_tools_type": {
+      "exception_type": "ValueError"
+    },
+    "missing_name": {
+      "exception_type": null,
+      "rows": [
+        {
+          "status": "completed",
+          "is_safe": true,
+          "tool_name_defaulted": true
+        }
+      ]
+    }
+  },
+  "cli": {
+    "yara_benign": {
+      "exit_code": 0,
+      "network_attempts": 0,
+      "result_type": "dict",
+      "result_source": "stdout",
+      "strict_json_stdout": true,
+      "output_file_created": false,
+      "requested_analyzers": [
+        "yara"
+      ],
+      "rows": [
+        {
+          "status": "completed",
+          "is_safe": true,
+          "analyzers": null,
+          "analyzer_errors": null,
+          "findings_count": 0,
+          "analyzers_reported": [
+            "yara_analyzer"
+          ],
+          "severities": [
+            "SAFE"
+          ]
+        }
+      ],
+      "missing_key_warning": false,
+      "no_analyzers_error": false,
+      "raw_exception_echoed": false
+    },
+    "yara_malicious": {
+      "exit_code": 0,
+      "network_attempts": 0,
+      "result_type": "dict",
+      "result_source": "stdout",
+      "strict_json_stdout": true,
+      "output_file_created": false,
+      "requested_analyzers": [
+        "yara"
+      ],
+      "rows": [
+        {
+          "status": "completed",
+          "is_safe": true,
+          "analyzers": null,
+          "analyzer_errors": null,
+          "findings_count": 0,
+          "analyzers_reported": [
+            "yara_analyzer"
+          ],
+          "severities": [
+            "SAFE"
+          ]
+        }
+      ],
+      "missing_key_warning": false,
+      "no_analyzers_error": false,
+      "raw_exception_echoed": false
+    },
+    "yara_positive_control": {
+      "exit_code": 0,
+      "network_attempts": 0,
+      "result_type": "dict",
+      "result_source": "stdout",
+      "strict_json_stdout": true,
+      "output_file_created": false,
+      "requested_analyzers": [
+        "yara"
+      ],
+      "rows": [
+        {
+          "status": "completed",
+          "is_safe": false,
+          "analyzers": null,
+          "analyzer_errors": null,
+          "findings_count": 1,
+          "analyzers_reported": [
+            "yara_analyzer"
+          ],
+          "severities": [
+            "HIGH"
+          ]
+        }
+      ],
+      "missing_key_warning": false,
+      "no_analyzers_error": false,
+      "raw_exception_echoed": false
+    },
+    "yara_llm_missing_key": {
+      "exit_code": 0,
+      "network_attempts": 0,
+      "result_type": "dict",
+      "result_source": "stdout",
+      "strict_json_stdout": true,
+      "output_file_created": false,
+      "requested_analyzers": [
+        "yara",
+        "llm"
+      ],
+      "rows": [
+        {
+          "status": "completed",
+          "is_safe": true,
+          "analyzers": null,
+          "analyzer_errors": null,
+          "findings_count": 0,
+          "analyzers_reported": [
+            "yara_analyzer"
+          ],
+          "severities": [
+            "SAFE"
+          ]
+        }
+      ],
+      "missing_key_warning": true,
+      "no_analyzers_error": false,
+      "raw_exception_echoed": false
+    },
+    "yara_readiness": {
+      "exit_code": 0,
+      "network_attempts": 0,
+      "result_type": "dict",
+      "result_source": "stdout",
+      "strict_json_stdout": true,
+      "output_file_created": false,
+      "requested_analyzers": [
+        "yara",
+        "readiness"
+      ],
+      "rows": [
+        {
+          "status": "completed",
+          "is_safe": true,
+          "analyzers": null,
+          "analyzer_errors": null,
+          "findings_count": 0,
+          "analyzers_reported": [
+            "yara_analyzer"
+          ],
+          "severities": [
+            "SAFE"
+          ]
+        }
+      ],
+      "missing_key_warning": false,
+      "no_analyzers_error": false,
+      "raw_exception_echoed": false
+    },
+    "readiness_only": {
+      "exit_code": 1,
+      "network_attempts": 0,
+      "result_type": "NoneType",
+      "result_source": "none",
+      "strict_json_stdout": false,
+      "output_file_created": false,
+      "requested_analyzers": null,
+      "rows": [],
+      "missing_key_warning": false,
+      "no_analyzers_error": true,
+      "raw_exception_echoed": false
+    },
+    "yara_failure": {
+      "exit_code": 0,
+      "network_attempts": 0,
+      "result_type": "dict",
+      "result_source": "stdout_after_warning",
+      "strict_json_stdout": false,
+      "output_file_created": false,
+      "requested_analyzers": [
+        "yara"
+      ],
+      "rows": [
+        {
+          "status": "completed",
+          "is_safe": true,
+          "analyzers": null,
+          "analyzer_errors": null,
+          "findings_count": 0,
+          "analyzers_reported": [
+            "yara_analyzer"
+          ],
+          "severities": [
+            "SAFE"
+          ]
+        }
+      ],
+      "missing_key_warning": false,
+      "no_analyzers_error": false,
+      "raw_exception_echoed": true
+    }
+  },
+  "yara_rules": {
+    "files": 10,
+    "inventory_sha256": "d61cad81a61246cbe13aefb9163e52b4de734d7b5b8156771da0fdd0118fb6bf"
+  },
+  "network_attempts": 0,
+  "raw_exception_echoed": true,
+  "verification_date_utc": "2026-10-12",
+  "scanner_wheel_sha256": "1cddf00dc4c7ee59cb567f0268e3fd131691506ae3557b9031bafd9d60d152b3",
+  "official_commit": "5d147dc7e3635606e41104112fa297b45444b05c",
+  "source_comparison": [
+    {
+      "file": "mcpscanner/cli.py",
+      "matches": true,
+      "sha256": "8a06fddabbb23355ef6baafce30d5f4552758e9df770db3e8eb4d53064512e42"
+    },
+    {
+      "file": "mcpscanner/core/result.py",
+      "matches": true,
+      "sha256": "fe06267e5ecc044d9a7d1c15219d2663e7627f44cd97b876a3ed4210863162a5"
+    },
+    {
+      "file": "mcpscanner/core/scanner.py",
+      "matches": true,
+      "sha256": "b3b2c5e0b2d5c56d61d006c070997bc11ccd0e0231cb0de5ab399b59a731d88e"
+    },
+    {
+      "file": "mcpscanner/core/analyzers/static_analyzer.py",
+      "matches": true,
+      "sha256": "4355008642e554730f5c639ffc09534c04861d9b81ec94eca1453150987c4e22"
+    },
+    {
+      "file": "mcpscanner/core/analyzers/yara_analyzer.py",
+      "matches": true,
+      "sha256": "233663ade50ec9b5bd98131f16a910c5e2630d146b42a8a47f35028683cf4491"
+    },
+    {
+      "file": "mcpscanner/core/analyzers/base.py",
+      "matches": true,
+      "sha256": "253f948ba8b4d4e7e6983531f6197232da12e00a49fe3fb8c39b1223a868d104"
+    },
+    {
+      "file": "mcpscanner/core/analyzers/prompt_defense_analyzer.py",
+      "matches": true,
+      "sha256": "67699c801987d803fb1cb3128d8da3850c96876994618d7ed0e8ba6983e07765"
+    },
+    {
+      "file": "mcpscanner/core/analyzers/readiness/readiness_analyzer.py",
+      "matches": true,
+      "sha256": "ec4a6b60a8a912983490cec0c4157aa31a2cd20857534ef7e1d8efb378e744f5"
+    },
+    {
+      "file": "mcpscanner/data/yara_rules/prompt_injection.yara",
+      "matches": true,
+      "sha256": "d34ac8ff7bfa367cbe7da5fc28d7db02f4882734316eadc5884ff4d398da7c94"
+    }
+  ],
+  "severity_probe": {
+    "input_severity": "CRITICAL",
+    "output_severity": "UNKNOWN",
+    "network_attempts": 0
+  },
+  "b_core_verification": {
+    "commit": "f3c2d2bc225e0406c50731c9b63779a3d890cd70",
+    "locked_packages_checked": 33,
+    "locked_version_mismatches": 0,
+    "unit_tests_passed": 864,
+    "seconds": 2.63,
+    "pip_check": "passed"
+  },
+  "environment_scope": "Ubuntu 24.04.4 x86_64 / Python 3.12.3 / isolated venv-1x",
+  "network_observation": "Python socket connect/connect_ex/create_connection blocked and counted. No packet capture or MCP wire/effect observation.",
+  "default_import_probe": {
+    "import": "ok",
+    "network_attempts": 1,
+    "remote_model_cost_map_warning": true
+  },
+  "unconstrained_mcp_version": "2.3.0"
+}

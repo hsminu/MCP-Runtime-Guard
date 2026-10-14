@@ -1,5 +1,6 @@
 # Local development environment
 .venv/
+.venv-scanner/
 .devtools/
 .cache/
 __pycache__/
