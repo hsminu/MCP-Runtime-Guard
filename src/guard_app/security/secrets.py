@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -11,6 +12,8 @@ from importlib.metadata import distribution
 from pathlib import Path
 
 from dotenv import dotenv_values
+
+_SDK_IMPORT_LOCK = threading.Lock()
 
 # tiktoken 0.14.0의 캐시 키(sha1(URL)) → 기대 SHA-256(tiktoken_ext.openai_public).
 # 순서대로 cl100k_base, o200k_base, p50k_base. litellm은 import 때 cl100k_base를 읽는다.
@@ -96,20 +99,25 @@ def scanner_sdk_import_environment() -> Iterator[None]:
     load_dotenv를 실행한다. 같은 import가 litellm을 불러와 가격표와 tokenizer를
     읽으므로 둘 다 로컬 자료로 고정한다. litellm은 tokenizer 위치를 프로세스 동안
     유지하므로 두 설정은 복원하지 않는다. 이 동기 구간에는 await를 넣지 않는다.
+
+    어댑터는 이벤트 루프를 막지 않도록 이 구간을 작업 스레드에서 실행한다. 구간은
+    프로세스 환경변수를 바꾸므로 lock으로 직렬화해 동시 준비의 저장·복원이 섞이지
+    않게 한다. 같은 스레드에서 중첩해 쓰지 않는다.
     """
-    cache_dir = scanner_tokenizer_cache_dir()
-    prepare_tokenizer_cache(cache_dir)
-    previous = os.environ.get("PYTHON_DOTENV_DISABLED")
-    os.environ["PYTHON_DOTENV_DISABLED"] = "1"
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    os.environ["CUSTOM_TIKTOKEN_CACHE_DIR"] = str(cache_dir)
-    try:
-        yield
-    finally:
-        if previous is None:
-            os.environ.pop("PYTHON_DOTENV_DISABLED", None)
-        else:
-            os.environ["PYTHON_DOTENV_DISABLED"] = previous
+    with _SDK_IMPORT_LOCK:
+        cache_dir = scanner_tokenizer_cache_dir()
+        prepare_tokenizer_cache(cache_dir)
+        previous = os.environ.get("PYTHON_DOTENV_DISABLED")
+        os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        os.environ["CUSTOM_TIKTOKEN_CACHE_DIR"] = str(cache_dir)
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("PYTHON_DOTENV_DISABLED", None)
+            else:
+                os.environ["PYTHON_DOTENV_DISABLED"] = previous
 
 
 def load_scanner_environment(

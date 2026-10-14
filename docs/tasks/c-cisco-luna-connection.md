@@ -31,6 +31,7 @@ async def inspect_definition(tool_definition, *, max_definition_bytes):
 | 재시도 | OpenAI·Cisco의 재시도 0. 오류를 자동 재호출하지 않음 |
 | API 주소 | 현재 선택한 `https://api.openai.com/v1`만 허용. HTTP redirect·환경 proxy 비활성 |
 | SDK import | 외부 가격표 조회를 import 전에 차단. import 중 암묵적 load_dotenv를 비활성화하고 기존 플래그 복원. tokenizer는 해시를 검증한 사용자 캐시 사본으로 고정(2026-10-14, [C-CISCO-05](../weakness_register.md#발견-항목과-조치)) |
+| 이벤트 루프 | SDK import·TLS 인증서 로딩·OpenAI 리소스 지연 import·YARA 준비를 작업 스레드에서 실행. import 환경은 lock으로 직렬화(2026-10-14, [C-CISCO-06](../weakness_register.md#발견-항목과-조치)) |
 | SDK 로그 | 현재 Scanner 호출의 OpenAI 요청·응답 원문 디버그 로그를 ContextVar 범위에서 제한. 다른 호출의 로그 설정을 비활성화하지 않음 |
 
 OpenAI Docs에서 Luna의 low 지원과 sampling 제한, Chat Completions의 `max_completion_tokens` 형식을 확인했다. 검사는 텍스트 분류이며 API tool calling을 사용하지 않는다. [Luna 사양](https://developers.openai.com/api/docs/models/gpt-6-luna), [요청 제한](https://developers.openai.com/api/docs/guides/deployment-checklist), [Chat Completions API](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
