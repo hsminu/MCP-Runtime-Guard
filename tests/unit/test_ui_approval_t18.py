@@ -183,18 +183,21 @@ def test_all_approval_fields_are_literal_and_never_open_links(app, monkeypatch, 
                 QTest.mouseClick(label, Qt.MouseButton.LeftButton)
             for body in widget.findChildren(QPlainTextEdit):
                 text = body.toPlainText()
-                assert "<b>" in text and "<img" in text and "<a href=" in text, (
-                    type(widget).__name__,
-                    body.accessibleName(),
-                )
+                where = (type(widget).__name__, body.accessibleName())
+                assert "<b>" in text, where
+                assert "<img" in text, where
+                assert "<a href=" in text, where
                 html = body.document().toHtml()
-                assert "&lt;b&gt;" in html and "&lt;img" in html and "&lt;a href=" in html
+                assert "&lt;b&gt;" in html
+                assert "&lt;img" in html
+                assert "&lt;a href=" in html
                 block = body.document().begin()
                 while block.isValid():
                     it = block.begin()
                     while not it.atEnd():
                         fmt = it.fragment().charFormat()
-                        assert not fmt.isAnchor() and not fmt.isImageFormat()
+                        assert not fmt.isAnchor()
+                        assert not fmt.isImageFormat()
                         it += 1
                     block = block.next()
                 cursor = body.textCursor()
