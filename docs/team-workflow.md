@@ -2,19 +2,19 @@
 
 설계 기준은 [기술 설계 및 개발 문서](technical-design.md)이며, 현행 역할·리뷰는 이 문서의 소유권 표를 따른다. 2026-10-12 사용자가 **"sqlite b로 넘기자"**고 결정해 SQLite 구현을 B로 이관했다. 기술 설계 원문 0.5·2.1절 등의 `storage` C 표기와 저장소 단위 테스트 담당 표기는 이 결정으로 대체한다. 원문은 보존한다.
 
-B1–B5 구현 초안은 B 브랜치에 있다. SQLite 이관은 담당 배정이며, Store API의 세부 합의·SQLite 구현·독립 인수 완료를 뜻하지 않는다. 기록은 [담당 변경](contracts.md#담당-변경-기록), 인수 작업은 [B6 · SQLite](tasks/b-sqlite-store.md)를 따른다.
+B1–B5 구현 초안은 B 브랜치에 있다. SQLite 이관은 담당 배정이며, Store API의 세부 합의·SQLite 구현·독립 인수 완료를 뜻하지 않는다. 기록은 [담당 변경](contracts.md#담당-변경-기록), 인수 작업은 [B6 · SQLite](b-status.md)를 따른다.
 
-현재 A 구현·검증·미완료 조건은 [A 작업 현황](tasks/a-progress.md), 임시 앱 계약은 [리뷰 반영 기록](tasks/a-review-fixes.md)을 따른다.
+현재 A 구현·검증·미완료 조건은 [A 작업 현황](a-status.md), 임시 앱 계약은 [리뷰 반영 기록](archive/tasks/a-review-fixes.md)을 따른다.
 
 ## 브랜치와 작업 문서
 
-| 담당 | 브랜치 | 브랜치 안에서 먼저 읽을 문서 |
+| 담당 | 브랜치 | 먼저 읽을 문서 |
 | --- | --- | --- |
-| A | `feat/a-application` | `AGENT.md`, `docs/tasks/a-application.md`, `docs/integration-notes.md` |
-| B | `feat/b-security-core` | `AGENT.md`, `docs/tasks/b-security-core.md`, `docs/tasks/b-sqlite-store.md`, `docs/contracts.md` |
-| C | `feat/c-security-platform` | `AGENT.md`, `docs/tasks/c-security-platform.md`, `docs/weakness_register.md` |
+| A | `feat/a-application` | `docs/a-status.md` |
+| B | `feat/b-security-core` | `docs/b-status.md`, `docs/contracts.md` |
+| C | `feat/c-security-platform` | `docs/c-status.md`, `docs/weakness_register.md` |
 
-`main`의 공통 문서 커밋을 세 브랜치가 공유한다. 역할 브랜치의 루트 `AGENT.md`는 같은 내용으로 유지하며, 현재 브랜치에 따라 고유한 작업 문서를 읽는다. 역할별 규칙을 바꿀 때는 `docs/tasks/`의 자기 문서를 수정한다. 이렇게 해야 세 브랜치를 합칠 때 역할 지침 파일이 서로 덮어써지지 않는다.
+`main`의 공통 문서 커밋을 세 브랜치가 공유한다. 각 담당은 자기 현황 문서만 고친다. 그래야 세 브랜치를 합칠 때 서로 덮어쓰지 않는다. 새 작업 일지·요청·회신 파일은 만들지 않고 PR·이슈 댓글로 남긴다. 이전 기록은 `docs/archive/`에 있으며 갱신하지 않는다.
 
 ## 파일 소유권과 리뷰
 
@@ -52,7 +52,7 @@ B1–B5 구현 초안은 B 브랜치에 있다. SQLite 이관은 담당 배정�
 | 2 · 실행 경로 | worker·Runner를 Guard에 연결 | Guard·승인·응답 게이트와 원자적 저장소 연결 | Registry·Scanner 연결, 저장소 리뷰·통합·결함 주입 | ALLOW/ASK/DENY와 커밋 후 공개를 계수로 증명 |
 | 3 · 화면과 공격 | bridge·GUI·승인 렌더링, T18 | 공격·경쟁 실패 수정, 계약 유지 | T/S 검증·replay·CI·약점 관리대장 | 담당 리뷰, 불변식 검증, 제한과 과잉 제한 보고 |
 
-상세 태스크는 각 브랜치의 `docs/tasks/`에 있다. 다른 담당의 구현이 아직 없으면 필요한 계약 초안·문서·담당 모듈의 독립 작업을 진행한다. 임시로 보안 경로를 우회해 연결하지 않는다.
+상세 태스크와 진행 상태는 담당 현황 문서에 있다. 다른 담당의 구현이 아직 없으면 필요한 계약 초안·문서·담당 모듈의 독립 작업을 진행한다. 임시로 보안 경로를 우회해 연결하지 않는다.
 
 ## Git 사용
 

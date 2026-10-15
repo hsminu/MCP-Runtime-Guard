@@ -11,7 +11,16 @@
 1. `README.md`
 2. `docs/technical-design.md`의 0.4·0.5·2장과 담당 설계 절
 3. `docs/team-workflow.md`, `docs/contracts.md`
-4. 루트 `AGENT.md`가 있으면 해당 지침과 현재 브랜치의 역할 문서
+4. 현재 브랜치 담당의 현황 문서
+
+| 현재 브랜치 | 담당 | 현황 문서 |
+| --- | --- | --- |
+| `feat/a-application` | A · 애플리케이션 | `docs/a-status.md` |
+| `feat/b-security-core` | B · 보안 코어·SQLite | `docs/b-status.md` |
+| `feat/c-security-platform` | C · 보안 기반·검증 | `docs/c-status.md` |
+| `main` | 공통 문서·통합 | `README.md`, `docs/team-workflow.md` |
+
+관리 문서는 README에 나열한 8개다. 새 작업 일지·요청·회신·실험 보고 파일을 만들지 않고 PR·이슈 댓글로 남긴다. 결정은 `docs/contracts.md`, 진행 상태는 담당 현황 문서, 검사 결과는 `docs/weakness_register.md`에 반영한다. `docs/archive/`는 이전 기록이며 갱신하지 않는다.
 
 `git branch --show-current`로 현재 역할을 확인한다. `main`에서는 공통 문서 기준을 적용한다. 브랜치 이름이 역할 표와 다르면 사용자의 명시적 담당 지정 또는 해당 브랜치 작업 지시를 따른다. 다른 역할을 임의로 추정하지 않는다.
 

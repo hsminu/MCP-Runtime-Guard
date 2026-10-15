@@ -1,7 +1,7 @@
 name: ci
 
 # 설계 13.5절 파이프라인 중 현재 통과 가능한 단계만 실행한다.
-# import-linter 규칙·Bandit·Semgrep·pip-audit·통합 테스트는 C 후속(docs/integration-a-b.md).
+# import-linter 규칙·Bandit·Semgrep·pip-audit·통합 테스트는 C 후속(docs/archive/integration-a-b.md).
 on:
   push:
     branches: [main]
