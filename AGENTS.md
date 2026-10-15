@@ -20,7 +20,7 @@
 | `feat/c-security-platform` | C · 보안 기반·검증 | `docs/c-status.md` |
 | `main` | 공통 문서·통합 | `README.md`, `docs/team-workflow.md` |
 
-관리 문서는 README에 나열한 8개다. 새 작업 일지·요청·회신·실험 보고 파일을 만들지 않고 PR·이슈 댓글로 남긴다. 결정은 `docs/contracts.md`, 진행 상태는 담당 현황 문서, 검사 결과는 `docs/weakness_register.md`에 반영한다. `docs/archive/`는 이전 기록이며 갱신하지 않는다.
+관리 문서는 README에 나열한 8개다. 담당 현황 문서(`docs/a-status.md`, `docs/b-status.md`, `docs/c-status.md`)는 각 담당이 고치고, 그 밖의 문서는 사용자만 작성한다. 다른 담당은 공통 문서를 직접 고치지 않고 `main` 대상 PR로 제안한다. 새 작업 일지·요청·회신·실험 보고 파일을 만들지 않고 PR·이슈 댓글로 남긴다. 결정은 `docs/contracts.md`, 진행 상태는 담당 현황 문서, 검사 결과는 `docs/weakness_register.md`에 반영한다. `docs/archive/`는 이전 기록이며 갱신하지 않는다.
 
 `git branch --show-current`로 현재 역할을 확인한다. `main`에서는 공통 문서 기준을 적용한다. 브랜치 이름이 역할 표와 다르면 사용자의 명시적 담당 지정 또는 해당 브랜치 작업 지시를 따른다. 다른 역할을 임의로 추정하지 않는다.
 

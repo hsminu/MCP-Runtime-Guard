@@ -32,18 +32,18 @@
 - [x] C1.1 [Store 계약 요구 초안](archive/tasks/c-store-requirements.md) 작성. B 검토·A·B·C 합의는 미완료다.
 - [x] B `0c02b61` 검토·840개 테스트 재현·C-B-01 발견 후, 수정 커밋 `f3c2d2b`와 회귀 검증 확인. 최신 코드로 864개 테스트·Ruff·포맷·mypy 통과를 재현했다. [인수 검토 기록](archive/tasks/c-b-review.md) 참조. 공통 계약 합의·실제 SQLite 인수는 남아 있다.
 - [x] [Store 계약 처리 제안 v1](archive/tasks/c-store-proposal.md) 작성. 보안 버전·원자 승인·ACK/취소·DB 시점 만료·복구 규칙과 B 변경 계획을 제안했다. 새 계약·구현·검증의 합의는 미완료다.
-- [x] SQLite 구현의 B 이관과 C 독립 검증 배정을 [공통 계약](contracts.md#담당-변경-기록)에 기록. API 세부 합의·원격 공유·B 착수 확인은 별도다.
+- [x] SQLite 구현의 B 이관과 C 독립 검증 배정을 [공통 계약](contracts.md#사용자-결정)에 기록. API 세부 합의·원격 공유·B 착수 확인은 별도다.
 - [x] C1.4의 Cisco Scanner 설치·API/CLI·오프라인·실패 의미 조사. [4.8.6 확인 보고](archive/tasks/c-cisco-scanner-spike.md)에 SDK 1.30.0·B lock 33개 호환, 864개 테스트 재실행, 완료 오판·생략·원문 출력과 네트워크 관측을 기록했다. 제품 어댑터·Registry 검증은 미실행이다.
 - [x] 2026-10-13 사용자 요청으로 [Scanner OpenAI 설정](archive/tasks/c-openai-scanner-setup.md) 준비. `.env`·공유 템플릿·`.venv-scanner`와 HTTP 대역 검증 후, 사용자 키의 참조를 수정하고 Mini와 Luna로 실제 API를 확인했다. 두 모델 모두 정상 0건·악성 HIGH 2건, HTTP 200·JSON 파싱 성공. Luna 원형의 `max_tokens` HTTP 400과 임시 요청 보정도 기록했다. 통계 탐지 평가·제품 연결은 미실행이다.
 - [x] [Luna 확장 평가](archive/tasks/c-luna-scanner-evaluation.md): 정상 12개·공격 16개와 표적 3개 재검사, 실제 API 59건. SDK 경로 공격 13/16·오탐 0/12, 전체 metadata 임시 경로 공격 16/16·오탐 0/12. C-CISCO-03 입력 누락을 확인했다. 독립 정답 리뷰·Mini 동일 세트 비교·제품 보정·통합 인수는 미완료다.
 - [x] 사용자 결정으로 Scanner LLM을 Luna low로 선택. `.env`·공유 템플릿 반영과 임시 보정 코드의 실제 API 두 건 확인. 기존 28개 평가는 none이며 low 전체 회귀는 미실행이다. [다음 Cisco 작업](archive/tasks/c-cisco-next-steps.md)에 계약 → 어댑터 → 실제 tools/list → 오류/회귀 → Registry·Guard 인수 순서를 기록했다.
 - [x] 후속 구현 지시로 [Cisco 도구 정의 입력·호출 어댑터](archive/tasks/c-cisco-metadata-implementation.md)를 제품 소스에 반영. 루트·중첩 schema·annotations·추가 필드 보존, 23개 테스트·Ruff·strict mypy와 B 실제 FrozenJsonObject 입력 확인. 당시 모델 요청 보정·ScanReport 집계·Registry 연결·B 리뷰는 미완료였다.
 - [x] 후속 "연결해 b scanreport는 연결하지마" 지시로 [Luna low 제품 연결](archive/tasks/c-cisco-luna-connection.md)을 구현. 62개 오프라인 테스트·Ruff·4개 소스 strict mypy 통과, 실제 API 28건 모두 HTTP 200·전체 정의 전달. 공격 16/16 탐지·교육용 인용 B06 오탐 1/12. SDK import의 암묵적 dotenv 로딩 차단·키 환경 비복사 확인. B ScanReport는 미연결이며 Registry·실제 MCP·B 리뷰는 남아 있다.
-- [x] 사용자 결정 [LLM 기본 + YARA 병행·위험/검사 실패 경고 정책](contracts.md#scanner-정책-사용자-결정)을 문서에 기록. 위험 발견과 검사 실패·미완료 모두 경고 후 사용을 계속하며 그 Scanner 결과만으로 자동 차단하지 않는다. 원래 심각도·실패 상태·고정 오류 코드는 보존한다. 후속 내부 병행·집계 구현은 아래에 기록하며 경고 UI·Registry 정책은 남아 있다.
+- [x] 사용자 결정 [LLM 기본 + YARA 병행·위험/검사 실패 경고 정책](contracts.md#사용자-결정)을 문서에 기록. 위험 발견과 검사 실패·미완료 모두 경고 후 사용을 계속하며 그 Scanner 결과만으로 자동 차단하지 않는다. 원래 심각도·실패 상태·고정 오류 코드는 보존한다. 후속 내부 병행·집계 구현은 아래에 기록하며 경고 UI·Registry 정책은 남아 있다.
 - [x] [실제 MCP metadata 조사](archive/tasks/c-real-mcp-metadata-survey.md): 공개 서버 6종·설정 7개의 stdio·원격 HTTP 목록 수집 189건, 현재 C 어댑터 전체 정의 보존 189/189. 최대 정의 8,360바이트·최대 페이지 result 259,485바이트. tools/call 0회·추가 모델 API 0건. 실제 정의의 LLM/YARA 검사·A 제품 transport·Registry·Guard·B 리뷰는 남아 있다.
-- [x] 사용자 결정 [도구당 기본 64KiB·설정 가능](contracts.md#scanner-입력-크기-사용자-결정)을 문서에 확정. 전체 JSON UTF-8 바이트 기준, 초과 시 자르지 않고 검사 미완료 경고 후 사용 계속. 제품 기본값·설정·경고 연결은 미반영이다.
-- [x] 사용자 결정 [목록 페이지당 기본 1MiB·설정 가능](contracts.md#mcp-목록-수신-크기-사용자-결정)을 문서에 확정. A transport가 파싱 전 수신 중 제한하고 초과 응답은 중단·목록 수집 미완료 경고로 처리. 제품 수신 제한·C 결함 검증·경고 연결은 미반영이다.
-- [x] 사용자 결정 [서버별 조회 누적 기본 8MiB·설정 가능](contracts.md#mcp-목록-누적-수신량-사용자-결정)을 문서에 확정. 한 번의 전체 목록 조회에서 모든 페이지를 합산하고 초과하면 추가 수집 중단·전체 목록 미완료 경고. 제품 계수·설정·중단·C 다중 페이지 검증은 미반영이며 다음은 서버별 도구 수 상한이다.
+- [x] 사용자 결정 [도구당 기본 64KiB·설정 가능](contracts.md#사용자-결정)을 문서에 확정. 전체 JSON UTF-8 바이트 기준, 초과 시 자르지 않고 검사 미완료 경고 후 사용 계속. 제품 기본값·설정·경고 연결은 미반영이다.
+- [x] 사용자 결정 [목록 페이지당 기본 1MiB·설정 가능](contracts.md#사용자-결정)을 문서에 확정. A transport가 파싱 전 수신 중 제한하고 초과 응답은 중단·목록 수집 미완료 경고로 처리. 제품 수신 제한·C 결함 검증·경고 연결은 미반영이다.
+- [x] 사용자 결정 [서버별 조회 누적 기본 8MiB·설정 가능](contracts.md#사용자-결정)을 문서에 확정. 한 번의 전체 목록 조회에서 모든 페이지를 합산하고 초과하면 추가 수집 중단·전체 목록 미완료 경고. 제품 계수·설정·중단·C 다중 페이지 검증은 미반영이며 다음은 서버별 도구 수 상한이다.
 - [x] 사용자 요청으로 [Scanner 운영 설정 일괄 추천안 v1](archive/tasks/c-scanner-operating-proposal.md) 작성. 개수·시간·동시성·입력·부분 실패·취소·재검사·캐시·경고 표시를 모았다. 현재 코드의 LLM 60초·4,096토큰·재시도 0과 기존 사용자 결정은 유지하며 새 추천값은 미확정·미구현이다.
 - [x] 사용자 요청의 [운영 추천안 검증](archive/tasks/c-scanner-operating-validation.md): 기존 62개 회귀·20 subtest·B 설정 Ruff·제품 strict mypy 통과. 공개 MCP 재수집·실제 정의 144개 Luna low/YARA 완료·HTTP 200 144건·분석 배치 69.764초. stdio/HTTP 경계 관찰 22개에서 수신·개수·깊이 제한의 미집행 확인. YARA async timeout 결함 주입·native 5초 기능 확인. 제품 상한·병행 runner·경고 UI·Registry·Guard·B 리뷰는 남음.
 - [ ] C1.2–C1.4 요구 초안과 공통 API 계약 합의.
