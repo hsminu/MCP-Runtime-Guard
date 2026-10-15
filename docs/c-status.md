@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-15 · main `82563ce` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-15 · main `d315d71` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -8,8 +8,9 @@
 | --- | --- | --- |
 | Store 계약 회신(B6-01–06) | B·A | C1.8, C3.5 |
 | ScanReport 번역·Registry 영속화 계약(B6-06) | B | C4.9, C4.10 |
-| CI 2단계 진행과 cryptography 예외 결정 | 사용자 | C2.9, C6.3, C6.4 |
-| Scanner 남은 상한·심각도 처리 결정 | 사용자 | C4.14, C4.15 |
+| AGT 제거(구현) | A·B | C2.9, C6.3, C6.4, C6.9 |
+| Scanner 남은 상한 결정 | 사용자 | C4.14 |
+| 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 
 ## C1 · 계약과 관측 기반
 
@@ -33,7 +34,7 @@
 - [ ] C2.6 launcher: 등록된 절대 경로·인자 리스트·최소 환경, shell·동적 실행 금지
 - [ ] C2.7 ids: 암호학적 난수, 비밀값 누락은 전용 예외
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
-- [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계
+- [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
 
 ## C3 · B SQLite 리뷰와 독립 검증
 
@@ -60,10 +61,11 @@
 - [ ] C4.10 Registry 등록·지문 영속화와 변경 시 승인 무효화 — 막힘: B6-06
 - [ ] C4.11 신규 서버 PENDING, 관리자 확인 후 ACTIVE
 - [ ] C4.12 B digest로 도구 지문화. 추가 필드(`icons`·`_meta` 등) 포함 범위 결정 필요
-- [ ] C4.13 경고 표시를 A UI에 연결
+- [ ] C4.13 경고 데이터를 등록 화면과 도구 호출 승인 창에 제공 · [결정](contracts.md#사용자-결정) — 막힘: A 화면
 - [ ] C4.14 남은 상한: 서버별 도구 수·페이지 수·조회 시간·검사 동시성 — 막힘: 사용자 결정
-- [ ] C4.15 Scanner 심각도: SDK가 모든 LLM finding을 HIGH로 고정, 모델 `overall_risk` 보존 여부 — 막힘: 사용자 결정
+- [ ] C4.15 LLM 자체 평가(`overall_risk`)를 참고 필드로 보존. 판정·정렬에 쓰지 않음 · [결정](contracts.md#사용자-결정) — 필드 형식은 C4.9
 - [ ] C4.16 LLM 경고의 반복 실행 변동 측정(144개 × 여러 회)
+- [ ] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록
 
 ## C5 · fixture와 계수
 
@@ -79,13 +81,13 @@
 
 - [x] C6.1 CI 1단계(Windows, Ruff·포맷·mypy·단위) · #4 · [통합 기록](archive/integration-a-b.md)
 - [x] C6.2 contract 테스트 Windows 수정(socket 차단·SDK import 경로·deadline) · #7
-- [ ] C6.3 CI 2단계(import-linter·Bandit·Semgrep·pip-audit) — 막힘: 보류(사용자), cryptography 예외 결정
-- [ ] C6.4 contract 테스트 CI 편입 — 막힘: CI 확장 보류
+- [ ] C6.3 CI 2단계(import-linter·Bandit·Semgrep·pip-audit, pip-audit 예외 없음) — 막힘: AGT 제거
+- [ ] C6.4 contract 테스트 CI 편입(C6.3과 함께) — 막힘: AGT 제거
 - [ ] C6.5 실험 스크립트 Windows 수정(socket 차단·`PYTHONPATH`·인코딩)과 MCP 정의 수집기 저장소 반영
 - [ ] C6.6 Windows Cisco 실험(2026-10-14~15) 완료 기록 작성
 - [ ] C6.7 Fake·실제 Transport·Store·AccessChecker·Scanner에 같은 계약 테스트
 - [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·S01·S02·S04·S05
-- [ ] C6.9 AGT 거절·오류·시간초과·형식 불명에서 host_dispatch 0
+- [ ] C6.9 자체 접근 규칙의 거절·오류에서 host_dispatch 0 — 막힘: AGT 제거(B 판정·A 연결)
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록
