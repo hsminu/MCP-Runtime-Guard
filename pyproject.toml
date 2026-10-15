@@ -59,7 +59,7 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "RET", "BLE", "S", "ASYNC",
 "src/guard_app/ui/**" = ["N802", "N815"]
 # ---- A+B 통합 기준선(2026-10-14) ----
 # 통합 시점에 이미 있던 위반만 파일별로 면제한다. 새 파일과 B 파일에는 적용하지 않는다.
-# 담당자가 해당 파일을 고치면 항목을 지운다. 범위는 docs/integration-a-b.md 참고.
+# 담당자가 해당 파일을 고치면 항목을 지운다. 범위는 docs/archive/integration-a-b.md 참고.
 "src/guard_app/adapters/mcp_transport.py" = ["N818", "S101"]
 "src/guard_app/services/bridge.py" = ["ASYNC109", "S101", "SIM105"]
 "src/guard_app/ui/approvals.py" = ["E501", "S101"]

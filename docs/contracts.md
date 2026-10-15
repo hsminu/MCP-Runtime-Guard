@@ -1,10 +1,10 @@
 # 공통 계약 체크리스트
 
-> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
+> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](archive/tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
 
 2026-10-13 현재 문서 대조 기준은 **A `ab82919`, B 공개 `6115fa6`, C/main `4179f98`**다.
-[B QA 반영 기록](b-qa-fixes-2026-10-13.md)의 01·02·05·07·08은 기존 계약 안의 B 내부 보완이다.
-후속 [QA-09의 자원 수명 보완](b-qa09-task-lifecycle.md)도 B 내부 구현이며,
+[B QA 반영 기록](archive/b-qa-fixes-2026-10-13.md)의 01·02·05·07·08은 기존 계약 안의 B 내부 보완이다.
+후속 [QA-09의 자원 수명 보완](archive/b-qa09-task-lifecycle.md)도 B 내부 구현이며,
 미확정 stop 해제·재시작 복구 규칙을 확정한 것은 아니다.
 공유 domain/ports/v1 스키마 변경과 새 공동 합의는 없다. QA-03/10·04·06의 가시성·미전송·busy 계약은 미결이다.
 이전 서비스 `29025e0`/971개·SQLite 추가 `9eb0560`/1,395개는 해당 시점의 근거로 구분한다.
@@ -17,7 +17,7 @@
 | --- | --- | --- | --- |
 | 2026-10-12 | 사용자 명시적 결정: "sqlite b로 넘기자" | `storage/*`, SQLite·스키마·마이그레이션·시작 복구·영속 순번·감사 저장·저장소 단위 테스트는 B. 저장소 리뷰·독립 계약·통합·공격·결함 주입·실험은 C | 담당 확정, 이 작업 디렉터리 문서 반영. 원격 공유·B 착수 확인·API 세부 합의·실제 구현·인수는 별도 |
 
-현행 소유권은 [협업 규칙](team-workflow.md), B의 작업은 [B6 · SQLite 인수](tasks/b-sqlite-store.md)를 따른다. C의 Registry·Scanner·위험 연산·정적 강제 규칙과 A의 시작 실행 게이트 배정은 해당 소유권 표를 따른다. 사용자 결정은 SQLite 담당 변경에 적용하며, 아래 API·DTO·상태·오류 제안 전체의 동의로 확대하지 않는다.
+현행 소유권은 [협업 규칙](team-workflow.md), B의 작업은 [B6 · SQLite 인수](b-status.md)를 따른다. C의 Registry·Scanner·위험 연산·정적 강제 규칙과 A의 시작 실행 게이트 배정은 해당 소유권 표를 따른다. 사용자 결정은 SQLite 담당 변경에 적용하며, 아래 API·DTO·상태·오류 제안 전체의 동의로 확대하지 않는다.
 
 ## Scanner 모델 선택 기록
 
@@ -25,7 +25,7 @@
 | --- | --- | --- | --- |
 | 2026-10-13 | 사용자 명시적 결정: "일단 luna low로 하는 걸로 가자" | C의 Cisco Scanner 선택 LLM에 `openai/gpt-6-luna`·`reasoning_effort=low` 사용 | `.env`·공유 템플릿·제품 연결 반영. low 실제 API 28개: 공격 16/16 탐지·정상 오탐 1/12. B ScanReport 연결 제외, 실제 MCP/Registry 인수는 남음 |
 
-이 결정은 A의 ModelClient·Runner 모델이나 `domain/*`·`ports.py`·필수 분석기·활성화 정책의 합의가 아니다. [설정과 호출 근거](tasks/c-openai-scanner-setup.md), [남은 작업](tasks/c-cisco-next-steps.md)을 따른다.
+이 결정은 A의 ModelClient·Runner 모델이나 `domain/*`·`ports.py`·필수 분석기·활성화 정책의 합의가 아니다. [설정과 호출 근거](archive/tasks/c-openai-scanner-setup.md), [남은 작업](archive/tasks/c-cisco-next-steps.md)을 따른다.
 
 ## Scanner 정책 사용자 결정
 
@@ -37,9 +37,9 @@
 
 같은 날 사용자가 "함께 돌리자"라고 결정해 YARA를 보조 분석기로 병행한다. 같은 전체 도구 정의를 LLM과 YARA에 각각 전달하고, 어느 한쪽이 발견한 위험도 경고 대상으로 보존한다. 두 분석기의 판단 일치를 요구하거나 서로의 Finding을 지우지 않는다. 기존 경고 정책을 두 분석기에 적용하며 실패·미완료도 경고 후 사용을 계속한다. 한쪽의 실패로 다른 검사를 생략하지 않고 각 분석기의 실제 완료·실패 상태를 따로 기록한다. 중복 경고의 표시 방식과 실행 순서는 후속 구현에서 정리한다.
 
-후속 사용자 지시 "내부 집계까지 구현해"로 [C 내부 병행 검사·집계](tasks/c-cisco-internal-aggregation.md)를 구현했다. 같은 정의 사본을 두 분석기에 전달하고 도구별·분석기별 완료·실패·미실행, 출처·심각도·코드를 보존한다. 경고 UI·Registry 정책은 미구현이며 B ScanReport 미연결 지시를 유지한다. 관리자의 활성화 절차·도구 지문 변경 시 PENDING/승인 무효화 규칙은 별도다. 도구별 입력 상한·목록 페이지 수신 상한·서버별 누적 수신 상한은 아래 사용자 결정으로 확정했으며, 도구 수 등 나머지 제한은 미확정이다.
+후속 사용자 지시 "내부 집계까지 구현해"로 [C 내부 병행 검사·집계](archive/tasks/c-cisco-internal-aggregation.md)를 구현했다. 같은 정의 사본을 두 분석기에 전달하고 도구별·분석기별 완료·실패·미실행, 출처·심각도·코드를 보존한다. 경고 UI·Registry 정책은 미구현이며 B ScanReport 미연결 지시를 유지한다. 관리자의 활성화 절차·도구 지문 변경 시 PENDING/승인 무효화 규칙은 별도다. 도구별 입력 상한·목록 페이지 수신 상한·서버별 누적 수신 상한은 아래 사용자 결정으로 확정했으며, 도구 수 등 나머지 제한은 미확정이다.
 
-입력 크기의 근거로 C가 [실제 MCP metadata 조사](tasks/c-real-mcp-metadata-survey.md)를 수행했다. 공개 서버 6종·설정 7개의 Tool 정의 189건에서 최대 단일 정의는 8,360바이트, 최대 페이지 result는 259,485바이트였다. 조사 당시 도구별 64KiB와 별도 목록·누적량·도구 수 제한을 제안했으며, 후속 사용자 결정은 아래에 기록한다. 추가 정의 필드와 지문 범위의 일치, A transport의 파싱 전 수신 제한은 별도 계약 검토 대상이다. 이 기록은 크기 조사이며 실제 정의의 LLM/YARA 검사나 공통 API 합의가 아니다.
+입력 크기의 근거로 C가 [실제 MCP metadata 조사](archive/tasks/c-real-mcp-metadata-survey.md)를 수행했다. 공개 서버 6종·설정 7개의 Tool 정의 189건에서 최대 단일 정의는 8,360바이트, 최대 페이지 result는 259,485바이트였다. 조사 당시 도구별 64KiB와 별도 목록·누적량·도구 수 제한을 제안했으며, 후속 사용자 결정은 아래에 기록한다. 추가 정의 필드와 지문 범위의 일치, A transport의 파싱 전 수신 제한은 별도 계약 검토 대상이다. 이 기록은 크기 조사이며 실제 정의의 LLM/YARA 검사나 공통 API 합의가 아니다.
 
 ## Scanner 입력 크기 사용자 결정
 
@@ -71,17 +71,17 @@
 
 현재는 결정 문서만 반영했다. A의 누적 수신량 계수·설정·수집 중단, C의 다중 페이지·누적 초과·조회별 계수 검증, 경고 UI·Registry 연결은 미구현이다. B ScanReport는 미연결 지시를 유지하며 제품 소스와 공통 API는 변경하지 않았다. 다음 미확정 항목은 **서버별 도구 수 상한**이다. 페이지 수·조회 시간·검사 동시성 등의 제한도 후속으로 검토한다.
 
-사용자의 "이런 자잘한 거 다 추천하는 거 적어봐" 요청으로 C가 [운영 설정 일괄 추천안 v1](tasks/c-scanner-operating-proposal.md)을 작성했다. 남은 개수·시간·동시성·오류·경고·재검사 설정과 현재 구현값을 정리한 제안이며 새 사용자 결정이나 A·B·C 공통 API 합의로 기록하지 않는다.
+사용자의 "이런 자잘한 거 다 추천하는 거 적어봐" 요청으로 C가 [운영 설정 일괄 추천안 v1](archive/tasks/c-scanner-operating-proposal.md)을 작성했다. 남은 개수·시간·동시성·오류·경고·재검사 설정과 현재 구현값을 정리한 제안이며 새 사용자 결정이나 A·B·C 공통 API 합의로 기록하지 않는다.
 
-후속 "검증 ㄱㄱ" 요청의 [실행 보고](tasks/c-scanner-operating-validation.md)에서 실제 정의 변형 144개의 Luna low/YARA 검사·API 144건 HTTP 200·stdio/HTTP 경계 관찰 22개를 확인했다. 동시 LLM 4개·YARA worker 1개는 실험 코드의 제한이며 A 수신 상한·제품 병행 runner·Registry·경고 UI·Guard 인수를 대신하지 않는다. 새 추천값은 아직 미확정이고 B ScanReport는 미연결 상태를 유지한다.
+후속 "검증 ㄱㄱ" 요청의 [실행 보고](archive/tasks/c-scanner-operating-validation.md)에서 실제 정의 변형 144개의 Luna low/YARA 검사·API 144건 HTTP 200·stdio/HTTP 경계 관찰 22개를 확인했다. 동시 LLM 4개·YARA worker 1개는 실험 코드의 제한이며 A 수신 상한·제품 병행 runner·Registry·경고 UI·Guard 인수를 대신하지 않는다. 새 추천값은 아직 미확정이고 B ScanReport는 미연결 상태를 유지한다.
 
 ## Scanner 입력 범위 구현 기록
 
-2026-10-13 사용자의 "반영해보" 지시로 C의 [도구 정의 입력 어댑터](tasks/c-cisco-metadata-implementation.md)를 구현했다. 네 기본 필드의 전체 중첩 구조와 추가 정의 필드를 보존하고, LLM SDK의 description에 전체 JSON을 넣는다. 실행 인자·결과·연결 설정을 입력에 합치지 않는다. 구현상 크기 상한은 호출자가 명시하며, 후속 기본 64KiB 정책은 위 사용자 결정에 기록했다. 기본 repr·입력 오류에는 원문을 노출하지 않는다.
+2026-10-13 사용자의 "반영해보" 지시로 C의 [도구 정의 입력 어댑터](archive/tasks/c-cisco-metadata-implementation.md)를 구현했다. 네 기본 필드의 전체 중첩 구조와 추가 정의 필드를 보존하고, LLM SDK의 description에 전체 JSON을 넣는다. 실행 인자·결과·연결 설정을 입력에 합치지 않는다. 구현상 크기 상한은 호출자가 명시하며, 후속 기본 64KiB 정책은 위 사용자 결정에 기록했다. 기본 repr·입력 오류에는 원문을 노출하지 않는다.
 
 B의 `FrozenJsonObject.to_dict` 입력과 호환되며 domain·ports·digest는 변경하지 않았다. 추가 필드·float를 포함한 검사 범위와 지문 범위의 일치, ScanReport 번역·필수 분석기 집계·Registry 연결은 후속 계약 검토 대상이다. 이 기록은 C 입력 구현에 대한 사용자 지시와 실제 검증이며 A·B·C의 새 공통 API 합의 기록을 대신하지 않는다.
 
-후속 사용자 지시 "연결해 b scanreport는 연결하지마"로 [Luna low 요청 연결](tasks/c-cisco-luna-connection.md)을 구현했다. 환경·OpenAI 요청·고정 오류 처리는 C 내부 구현이며 B ScanReport·domain·ports는 연결하거나 변경하지 않았다. 이 제외 지시는 현재 작업 범위에 적용하며 새 공통 DTO·필수 분석기·등록 정책의 합의를 뜻하지 않는다.
+후속 사용자 지시 "연결해 b scanreport는 연결하지마"로 [Luna low 요청 연결](archive/tasks/c-cisco-luna-connection.md)을 구현했다. 환경·OpenAI 요청·고정 오류 처리는 C 내부 구현이며 B ScanReport·domain·ports는 연결하거나 변경하지 않았다. 이 제외 지시는 현재 작업 범위에 적용하며 새 공통 DTO·필수 분석기·등록 정책의 합의를 뜻하지 않는다.
 
 후속 "내부 집계까지 구현해"로 `adapters/cisco_aggregation.py`에 C 전용 불변 결과와 병행 runner를 구현했다. SDK 원문·evidence를 복사하지 않고 실패 결과는 `findings: null`, 정상 무탐지는 빈 목록으로 구분한다. 이미 검증한 finding은 다른 결과 항목이 잘못돼도 보존한다. 96개 회귀·20 subtest와 실제 수집 정의 144개의 오프라인 SDK/native YARA 검증을 확인했다. 이번 LLM HTTP 응답은 대역이며 실제 모델 API 재평가는 아니다. 이 내부 형식은 B DTO·지문·공통 Scanner API 합의가 아니며 전역 동시성·대기열·YARA native 시간 제한·A 수신 제한·Registry·UI 연결은 남아 있다.
 
@@ -108,13 +108,13 @@ B의 `FrozenJsonObject.to_dict` 입력과 호환되며 domain·ports·digest는 
 - [ ] 연결은 백엔드 단일 writer가 소유하며 WAL·foreign_keys·synchronous FULL·명시적 트랜잭션을 사용한다.
 - [ ] 저장소 오류·상태 충돌·감사 기록 실패가 도메인 결과로 바뀌는 경계를 합의한다. 원문을 오류 메시지로 공개하지 않는다.
 
-C가 작성한 [Store 계약 요구 초안](tasks/c-store-requirements.md)은 세 연산의 입력 의미·관계 검사·rollback·실패 전달과 후속 검증 기준을 제안한다. B 검토·A·B·C 합의는 아직 없으며, 특히 상태 전이의 `security_version`, 소비 감사 원자성, SEND 결과·커밋 실패의 처리, 재시작·제어 경쟁은 초안 U1–U8의 미확정 항목이다. 이 링크 추가는 계약 확정이나 위 체크리스트 통과를 뜻하지 않는다.
+C가 작성한 [Store 계약 요구 초안](archive/tasks/c-store-requirements.md)은 세 연산의 입력 의미·관계 검사·rollback·실패 전달과 후속 검증 기준을 제안한다. B 검토·A·B·C 합의는 아직 없으며, 특히 상태 전이의 `security_version`, 소비 감사 원자성, SEND 결과·커밋 실패의 처리, 재시작·제어 경쟁은 초안 U1–U8의 미확정 항목이다. 이 링크 추가는 계약 확정이나 위 체크리스트 통과를 뜻하지 않는다.
 
-C의 [Store 계약 처리 제안 v1](tasks/c-store-proposal.md)은 정상 승인 상태 전이의 보안 버전 유지, 승인 생성·종결 원자 연산, 커밋 불명 오류·취소, DB 처리 시점의 만료·시작 정리 규칙을 구체적으로 제안한다. 새 API·DTO·오류 이름과 시계·스키마 변경은 B 검토·A·B·C 합의 대상이다. 제안 작성과 실제 구현·검증·합의를 구분한다.
+C의 [Store 계약 처리 제안 v1](archive/tasks/c-store-proposal.md)은 정상 승인 상태 전이의 보안 버전 유지, 승인 생성·종결 원자 연산, 커밋 불명 오류·취소, DB 처리 시점의 만료·시작 정리 규칙을 구체적으로 제안한다. 새 API·DTO·오류 이름과 시계·스키마 변경은 B 검토·A·B·C 합의 대상이다. 제안 작성과 실제 구현·검증·합의를 구분한다.
 
 SQLite 이관 후에도 C 요구·제안 문서는 B의 설계 검토와 C의 독립 인수 기준으로 사용한다. Registry 상태·지문 영속화, 변경 시 승인 무효화와 단일 writer 사용 인터페이스는 B·C가 구체화하고 공통 계약 변경을 기록한다.
 
-[Cisco Scanner 4.8.6 확인 보고](tasks/c-cisco-scanner-spike.md)에서 개별 오프라인 API와 CLI를 실행했다. 정적 검사 경로의 실패 완료 오판·생략과 원문 출력 때문에 C가 도구별 필수 분석기 완료·실패를 직접 집계해야 한다. B ScanReport의 필수/완료/생략/실패·지문·severity로 번역하는 계약과 필수 분석기 목록은 후속 검토 대상이며, SDK 결과나 종료 코드만으로 ACTIVE를 확정하지 않는다. MCP 1.30.0·B lock과의 설치/단위 검증은 A의 실제 연결·AGT 호환 확정을 대신하지 않는다.
+[Cisco Scanner 4.8.6 확인 보고](archive/tasks/c-cisco-scanner-spike.md)에서 개별 오프라인 API와 CLI를 실행했다. 정적 검사 경로의 실패 완료 오판·생략과 원문 출력 때문에 C가 도구별 필수 분석기 완료·실패를 직접 집계해야 한다. B ScanReport의 필수/완료/생략/실패·지문·severity로 번역하는 계약과 필수 분석기 목록은 후속 검토 대상이며, SDK 결과나 종료 코드만으로 ACTIVE를 확정하지 않는다. MCP 1.30.0·B lock과의 설치/단위 검증은 A의 실제 연결·AGT 호환 확정을 대신하지 않는다.
 
 ## 상태·승인·응답
 
@@ -142,15 +142,15 @@ SQLite 이관 후에도 C 요구·제안 문서는 B의 설계 검토와 C의 �
 
 2026-10-11 B 브랜치에 도메인 모델·enum·reason code·전용 오류, 결과 DTO와 포트 Protocol의
 검토용 구현 및 단위 테스트를 추가했다. 세부 구현과 추가 시그니처 선택은
-[B1 도메인·포트 계약 구현 초안](b1-contract-draft.md)에 있다.
+[B1 도메인·포트 계약 구현 초안](archive/b1-contract-draft.md)에 있다.
 코드 작성과 단위 검증은 A·C의 합의·계약 동결을 뜻하지 않는다.
 위 체크리스트의 미정 항목과 실제 저장소·전송·UI 인수 조건은 계속 검토 대상이다.
 
 ## B4·B5 연동 제안
 
 해시·예외·Guard·응답·승인 서비스의 구현과 미확정 연결 조건은
-[B4·B5 구현 문서](b4-b5-execution.md)에 기록했다. 기존 domain·ports 코드는 유지했다.
-실제 A·C 연결 위치, 서비스 구성 예시와 인수 순서는 [B 인수 안내](b-handoff.md)에 있다.
+[B4·B5 구현 문서](archive/b4-b5-execution.md)에 기록했다. 기존 domain·ports 코드는 유지했다.
+실제 A·C 연결 위치, 서비스 구성 예시와 인수 순서는 [B 인수 안내](archive/b-handoff.md)에 있다.
 다음 항목은 구현자가 제안한 서비스 구성 선택이며 A·C 합의 기록이 아니다.
 
 - ID·기존 Task의 순번·예약 전 예외 감사는 구성 callback으로 주입한다.
@@ -166,21 +166,21 @@ SQLite 이관 후에도 C 요구·제안 문서는 B의 설계 검토와 C의 �
 
 ## 2026-10-13 B 검토안과 구현 상태
 
-[B6 계약 변경안](b6-contract-proposal.md)에 현재 Store 12개 연산과 C U1–U8,
+[B6 계약 변경안](archive/b6-contract-proposal.md)에 현재 Store 12개 연산과 C U1–U8,
 A의 상태·제어·승인 상세 요청을 대조했다. 원자 승인 API·DTO·오류·버전·복구는
 공동 검토용 제안이며 아래 합의 표의 동의를 대신하지 않는다.
 
 같은 날 사용자는 **B6는 A·C 검토를 받은 뒤 확정**하도록 결정했다.
-새 API·DTO·오류·버전·복구 규칙은 [변경안 10절](b6-contract-proposal.md)의 회신 후
+새 API·DTO·오류·버전·복구 규칙은 [변경안 10절](archive/b6-contract-proposal.md)의 회신 후
 실제 합의 근거를 기록한다. 검토 자료 작성과 다른 clone에 전달된 상태는 구분한다.
 
-회신할 항목·목적·담당별 질문·답변 형식은 [A·C 공동 계약 검토 요청](ac-contract-review-request.md)에
+회신할 항목·목적·담당별 질문·답변 형식은 [A·C 공동 계약 검토 요청](archive/ac-contract-review-request.md)에
 모았다. 기존 도메인·Store 12개 연산의 의미를 유지하는 독립 SQLite 준비·구현은 먼저 진행할 수
 있으며, 이 순서를 새 공유 API/DTO/오류/상태 규칙을 미리 확정하는 근거로 사용하지 않는다.
 
 정규식은 사용자의 기술설계·GitHub 문서 기준 판단 요청에 따라 B가 **기능 유지와
 전체 JSON Schema 검증의 종료 가능한 프로세스 실행**을 선택했다.
-[검증 연결안](b-schema-validation-proposal.md)에 A 모델 입력·B Catalog/Guard/승인·C launcher의
+[검증 연결안](archive/b-schema-validation-proposal.md)에 A 모델 입력·B Catalog/Guard/승인·C launcher의
 연결 범위와 리뷰 질문을 제공했다. 공동 API·실행 예산·실제 수정/인수는 검토 대기다.
 
 | 피드백 | B 상태 | 다음 인수 |
@@ -192,7 +192,7 @@ A의 상태·제어·승인 상세 요청을 대조했다. 원자 승인 API·DT
 | 승인 생성·종결 원자성 | open/finish 및 반환 관계 DTO 제안 | 공통 API 합의 후 B6 구현·C 독립 검증 |
 | 등록 스키마 정규식 | B 처리 방향은 기능 유지·전체 검증 프로세스 실행. 연결안 제공, 제품 소스는 유지 | A 직접 검증·C launcher·공동 비동기/실패 계약 검토 후 구현·인수 |
 | 실제 AGT 규칙·버전·감사 | A `cd75bf9`의 로컬 판정 연결 확인. 제품 규칙·policy_version/승인 결속·agt_mode/규칙 버전 영속 감사는 추가 검토안 | AGT-01–03 회신, B6 저장·마이그레이션과 C 독립 계수 인수 |
-| 공통 설치 조합 | A 실행 lock jsonschema 4.25.1 유지, B lock 4.26.0은 별도 검사 환경. A에 config/b-core 검사 설정 보존 | ENV-01 회신, 공통 제품 버전·lock 담당과 Scanner 포함 인수 환경 결정. 2026-10-14 통합 제안: [A+B 통합](integration-a-b.md) |
+| 공통 설치 조합 | A 실행 lock jsonschema 4.25.1 유지, B lock 4.26.0은 별도 검사 환경. A에 config/b-core 검사 설정 보존 | ENV-01 회신, 공통 제품 버전·lock 담당과 Scanner 포함 인수 환경 결정. 2026-10-14 통합 제안: [A+B 통합](archive/integration-a-b.md) |
 
 submit의 생략 기본값은 기존 호출과 호환되는 `None`이며, 기대 epoch가 다른 호출은
 `Denied(TASK_NOT_RUNNING)`을 반환한다. 새 epoch의 Task를 정지·수정하거나 요청을 만들지 않는다.
@@ -239,7 +239,7 @@ A는 `6452b13`에서 기본 대기/실행 16개·퇴역 worker 예산 2개·제�
 위 최신 병합 검증과 과거 기록은 이번 B 재현 결과나 C 독립 인수로 표시하지 않는다.
 
 A가 요청한 AGT mode/규칙 버전의 영속 감사와 규칙 변경/승인 결속은
-[B6 변경안 11절](b6-contract-proposal.md)의 검토 제안이다. 현재 불변 합성 규칙을 제품 정책
+[B6 변경안 11절](archive/b6-contract-proposal.md)의 검토 제안이다. 현재 불변 합성 규칙을 제품 정책
 인수로 확대하거나 A의 NOT NULL 감사 필드 제안을 공동 합의로 간주하지 않는다.
 기존 불명 감사 기록을 real/mock으로 추정하지 않으며 정확한 migration·필드·실패 처리를 검토한다.
 최신 [A18-D 역할 결정 요청](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-agt-role-decision.md)의
@@ -265,14 +265,14 @@ Guard 결합을 대상으로 다시 검토한다. 실패 요청/MCP SEND 재시�
 | SCHEMA-01 | 전체 스키마 검증과 C launcher 연결 | 미기록 | 미기록 | 요청 초안 |
 | ENV-01 | 통합 버전·lock·검사 도구·Scanner 조합 | A 실행/B 검사 환경 분리 확인, 제품 조합 동의 회신 아님 | 미기록 | 공통 제품 조합 미결 |
 
-답변 형식은 [중앙 요청 6절](ac-contract-review-request.md)을 따른다. 이번 작업은 요청 문서
+답변 형식은 [중앙 요청 6절](archive/ac-contract-review-request.md)을 따른다. 이번 작업은 요청 문서
 준비이며 실제 전달·A/C 동의·새 공유 계약 구현·SQLite 착수/제품 검증 완료를 뜻하지 않는다.
 
 ## 2026-10-13 영속 순번·재시작 복구 추가 검토
 
 B `6115fa6`의 실제 콜백·v1 schema/메모리 결속·split API를 기준으로
-[상세 설계안](b6-sequence-recovery-design.md)과
-[검증 시나리오 50개](b6-sequence-recovery-validation.md)를 준비했다.
+[상세 설계안](archive/b6-sequence-recovery-design.md)과
+[검증 시나리오 50개](archive/b6-sequence-recovery-validation.md)를 준비했다.
 사용자 요청은 **설계·시나리오 준비·합의 대상 분리·문서 add**이며,
 API/스키마/복구 코드 구현이나 테스트 실행·팀원 동의의 승인으로 확대하지 않는다.
 최종 기술설계의 승인 복원/결과 불명 SEND 재전송 금지·종결 Task 재개 금지·등급 보존은 유지한다.
@@ -291,34 +291,34 @@ API/스키마/복구 코드 구현이나 테스트 실행·팀원 동의의 승�
 | REC-04 | 버전·반복 적용·run 표식·UTC/감사·RecoveryReport | 미기록 | 미기록 | 설계안 작성 |
 | REC-05 | 전체 복구 TX·불명 COMMIT·예산·백업/미확정 메모리 | 미기록 | 미기록 | 설계안 작성 |
 
-A/C의 질문과 상위 계약 연결은 [상세 설계 8절](b6-sequence-recovery-design.md),
-회신 형식은 [중앙 요청 6–7절](ac-contract-review-request.md)을 따른다.
+A/C의 질문과 상위 계약 연결은 [상세 설계 8절](archive/b6-sequence-recovery-design.md),
+회신 형식은 [중앙 요청 6–7절](archive/ac-contract-review-request.md)을 따른다.
 영속 배정/상태 복구 기능의 코드/DDL/실제 연결 검증은 여전히 미완료다.
 이번 문서에는 합의 확인자·동의 일자를 새로 채우지 않는다.
 
 후속 사용자는 **혼자 구현 가능한 부분만 먼저 구현**하도록 지시했다.
-이에 B의 [private 읽기 전용 사전 점검](b6-startup-preflight.md)을 추가하며,
+이에 B의 [private 읽기 전용 사전 점검](archive/b6-startup-preflight.md)을 추가하며,
 이는 v1 스키마·기존 형식/FK·기록 MAX의 관찰 기반이다. shared domain/ports·Reason·schema는
 바꾸지 않는다. 앞선 SEQ/REC의 배정·상태 복구·epoch·앱 개방 규칙은 미합의/미구현으로 유지한다.
 사전 점검 단위 검증을 50개 기능/실제 전송 시나리오의 완료로 확대하지 않는다.
 
 ## 합의 기록
 
-아래 구현/시험 이력과 별개로, 후속 [영속 순번·복구 설계안](b6-sequence-recovery-design.md)의
+아래 구현/시험 이력과 별개로, 후속 [영속 순번·복구 설계안](archive/b6-sequence-recovery-design.md)의
 새 공유 계약 동의는 미기록이다. 검증 계획 50개도 아직 실행하지 않았다.
 
 2026-10-13 A는 B `3bf414c`의 코드·검토 요청을 병합했다.
-[A 동기화 기록](tasks/a-b-sync-2026-10-13.md)은 현재 코드·환경·검증과 AGT 기준 차이를 기록한다.
+[A 동기화 기록](archive/tasks/a-b-sync-2026-10-13.md)은 현재 코드·환경·검증과 AGT 기준 차이를 기록한다.
 동기화는 위 요청 ID의 동의가 아니며 공통 API·상태·환경 합의 표는 미확정으로 유지한다.
 
-2026-10-13 사용자 지시로 [SQLite 첫 단계](b6-sqlite-foundation.md)의 연결·초기 v1
+2026-10-13 사용자 지시로 [SQLite 첫 단계](archive/b6-sqlite-foundation.md)의 연결·초기 v1
 스키마/마이그레이션·Task 생성/조회를 구현하고 전체 1,045개 단위·성질 테스트를 통과했다.
 당시 Store 12개 중 2개를 구현했으며 기존 domain·ports·서비스는 유지했다.
 이 구현/시험 기록은 아래 API 세부 합의나 C 독립 인수의 근거를 대신하지 않는다.
-후속 [상태·판정 감사·ALLOW 예약](b6-sqlite-decisions.md) 추가 당시 5/12개 연산과
+후속 [상태·판정 감사·ALLOW 예약](archive/b6-sqlite-decisions.md) 추가 당시 5/12개 연산과
 전체 1,193개 검사를 완료했다. v1 스키마를 유지하는 같은 인스턴스 ALLOW 결속이며,
 정상 전이의 보안 버전 유지 등은 adapter 구현 선택으로 B6-02 합의와 구분한다.
-이후 [승인·응답 저장](b6-sqlite-lifecycle.md) 7개를 추가해 **현행 12/12개 구현·전체
+이후 [승인·응답 저장](archive/b6-sqlite-lifecycle.md) 7개를 추가해 **현행 12/12개 구현·전체
 1,395개 검사**를 완료했다. 소비/READ/SEND/실패의 원자 저장은 B 단위 검증이며 현행
 승인 생성/종결의 두 커밋 간격, 시작 복구·새 공유 API·A 연결·C 독립 인수는 남아 있다.
 같은 인스턴스의 원문 없는 결속·fresh UTC 검사·버전 선택을 공동 합의로 기록하지 않는다.
@@ -341,7 +341,7 @@ API 세부 사항에 대한 A·B·C 합의 기록은 없다. SQLite 담당에 �
 - A bridge 내부 TaskProjection·ApprovalReview는 불변이고 command/Task/epoch로 오래된 응답을 배제한다.
   domain·ports 공통 DTO를 동결하거나 C 조회 API를 대신한 것이 아니다.
 - SQLite·영속 감사는 B6 소유다. `agt_mode`와 rule version의 영속 저장은 B6 계약/스키마 후속이다.
-- AGT 입력 최소화·경계·규칙 담당·timeout의 제안은 [리뷰 반영 기록](tasks/a-review-fixes.md#agt-경계와-남은-결정)을 따른다.
+- AGT 입력 최소화·경계·규칙 담당·timeout의 제안은 [리뷰 반영 기록](archive/tasks/a-review-fixes.md#agt-경계와-남은-결정)을 따른다.
 - 사용자 요청으로 A 개발 명세·lock을 추가했다. 실제 AGT/Scanner까지 검증한 제품 lock은 아니다.
 
 이 절은 이번 사용자 수정 요청과 구현 연결을 기록한다. A·B·C의 별도 합의 서명은 여전히 미확정이다.

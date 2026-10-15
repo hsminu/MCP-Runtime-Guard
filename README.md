@@ -1,13 +1,13 @@
 # MCP Runtime Guard
 
-> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](docs/tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
+> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](docs/archive/tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
 현재 A 브랜치에는 보안 코어·transport·Runner·Qt 앱의 **합성 개발 경로**가 있다.
 실제 stdio·로컬 HTTP MCP 서버와 로컬 AGT 판정을 연결했고, AGT는 명시적으로 real/mock을 선택한다.
 Store는 기본 메모리 대역 또는 B SQLiteStore를 선택하고, Registry는 B 단위 대역이며 모델은 mock이다.
 SQLite는 새 Task 실행만 연결했다. 시작 복구·C launcher/endpoint 검증·실제 모델 및 C 독립 인수는 아직 완료하지 않았다.
-작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/tasks/a-progress.md)이다.
+작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/a-status.md)이다.
 
 ## 설치와 실행
 
@@ -39,68 +39,47 @@ SQLite의 부모 디렉터리는 미리 있어야 한다. 같은 DB에 새 Task�
 기본값은 `stdio`다. HTTP는 JSON·SSE 응답을 지원하고 redirect·자동 인증·POST 재시도를
 사용하지 않는다. 응답 유실·timeout 뒤 SEND는 결과 불명으로 처리한다.
 현재 CLI는 임의 외부 서버 URL·인증정보를 받지 않는다. 제품 endpoint 검증·등록 연결은
-C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/tasks/a-http-integration.md)을 따른다.
+C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/archive/tasks/a-http-integration.md)을 따른다.
 
 `--agt-mode`는 필수다. real은 `agent-governance-toolkit-core==5.0.0`의 로컬
 `PolicyEngine`으로 판정하며, 시작 실패·판정 오류·시간초과 시 차단한다.
 자동 mock 전환은 없다. `--agt-policy deny-send`는 SEND만, `deny-all`은 READ부터 막는다.
 실행 탭과 창 제목에 확인된 AGT 모드를 표시한다. AGT 허용은 Guard의 ASK·DENY를 완화하지 않는다.
-[배포판 선정](docs/tasks/a-agt-selection.md)과 [실제 연결·검증 범위](docs/tasks/a-agt-integration.md)를 참고한다.
+[배포판 선정](docs/archive/tasks/a-agt-selection.md)과 [실제 연결·검증 범위](docs/archive/tasks/a-agt-integration.md)를 참고한다.
 
 B 기준 갱신 시 소스와 B 테스트를 함께 대조한 뒤 `uv run pytest -q`를 실행한다.
 A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_approvals.py`로 분리했다.
-최신 B 병합·AGT 기준 차이는 [A 동기화 기록](docs/tasks/a-b-sync-2026-10-13.md)을 따른다.
+최신 B 병합·AGT 기준 차이는 [A 동기화 기록](docs/archive/tasks/a-b-sync-2026-10-13.md)을 따른다.
 환경은 `uv.lock` 하나로 관리하고 `requirements.lock`은 거기서 생성한다.
-Ruff·포맷·mypy 검사 명령, A 기준선, main 반영 순서는 [A+B 통합](docs/integration-a-b.md)을 따른다.
+Ruff·포맷·mypy 검사 명령, A 기준선, main 반영 순서는 [A+B 통합](docs/archive/integration-a-b.md)을 따른다.
 
 B 브랜치 `6115fa6`까지 병합해 B6의 SQLite Store(현행 12/12개 메서드)와 B QA 보완이 A 브랜치에 들어왔다.
-B 범위·검증은 [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md)과 [B QA 반영 기록](docs/b-qa-fixes-2026-10-13.md)을 따른다.
-시작 복구·영속 순번·새 공동 API 합의는 B 후속이며, 앱 연결 상태는 [A 작업 현황](docs/tasks/a-progress.md)을 따른다.
+B 범위·검증은 [B6 승인·응답 저장](docs/archive/b6-sqlite-lifecycle.md)과 [B QA 반영 기록](docs/archive/b-qa-fixes-2026-10-13.md)을 따른다.
+시작 복구·영속 순번·새 공동 API 합의는 B 후속이며, 앱 연결 상태는 [A 작업 현황](docs/a-status.md)을 따른다.
 
 ## 개발 문서
+
+관리하는 문서는 이 README와 아래 7개다. 결정은 계약 문서, 진행 상태는 담당 현황 문서에 기록한다.
 
 | 문서 | 용도 |
 | --- | --- |
 | [기술 설계 및 개발 문서](docs/technical-design.md) | 제공받은 개발문서 원본 사본. 상세 설계, 테스트 T01–T38·S01–S05, ADR 기준 |
 | [3인 협업 규칙](docs/team-workflow.md) | 모듈 소유권, 리뷰 담당, 개발 순서, 브랜치 사용법 |
 | [공통 계약 체크리스트](docs/contracts.md) | B가 정의하고 A·C와 합의해야 하는 모델·포트·이벤트 계약 |
-| [B 구현 인수 안내](docs/b-handoff.md) | A·C 연결 위치, 구성 예시, 남은 합의와 환경 재현·인수 순서 |
-| [B QA 요청 반영](docs/b-qa-fixes-2026-10-13.md) | A 최신 요청 01·02·05·07·08 수정·실제 B 검증과 미결 계약/복구 |
-| [B QA-09 Task 수명](docs/b-qa09-task-lifecycle.md) | 사용 중 lock 보존·확정 종결 자원 정리·늦은 AGT와 미확정 stop 보존 |
-| [A·C 공동 계약 검토 요청](docs/ac-contract-review-request.md) | 항목별 목적·A/C 회신 질문·최신 AGT 요구·답변 형식과 합의 절차 |
-| [B6 계약 변경안](docs/b6-contract-proposal.md) | SQLite 승인 원자성·버전·오류/복구와 AGT 규칙·영속 감사 제안 |
-| [B6 SQLite 첫 단계](docs/b6-sqlite-foundation.md) | 실제 연결·v1 스키마·Task 생성/조회 구현과 74개 SQLite 단위 검사·남은 연결 |
-| [B6 상태·판정·예약](docs/b6-sqlite-decisions.md) | 3개 연산 추가·감사 원자성·같은 인스턴스 ALLOW 결속과 전체 1,193개 검사 |
-| [B6 승인·응답 저장](docs/b6-sqlite-lifecycle.md) | 남은 7개 추가·현행 12/12개 구현·전체 1,395개 검사와 제품 연결/복구 한계 |
-| [B6 영속 순번·복구 설계안](docs/b6-sequence-recovery-design.md) | 계수/migration·시작 게이트·복구 상태/epoch·A/C 회신 8항목 |
-| [B6 순번·복구 검증 계획](docs/b6-sequence-recovery-validation.md) | B 단위·C 독립·A 시작 연결의 50개 미실행 시나리오와 crash 지점 |
-| [B6 내부 시작 점검기](docs/b6-startup-preflight.md) | B 단독 구현: v1 사실·관계·기록 MAX의 읽기 전용 점검, 새 배정/복구 권한 없음 |
-| [정규식 검증 연결안](docs/b-schema-validation-proposal.md) | A 모델 입력·B 검증 의미·C 프로세스 실행/종료 연결 검토 |
-| [B1 구현 초안과 검증](docs/b1-contract-draft.md) | 구현 범위, 포트 초안 선택, 설치·단위 검사, A·C 검토 항목 |
-| [B2 순수 정책과 등급 누적](docs/b2-policy-and-taint.md) | 경계·AGT 판정, READ 누적·비교 모드, 버전과 성질 검증 |
-| [B3 Catalog 구현과 연동 경계](docs/b3-catalog.md) | 고정 스키마·namespace·출처·목적지 해석, C 안전 경로 연결 조건 |
-| [B4·B5 실행·응답·승인 구현](docs/b4-b5-execution.md) | 해시·예외, Task 직렬화, 커밋 후 공개, 사람 승인·재평가·소비와 A·C 연결 조건 |
-| [A+B 통합](docs/integration-a-b.md) | main 반영 순서, 공통 환경·검사·CI, A 기준선과 담당별 남은 일 |
-| [공통 에이전트 지침](AGENTS.md) | 모든 브랜치에 적용하는 작업 지침 |
-| [A 작업 현황](docs/tasks/a-progress.md) | 현재 구현, 실제 검증, 미완료 조건과 커밋 추적 |
+| [보안약점 관리대장](docs/weakness_register.md) | 검사 실행 기록, 발견 항목과 조치, 규칙 예외 |
+| [A 현황](docs/a-status.md) | A 구현·검증·남은 조건 |
+| [B 현황](docs/b-status.md) | B 보안 코어·SQLite 체크리스트 |
+| [C 현황](docs/c-status.md) | C 보안 기반·검증 체크리스트 |
 
-2026-10-13 현재 문서 대조 기준은 **A `ab82919`, B 공개 `6115fa6`**이다.
-후속 QA-09까지 반영 후 B 전체 **1,614개 테스트·Ruff·포맷·mypy·의존성 검사**를 통과했다.
-후속 로컬 [읽기 전용 사전 점검기](docs/b6-startup-preflight.md) 추가 후 전체 **1,683개**와
-동일 코드 검사를 통과했다. 영속 배정/상태 복구·공유 계약·제품 연결은 아직 완료되지 않았다.
-A의 후속 Runner·transport·AGT·UI 수정과 B QA 요청은 [B 반영 기록](docs/b-qa-fixes-2026-10-13.md)에 정리했다.
-A 자체 보고(전체 1,485개·합성 32경로), B 단위 검증, 미합의 계약·C 독립 인수를 구분한다.
-이전 `cd75bf9` 기준의 AGT/연동 기록은 해당 시점의 근거로 보존한다.
-
-각 작업 브랜치에는 루트 `AGENT.md`와 `docs/tasks/` 아래 담당별 작업 문서가 추가로 있다. `AGENTS.md`에서 `AGENT.md`를 읽도록 연결했다. 브랜치의 `AGENT.md`는 현재 브랜치 이름으로 담당 문서를 선택한다.
+[공통 에이전트 지침](AGENTS.md)은 에이전트가 읽는 작업 규칙이다. 이전 작업 기록, 리뷰 요청·회신, 실험 보고와 근거 JSON은 [docs/archive](docs/archive/)에 보존했으며 갱신하지 않는다.
 
 ## 3인 작업 분담
 
-| 담당 | 작업 브랜치 | 주요 책임 | 브랜치별 작업 문서 |
+| 담당 | 작업 브랜치 | 주요 책임 | 현황 문서 |
 | --- | --- | --- | --- |
-| A · 애플리케이션 | `feat/a-application` | MCP transport, AGT 연결, 모델·Runner, Qt↔asyncio bridge, GUI | `docs/tasks/a-application.md` |
-| B · 보안 코어·SQLite | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트, SQLite·스키마·복구·저장소 단위 테스트 | `docs/tasks/b-security-core.md`, [B6 · SQLite 인수](docs/tasks/b-sqlite-store.md) |
-| C · 보안 기반·검증 | `feat/c-security-platform` | 위험 연산 모듈, 서버 등록·Scanner, 저장소 리뷰·독립 검증, fixture·계수, 통합·공격·실험, CI | `docs/tasks/c-security-platform.md` |
+| A · 애플리케이션 | `feat/a-application` | MCP transport, AGT 연결, 모델·Runner, Qt↔asyncio bridge, GUI | [A 현황](docs/a-status.md) |
+| B · 보안 코어·SQLite | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트, SQLite·스키마·복구·저장소 단위 테스트 | [B 현황](docs/b-status.md) |
+| C · 보안 기반·검증 | `feat/c-security-platform` | 위험 연산 모듈, 서버 등록·Scanner, 저장소 리뷰·독립 검증, fixture·계수, 통합·공격·실험, CI | [C 현황](docs/c-status.md) |
 
 브랜치 이름은 담당 범위를 나타낸다. 실제 담당자 이름은 아직 지정하지 않았다. `main`은 공통 기준 문서와 리뷰를 마친 변경을 모으는 브랜치다.
 
@@ -163,7 +142,7 @@ flowchart LR
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
 | `fixtures`, 테스트, CI | 실제 수신 계수로 집행을 검증 | C 주도 |
 
-표는 전체 제품의 소유권이다. 현재 존재하는 모듈과 미구현 항목은 [A 작업 현황](docs/tasks/a-progress.md)에서 구분한다. 전체 예정 구조는 개발문서 2.1절에 있다.
+표는 전체 제품의 소유권이다. 현재 존재하는 모듈과 미구현 항목은 [A 작업 현황](docs/a-status.md)에서 구분한다. 전체 예정 구조는 개발문서 2.1절에 있다.
 
 ## 보안 불변식
 
@@ -186,7 +165,7 @@ flowchart LR
 
 설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. A 앱·B 단위 검증·로컬 AGT 조합은 pyproject.toml과 uv.lock에 고정했다. Scanner와 HTTP를 포함한 공통 제품 조합은 추가 검증 대상이다.
 
-1. 세 사람이 공통 문서와 각자의 `AGENT.md`·작업 문서를 읽는다.
+1. 세 사람이 공통 문서와 각자의 현황 문서를 읽는다.
 2. B가 모델·포트·명령·이벤트 계약을 제안하고 A·C와 확정한다.
 3. A는 연결 호환성을, C는 fixture·수신 계수를 준비하고 B는 순수 정책을 구현한다.
 4. Guard·저장소·transport·승인·응답 게이트를 연결해 보안 불변식을 검증한다.
