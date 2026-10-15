@@ -63,7 +63,7 @@
 - [ ] C4.9 Scanner 결과를 B ScanReport로 번역(필수 분석기·완료/생략/실패·지문·severity) — 막힘: B 계약
 - [ ] C4.10 Registry 등록·지문 영속화와 변경 시 승인 무효화. DB의 ACTIVE만으로 실행하지 않고 연결마다 실제 지문과 대조 · [결정](contracts.md#사용자-결정) — 막힘: B6-06
 - [ ] C4.11 신규 서버 PENDING, 관리자 확인 후 ACTIVE
-- [ ] C4.12 B digest로 도구 지문화. 추가 필드(`icons`·`_meta` 등) 포함 범위 결정 필요
+- [ ] C4.12 정의 전체로 도구 지문 계산(B digest, float 표기 포함) · [결정](contracts.md#사용자-결정)
 - [ ] C4.13 경고 데이터를 등록 화면과 도구 호출 승인 창에 제공 · [결정](contracts.md#사용자-결정) — 막힘: A 화면
 - [ ] C4.14 Scanner 검사 예산 구현(동시성·작업 10분·YARA native 5초·대기열 8건) · [결정](contracts.md#사용자-결정)
 - [ ] C4.15 LLM 자체 평가(`overall_risk`)를 참고 필드로 보존. 판정·정렬에 쓰지 않음 · [결정](contracts.md#사용자-결정) — 필드 형식은 C4.9
