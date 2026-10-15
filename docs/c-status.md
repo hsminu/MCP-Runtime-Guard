@@ -11,7 +11,7 @@
 | AGT 제거(구현) | A·B | C2.9, C6.3, C6.4, C6.9 |
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
-| Codex CLI 연결(A19·A20) | A | C6.13 |
+| Codex 세션 관리자(하네스 연결) | A | C6.14, C6.15 |
 
 ## C1 · 계약과 관측 기반
 
@@ -96,7 +96,11 @@
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록
-- [ ] C6.13 Codex 격리 검증(T22): 자체 셸·파일 읽기·웹·하위 agent·MCP 차단, 작업 폴더 밖 읽기 거부, 확인 실패 시 시작 거부, 버전 변경마다 재검증 · [결정](contracts.md#사용자-결정) — 막힘: A19·A20
+- [ ] C6.13 Codex L1 설정 파일·모델 정보 파일(`model_catalog_json`)·고정 버전과 SHA-256 관리, 설치 스크립트 해시 확인 · [결정](contracts.md#사용자-결정)
+- [ ] C6.14 L2 시작 시험(T22): `configRequirements/read`·`config/read` 대조, 가짜 모델 서버로 도구 목록 정확 대조·금지 도구 7종 거부·호출 순차·요청 프롬프트 확인, 실패 시 시작 거부, 앱 시작·버전 변경·CI 실행. 스크래치 실험 스크립트를 저장소로 · [결정](contracts.md#사용자-결정) — 막힘: A 세션 관리자
+- [ ] C6.15 L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답 검증 · [결정](contracts.md#사용자-결정) — 막힘: A 세션 관리자
+- [ ] C6.16 Codex `sqlite_home` Task별 정리 검증(C-CODEX-01) · [대장](weakness_register.md#발견-항목과-조치)
+- [ ] C6.17 (후속·선택) codex.exe AppContainer 실행 실험(C-CODEX-04)
 
 ## 인수 기준
 
