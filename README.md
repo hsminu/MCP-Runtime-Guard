@@ -71,7 +71,7 @@ B 범위·검증은 [B6 승인·응답 저장](docs/archive/b6-sqlite-lifecycle.
 | [B 현황](docs/b-status.md) | B 보안 코어·SQLite 체크리스트 |
 | [C 현황](docs/c-status.md) | C 보안 기반·검증 체크리스트 |
 
-[공통 에이전트 지침](AGENTS.md)은 에이전트가 읽는 작업 규칙이다. 이전 작업 기록, 리뷰 요청·회신, 실험 보고와 근거 JSON은 [docs/archive](docs/archive/)에 보존했으며 갱신하지 않는다.
+[공통 에이전트 지침](AGENTS.md)은 에이전트가 읽는 작업 규칙이다. 완료 기록과 이전 작업 기록·실험 근거는 [docs/archive](docs/archive/)에 있다. 기록은 한 번 쓰고 고치지 않는다.
 
 ## 3인 작업 분담
 

@@ -1,300 +1,97 @@
-# B · 보안 코어 작업 지침과 체크리스트
+# B 현황
 
-작업 브랜치는 `feat/b-security-core`다. **호출을 보내도 되는지 결정하고, 승인·결과 공개·Task 상태를 일관되게 집행하는 코어**를 맡는다. B1 계약 초안과 B2–B5 담당 서비스·단위 테스트를 구현했다. 2026-10-12 사용자 결정으로 SQLite 구현을 B6로 인수했다. 2026-10-13 연결·초기 v1 스키마/마이그레이션과 현행 Store **12/12개 메서드·전체 1,395개 검사**를 완료했다. 분리 승인 생성/종결 간격·시작 복구·영속 순번·새 API 합의·제품 연결·독립 인수는 남아 있다. 아래 구현 체크는 B 소유 코드 범위이며 A·C 계약 합의·실제 연결·인수 검증은 별도다.
+갱신: 2026-10-15 · main `82563ce` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
-현재 문서 대조 기준은 **A `ab82919`, B 공개 `6115fa6`**이다.
-후속 QA 요청 **01·02·05·07·08**의 B 내부 수정·검증·남은 항목은
-[B QA 반영 기록](archive/b-qa-fixes-2026-10-13.md)을 따른다. 아래 1,395개는 SQLite 추가 당시 기록이다.
-후속 [QA-09 자원 수명 보완](archive/b-qa09-task-lifecycle.md)까지 구현했고,
-최신 전체 검사는 **1,614 passed**, Ruff·포맷·mypy·의존성 검사 통과다.
-후속 로컬 B 내부 사전 점검기 69개 추가 후 전체 **1,683 passed**와 동일 코드 검사를 통과했다.
-회신 입구는 [A·C 계약 검토 요청 초안](archive/ac-contract-review-request.md)이다.
-최신 A/B 상태와 담당별 질문을 모았으며 실제 전달·동의·새 검증 완료 기록은 아니다.
+`B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
-## 담당 범위
+## 막힌 것
 
-제품 경로는 향후 `src/guard_app/` 기준이다.
-
-| 파일 / 영역 | 구현 책임 | 리뷰 |
+| 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| `domain/*`, `ports.py` | 불변 모델, enum, reason_code, 전체 포트 계약 | A·C, 변경은 3인 합의 |
-| `core/*` | 정책·결정표·등급 병합·승인 snapshot 구성 | C |
-| `services/guard.py`, `services/catalog.py` | 유일 실행 입구·직렬화, 신뢰 설정 기반 요청 해석 | A |
-| `services/approvals.py`, `services/response_gate.py` | 재평가·원자적 소비 연계, 격리·커밋 후 공개 | C |
-| `security/failclosed.py`, `security/digest.py` | 예약 전후 예외 의미, 바이트 직렬화·SHA-256 | C |
-| `storage/*` | SQLite·스키마·마이그레이션·원자 연산·영속 순번·감사 저장·시작 복구 | C |
-| 담당 단위·성질 테스트 | 정책·모델·Catalog·승인 의미 검증 | 관련 리뷰 담당 |
-| `docs/contracts.md` | 계약 초안·미확정 항목·3인 합의 기록 | A·C |
+| B6·SEQ·REC 계약 회신 | A·C | B1.5, B1.6, B6.8–B6.12, B6.16 |
+| AGT-01–03 결정·회신 | 사용자·A·C | B6.15, B7.3, B7.4 |
+| safe_path | C | B3.3 |
+| Registry 영속화 계약(B6-06) | C | B6.14 |
+| 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
 
-A의 transport·AGT 번역·Runner·GUI, C의 Registry·Scanner·위험 연산을 구현하지 않는다. SQLite·저장소 단위 테스트는 B가 구현하고 C가 리뷰·독립 계약·통합·결함 주입 검증을 맡는다. 현행 소유권은 [협업 규칙](team-workflow.md), 추가 작업은 [B6 · SQLite 인수](b-status.md)를 따른다. 필요한 연산은 공통 계약으로 검토하고 담당 구현을 사용한다. core의 외부 의존성을 추가하지 않는다.
+## B1 · 공통 모델과 계약
 
-## 먼저 읽을 설계
+- [x] B1.1 `ProposedCall`·`ResolvedRequest` 분리, frozen·strict·extra forbid · [기록](archive/b1-contract-draft.md)
+- [x] B1.2 모델·도구 출력에 ID·등급·경계·승인 결정권을 주지 않음. ID·epoch·call_seq는 Guard 관리
+- [x] B1.3 Label·Decision·TrustTier·ToolKind·상태 enum과 reason_code 초안
+- [x] B1.4 Guard 결과 타입과 Transport·AccessChecker·Scanner·Store·ModelClient 계약 초안
+- [ ] B1.5 명령·이벤트 payload, 원시 결과 격리·공개 결과 구분, 계수 연결 확정 — 막힘: A·C 합의
+- [ ] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 기록 — 막힘: B6-02
 
-개발문서 0–8장 전체, 9.2·9.4절(실패·계수), 10.3절(AGT 분담), 11장(Store 트랜잭션), 13장(예외·해시·정적 규칙), 14.3·14.4절·부록 B를 읽는다.
+## B2 · 순수 정책과 등급 누적
 
-## 작업 순서
+- [x] B2.1 모든 경계에서 max_label 우선 검사·기본 행렬, 외부 max_label은 INTERNAL 이하만 · [기록](archive/b2-policy-and-taint.md)
+- [x] B2.2 READ에 서버 경계, SEND에 목적지 경계도 적용
+- [x] B2.3 서버·목적지·AGT 중 가장 엄격한 결과 합성, AGT 거절·오류는 DENY
+- [x] B2.4 등록·지문·Task 상태·미분류·정책 버전·목적지 전제조건을 먼저 검사
+- [x] B2.5 `accumulate` 기본, last_read·none은 비교 모드
+- [x] B2.6 high-watermark 단조성·Unclassified 해제 금지, 보안 의미 변화에만 security_version 증가
+- [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증
 
-### B1 · 공통 모델과 계약
+## B3 · Catalog와 요청 해석
 
-- [x] `ProposedCall`과 `ResolvedRequest`를 분리하고 모델을 frozen·strict·extra forbid로 정의한다. 내부 dict·list의 실제 변경 가능성도 검토한다.
-- [x] 모델·도구 출력에 task_id·등급·경계·승인자 결정권을 주지 않는다. Guard가 ID·epoch·call_seq를 관리한다.
-- [x] Label·Decision·TrustTier·ToolKind·등록·Task·승인 상태와 reason_code 초안을 정의한다.
-- [x] Guard 결과 타입, Transport·AccessChecker·Scanner·Store·ModelClient 전체 계약과 오류 타입을 초안으로 작성한다.
-- [ ] A·C와 명령·이벤트 payload, 원시 결과 격리·공개 결과 구분, 계수 연결을 확정한다.
-- [ ] policy_version·security_version·row_revision·fingerprint의 역할을 분리하고 `docs/contracts.md`에 3인 합의 근거를 기록한다.
+- [x] B3.1 `server_id__tool_name` 네임스페이스·고정 JSON Schema 검증, ToolKind는 annotation을 신뢰하지 않음 · [기록](archive/b3-catalog.md)
+- [x] B3.2 미등록 서버·도구·목적지·OTHER는 DENY
+- [ ] B3.3 자원형 READ의 expected_resource_id를 C safe_path로 계산하고 실제 resource_id와 대조 — 막힘: C safe_path
+- [x] B3.4 출처 접두어 매칭·중복은 최고 등급·미매칭은 Unclassified
+- [x] B3.5 도구 단위 READ는 `prefix: []` 규칙만, 없으면 Unclassified
+- [x] B3.6 목적지는 등록 목록 정확 일치, 이름·IP·DNS·stdio를 신뢰 근거로 쓰지 않음
 
-모델·포트·버전 역할의 구현 초안은 [B1 문서](archive/b1-contract-draft.md)에 있다.
-위 완료 표시는 B 초안의 구현 상태이며 enum·reason 의미와 공통 계약의 A·C 합의는 남아 있다.
-실제 연결 위치·합의 항목·인수 순서는 [B 인수 안내](archive/b-handoff.md)에 정리했다.
+## B4 · Guard와 응답 게이트
 
-### B2 · 순수 정책과 등급 누적
+- [x] B4.1 일반 도구 실행은 `GuardService.submit()` 하나, transport 비노출 · [기록](archive/b4-b5-execution.md)
+- [x] B4.2 Task별 판정→실행→응답 커밋 직렬화
+- [x] B4.3 ASK 대기 중 lock 미보유, WAITING_APPROVAL의 일반 submit 거부·제어 큐 처리
+- [x] B4.4 DISPATCHING 예약 전 fail_closed, 예약 후 READ HALTED·미공개, SEND UNKNOWN_OUTCOME
+- [x] B4.5 결과 불명·정지 Task를 RUNNING으로 복구하지 않음, 새 Task로만 재시작
+- [x] B4.6 격리→형식/크기 검사→분류→원자 커밋→공개 순서, 미분류·커밋 실패·미지원 형식은 미공개
+- [x] B4.7 본문이 섞인 오류 READ도 분류, 알려진 전송 실패와 예기치 않은 처리 오류 구분
+- [x] B4.8 SEND 응답은 commit_send_outcome으로 요청·감사만 저장
+- [x] B4.9 정책·Profile 불일치는 Task 정지·승인 무효, 기록 실패가 겹치면 global halt
 
-- [x] 모든 경계에서 max_label을 우선 검사하고 기본 행렬을 적용한다. 외부 max_label은 INTERNAL 이하만 로드한다.
-- [x] READ에도 서버 경계를 적용하고 SEND에는 목적지 경계도 적용한다.
-- [x] 서버·목적지·AGT의 가장 엄격한 결과를 합성한다. AGT 허용은 정책을 완화하지 않으며 거절·오류는 DENY다.
-- [x] 등록·지문·Task 상태·미분류·정책 버전·목적지 전제조건을 다른 판정보다 먼저 검사한다. submit과 approval_recheck의 허용 상태를 구분한다.
-- [x] `accumulate`를 기본으로 하고 last_read·none은 비교 모드로 둔다. 모드 차이는 effective_label 계산에만 둔다.
-- [x] high-watermark 단조성과 Unclassified의 해제 금지를 구현한다. 보안 의미 변화에서만 security_version을 올린다.
-- [x] 같은 입력의 결정성, 등급·경계 단조성, 거부 흡수, 전처리 우선 성질을 hypothesis로 검증한다.
+## B5 · 승인 프로토콜
 
-구현 의미와 실제 단위·성질 검증은 [B2 구현·검증 문서](archive/b2-policy-and-taint.md)에 기록했다.
-이 체크는 순수 코어 구현 범위다. C 담당 리뷰와 실제 수신 계수·저장소 검증은 인수 단계에 남아 있다.
+- [x] B5.1 요청·서버/도구/지문·경계·인자 해시·등급·버전·승인자·만료를 snapshot에 고정 · [기록](archive/b4-b5-execution.md)
+- [x] B5.2 정규화 JSON·SHA-256, NFC 변환 없음, float·NaN·불허 타입 거부
+- [x] B5.3 원문은 메모리에만, Store에는 해시·메타데이터, 재시작 때 승인 원문·권한 미복원
+- [x] B5.4 사람 전용 제어 채널만 승인·거절·취소·긴급 차단, AGT 허용은 사람 승인을 대체하지 않음
+- [x] B5.5 승인 시 재해석·재평가, ASK와 snapshot 해시가 모두 일치해야 소비
+- [x] B5.6 consume_and_reserve의 정확한 True ACK 후에만 실행, 중복 클릭·재전달 실행 1회
+- [x] B5.7 재평가부터 응답 커밋까지 같은 Task lock 유지
+- [x] B5.8 monotonic deadline·UTC 만료 동시 검사, 소비 후 전송 직전에도 검사
 
-### B3 · Catalog와 요청 해석
+## B6 · SQLite 저장소
 
-- [x] `server_id__tool_name` 네임스페이스와 고정 JSON Schema로 검증한다. ToolKind를 서버 annotation에서 신뢰하지 않는다.
-- [x] 미등록 서버·도구·목적지·지원하지 않는 OTHER는 DENY로 처리한다.
-- [ ] 자원형 READ는 C의 안전 경로 함수를 사용해 expected_resource_id를 계산한다. 결과의 실제 resource_id와 대조한다.
-- [x] 출처는 서버·도구·경로 세그먼트 접두어로 매칭하고 중복 규칙은 최고 등급을 택한다. 미매칭은 PUBLIC이 아니라 Unclassified다.
-- [x] 도구 단위 READ는 자원 경로 없이 `prefix: []` 규칙만 적용한다. 규칙 없으면 Unclassified다.
-- [x] 목적지는 등록 목록의 정확한 일치로 해석한다. 이름·IP·DNS·stdio 여부를 신뢰 근거로 쓰지 않는다.
+- [x] B6.1 Store 12개 연산과 C 요구·제안 대조, 계약 변경안과 회신 항목 정리 · [기록](archive/b6-contract-proposal.md)
+- [x] B6.2 연결·v1 스키마(7개 테이블·STRICT·FK·UNIQUE)·v0→v1 마이그레이션, WAL·FULL·BEGIN IMMEDIATE · [기록](archive/b6-sqlite-foundation.md)
+- [x] B6.3 Task 생성/조회·상태 전이·판정 감사·ALLOW 예약 · [기록](archive/b6-sqlite-decisions.md)
+- [x] B6.4 승인 저장/조회/전이/소비·READ/SEND/실패 저장, 현행 12/12 · [기록](archive/b6-sqlite-lifecycle.md)
+- [x] B6.5 UTC 만료·쓰기 중 만료·ACK 유실, 원문·인자·비밀값 비기록과 고정 오류 코드 · [기록](archive/b6-sqlite-lifecycle.md)
+- [x] B6.6 영속 순번·시작 복구 설계와 검증 시나리오 50개 · [설계](archive/b6-sequence-recovery-design.md) · [시나리오](archive/b6-sequence-recovery-validation.md)
+- [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
+- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 구현 — 막힘: SEQ-01–03·REC-01–05
+- [ ] B6.9 승인 생성·종결 원자화(현재 두 커밋 간격) — 막힘: B6-01
+- [ ] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 — 막힘: B6-02
+- [ ] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 — 막힘: B6-03·B6-04
+- [ ] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙과 예산(잠금 대기 1000ms는 미측정 제안값) — 막힘: B6-03
+- [ ] B6.13 SQLite 잠금 대기 중 이벤트 루프 정지·전역 정지(B-QA-03)
+- [ ] B6.14 Registry 등록·지문 영속화·변경 시 승인 무효화 — 막힘: B6-06·C
+- [ ] B6.15 agt_mode·규칙 버전 감사·과거 기록 migration·규칙 변경 결속 — 막힘: AGT-01–03
+- [ ] B6.16 A 시작 게이트·조회 요구와 C 인수 기준을 대조해 API 합의 기록 — 막힘: A·C 회신
 
-독립 구현·단위 검증은 [B3 Catalog 문서](archive/b3-catalog.md)에 기록했다.
-기대·실제 자원 ID 대조와 resolver 미연결 거부는 구현했다. 실제 C safe_path 연결·S01 검증은
-C 브랜치에 경로 함수가 없어 위 자원형 READ 항목에 계속 남아 있다.
+## B7 · 검증과 인수
 
-### B4 · Guard와 응답 게이트
-
-- [x] 일반 도구 실행은 `GuardService.submit()` 하나로 받는다. transport는 Guard 외부에 노출하지 않는다.
-- [x] Task별로 판정부터 실행·응답 커밋까지 직렬화한다. 이전 READ 커밋 전에 다음 SEND를 판정하지 않는다.
-- [x] ASK 대기 중 lock을 유지하지 않는다. WAITING_APPROVAL 상태의 일반 submit은 거부하며 제어 큐가 처리될 수 있게 한다.
-- [x] DISPATCHING 예약 전에는 fail_closed를 적용한다. 예약 후 예상하지 못한 예외는 READ HALTED·미공개, SEND UNKNOWN_OUTCOME으로 처리한다.
-- [x] 결과 불명·정지 상태를 기존 Task의 RUNNING으로 복구하지 않는다. 후속 호출은 차단하고 새 Task로만 재시작한다.
-- [x] 격리·형식/크기 검사·출처 분류·원자적 커밋·공개 순서를 지킨다. 미분류·커밋 실패·미지원 형식은 미공개다.
-- [x] 오류에 본문이 섞인 READ도 분류한다. 바이트가 없는 알려진 전송 실패와 예기치 않은 결과 처리 오류를 구분한다.
-- [x] SEND 응답은 commit_send_outcome으로 요청·감사만 저장하고 등급 병합을 호출하지 않는다.
-- [x] 정책·Profile 불일치는 Task 정지와 살아 있는 승인 무효로 처리한다. 상태 기록 실패까지 겹치면 global halt로 이후 판정을 차단한다.
-
-### B5 · 승인 프로토콜
-
-- [x] 요청·서버/도구/지문·경계/목적지·인자 해시·유효 등급·버전·승인자·만료를 snapshot에 고정한다.
-- [x] 정규화 JSON과 SHA-256을 사용한다. 유니코드 NFC 변환을 하지 않고 float·NaN·허용하지 않는 값 타입을 거부한다.
-- [x] 사본 원문은 메모리에만 두고 Store에는 해시·메타데이터만 전달한다. 재시작 때 승인 원문·실행 권한을 복원하지 않는다.
-- [x] 사람 전용 제어 채널만 승인·거절·취소·긴급 차단 API를 호출하게 한다. AGT 허용은 사람 승인을 대체하지 않는다.
-- [x] 승인 시 현재 등록·지문·목적지·상태로 재해석하고 재평가한다. ASK와 snapshot 해시가 모두 일치해야 소비한다.
-- [x] Store의 consume_and_reserve 초안을 연계하며 정확한 True ACK 후에만 실행한다. 더블클릭·재전달의 서비스 단위 실행은 1회다.
-- [x] 재평가부터 소비·dispatch·응답 커밋까지 submit과 같은 Task lock을 유지한다.
-- [x] monotonic deadline과 UTC 만료를 함께 검사한다. 소비 완료 후 전송 직전에도 검사하며 만료 시간은 설정값으로 관리한다.
-
-해시·예외·B4·B5의 구현·검증·미확정 계약은 [B4·B5 문서](archive/b4-b5-execution.md)에 있다.
-실제 B6 저장소의 승인 소비·실행 예약·Task RUNNING·감사 단일 트랜잭션과 DB 시점의 UTC 만료,
-A의 인증된 제어 큐 연결, 실제 wire/부작용 계수는 인수 검증에 계속 남아 있다.
-
-2026-10-12 `f3c2d2b`에서 승인 조회와 정지 경로의 Task ID·snapshot epoch 검증을 보강했다.
-B의 회귀 테스트 24개 추가 후 전체 864개 통과를 확인했고, C도 해당 커밋의 864개·Ruff·mypy를
-별도 환경에서 재현했다. 이는 당시 대역 단위 검증이며 SQLite 원자 소비/응답 커밋 인수는 미완료다.
-근거는 [C의 B 검토·후속 수정 확인](archive/tasks/c-b-review.md#후속-수정-f3c2d2b-확인)이다.
-
-### B6 · SQLite 저장소
-
-- [x] 현재 Store 12개 메서드와 [C Store 요구](archive/tasks/c-store-requirements.md)·[처리 제안 v1](archive/tasks/c-store-proposal.md)을 대조해 [B6 계약 변경안](archive/b6-contract-proposal.md)을 제공했다. API·DTO·상태·버전·오류·시간·감사 선택은 공동 합의 전 제안이다.
-- [x] 사용자 결정인 A·C 검토 후 확정을 기록하고, 변경안 10절에 담당별 회신 항목을 정리했다. 실제 전달·동의는 미완료다.
-- [x] 기존 Store 포트를 바꾸지 않고 SQLite 연결·초기 v1 스키마/마이그레이션·Task 생성/조회와 74개 SQLite 단위 검사를 구현한다. 전체 기존 971개와 합쳐 1,045개 통과. [첫 단계 기록](archive/b6-sqlite-foundation.md)을 따른다.
-- [x] Task 상태 CAS/전이·판정/감사·ALLOW 예약을 추가하고 감사 실패 rollback·같은 인스턴스 결속을 검증한다. 148개 추가 후 전체 1,193개 통과. [후속 기록](archive/b6-sqlite-decisions.md)을 따르며 버전 구현 선택은 공동 합의와 구분한다.
-- [x] 남은 승인 4개·응답 3개 연산을 구현하고 관계/CAS·소비/응답 원자성·만료·중복·부분 실패·ACK 불명·재개방 차단을 검증한다. 202개 추가 후 전체 1,395개 통과. [현행 12/12 기록](archive/b6-sqlite-lifecycle.md)을 따르며 제품 인수 완료와 구분한다.
-- [ ] 영속 순번·시작 복구의 구현과 단위 검증을 진행한다. 제품 bootstrap 연결·새 open/finish·C 인수는 미완료다.
-- [x] B `6115fa6` 기준으로 [순번·복구 상세 설계](archive/b6-sequence-recovery-design.md)와 [검증 계획 50개](archive/b6-sequence-recovery-validation.md)를 작성하고 SEQ-01–03·REC-01–05 합의 대상을 분리한다. 문서 준비이며 구현·시험·A/C 동의는 미완료다.
-- [x] 후속 사용자 지시로 [B 내부 시작 사전 점검](archive/b6-startup-preflight.md)을 구현한다. v1 형식/FK·같은 읽기 snapshot·기록 MAX/미기록 종류를 관찰하는 private 기반이며 배정/복구/앱 개방은 아니다.
-- [ ] A의 시작 실행 게이트·제어 큐·조회 요구와 C의 독립 인수 기준을 대조하고 실제 API 합의 근거를 공통 계약에 기록한다.
-- [ ] 새 공유 API·DTO·상태/버전·오류 규칙은 회신·합의 기록 후 변경하고 SQLite·원자 연산·영속 순번·감사·시작 복구와 저장소 단위 테스트에 반영한다.
-- [ ] C의 실제 Store/Fake 계약·결함 주입 검증을 받고, A 연결 후 요청별 소비·dispatch·wire·수신 부작용 계수를 확인한다.
-
-세부 체크·설정·인수 기준은 [B6 작업 문서](b-status.md)를 따른다.
-C의 안전 ID·safe_path·Registry·Scanner 소유권은 유지하며 Registry 영속화는 B 저장소의
-단일 writer 계약으로 연결한다. 이 담당 변경으로 C 제안의 API까지 확정하지 않는다.
-기존 포트의 독립 구현·준비와 새 공유 계약의 확정은 구분한다. B6·정규식 검토 회신을 받은 뒤
-공통 계약에 실제 합의 근거를 기록하고, 합의된 변경과 A/C 통합 인수를 진행한다.
-
-A `5598009`의 transport·AGT mock·모델·Runner·bridge·Qt UI와 아래 `655aef5` 선별 반영은
-당시 상태의 기록이다. 인증된 동일 메모리 승인 사본 조회의 UI 인수, 권위 있는
-승인·Task 상태·revision 및 제어 적용 결과의 요청 근거는
-[A 최초 계약 질문의 역사 기록](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-port-review.md#7-b-head-f3c2d2b-연동-중-드러난-호출제어-계약-질문)에 있다. 현재 구현과 남은 계약은 아래 최신 대조를 따른다.
-
-이전 검토 기준 A `cd75bf9fa2a96a76f84fc1ce17a746705265ae53`에는 실제 로컬 AGT core 5.0.0과
-loopback HTTP MCP가 추가됐고 Runner가 신뢰 맥락의 `expected_epoch=self.epoch`를 Guard에 전달한다.
-최신 QA 변경은 adapter 대기/실행 상한 16개·퇴역 worker 예산 2개·제한적 worker 교체·실제 thread
-종료 확인 및 한국어 실행/제어 문구다. AGT 제품 역할과 규칙 관리의 새 A18-D 결정 요청은 미확정이다.
-A `cd75bf9`는 B `3bf414c`를 병합했다. 당시 domain·ports·Guard·승인 서비스는 B와 동일했으며
-B `29025e0`의 승인 ID 검증·마지막 조회 만료/현재성 확인·늦은 AGT 작업 추적 보완이 반영됐다.
-A의 연결 검증 보고는 아래에 기록한다. C의 독립 경합·소비·dispatch·wire·부작용 인수와
-공동 계약 합의는 필요하다. 제품 SQLite·C 서비스 연결은 미완료다.
-
-2026-10-13 후속 사용자 지시로 B `f22968c`에 A `655aef5`의 긴급 차단·
-`HumanControl.review(approval_id)`를 선별 반영한 B 브랜치 변경을 준비했다. 조회 도중 만료·
-다른 승인 ID·취소 후 AGT 누적 세 지적을 보완했다. 상세는 strict 모델·승인/Task ID·epoch·
-PENDING·hash·현재 ACTIVE/지문과 마지막 await 뒤 양시계·메모리 사본을 확인한다.
-조회는 상태 쓰기·승인 소비 없이 메모리 사본 또는 `None`을 반환하며 깨진 Store 관계는 global halt다.
-같은 승인 ID 검사도 승인·거절·만료·무효화·재조회·오류 정리 및 전이 반환에 공통 적용했다.
-오연결 행은 추가 상태 변경·소비·전송 없이 봉쇄하며 다른 Task의 승인 행·사본을 보존한다.
-긴급 차단은 인증 후 lock 전에 정지 요청을 기록하고 예약·소비·전송 직전에 확인한다.
-AGT 실제 완료 전 추적·슬롯을 유지하고 미종료 취소 작업이 있으면 새 검사를 생성하지 않는다.
-기본 상한 4개·정리 대기 0.05초는 실측 최적값이 아니며, 새 Task ID로 재시작한다.
-같은 ID/epoch 복구·B6 revision 지정 상세 조회·정규식 프로세스 연결 계약은 아직 검토 대상이다.
-
-관련 **250개(1.36초)**와 전체 **971개(4.21초, 기존 886개+85개)** 테스트,
-Ruff·45개 파일 포맷·24개 소스 strict mypy·pip check·diff 검사 통과를 확인했다.
-기존 840·864·886 결과는 해당 단계의 기록으로 보존한다. 최종 설계·domain·ports·lock·
-B6 공유 API는 변경하지 않았다. 사용자는 당시 B 서비스 변경의 commit·push를 승인했다.
-위 B 단독 시험 당시의 한계와 현재 A 합성 앱 연결을 구분한다. 실제 SQLite·C 서비스·
-모델의 제품 연결과 C 독립 검증은 미완료다.
-
-A의 [최신 동기화 기록](https://github.com/hsminu/MCP-Runtime-Guard/blob/cd75bf9fa2a96a76f84fc1ce17a746705265ae53/docs/tasks/a-b-sync-2026-10-13.md)은
-**A lock 전체 1,371 passed(48.87초)**, **별도 B lock의 B 소유 테스트 971 passed(18.83초)**,
-AGT real/mock × stdio/HTTP **4조합·총 32경로**와 Guard 4슬롯 결합 단위 시험을 보고했다.
-이전 A `281cbae`의 1,298개·87개 × 30회 실패0·stdio 각 모드 8경로와 HTTP
-1,282개는 당시 보고다. 모두 이번 B 재현·C 독립 인수가 아니다. 기존 B 971개 검증 기록도 유지한다.
-A 실행 jsonschema 4.25.1과 B 별도 코어 검사 4.26.0, A의 config/b-core strict 설정 보존을
-확인했다. 공통 제품 버전·Scanner 포함 환경은 ENV-01 검토 대기다.
-2026-10-14 `chore/integrate-a-b`가 ENV-01 제안으로 두 환경과 검사 설정을 루트 `pyproject.toml`·`uv.lock`으로 합쳤다([A+B 통합](archive/integration-a-b.md)).
-이번 작업에서는 설치·테스트 실행·lock 변경을 하지 않는다.
-
-## 검증과 인수
-
-2026-10-13 정규식 후속은 기존 기능 유지·전체 검증 프로세스 실행을 B 방향으로 선택했다.
-[B3 연결안](archive/b-schema-validation-proposal.md)을 제공했으며 A 모델 변환과 C launcher의
-공동 비동기/실패 계약은 검토 대기다. 정규식 제품 수정·종료 검증은 미완료다.
-
-| 분류 | B가 작성할 검증 | C의 독립 검증 |
-| --- | --- | --- |
-| 모델·Catalog·정책 | T04–T06, T13, T25–T27, T30–T32, T38의 단위 부분과 정책 성질 | 해당 통합 시나리오·계약 검증 |
-| 승인 | 해시·만료·상태·버전 의미의 단위 테스트 | T02, T09–T12, T37의 실제 소비·dispatch 계수 |
-| 응답·예외 | READ/SEND 분리, 예약 전후 결과 의미 | T07, T19, T33, T35–T37, S05의 결함·유출 검증 |
-| 누적·비교 모드 | high-watermark 단조성·미분류 고정 | T23·T24·T28·T34의 동일 조건 replay |
-| SQLite 저장소 | 스키마·제약·상태/버전·원자 연산·S03 바인딩 SQL의 단위 부분 | 실제 Store/Fake 계약·통합·공격·결함 주입·복구 검증 |
-
-- [ ] A의 Guard·Catalog 리뷰와 C의 정책·승인·응답·예외·해시 리뷰를 받는다.
-- [ ] A18-D 운영자 차단 목록/조건 규칙과 서명 정책 관리의 선택부터 AGT-01로 회신받는다. 신뢰 입력·기본 판정·규칙/버전·policy_version/승인 결속·agt_mode 감사는 실제 선택 후 확정한다.
-- [ ] B 검사 상한 4개·정리 0.05초와 A 기본 대기/실행 16개·퇴역 예산 2개·미평가 요청 이관·대기 deadline·실제 종료 확인을 AGT-03으로 검토한다. 같은 실패 요청/MCP SEND 재시도와 구분하고 합의 후 제품 규칙을 변경한다.
-- [ ] B6 저장소에 대한 C 리뷰·독립 검증을 받고, C의 보안 모듈·Registry·Scanner·CI 및 C 소유 테스트를 리뷰한다.
-- [x] A `cd75bf9`의 B 서비스 병합과 A 자체 AGT real/mock × stdio/HTTP 32경로 검증 보고를 읽고 소스 동일성을 대조한다. 이번 B 시험 실행이나 공동 합의로 처리하지 않는다.
-- [ ] C 독립 통합 인수의 실제 소비·dispatch·wire·부작용 결과와 대상 커밋을 기록한다. 후속 SQLite/공유 계약 변경 후 A 연결 시험도 갱신한다.
-- [ ] A·C에게 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 전달한다.
-- [ ] 구현자가 만든 Fake 테스트만으로 집행을 완료 처리하지 않는다. C의 실제 수신 계수 검증을 확인한다.
-
-이 역할은 I1–I10 전체의 판정·상태 의미를 책임진다. 상세 기대 결과는 개발문서 14.3절을 기준으로 한다.
-
----
-
-# B6 · SQLite 저장소 인수와 구현 작업
-
-2026-10-12 사용자 결정 **"sqlite b로 넘기자"**에 따라 SQLite 구현을 C에서 B로 이관한다. 작업 브랜치는 `feat/b-security-core`이며 저장소 리뷰·독립 검증 담당은 C다. 결정 근거는 [공통 계약](contracts.md#사용자-결정), 현행 소유권은 [협업 규칙](team-workflow.md)을 따른다.
-
-상태는 **SQLite 현행 Store 12/12개 메서드 구현·B 단위 검증 완료, 제품 연결·복구·API 합의·독립 인수 미완료**다. DB 하나·테이블 7개이며 12는 메서드 수다. 아래 A `cd75bf9`/B `5f8a003` 대조는 당시 기록이다. SQLite 12/12 추가는 B `9eb0560`으로 공개했고 당시 전체 **1,395개** 테스트를 통과했다. 후속 A `ab82919` QA 요청의 B 내부 보완은 `6115fa6`으로 공개했고 전체 **1,614개**를 검증했다. 상세는 [첫 단계](archive/b6-sqlite-foundation.md), [상태·판정·예약](archive/b6-sqlite-decisions.md), [승인·응답](archive/b6-sqlite-lifecycle.md), [QA 반영](archive/b-qa-fixes-2026-10-13.md)을 따른다.
-
-이번 사용자 요청으로 [영속 순번·재시작 복구 설계안](archive/b6-sequence-recovery-design.md)과
-[검증 시나리오 50개](archive/b6-sequence-recovery-validation.md)를 준비했다.
-SEQ-01–03·REC-01–05의 A/C 회신은 미기록이다. 설계 작성 때는 소스를 변경하지 않았고,
-후속 사용자 지시로 [v1 읽기 전용 사전 점검기](archive/b6-startup-preflight.md)와 B 단위 검증만 추가한다.
-계수/schema·공유 API·상태 복구/앱 연결·50개 기능 시나리오는 여전히 미완료다.
-사전 점검기의 새 단위 **69개**, 기존 SQLite **424개**, 최종 전체 **1,683개**와
-Ruff·포맷·strict mypy·의존성 검사는 통과했다. 배정/복구 기능 검증과는 구분한다.
-이 변경은 add까지만 진행한다. 체크는 실제 해당 준비/구현/검증 단계가 완료된 경우에만 표시한다.
-
-## 범위와 리뷰
-
-| 작업 | 구현 / 작성 | 리뷰 |
-| --- | --- | --- |
-| `storage/*`, 스키마·마이그레이션·바인딩 SQL·단일 writer | B | C |
-| Task·요청·승인·감사 원자 연산, 영속 순번·시작 복구 | B | C |
-| Store API·DTO·오류·상태 의미와 B 호출부 연결 | B | A·C, 공통 계약 변경은 기존 절차 적용 |
-| 저장소 단위 테스트·S03 바인딩 SQL 단위 부분 | B | C |
-| 저장소 계약·통합·공격·결함 주입·실험 | C | B |
-| SQL 제한 Semgrep·import-linter | C | B |
-| Registry·Scanner 서비스와 안전 연산 | C | B |
-| 앱 시작 실행 게이트·Task/대화 격리·Transport | A | 기존 소유권 표 적용 |
-
-SQL과 연결 소유권은 storage에 둔다. core는 domain·표준 라이브러리만 의존한다. Registry의 상태·검사 판정은 C 서비스가 맡고, 등록·지문 영속화와 승인 무효화에는 B 저장소의 검토된 인터페이스를 사용한다. B·C가 단일 writer 계약을 맞추며 C 서비스에서 별도 SQL 경로를 만들지 않는다.
-
-## 먼저 확인할 자료
-
-1. 기술 설계 0.4·0.5·2·6–8·11·13장과 14.3절. 원문의 이전 SQLite 담당 표기는 사용자 결정으로 대체한다.
-2. [Store 요구 초안](archive/tasks/c-store-requirements.md)의 U1–U8과 인수 기준.
-3. [Store 처리 제안 v1](archive/tasks/c-store-proposal.md)의 API·버전·원자 승인·실패/ACK·시계·복구 규칙.
-4. [B 검토 기록](archive/tasks/c-b-review.md)의 검증 범위와 최신 승인 식별자 수정 확인.
-5. [A·C 공동 계약 검토 요청](archive/ac-contract-review-request.md)의 B6-01–06·AGT-01–03·SCHEMA-01·ENV-01 회신 항목과 최신 기준 커밋.
-
-C의 기존 요구·제안은 B의 설계 검토 자료와 C의 독립 검증 기준이다. 이관 결정이 `open_approval`·`finish_approval`·`ApprovalCommit`·커밋 불명 오류 등의 이름과 의미까지 확정한 것은 아니다.
-
-2026-10-13 사용자는 **A·C 검토를 받은 뒤 계약 확정**을 선택했다.
-[B6 변경안 10절](archive/b6-contract-proposal.md)에 담당별 회신 항목을 제공했다.
-검토 자료 준비와 실제 전달·동의·SQLite 착수는 구분하며, 새 공유 계약 구현은 회신 후 진행한다.
-
-기존 도메인·Store 12개 연산의 의미를 유지하는 DB 설정·스키마·저장소 구현·B 단위 검증은
-먼저 진행할 수 있다. 새 원자 승인 API/DTO·오류·상태/버전·복구 규칙의 확정과 호출부 교체는
-공동 검토 후다. 기존 분리 연산의 구현만으로 승인 생성/종결의 원자성 인수를 완료 표시하지 않는다.
-
-## 착수와 전달 순서
-
-- [x] 공통 문서 커밋을 B 브랜치에 반영하고 `docs/tasks/b-security-core.md`의 SQLite 제외·C 저장소 연계 문구를 현행 분담으로 갱신한다. 이 문서를 B6 작업으로 연결한다.
-- [x] `docs/b-handoff.md`의 C 저장소 구현 배정을 B 저장소 구현·C 독립 검증 배정으로 갱신한다. 착수·구현·검증 상태를 구분해 기록한다.
-- [x] 현재 Store 12개 메서드와 C 제안의 승인 생성·종결·시작 정리를 대조한다. 필요한 인자·반환 DTO·오류·허용 상태/버전·감사 의미를 [B6 계약 변경안](archive/b6-contract-proposal.md)으로 제공했다. 제안 작성이며 API 합의·구현 완료는 아니다.
-- [x] A `cd75bf9`의 최신 B 병합·QA(대기/실행 16개·퇴역 예산 2개·worker 교체/실제 종료·UI 표시)·분리 검사 환경과 A18-D 역할/규칙 관리 요청을 다시 대조해 B6 11절과 공동 요청을 갱신한다. A 자체 시험 보고와 선택지 제시를 공동 계약 동의나 C 인수로 처리하지 않는다.
-- [x] 사용자 지시로 연결·초기 v1 스키마/마이그레이션·Task 생성/조회와 실제 파일 DB 단위 검증을 구현한다. 새 공유 모델·포트·서비스·lock을 변경하지 않는다.
-- [x] Task 상태 전이·판정 감사·ALLOW 예약을 추가한다. 감사 ID는 공급자 주입이며 같은 인스턴스의 ALLOW 결속만 사용한다. 148개 추가 후 전체 1,193개 통과.
-- [x] 현행 승인 생성/조회/전이/소비·READ/SEND/실패 저장의 7개를 추가한다. 202개 추가 후 전체 1,395개 통과하며 현행 Store 12/12개 시그니처를 만족한다. 새 공유 계약 합의나 제품 인수를 대신하지 않는다.
-- [ ] 영속 순번·시작 복구를 구현·단위 검증한다. 미합의 새 계약을 운영 확정처럼 적용하지 않는다.
-- [x] B `6115fa6`의 콜백·v1 필드·split API 중단 상태를 대조해 영속 계수/이관·시작 복구·ACK/epoch 설계를 작성하고 50개 검증 시나리오와 A/C 회신 8항목을 분리한다. 설계 준비만 완료이며 위 구현·단위 검증 체크는 미완료다.
-- [x] 공유 계약을 바꾸지 않는 B 내부 `_inspect_startup`과 frozen private 관찰 자료를 구현한다. 관계/형식·기록 MAX·미기록 kind/epoch·읽기 불변성은 검증하며 복구 상태/번호 배정/READY는 만들지 않는다.
-- [ ] C는 인수 기준·정적 강제 규칙과 API를 대조하고, A는 시작 실행 게이트·제어 큐·결과 처리 영향을 검토한다. 실제 합의 근거만 공통 계약에 기록한다.
-- [ ] 확정된 계약으로 SQLite를 구현하고 B 단위 테스트 결과·대상 커밋·DB 설정·지원 플랫폼과 한계를 전달한다.
-- [ ] C의 실제 Store/Fake 계약·결함 주입 검증과 A 연결 후 실제 계수 검증을 받는다. 실패 수정은 B가 하고 C가 해당 검증을 재실행한다.
-
-## 구현 체크
-
-- [x] 설계의 7개 테이블·STRICT/CHECK·외래키·UNIQUE, 앱/스키마 버전과 빈 v0→v1 원자 마이그레이션·정확한 v1 재개방을 구현하고 검증한다.
-- [x] 같은 백엔드 스레드의 연결 소유·WAL·foreign_keys·synchronous FULL·명시적 BEGIN IMMEDIATE와 적용 값 검증을 구현한다. 제품 SQL은 지정 storage 모듈의 바인딩 파라미터로 실행한다.
-- [x] Task 생성/조회는 기존 상태·epoch·버전·revision·승격 근거를 보존하고 한 트랜잭션에서 저장/읽기한다. 없는 상태는 STATE_MISSING이며 빈 PUBLIC로 보충하지 않는다.
-- [ ] 요청 epoch/kind/revision 확장·승인/요청/Task 추가 결속은 합의 후 스키마/호출부에 연결한다.
-- [x] Task 상태 전이·판정/감사 기록·ALLOW 예약을 구현하고 종결/미분류 Task 재개·옛 ALLOW/ASK/DENY 예약을 거절한다. 정상 전이 보안 버전 유지 등은 로컬 검토용 선택이며 B6-02 공동 합의는 별도다.
-- [x] 현행 승인 저장/조회/전이와 소비를 구현한다. 소비는 승인 CONSUMED·요청 DISPATCHING·Task RUNNING·감사 한 트랜잭션이며 관계·해시·만료·버전·각 변경 행 수를 검사한다. 조건 충돌 False와 저장 실패 StoreError를 구분한다.
-- [ ] 새 open/finish 계약 합의 후 승인 생성·종결의 Task 전이와 승인/요청/감사를 묶어 기존 두 커밋 간격을 해결한다.
-- [x] READ 관측의 등급·버전·승격 근거·요청·감사를 원자 커밋하고, SEND 성공은 요청·감사만 저장한다. 실제 B 게이트 단위 검사로 커밋 실패 때 공개 차단을 확인했다.
-- [x] 현행 예약 후 실패의 상태 쌍과 등급·미분류 보존을 검증한다. READ FAILED/RUNNING 또는 WITHHELD/HALTED, SEND UNKNOWN/UNKNOWN이며 종결 Task 재개를 거부한다.
-- [ ] U8 제어/응답 경쟁·커밋 불명 오류의 최종 계약과 A 제품 containment/복구 연결을 확정한다.
-- [ ] 조건 충돌·rollback 확인된 장애·커밋/rollback 확정 불가를 구분한다. 확정 불가를 성공 ACK나 재시도 권한으로 사용하지 않는다.
-- [x] 신뢰 fresh UTC의 승인 만료·쓰기 중 만료·시각 역행과 ACK 유실 시 연결/결속 폐기를 단위 검증한다. 이 검사는 COMMIT 전체 I/O 상한과 양시계/복구 계약 확정이 아니다.
-- [ ] DB 대기·양시계 만료·취소·커밋 ACK의 공동 규칙과 제품 예산을 확정한다. 잠금 대기 1000ms는 미측정 제안값이다.
-- [ ] 영속 call_seq·허용된 실패 감사와 재시작 정리를 구현한다. 옛 승인 실행 권한·쓰기 재전송을 복원하지 않는다.
-- [ ] C Registry의 등록·지문·검사 메타데이터 영속화와 변경 시 승인 무효화를 계약으로 연결한다.
-- [x] 구현한 12개 연산은 원문·전체 인자·인증정보·승인 사본을 DB·감사·StoreError에 기록하지 않는다. 실패 감사에는 검증된 예외 타입명만 고정 JSON으로 남기고 공개 오류에는 고정 코드를 둔다. 실제 단위 검증을 완료했으며 C 독립 I9 인수는 별도다.
-- [ ] AGT-01–03 합의 후 신뢰 bootstrap의 agt_mode/규칙 버전 감사·과거 기록 migration·규칙 변경/승인 결속과 누락/감사 실패 처리를 연결한다. A의 감사 필드 제안 자체를 확정 스키마로 사용하지 않는다.
-
-## 검증과 인수 기준
-
-| 검증 | 담당 | 관련 I/T/S |
-| --- | --- | --- |
-| 저장소 연산·상태/버전·제약·바인딩 SQL 단위 | B | I3–I6·I9, T09–T12·T35·T37의 단위 상세, S03 |
-| 실제 Store/Fake의 동일 계약·승인 원자성·중복 소비 | C | I3·I6, T09–T12·T20 |
-| 부분 쓰기·감사·잠금·커밋·rollback·프로세스 중단 결함 | C | I5·I6·I8, T07·T36·S05 |
-| READ 공개 경계·SEND 등급 불변·직렬화 | C | I4·I5, T19·T33·T35·T37 |
-| 복구·결과 불명 SEND·추가 전송 0 | C, A 연결 | I3·I8, T11·T14–T16 |
-| Registry 지문 변경·승인 무효화 | C, B 저장소 연결 | I10, T10·T17 |
-| SQL 실행 지점·원문/비밀값 기록 제한 | C | I9, S03·S04·T19 |
-
-B 단위 테스트 통과는 C 독립 인수와 별도로 보고한다. 실제 승인 소비·host dispatch·wire tools/call·receiver effect는 요청별로 관측하며, DB 예약만으로 실제 전송을 증명하지 않는다. 미실행·미관측은 해당 상태로 기록한다.
-
-## B에게 전달할 요약
-
-> SQLite 구현 담당을 B로 변경했어. storage·스키마·마이그레이션·원자 연산·영속 순번·감사 저장·시작 복구·저장소 단위 테스트를 맡아줘. C는 저장소 리뷰·독립 계약·통합·결함 주입·실제 계수 검증을 맡아. 공통 문서 변경을 반영하고 B6와 기존 Store 요구·제안을 읽은 뒤, 먼저 API·DTO·오류·상태 규칙 변경안을 제공해줘. Registry 영속화는 C와 단일 writer 계약을 맞춰야 해. 담당 변경은 사용자 결정이고 API 세부 제안은 아직 검토 대상이야.
-
-위 문구는 전달용 초안이다. 개인 메시지를 보낼 때 실제 공유된 문서 PR 또는 커밋을 함께 알려야 하며, 이 문서 작성으로 전달 완료를 기록하지 않는다.
+- [x] B7.1 A의 B 서비스 병합과 32경로 검증 보고 대조
+- [ ] B7.2 A의 Guard·Catalog 리뷰, C의 정책·승인·응답·예외·해시 리뷰 받기 — 막힘: A·C
+- [ ] B7.3 AGT-01 회신(운영자 차단 목록·조건 규칙·서명 정책 관리 선택) — 막힘: 사용자·팀
+- [ ] B7.4 AGT-03 검토(B 검사 상한 4개·정리 0.05초와 A 대기/실행 16개·퇴역 예산 2개)
+- [ ] B7.5 정규식 전체 스키마 검증을 종료 가능한 프로세스에서 실행(SCHEMA-01) · [연결안](archive/b-schema-validation-proposal.md)
+- [ ] B7.6 B6 저장소의 C 리뷰·독립 검증 받기 — 막힘: C
+- [ ] B7.7 C 보안 모듈·Registry·Scanner·CI·테스트 리뷰(PR #6·#8의 `adapters/cisco*.py`, `security/secrets.py`·`redact.py` 포함)
+- [ ] B7.8 C 독립 통합 인수 결과와 대상 커밋 기록 — 막힘: C
+- [ ] B7.9 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 A·C에 전달
