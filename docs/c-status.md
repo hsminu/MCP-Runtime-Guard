@@ -11,6 +11,7 @@
 | AGT 제거(구현) | A·B | C2.9, C6.3, C6.4, C6.9 |
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
+| Codex CLI 연결(A19·A20) | A | C6.13 |
 
 ## C1 · 계약과 관측 기반
 
@@ -36,6 +37,7 @@
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
 - [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
 - [ ] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용 · [결정](contracts.md#사용자-결정) — 막힘: A 입력 화면
+- [ ] C2.11 제품용 읽기 전용 파일 MCP 서버(stdio): 폴더 목록·파일 읽기만, `safe_path`(C2.3) 사용, `structuredContent.resource_id` 보고, UTF-8 텍스트만 · [결정](contracts.md#사용자-결정)
 
 ## C3 · B SQLite 리뷰와 독립 검증
 
@@ -73,7 +75,7 @@
 ## C5 · fixture와 계수
 
 - [x] C5.1 Scanner 목록 수신 경계 합성 fixture(stdio·HTTP 22개 시나리오) · [검증](archive/tasks/c-scanner-operating-validation.md)
-- [ ] C5.2 Local Document stdio 서버(public·company·secret 합성 문서, TEST_SECRET)
+- [ ] C5.2 C2.11 서버를 합성 문서(public·company·secret, TEST_SECRET)로 띄우는 fixture
 - [ ] C5.3 Remote Send HTTP 서버(127.0.0.1, tools/call과 프로토콜 메시지 구분 계수)
 - [ ] C5.4 approval_consumed·host_dispatch·wire tools/call·receiver_effect를 요청별로 연결
 - [ ] C5.5 wire_tools_call과 wire_post 대응, 카운터는 테스트 임시 파일
@@ -94,6 +96,7 @@
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록
+- [ ] C6.13 Codex 격리 검증(T22): 자체 셸·파일 읽기·웹·하위 agent·MCP 차단, 작업 폴더 밖 읽기 거부, 확인 실패 시 시작 거부, 버전 변경마다 재검증 · [결정](contracts.md#사용자-결정) — 막힘: A19·A20
 
 ## 인수 기준
 
