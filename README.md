@@ -1,18 +1,16 @@
 # MCP Runtime Guard
 
-> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](docs/archive/tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-현재 A 브랜치에는 보안 코어·transport·Runner·Qt 앱의 **합성 개발 경로**가 있다.
+`main`에는 보안 코어(B), transport·Runner·Qt 앱(A), Cisco Scanner 어댑터(C)가 들어 있고 **합성 자료로 처음부터 끝까지 실행**할 수 있다.
 실제 stdio·로컬 HTTP MCP 서버와 로컬 AGT 판정을 연결했고, AGT는 명시적으로 real/mock을 선택한다.
-Store는 기본 메모리 대역 또는 B SQLiteStore를 선택하고, Registry는 B 단위 대역이며 모델은 mock이다.
-SQLite는 새 Task 실행만 연결했다. 시작 복구·C launcher/endpoint 검증·실제 모델 및 C 독립 인수는 아직 완료하지 않았다.
-작업별 구현·검증·남은 계약의 현재 기준은 [A 작업 현황](docs/a-status.md)이다.
+Store는 기본 메모리 대역 또는 SQLiteStore를 선택하고, Registry는 단위 대역이며 모델은 mock이다. Scanner는 아직 앱에 연결하지 않았다.
+SQLite는 새 Task 실행만 연결했다. 시작 복구·launcher/endpoint 검증·실제 모델·독립 인수는 남아 있다. 담당별 남은 일은 현황 문서에 있다.
 
 ## 설치와 실행
 
 Python 3.12와 [uv](https://docs.astral.sh/uv/)를 사용한다. winget의 특정 패치 버전을 요구하지 않는다.
-uv가 `.python-version`의 3.12를 설치하며 이번 검증은 CPython 3.12.15에서 실행했다.
+uv가 `.python-version`의 3.12를 설치한다.
 
 ```powershell
 uv sync --locked
@@ -47,15 +45,9 @@ C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/archive/tas
 실행 탭과 창 제목에 확인된 AGT 모드를 표시한다. AGT 허용은 Guard의 ASK·DENY를 완화하지 않는다.
 [배포판 선정](docs/archive/tasks/a-agt-selection.md)과 [실제 연결·검증 범위](docs/archive/tasks/a-agt-integration.md)를 참고한다.
 
-B 기준 갱신 시 소스와 B 테스트를 함께 대조한 뒤 `uv run pytest -q`를 실행한다.
-A UI 승인 테스트는 `test_ui_approvals.py`, B 서비스 테스트는 `test_approvals.py`로 분리했다.
-최신 B 병합·AGT 기준 차이는 [A 동기화 기록](docs/archive/tasks/a-b-sync-2026-10-13.md)을 따른다.
 환경은 `uv.lock` 하나로 관리하고 `requirements.lock`은 거기서 생성한다.
-Ruff·포맷·mypy 검사 명령, A 기준선, main 반영 순서는 [A+B 통합](docs/archive/integration-a-b.md)을 따른다.
-
-B 브랜치 `6115fa6`까지 병합해 B6의 SQLite Store(현행 12/12개 메서드)와 B QA 보완이 A 브랜치에 들어왔다.
-B 범위·검증은 [B6 승인·응답 저장](docs/archive/b6-sqlite-lifecycle.md)과 [B QA 반영 기록](docs/archive/b-qa-fixes-2026-10-13.md)을 따른다.
-시작 복구·영속 순번·새 공동 API 합의는 B 후속이며, 앱 연결 상태는 [A 작업 현황](docs/a-status.md)을 따른다.
+CI(Windows)는 locked 설치 → `requirements.lock` 일치 → Ruff → 포맷 → mypy → 단위 테스트 순서로 돈다.
+Ruff·포맷·mypy의 A 기준선과 명령은 `pyproject.toml` 주석과 [A+B 통합 기록](docs/archive/integration-a-b.md)에 있다.
 
 ## 개발 문서
 
@@ -65,7 +57,7 @@ B 범위·검증은 [B6 승인·응답 저장](docs/archive/b6-sqlite-lifecycle.
 | --- | --- |
 | [기술 설계 및 개발 문서](docs/technical-design.md) | 제공받은 개발문서 원본 사본. 상세 설계, 테스트 T01–T38·S01–S05, ADR 기준 |
 | [3인 협업 규칙](docs/team-workflow.md) | 모듈 소유권, 리뷰 담당, 개발 순서, 브랜치 사용법 |
-| [공통 계약 체크리스트](docs/contracts.md) | B가 정의하고 A·C와 합의해야 하는 모델·포트·이벤트 계약 |
+| [공통 계약](docs/contracts.md) | 사용자 결정, 합의할 계약과 체크리스트, 미결 요청 |
 | [보안약점 관리대장](docs/weakness_register.md) | 검사 실행 기록, 발견 항목과 조치, 규칙 예외 |
 | [A 현황](docs/a-status.md) | A 구현·검증·남은 조건 |
 | [B 현황](docs/b-status.md) | B 보안 코어·SQLite 체크리스트 |
@@ -81,9 +73,7 @@ B 범위·검증은 [B6 승인·응답 저장](docs/archive/b6-sqlite-lifecycle.
 | B · 보안 코어·SQLite | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트, SQLite·스키마·복구·저장소 단위 테스트 | [B 현황](docs/b-status.md) |
 | C · 보안 기반·검증 | `feat/c-security-platform` | 위험 연산 모듈, 서버 등록·Scanner, 저장소 리뷰·독립 검증, fixture·계수, 통합·공격·실험, CI | [C 현황](docs/c-status.md) |
 
-브랜치 이름은 담당 범위를 나타낸다. 실제 담당자 이름은 아직 지정하지 않았다. `main`은 공통 기준 문서와 리뷰를 마친 변경을 모으는 브랜치다.
-
-2026-10-12 사용자 결정으로 SQLite 구현을 C에서 B로 이관했다. 현행 소유권과 리뷰는 [협업 규칙](docs/team-workflow.md)을 따른다. 기술 설계 원문은 보존하며, 이전 SQLite 담당 표기는 이 결정으로 대체한다. Store API의 세부 제안은 별도 검토 대상이다.
+`main`은 공통 문서와 리뷰를 마친 변경을 모으는 브랜치다. 소유권과 리뷰는 [협업 규칙](docs/team-workflow.md), 개발문서와 다른 담당 배정(예: SQLite는 B)은 [공통 계약](docs/contracts.md#사용자-결정)에 있다.
 
 ## 해결할 문제
 
@@ -142,7 +132,7 @@ flowchart LR
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
 | `fixtures`, 테스트, CI | 실제 수신 계수로 집행을 검증 | C 주도 |
 
-표는 전체 제품의 소유권이다. 현재 존재하는 모듈과 미구현 항목은 [A 작업 현황](docs/a-status.md)에서 구분한다. 전체 예정 구조는 개발문서 2.1절에 있다.
+표는 전체 제품의 소유권이다. 구현 여부는 담당별 현황 문서에서 확인한다. 전체 예정 구조는 개발문서 2.1절에 있다.
 
 ## 보안 불변식
 
@@ -163,7 +153,7 @@ flowchart LR
 
 ## 개발 환경과 진행 순서
 
-설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. A 앱·B 단위 검증·로컬 AGT 조합은 pyproject.toml과 uv.lock에 고정했다. Scanner와 HTTP를 포함한 공통 제품 조합은 추가 검증 대상이다.
+설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. 앱·보안 코어·AGT·Scanner 의존성은 `pyproject.toml`·`uv.lock`에 고정했다. 공통 조합의 합의 기록은 ENV-01로 남아 있다.
 
 1. 세 사람이 공통 문서와 각자의 현황 문서를 읽는다.
 2. B가 모델·포트·명령·이벤트 계약을 제안하고 A·C와 확정한다.
@@ -184,7 +174,7 @@ git switch feat/b-security-core
 git switch feat/c-security-platform
 ```
 
-이 명령은 로컬 브랜치가 있는 저장소 기준이다. 새 clone에서 사용할 원격 브랜치는 push 후 생긴다. 상세 동기화·리뷰 절차는 [협업 규칙](docs/team-workflow.md)에 있다.
+새 clone이면 `git switch --track origin/<브랜치>`를 쓴다. 상세 동기화·리뷰 절차는 [협업 규칙](docs/team-workflow.md)에 있다.
 
 ## 검증 목표와 보호 범위
 
