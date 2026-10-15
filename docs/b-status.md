@@ -197,7 +197,7 @@ A 실행 jsonschema 4.25.1과 B 별도 코어 검사 4.26.0, A의 config/b-core 
 
 # B6 · SQLite 저장소 인수와 구현 작업
 
-2026-10-12 사용자 결정 **"sqlite b로 넘기자"**에 따라 SQLite 구현을 C에서 B로 이관한다. 작업 브랜치는 `feat/b-security-core`이며 저장소 리뷰·독립 검증 담당은 C다. 결정 근거는 [공통 계약](contracts.md#담당-변경-기록), 현행 소유권은 [협업 규칙](team-workflow.md)을 따른다.
+2026-10-12 사용자 결정 **"sqlite b로 넘기자"**에 따라 SQLite 구현을 C에서 B로 이관한다. 작업 브랜치는 `feat/b-security-core`이며 저장소 리뷰·독립 검증 담당은 C다. 결정 근거는 [공통 계약](contracts.md#사용자-결정), 현행 소유권은 [협업 규칙](team-workflow.md)을 따른다.
 
 상태는 **SQLite 현행 Store 12/12개 메서드 구현·B 단위 검증 완료, 제품 연결·복구·API 합의·독립 인수 미완료**다. DB 하나·테이블 7개이며 12는 메서드 수다. 아래 A `cd75bf9`/B `5f8a003` 대조는 당시 기록이다. SQLite 12/12 추가는 B `9eb0560`으로 공개했고 당시 전체 **1,395개** 테스트를 통과했다. 후속 A `ab82919` QA 요청의 B 내부 보완은 `6115fa6`으로 공개했고 전체 **1,614개**를 검증했다. 상세는 [첫 단계](archive/b6-sqlite-foundation.md), [상태·판정·예약](archive/b6-sqlite-decisions.md), [승인·응답](archive/b6-sqlite-lifecycle.md), [QA 반영](archive/b-qa-fixes-2026-10-13.md)을 따른다.
 

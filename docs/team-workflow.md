@@ -2,7 +2,7 @@
 
 설계 기준은 [기술 설계 및 개발 문서](technical-design.md)이며, 현행 역할·리뷰는 이 문서의 소유권 표를 따른다. 2026-10-12 사용자가 **"sqlite b로 넘기자"**고 결정해 SQLite 구현을 B로 이관했다. 기술 설계 원문 0.5·2.1절 등의 `storage` C 표기와 저장소 단위 테스트 담당 표기는 이 결정으로 대체한다. 원문은 보존한다.
 
-B1–B5 구현 초안은 B 브랜치에 있다. SQLite 이관은 담당 배정이며, Store API의 세부 합의·SQLite 구현·독립 인수 완료를 뜻하지 않는다. 기록은 [담당 변경](contracts.md#담당-변경-기록), 인수 작업은 [B6 · SQLite](b-status.md)를 따른다.
+B1–B5 구현 초안은 B 브랜치에 있다. SQLite 이관은 담당 배정이며, Store API의 세부 합의·SQLite 구현·독립 인수 완료를 뜻하지 않는다. 기록은 [담당 변경](contracts.md#사용자-결정), 인수 작업은 [B6 · SQLite](b-status.md)를 따른다.
 
 현재 A 구현·검증·미완료 조건은 [A 작업 현황](a-status.md), 임시 앱 계약은 [리뷰 반영 기록](archive/tasks/a-review-fixes.md)을 따른다.
 
@@ -15,6 +15,15 @@ B1–B5 구현 초안은 B 브랜치에 있다. SQLite 이관은 담당 배정�
 | C | `feat/c-security-platform` | `docs/c-status.md`, `docs/weakness_register.md` |
 
 `main`의 공통 문서 커밋을 세 브랜치가 공유한다. 각 담당은 자기 현황 문서만 고친다. 그래야 세 브랜치를 합칠 때 서로 덮어쓰지 않는다. 새 작업 일지·요청·회신 파일은 만들지 않고 PR·이슈 댓글로 남긴다. 이전 기록은 `docs/archive/`에 있으며 갱신하지 않는다.
+
+## 문서 작성
+
+| 문서 | 작성 |
+| --- | --- |
+| `docs/a-status.md`, `docs/b-status.md`, `docs/c-status.md` | 각 담당. 자기 브랜치에서 작업과 함께 고친다 |
+| 그 밖의 모든 문서(`README.md`, `AGENTS.md`, `docs/technical-design.md`, `docs/contracts.md`, `docs/team-workflow.md`, `docs/weakness_register.md`) | 사용자만 작성·수정한다 |
+
+팀원이 공통 문서를 바꾸고 싶으면 `main` 대상 PR로 제안한다. 사용자가 검토하고 필요하면 문구를 고쳐 병합한다. 개인 연락은 논의에만 쓰고 결론은 PR에 남긴다. 공통 문서는 역할 브랜치에서 고치지 않는다.
 
 ## 파일 소유권과 리뷰
 
