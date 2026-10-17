@@ -1319,7 +1319,7 @@ class AccessChecker(Protocol):                  # ports.py, B 소유
 
 | 담당 | 작업 |
 | --- | --- |
-| B | 규칙 판정 함수, `AccessResult` → Decision 매핑, reason code 정리(AGT-04), 단위 테스트 |
+| B | 규칙 판정 함수, `AccessResult` → Decision 매핑, reason code 정리(AGT-04), 단위 테스트, 기존 AGT 코드 제거(A 소유 파일 포함, 해당 파일은 A 리뷰) |
 | A | `AccessChecker` 포트로 Guard에 연결, 규칙 설정 로딩 연결 |
 | C | 규칙 거절·오류 시 `host_dispatch == 0` 확인 |
 
