@@ -227,12 +227,15 @@ def http_stream_factory(
                 get_started = True
 
         try:
+            # AsyncHTTPTransport(verify=True)는 인증서 묶음을 읽어 SSL 문맥을 동기로 만든다
+            # (A46). 같은 trust_env=False 기본 문맥을 작업 스레드에서 만들어 루프를 막지 않는다.
+            ssl_context = await asyncio.to_thread(httpx.create_ssl_context, trust_env=False)
             async with (
                 httpx.AsyncClient(
                     transport=httpx.AsyncHTTPTransport(
                         retries=0,
                         trust_env=False,
-                        verify=True,
+                        verify=ssl_context,
                         limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
                     ),
                     timeout=httpx.Timeout(float(io_timeout_s), read=float(read_timeout_s)),

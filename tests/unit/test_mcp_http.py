@@ -234,6 +234,44 @@ async def test_client_and_stream_lifetime_settings_and_request_guards(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_tls_context_is_built_off_the_event_loop_and_still_verifies(monkeypatch):
+    # A46: 인증서 묶음 로딩이 이벤트 루프를 막지 않고, 검증 설정은 그대로다.
+    import ssl
+
+    built = []
+    transports = []
+    real_context = httpx.create_ssl_context
+    real_transport = httpx.AsyncHTTPTransport
+    loop_thread = threading.get_ident()
+
+    def capture_context(**kwargs):
+        context = real_context(**kwargs)
+        built.append((threading.get_ident(), kwargs, context))
+        return context
+
+    def capture_transport(**kwargs):
+        transports.append(kwargs)
+        return real_transport(**kwargs)
+
+    @asynccontextmanager
+    async def fake_stream(endpoint, *, http_client, terminate_on_close):
+        yield (None, None, None)
+
+    monkeypatch.setattr(mcp_transport.httpx, "create_ssl_context", capture_context)
+    monkeypatch.setattr(mcp_transport.httpx, "AsyncHTTPTransport", capture_transport)
+    monkeypatch.setattr(mcp_transport, "streamable_http_client", fake_stream)
+    async with http_stream_factory("https://example.test/mcp")():
+        pass
+
+    assert len(built) == 1
+    thread_id, kwargs, context = built[0]
+    assert thread_id != loop_thread
+    assert kwargs == {"trust_env": False}
+    assert context.verify_mode is ssl.CERT_REQUIRED and context.check_hostname
+    assert transports[0]["verify"] is context
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "json_response,stateless", [(True, False), (False, False), (True, True), (False, True)]
 )
