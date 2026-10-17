@@ -529,7 +529,7 @@ def resolve_tool(self, tool_ref: str) -> ToolSpec:
 
 인자는 등록 시점에 고정한 `input_schema`로 검증한다(`jsonschema`, `additionalProperties: false` 강제). 서버가 나중에 스키마를 바꿔도 Guard는 등록본으로 검증하며, 지문 불일치로 PENDING이 된다.
 
-서버 ID에는 `__`를 쓸 수 없고 `_`로 끝날 수 없다(`valid_server_id`). 처음 나오는 `__`에서 자르므로 도구 이름에는 제한이 없다. Codex 하네스에서는 세션 관리자가 namespace와 도구 이름을 이어 이 형식을 만든다(10.4절).
+서버 ID에는 `__`를 쓸 수 없고 `_`로 끝날 수 없다(`valid_server_id`). 등록할 때 Registry(C)가 거부하고 등록 화면(A)은 입력 즉시 안내한다. 둘 다 같은 함수를 쓰며 Catalog 검사는 마지막 방어다. 처음 나오는 `__`에서 자르므로 도구 이름에는 제한이 없다. Codex 하네스에서는 세션 관리자가 namespace와 도구 이름을 이어 이 형식을 만든다(10.4절).
 
 도구 설명의 `annotations`(예: `readOnlyHint`)는 서버가 스스로 주장하는 힌트일 뿐이므로 `ToolKind` 결정에 쓰지 않는다. `ToolKind`는 사용자가 등록 시 지정한다.
 
@@ -1836,7 +1836,7 @@ rules:
 ruff check  →  mypy --strict (domain, core, security)  →  lint-imports
    →  pytest tests/unit tests/contract  →  pytest tests/integration
    →  bandit -r src -ll  →  semgrep --config tools/ci/semgrep.yml --error
-   →  pip-audit (uv.lock 기준)  →  Codex 하네스 시험(T22, T39, T40, T44)
+   →  pip-audit -r requirements.lock (uv.lock에서 생성)  →  Codex 하네스 시험(T22, T39, T40, T44)
 ```
 
 - `attack_fixtures/`는 스캔 대상에서 제외하고 별도 디렉터리로 관리한다. 의도적으로 취약한 코드가 제품 코드의 약점 수에 섞이지 않게 한다.
