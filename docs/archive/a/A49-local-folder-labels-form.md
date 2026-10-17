@@ -13,7 +13,7 @@
 
 ## 실제 검증
 
-- `tests/unit/test_server_add_folders.py` 18개(파라미터 포함) 통과. 기존 `test_server_add.py`와 합쳐 66개 통과.
+- `tests/unit/test_server_add_folders.py` 16개(파라미터 포함) 통과. 기존 `test_server_add.py`와 합쳐 66개 통과.
   - 필수 입력, 세그먼트 보존, 미리보기의 루트 숨김
   - 수정하면 초안이 버려짐
   - 루트 거부 4종, 접두어 거부 7종
