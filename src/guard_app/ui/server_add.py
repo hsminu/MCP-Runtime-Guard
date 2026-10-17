@@ -726,17 +726,19 @@ class LocalFolderRulesForm(QWidget):
         failed = root_error is not None
 
         rules: list[FolderLabelRule] = []
+        # Windows folder names ignore case, so Docs and docs are the same folder.
         seen: set[tuple[str, ...]] = set()
         for row in self.rows:
             parts, error = _prefix_parts(row.prefix.text().strip())
-            if parts is not None and parts in seen:
-                error = "같은 폴더 규칙을 두 번 적지 마."
+            key = None if parts is None else tuple(part.casefold() for part in parts)
+            if key is not None and key in seen:
+                error = "같은 폴더 규칙을 두 번 적지 마. 대소문자만 다른 이름도 같은 폴더야."
             elif error is None and row.label.currentData() is None:
                 error = "이 폴더의 등급을 선택해."
             row.error.setText(error or "")
             row.error.setVisible(error is not None)
-            if parts is not None:
-                seen.add(parts)
+            if key is not None:
+                seen.add(key)
             if error is not None or parts is None:
                 failed = True
                 continue

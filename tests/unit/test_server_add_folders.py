@@ -141,6 +141,14 @@ def test_duplicate_folder_rules_are_rejected(form: LocalFolderRulesForm) -> None
     assert not form.prepare_button.isEnabled()
 
 
+def test_folder_rules_differing_only_in_case_are_duplicates(form: LocalFolderRulesForm) -> None:
+    form.root.setText(str(Path.cwd()))
+    _set_rule(form, 0, "Docs/Private", "CONFIDENTIAL")
+    _set_rule(form, 1, "docs/private", "PUBLIC")
+    assert "대소문자" in form.rows[1].error.text()
+    assert not form.prepare_button.isEnabled()
+
+
 def test_removing_every_rule_blocks_the_draft(form: LocalFolderRulesForm) -> None:
     form.root.setText(str(Path.cwd()))
     _set_rule(form, 0, "", "PUBLIC")
