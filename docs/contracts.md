@@ -15,6 +15,21 @@
 | 2026-10-13 | 도구 정의 하나의 검사 입력 상한은 기본 64KiB, 설정 가능 | 측정 기준 1. 초과하면 자르지 않고 `SCAN_METADATA_TOO_LARGE`와 미완료 경고를 남긴다 |
 | 2026-10-13 | `tools/list` 한 페이지의 수신 상한은 기본 1MiB, 설정 가능 | 측정 기준 2. A transport가 파싱 전에 제한한다(미구현). 초과하면 목록 수집 미완료 경고 |
 | 2026-10-13 | 서버 하나의 목록 조회 한 번의 누적 수신 상한은 기본 8MiB, 설정 가능 | 같은 조회의 모든 페이지를 합산하고 페이지마다 초기화하지 않는다. A transport가 제한한다(미구현). 초과하면 전체 목록 미완료 경고 |
+| 2026-10-15 | AGT를 제거하고 접근 규칙은 자체 구현한다 | 범위는 (서버, 도구) 정확 일치 허용/거부 목록, 기본 deny, 신뢰 설정에서만 로드, 규칙 변경 시 `policy_version` 증가와 대기 승인 무효까지다. 인자 내용 검사·호출 횟수 제한·조건식·원격 정책·서명 규칙은 범위 밖이다. `AccessChecker` 포트와 Guard 합성(가장 엄격한 판정, 거부권만, 오류는 DENY)은 그대로다. 판정은 B가 `core`의 순수 함수로, 연결은 A가, 차단 계수 검증은 C가 맡는다. 개발문서 10.3절·ADR-3의 AGT를 대체한다 |
+| 2026-10-15 | CI 2단계(import-linter·Bandit·Semgrep·pip-audit)를 재개하고 contract 테스트를 CI에 넣는다 | AGT 제거 후 진행한다. AGT의 `cryptography<50` 제한이 없어지므로 pip-audit 예외를 두지 않는다 |
+| 2026-10-15 | Scanner LLM은 Luna low를 유지한다 | Sol 등 상위 모델은 같은 자료로 비교 실험한 뒤 다시 정한다 |
+| 2026-10-15 | Scanner 위험도는 SDK 값을 그대로 쓰고, LLM 자체 평가(`overall_risk`)는 참고 정보로 따로 보존한다 | SDK는 LLM이 지목한 위협을 모두 HIGH로 고정하고 모델의 자체 평가를 버린다. 자체 평가는 표시만 하고 판정·정렬·위험도 하향에 쓰지 않는다. 검사 대상 도구 설명이 이 값을 조작할 수 있기 때문이다. ScanReport 필드 형식은 미결이다 |
+| 2026-10-15 | Scanner 경고는 서버 등록 화면과 도구 호출 승인 창에 표시하고, 모델 설명(`threat_summary`)도 함께 보여준다 | 등록 화면은 도구별 위험도·출처(LLM/YARA)·LLM 자체 평가·미완료를 보여준다. 승인 창은 호출하는 도구의 경고를 보여주며 승인을 막지 않는다. 모델 설명은 신뢰하지 않는 텍스트로 다룬다: 일반 텍스트만, 링크·HTML 없음, 300자 제한, "검증되지 않은 내용" 표시, 로그 미기록 |
+| 2026-10-15 | Scanner 경고가 있는 도구의 ALLOW 호출을 ASK로 올리지 않는다 | 경고 검토의 관문은 등록 단계의 관리자 활성화다. Guard 판정 규칙은 바꾸지 않는다 |
+| 2026-10-15 | Scanner LLM API 키는 사용자가 각자 준비하고 Windows 자격증명 관리자(DPAPI)에 저장한다 | 제품 경로는 자격증명 관리자만 읽고 `.env`는 개발·실험용이다. 키는 앱 화면의 가려진 입력칸으로 받고 끝 4자리만 보여준다. 앱 전용 OpenAI 프로젝트 키와 사용 한도를 안내한다. 키를 우리 서버로 보내지 않는다. 저장·로딩은 C(`secrets.py`), 입력 화면은 A |
+| 2026-10-15 | SQLite DB의 의도적 변조는 위협 모델 밖이고, 손상·불일치는 fail-closed로 처리한다 | DB를 고칠 수 있는 같은 사용자 권한의 공격자는 Guard 자체를 우회할 수 있으므로 행 서명·HMAC은 두지 않는다. DB 내용만으로 실행 권한이 생기지 않는다(승인 원문은 메모리에만, 재시작 후 승인·옛 Task 미복원). 관계가 깨진 행·모르는 상태값 등은 시작 점검에서 멈춘다 |
+| 2026-10-15 | 시작 복구는 DB의 등급·상태를 그대로 믿지 않고 감사 기록과 대조한다 | 복구할 Task의 등급이 감사 기록의 승격 이력보다 낮거나 미분류 표시가 사라졌으면 복구하지 않고 멈춘다. 시작 복구(B6.8·REC 요청)의 조건이다 |
+| 2026-10-15 | Registry는 DB의 ACTIVE 상태만으로 실행하지 않고, 연결할 때마다 실제 `tools/list` 지문과 등록 지문을 대조한다 | 개발문서 10.1절과 worker의 연결 직후 지문 검사를 따른다. 다르면 사람 개입 없이 즉시 PENDING으로 내리고 기존 승인을 무효로 한다(I10). Registry(C4.10)의 조건이다 |
+| 2026-10-15 | Scanner 운영 상한은 C 운영 설정 추천안 v1의 값을 기본값(설정 가능)으로 확정한다 | 서버별 도구 256개·목록 32페이지·Tool JSON 중첩 64단계, 초기화 10초·페이지 10초·목록 수집 30초, 서버 검사 작업 10분, 도구별 LLM 60초·YARA 5초(native), 앱 전체 LLM 동시 4개·YARA worker 1개·서버 검사 1건·대기 8건, 자동 재시도 0회, 주기적 재검사 끔, 결과 캐시 재사용 끔. 초과하면 자르지 않고 해당 조회·작업을 미완료 경고로 끝낸다. 목록 수신 제한은 A transport, 검사 예산은 C. [추천안](archive/tasks/c-scanner-operating-proposal.md) |
+| 2026-10-15 | 도구 지문은 정의 전체(Tool 객체의 모든 필드)로 계산한다 | 개발문서 10.1절의 4필드(name·description·inputSchema·annotations)를 대체한다. 검사 범위(C-CISCO-03)와 지문 범위를 같게 한다. 직렬화는 키 정렬·공백 없는 UTF-8 JSON, 배열 순서 변경도 변경으로 본다. float는 거부하지 않고 정해진 표기로 처리한다(B digest 리뷰). 실측: 공개 정의 189개의 전체 해시가 10-13·10-15 두 번 수집에서 모두 같았다. 자주 바뀌는 필드가 실제로 나오면 근거와 함께 제외 목록을 정한다 |
+| 2026-10-15 | 실제 모델은 Codex를 하네스로 쓴다. Task마다 고정 버전 `codex app-server`(stdio JSON-RPC)를 띄우고 Guard 도구만 `dynamicTools`로 등록해, 모델의 도구 호출을 `item/tool/call`로 받아 `Guard.submit`으로 보낸다. Codex 자체 도구는 목록에서 빼고, 시작할 때마다 실제 상태를 시험해 확인하지 못하면 시작을 거부한다(T22) | Codex 자체 도구가 남으면 Guard 밖 읽기로 Task 등급이 틀어지고(파일 등급 규칙도 Guard가 처리한 읽기에만 적용된다) 자체 셸·MCP는 Guard를 우회한다. **L1 제거:** 앱 전용 CODEX_HOME의 config를 Task마다 새로 쓴다. 셸·unified exec·이미지 보기·goals·하위 agent·apps·plugins·이미지 생성·브라우저·computer use·tool suggest·skill search·code mode·hooks·memories를 끄고 `web_search="disabled"`, `project_root_markers=[]`, `project_doc_max_bytes=0`, 업데이트 확인·analytics·feedback·history를 끈다. thread/start는 `environments=[]`, `ephemeral`, `approvalsReviewer="user"`. 모델 정보는 `model_catalog_json`으로 고정한다(도구 직접 호출, 하위 agent 없음, 셸 disabled, skill·apps·plugin 안내 끔). ChatGPT 로그인 때 서버 모델 정보는 code mode 전용·하위 agent를 켜서 Guard 도구를 쓸 수 없었다. 기본 프롬프트는 `baseInstructions`로 우리 프롬프트로 바꾼다(보안 장치 아님, I7). **연결:** 도구 이름은 `서버이름.도구이름`, `deferLoading` 미사용. DENY·거절·만료는 `success:false`와 고정 문구. dynamicTools가 없어지면 Guard MCP 서버로 바꾼다. **고정:** codex.exe 버전·SHA-256(설치 스크립트가 npm에서 앱 전용 폴더로 받아 확인), 모델 정보 파일·해시(허용 모델 `gpt-6.1-sol`), config. 바꿀 때마다 C가 L2 통과 뒤 PR. **L2 시작 시험:** `configRequirements/read`가 null, `config/read`의 층·값 대조, 같은 exe·config·모델 정보로 가짜 모델 서버에 붙여 도구 목록 정확 대조, 금지 도구 7종 강제 호출 거부, 한 응답의 두 호출 순차 도착, 요청 프롬프트 확인. 앱 시작·버전 변경·CI에서 돈다. **L3 감시:** 허용 항목(userMessage·agentMessage·reasoning·contextCompaction·Guard 도구 호출) 밖의 항목이나 승인 요청은 거절하고 `turn/interrupt` 뒤 Task를 정지한다. `request_user_input`은 화면 없이 빈 응답으로 답하고 감사에는 요청 사실만 남긴다. **승인 대기:** ASK 5분 만료 등 기존 규칙. Codex는 대기 상한이 없어 Runner가 호출별 감시 상한(5분+MCP 실행 상한+여유)을 넘기면 interrupt하고 Task를 정지한다. SEND 전송 뒤면 UNKNOWN_OUTCOME, 재전송 없음. 호출은 받은 순서대로 하나씩 처리한다. **로그인:** ChatGPT 기기 코드 또는 API 키, Windows 자격증명 관리자(keyring) 저장, Task 시작 때 `account/read`, 사용량 한도면 정지. Scanner는 API 키를 따로 쓴다. Codex 내장 기기 코드 로그인은 Sign in with ChatGPT 약관의 앱 이름·사칭 조항과 맞지 않을 수 있으나 그대로 쓴다(2026-10-17 사용자 결정, C-CODEX-05). **원문:** Codex 로그 DB가 도구 결과 원문을 저장하고 끌 수 없어 `sqlite_home`을 Task 전용 폴더로 두고 Codex 종료 뒤·앱 시작 때 지운다(Task 종료 뒤 원문 비잔존). **L4:** codex.exe OS 격리는 하지 않는다(해시 고정 신뢰 구성요소). 한계는 [대장](weakness_register.md#발견-항목과-조치) C-CODEX-01–05. 세션 관리자·로그인 UI·프롬프트 문구는 A, Guard 도구 입구 계약은 B, L1 설정·모델 정보·L2·정리 검증은 C |
+| 2026-10-15 | 로컬 파일 접근은 우리가 만든 읽기 전용 파일 MCP 서버(stdio)를 Guard에 등록해서만 허용한다. 모델이 보고하는 출처는 등급 판정에 쓰지 않는다 | 개발문서 4.2·14.2절의 Local Document MCP를 제품 서버로 키운다. 공식 `server-filesystem`은 쓰지 않는다(쓰기·이동 도구 포함, 결과에 `resource_id` 없음). 도구는 폴더 목록과 파일 읽기만 두고, 둘 다 READ로 대상 경로의 등급을 따른다. 관리자가 등록할 때 루트 폴더와 하위 폴더별 등급을 정하고(세그먼트 접두어 출처 규칙), 어느 규칙에도 맞지 않으면 Unclassified로 Task를 멈춘다. 서버는 `safe_path`로 경로를 정규화하고 결과 `structuredContent.resource_id`로 실제 읽은 경로를 보고한다. Guard는 요청 인자로 계산한 `expected_resource_id`와 대조하고 다르면 공개하지 않는다(T33). UTF-8 텍스트만 돌려주고 응답 게이트 크기 상한을 넘으면 정지한다. 이 서버가 유일한 파일 경로가 되려면 위 Codex 자체 도구 차단이 필요하다. 서버·`safe_path`·검증은 C, 경로 대조 연결(B3.3)은 B, 등록 화면의 폴더별 등급 입력은 A |
+| 2026-10-17 | 사용자 화면은 A의 GUI 하나로 하고 Codex TUI는 쓰지 않는다 | Codex TUI(`codex --remote`)는 app-server에 직접 붙는 별도 클라이언트라 세션 관리자를 건너뛴다. 그러면 Guard 도구 등록·`item/tool/call` 중계·L3 감시가 빠지고, 클라이언트가 설정과 turn 권한을 바꿀 수 있다. 세션 관리자는 화면과 무관하게 필요하다. 터미널 화면이 필요하면 세션 관리자 위에 붙인다. 개발문서 10.4절·ADR-15 |
 
 측정 기준
 
@@ -65,7 +80,7 @@ Scanner 결과는 아직 B ScanReport에 연결하지 않았다. 필수 분석�
 - [ ] UI 명령·이벤트 payload, 제어 주체, reason_code 표시와 모델에 공개할 고정 응답을 확정한다.
 - [ ] 설정 파일·Profile 검증 및 로딩의 편집 담당을 배정한다. 정책·경계 의미는 B, 위험 입력 검증은 C, 연결 필드는 A와 검토한다.
 - [ ] `pyproject.toml`, lock 생성, 모델 제공자·모드 설정의 편집 담당을 정한다.
-- [ ] Python 3.12에서 동일 MCP SDK로 stdio·HTTP 왕복을 검증하고 AGT·Scanner 호환성을 기록한다.
+- [ ] Python 3.12에서 동일 MCP SDK로 stdio·HTTP 왕복을 검증하고 Scanner 호환성을 기록한다.
 - [ ] fixture의 `wire_tools_call`과 문서의 `wire_post`가 같은 tools/call 계수를 뜻함을 계약 테스트에서 확인한다. 프로토콜 메시지는 별도 계수다.
 - [ ] 위 계약을 실제·Fake 어댑터에 동일하게 적용할 C의 계약 테스트 인수 기준을 확정한다.
 
@@ -81,9 +96,10 @@ Scanner 결과는 아직 B ScanReport에 연결하지 않았다. 필수 분석�
 | B6-04 | SEND 실패 상태·시작 정리·recovery epoch | 요청 초안 |
 | B6-05 | 권위 조회·사람 상세·명령 접수/적용 결과 | 요청 초안 |
 | B6-06 | Registry 등록·지문 영속화·단일 writer | 요청 초안 |
-| AGT-01 | 역할·관리 경로·규칙/버전·Task/승인 결속 | 공동 선택 미결. A가 [선택지](archive/tasks/a-agt-role-decision.md)를 제안했다 |
-| AGT-02 | mode/규칙 버전 감사·migration·실패 | 요청 초안 |
-| AGT-03 | 대기/실행·worker 교체·퇴역 예산·실제 종료 | A 단위 시험 확인. C 독립 인수·합의 미결 |
+| AGT-01 | 역할·관리 경로·규칙/버전·Task/승인 결속 | 2026-10-15 결정으로 대체: AGT 제거, 자체 규칙 목록·규칙 버전 결속 |
+| AGT-02 | mode/규칙 버전 감사·migration·실패 | AGT 제거로 mode 감사는 불필요. 규칙 버전 감사만 남음(요청 초안) |
+| AGT-03 | 대기/실행·worker 교체·퇴역 예산·실제 종료 | AGT 제거로 폐기. 자체 규칙은 같은 프로세스의 동기 판정이라 worker가 없다 |
+| AGT-04 | AGT 제거에 따른 reason code(`AGT_DENY`·`AGT_ERROR`)와 domain 정리 | 요청 초안. `domain/*` 변경이라 3인 합의 필요 |
 | SCHEMA-01 | 전체 스키마 검증과 C launcher 연결 | 요청 초안. B 방향은 정규식 기능을 유지하고 전체 검증을 종료 가능한 프로세스에서 실행하는 것이다([연결안](archive/b-schema-validation-proposal.md)) |
 | ENV-01 | 통합 버전·lock·검사 도구·Scanner 조합 | main은 `pyproject.toml`·`uv.lock`을 쓴다(#4, #6). 합의 기록은 없다 |
 | SEQ-01 | Task ID 생애 계수·초기값·공백/커밋 배정 회수 금지 | 설계안 작성 |
