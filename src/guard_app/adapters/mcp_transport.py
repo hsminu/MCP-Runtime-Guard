@@ -306,6 +306,7 @@ class _SessionExitTracker:
 
 
 _STOP = object()
+_MAX_TOOL_JSON_DEPTH = 64
 _MAX_RESULT_CONTENT_BLOCKS = 256
 _MAX_RESULT_VALUE_NODES = 4096
 # The ResponseGate's default text/structured limit is 256 KiB. Leave room for
@@ -418,10 +419,14 @@ async def _check_result_budget(result: object, *, max_copy_bytes: int) -> None:
 class ToolListLimits:
     """tools/list collection bounds (contracts 2026-10-15 Scanner operating limits).
 
-    Defaults are the decided values and stay configurable. The 1 MiB page and
-    8 MiB per-listing byte limits (contracts 2026-10-13) are measured on the
-    JSON-RPC bytes before parsing; the MCP SDK parses inside its stream reader,
-    so they wait for C's stream ingress (GitHub #21 item 5) and are not here.
+    Defaults are the decided values and stay configurable. Their meaning follows
+    C's operating proposal v1 that the decision adopted: the Tool root object is
+    depth 1; the 10 s initialization bound covers connecting and ``initialize``
+    from the start of the wait; the 30 s collection bound runs from the start
+    of initialization to the last page. The 1 MiB page and 8 MiB per-listing
+    byte limits (contracts 2026-10-13) are measured on the JSON-RPC bytes
+    before parsing; the MCP SDK parses inside its stream reader, so they wait
+    for C's stream ingress (GitHub #21 item 5) and are not here.
     """
 
     max_tools: int = 256
@@ -434,6 +439,10 @@ class ToolListLimits:
         for count in (self.max_tools, self.max_pages, self.max_json_depth):
             if type(count) is not int or count < 1:
                 raise ValueError("positive tools/list count limits required")
+        if self.max_json_depth > _MAX_TOOL_JSON_DEPTH:
+            # FrozenJsonObject itself stops at this depth; a higher setting would
+            # be reported as malformed instead of too deep.
+            raise ValueError("tools/list JSON depth limit cannot exceed 64")
         for timeout in (self.page_timeout_s, self.collection_timeout_s):
             if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
                 raise ValueError("positive finite tools/list timeouts required")
@@ -480,27 +489,41 @@ def _json_depth_exceeds(value: object, limit: int) -> bool:
     return False
 
 
-async def collect_tool_definitions(session: _ToolSession, limits: ToolListLimits) -> ToolListing:
+async def collect_tool_definitions(
+    session: _ToolSession, limits: ToolListLimits, *, deadline: float | None = None
+) -> ToolListing:
     """Page through tools/list within ``limits`` and keep each Tool object whole.
 
     Each definition is the SDK's parse of the wire object with only the fields
     the server sent (``exclude_unset``), including unknown extra fields. Byte-
     exact originals are not available after SDK parsing. Exceeding any bound is
-    an incomplete listing: definitions are never truncated or guessed.
+    an incomplete listing: definitions are never truncated or guessed. A cursor
+    seen before or a tool name repeated within the listing also ends it as
+    incomplete (C operating proposal v1). ``deadline`` is the loop time at
+    which the whole collection ends; by default it is ``collection_timeout_s``
+    from now.
     """
 
+    if deadline is None:
+        deadline = asyncio.get_running_loop().time() + limits.collection_timeout_s
     tools: list[FrozenJsonObject] = []
+    names: set[str] = set()
+    cursors: set[str] = set()
     cursor: str | None = None
     try:
-        async with asyncio.timeout(limits.collection_timeout_s):
+        async with asyncio.timeout_at(deadline):
             for _page in range(limits.max_pages):
                 async with asyncio.timeout(limits.page_timeout_s):
                     page = await session.list_tools(cursor)
                 if not isinstance(page, ListToolsResult):
                     return _incomplete_listing("TOOLS_LIST_MALFORMED")
+                # Count every listed entry before any de-duplication.
                 if len(tools) + len(page.tools) > limits.max_tools:
                     return _incomplete_listing("TOOLS_LIST_TOO_MANY_TOOLS")
                 for tool in page.tools:
+                    if tool.name in names:
+                        return _incomplete_listing("TOOLS_LIST_DUPLICATE_NAME")
+                    names.add(tool.name)
                     definition = tool.model_dump(mode="json", by_alias=True, exclude_unset=True)
                     if _json_depth_exceeds(definition, limits.max_json_depth):
                         return _incomplete_listing("TOOL_DEFINITION_TOO_DEEP")
@@ -508,6 +531,9 @@ async def collect_tool_definitions(session: _ToolSession, limits: ToolListLimits
                 cursor = page.nextCursor
                 if cursor is None:
                     return ToolListing(complete=True, tools=tuple(tools), reason=None)
+                if cursor in cursors:
+                    return _incomplete_listing("TOOLS_LIST_CURSOR_REPEATED")
+                cursors.add(cursor)
                 # Let shutdown/control run between pages of a long listing.
                 await asyncio.sleep(0)
             return _incomplete_listing("TOOLS_LIST_TOO_MANY_PAGES")
@@ -632,14 +658,15 @@ class ServerWorker:
         self._owner.add_done_callback(self._consume_task_exception)
         start_budget = self._startup_timeout_s
         if self._tool_list_limits is not None:
-            # initialize keeps its own bound in _run and the listing has its own.
-            # The extra second lets an expired listing report itself as
-            # incomplete before this outer wait gives up on the start.
-            start_budget += self._tool_list_limits.collection_timeout_s + 1.0
+            # Both bounds run from the start in _run. The extra second lets an
+            # expired listing report itself as incomplete before this outer
+            # wait gives up on the start.
+            start_budget = max(start_budget, self._tool_list_limits.collection_timeout_s) + 1.0
         try:
             await asyncio.wait_for(self._ready.wait(), timeout=start_budget)
         except TimeoutError:
             self._state = _State.CLOSING
+            self._owner_cancel_expected = True
             self._owner.cancel()
             raise DispatchError("SessionStartTimeout") from None
         if self._state is not _State.READY:
@@ -691,6 +718,9 @@ class ServerWorker:
             self._reject_queued("WorkerClosed")
             self._queue.put_nowait(_STOP)
             if starting and self._owner is not None:
+                # Cancelling a start (initialize or tools/list) is this close's
+                # own action, not an owner failure.
+                self._owner_cancel_expected = True
                 self._owner.cancel()
 
     async def wait_closed(self) -> None:
@@ -733,39 +763,43 @@ class ServerWorker:
 
     async def _run(self) -> None:
         tracker: _SessionExitTracker | None = None
+        limits = self._tool_list_limits
+        started = asyncio.get_running_loop().time()
+        # With tools/list collection on, the initialization bound covers
+        # connecting and initialize from the start of the wait, and the
+        # collection bound runs from the same start (C proposal v1).
+        init_bound = None if limits is None else self._startup_timeout_s
         try:
             tracker = _SessionExitTracker(self._session_factory())
-            async with tracker as session:
-                if self._tool_list_limits is None:
+            async with asyncio.timeout(init_bound) as init_window:
+                async with tracker as session:
                     await session.initialize()
-                else:
-                    async with asyncio.timeout(self._startup_timeout_s):
-                        await session.initialize()
-                self._initialized = True
-                if self._tool_list_limits is not None:
-                    # Before READY, so no Guard call reaches a session whose
-                    # listing is still running. An incomplete listing is a
-                    # warning for Registry/Scanner and does not stop the worker.
-                    self._tool_listing = await collect_tool_definitions(
-                        session, self._tool_list_limits
-                    )
-                if self._state is _State.STARTING:
-                    self._state = _State.READY
-                self._ready.set()
-                while True:
-                    item = await self._queue.get()
-                    if item is _STOP:
-                        break
-                    assert isinstance(item, _Command)
-                    if item.future.done():
-                        continue
-                    self._active = item
-                    try:
-                        await self._execute(session, item)
-                    finally:
-                        if not item.future.done():
-                            item.future.set_exception(DispatchError("WorkerInterrupted"))
-                        self._active = None
+                    init_window.reschedule(None)
+                    self._initialized = True
+                    if limits is not None:
+                        # Before READY, so no Guard call reaches a session whose
+                        # listing is still running. An incomplete listing is a
+                        # warning for Registry/Scanner and does not stop the worker.
+                        self._tool_listing = await collect_tool_definitions(
+                            session, limits, deadline=started + limits.collection_timeout_s
+                        )
+                    if self._state is _State.STARTING:
+                        self._state = _State.READY
+                    self._ready.set()
+                    while True:
+                        item = await self._queue.get()
+                        if item is _STOP:
+                            break
+                        assert isinstance(item, _Command)
+                        if item.future.done():
+                            continue
+                        self._active = item
+                        try:
+                            await self._execute(session, item)
+                        finally:
+                            if not item.future.done():
+                                item.future.set_exception(DispatchError("WorkerInterrupted"))
+                            self._active = None
         finally:
             if tracker is not None:
                 self._session_entered = tracker.entered
