@@ -342,3 +342,92 @@ def test_codec_round_trip_keeps_unicode_and_rejects_nan() -> None:
     assert codec.decode(frame) == {"jsonrpc": "2.0", "method": "가", "params": {"v": 0.5}}
     with pytest.raises(ValueError, match="JSON compliant"):
         codec.encode({"v": float("nan")})
+
+
+class StuckChannel(FakeChannel):
+    """A peer that stopped reading: every send blocks."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+
+    async def send(self, frame: bytes) -> None:
+        await self.release.wait()
+
+
+@pytest.mark.asyncio
+async def test_blocked_send_is_bounded_by_the_request_deadline_and_closes() -> None:
+    channel = StuckChannel()
+    client = _client(channel, request_timeout_s=0.05)
+    with pytest.raises(JsonRpcError) as failed:
+        await asyncio.wait_for(client.request("x"), timeout=1)
+    assert failed.value.reason == "SEND_TIMEOUT"
+    assert client.closed_reason == "SEND_TIMEOUT"  # a partial frame may be on the wire
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_close_releases_a_request_stuck_in_send() -> None:
+    channel = StuckChannel()
+    client = _client(channel, request_timeout_s=10.0)
+    waiting = asyncio.create_task(client.request("x"))
+    await asyncio.sleep(0.05)
+    await asyncio.wait_for(client.close(), timeout=1)
+    with pytest.raises(JsonRpcError) as failed:
+        await asyncio.wait_for(waiting, timeout=1)
+    assert failed.value.reason == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_handler_may_close_the_client_without_deadlock() -> None:
+    channel = FakeChannel()
+    holder: list[JsonRpcClient] = []
+
+    async def handler(_method: str, _params: object) -> object:
+        await holder[0].close()
+        return None
+
+    client = _client(channel, on_server_request=handler)
+    holder.append(client)
+    channel.push({"jsonrpc": "2.0", "id": 1, "method": "stop"})
+    for _ in range(50):
+        if client.closed_reason is not None and not client._server_tasks:
+            break
+        await asyncio.sleep(0.01)
+    assert client.closed_reason == "CLOSED"
+    assert not client._server_tasks
+
+
+@pytest.mark.asyncio
+async def test_overflow_and_handler_raised_invalid_message_have_their_own_reasons() -> None:
+    from guard_app.adapters.jsonrpc_client import InvalidMessageError
+
+    channel = FakeChannel()
+    release = asyncio.Event()
+
+    async def slow(_method: str, _params: object) -> object:
+        await release.wait()
+        return None
+
+    client = _client(channel, max_pending=1, on_server_request=slow)
+    channel.push({"jsonrpc": "2.0", "id": 1, "method": "a"})
+    channel.push({"jsonrpc": "2.0", "id": 2, "method": "b"})
+    for _ in range(50):
+        if client.closed_reason is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert client.closed_reason == "TOO_MANY_SERVER_REQUESTS"
+    await client.close()
+
+    def raising(_method: str, _params: object) -> None:
+        raise InvalidMessageError()
+
+    second = FakeChannel()
+    noisy = _client(second, on_notification=raising)
+    second.push({"jsonrpc": "2.0", "method": "n"})
+    for _ in range(50):
+        if noisy.closed_reason is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert noisy.closed_reason == "HANDLER_FAILED"
+    await noisy.close()

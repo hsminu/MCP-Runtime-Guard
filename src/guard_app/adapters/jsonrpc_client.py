@@ -159,6 +159,7 @@ class JsonRpcClient:
         self._send_lock = asyncio.Lock()
         self._reader: asyncio.Task[None] | None = None
         self._closed_reason: str | None = None
+        self._closed = asyncio.Event()
         self._in_notification = False
 
     @property
@@ -176,11 +177,16 @@ class JsonRpcClient:
         if len(self._pending) >= self._max_pending:
             raise JsonRpcError("TOO_MANY_PENDING")
         request_id = next(self._ids)
-        future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+        loop = asyncio.get_running_loop()
+        # One deadline covers sending and waiting: a peer that stops reading
+        # cannot hold the request past it.
+        deadline = loop.time() + self._timeout
+        future: asyncio.Future[object] = loop.create_future()
         self._pending[request_id] = future
         try:
-            await self._send(self._message(id=request_id, method=method, params=params))
-            async with asyncio.timeout(self._timeout):
+            message = self._message(id=request_id, method=method, params=params)
+            await self._send(message, deadline=deadline)
+            async with asyncio.timeout_at(deadline):
                 return await asyncio.shield(future)
         except TimeoutError:
             raise JsonRpcError("REQUEST_TIMEOUT") from None
@@ -192,11 +198,18 @@ class JsonRpcClient:
 
     async def notify(self, method: str, params: object = None) -> None:
         self._require_open()
-        await self._send(self._message(method=method, params=params))
+        deadline = asyncio.get_running_loop().time() + self._timeout
+        await self._send(self._message(method=method, params=params), deadline=deadline)
 
     async def close(self) -> None:
         self._shutdown("CLOSED")
-        tasks = [task for task in (self._reader, *self._server_tasks) if task is not None]
+        # A server-request handler may close the client from its own task.
+        current = asyncio.current_task()
+        tasks = [
+            task
+            for task in (self._reader, *self._server_tasks)
+            if task is not None and task is not current
+        ]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -213,14 +226,44 @@ class JsonRpcClient:
         message.update({key: value for key, value in fields.items() if value is not None})
         return message
 
-    async def _send(self, message: dict[str, object]) -> None:
+    async def _send(self, message: dict[str, object], *, deadline: float) -> None:
+        """Send one frame by ``deadline``; close or a stuck peer never blocks forever.
+
+        A frame that may be partly written leaves the stream unusable, so a
+        send that times out or fails closes the whole client.
+        """
         frame = self._codec.encode(message)
         if len(frame) > self._max_frame_bytes:
             raise JsonRpcError("FRAME_TOO_LARGE")
-        async with self._send_lock:
+        loop = asyncio.get_running_loop()
+        try:
+            async with asyncio.timeout_at(deadline):
+                await self._send_lock.acquire()
+        except TimeoutError:
+            # Nothing of this frame was written yet.
+            raise JsonRpcError("REQUEST_TIMEOUT") from None
+        try:
             if self._closed_reason is not None:
                 raise JsonRpcError(self._closed_reason)
-            await self._channel.send(frame)
+            send = asyncio.ensure_future(self._channel.send(frame))
+            closing = asyncio.ensure_future(self._closed.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    {send, closing},
+                    timeout=max(0.0, deadline - loop.time()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                closing.cancel()
+            if send not in done:
+                send.cancel()
+                self._shutdown("SEND_TIMEOUT")
+                raise JsonRpcError(self._closed_reason or "SEND_TIMEOUT")
+            if send.exception() is not None:
+                self._shutdown("CHANNEL_FAILED")
+                raise JsonRpcError(self._closed_reason or "CHANNEL_FAILED")
+        finally:
+            self._send_lock.release()
 
     async def _read_loop(self) -> None:
         while self._closed_reason is None:
@@ -235,7 +278,8 @@ class JsonRpcClient:
                 message = self._codec.decode(frame)
                 self._dispatch(message)
             except InvalidMessageError:
-                self._shutdown("PROTOCOL_ERROR")
+                # A notification handler that raises this error is still a handler failure.
+                self._shutdown("HANDLER_FAILED" if self._in_notification else "PROTOCOL_ERROR")
                 return
 
     def _dispatch(self, message: dict[str, object]) -> None:
@@ -264,7 +308,8 @@ class JsonRpcClient:
         if not _valid_id(request_id):
             raise InvalidMessageError()
         if len(self._server_tasks) >= self._max_pending:
-            raise InvalidMessageError()
+            self._shutdown("TOO_MANY_SERVER_REQUESTS")
+            return
         task = asyncio.create_task(
             self._answer(cast("JsonId", request_id), method, params), name="jsonrpc-server-request"
         )
@@ -294,7 +339,7 @@ class JsonRpcClient:
             result = await self._on_server_request(method, params)
             reply = self._message(id=request_id)
             reply["result"] = result
-        await self._send(reply)
+        await self._send(reply, deadline=asyncio.get_running_loop().time() + self._timeout)
 
     def _server_task_done(self, task: asyncio.Task[None]) -> None:
         self._server_tasks.discard(task)
@@ -313,6 +358,7 @@ class JsonRpcClient:
     def _shutdown(self, reason: str) -> None:
         if self._closed_reason is None:
             self._closed_reason = reason
+        self._closed.set()
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(JsonRpcError(self._closed_reason))
