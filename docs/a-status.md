@@ -94,4 +94,5 @@
 - [ ] A44 시연 앱의 `tests.unit.test_guard` 대역 import 제거 — 막힘: B AGT 제거 PR과 같은 파일(`examples`)
 - [ ] A45 `guard-app` 콘솔 명령이 checkout 안에서도 실패(`__main__.py:40`이 패키지 밖 `examples`를 import) — 막힘: 제품 시작 구성(A24–A27)
 - [x] A46 HTTP transport TLS 문맥을 이벤트 루프 밖에서 생성(반복 연결 정지 해소) · [기록](archive/a/A46-tls-off-loop.md)
-- [ ] A46 첫 연결의 `httpcore` 최초 import 정지(이 PC 약 75ms)·C 측정값(210–280ms) 재현 확인 — 미착수
+- [x] A46 첫 연결의 `httpcore` 최초 import 정지를 모듈 import로 이동 · [기록](archive/a/A46-httpcore-preload.md)
+- [ ] A46 C 측정값(210–280ms) 환경에서 재측정 — 막힘: C 환경

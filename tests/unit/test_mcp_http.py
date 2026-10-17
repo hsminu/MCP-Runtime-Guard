@@ -233,6 +233,13 @@ async def test_client_and_stream_lifetime_settings_and_request_guards(monkeypatc
     assert seen[1].is_closed
 
 
+def test_httpcore_is_imported_with_the_transport_module():
+    # A46: httpx would otherwise import httpcore on the loop at the first connection.
+    import sys
+
+    assert mcp_transport.httpcore is sys.modules["httpcore"]
+
+
 @pytest.mark.asyncio
 async def test_tls_context_is_built_off_the_event_loop_and_still_verifies(monkeypatch):
     # A46: 인증서 묶음 로딩이 이벤트 루프를 막지 않고, 검증 설정은 그대로다.

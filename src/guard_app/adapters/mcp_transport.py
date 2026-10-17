@@ -22,6 +22,11 @@ from typing import Any, Protocol, TextIO, cast
 
 import anyio
 import httpx
+
+# A46: httpx imports httpcore lazily inside AsyncHTTPTransport(), which stalled
+# the backend loop on the first HTTP connection. Import it with this module
+# instead (httpx's own locked dependency), before any backend loop runs.
+import httpcore  # noqa: F401  # isort: skip
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
