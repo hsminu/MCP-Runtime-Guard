@@ -1,6 +1,6 @@
 # MCP Runtime Guard 기술 설계 및 개발 문서
 
-> 2026-10-13 반영: SQLite·영속 순번·감사 저장·시작 복구는 2026-10-12 사용자 결정에 따라 B6 소유, C는 독립 검증 담당이다. 이번 리뷰 수정·임시 앱 계약은 [리뷰 반영 기록](archive/tasks/a-review-fixes.md)을 따른다. 기존 설계 코드 블록은 참고이며 구현 증거가 아니다.
+> 이 문서는 현재 기준서다. 사용자 결정은 [공통 계약](contracts.md#사용자-결정)에 날짜와 함께 기록하고, 같은 변경에서 이 문서의 해당 절도 고친다. 코드 블록은 설계 의도를 보여주는 골격이며 구현 증거가 아니다.
 - 사용 형태: 개인 사용자 한 명이 자기 PC에서 쓰는 데스크톱 앱이다. 서버 등록, 폴더 등급, 정책, 승인을 모두 같은 사용자가 한다. 계정·역할 구분·원격 관리는 없다.
 - 대상 독자: 구현 담당 3인(A 애플리케이션, B 보안 코어, C 보안 기반·검증). 역할 상세는 0.5절
 - 기준 환경: Python 3.12, MCP Python SDK 1.x, PySide6, SQLite, pytest
@@ -82,9 +82,9 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 
 | 역할 | 책임 | 답해야 하는 질문 |
 | --- | --- | --- |
-| A 애플리케이션 | MCP 서버 연결과 호출 실행, AGT 연동, 모델 연동과 Runner, Qt↔asyncio 다리, GUI | 요청이 Guard를 거쳐 실제 서버에 닿고, 사람이 그 과정을 보고 통제할 수 있는가 |
-| B 보안 코어 | 도메인 모델과 포트 계약, 정책 판정, 등급 병합, 요청 해석(Catalog), GuardService, 승인 프로토콜, 응답 게이트 | 이 호출을 보내도 되는가, 보낸 뒤 Task 상태는 어떻게 바뀌는가 |
-| C 보안 기반·검증 | 저장소 독립 검증, 위험 연산 모듈(경로·URL·프로세스·ID·비밀값·로그), 서버 등록·검사, fixture와 수신 계수, 통합·공격·실험·결함 주입 테스트, CI | 판정이 실제로 집행되었음을 측정으로 증명할 수 있는가, 코드에 진단 대상 약점이 남지 않는가 |
+| A 애플리케이션 | MCP 서버 연결과 호출 실행, 접근 규칙 연결, Codex 세션 관리자(Runner), Qt↔asyncio 다리, GUI | 요청이 Guard를 거쳐 실제 서버에 닿고, 사람이 그 과정을 보고 통제할 수 있는가 |
+| B 보안 코어 | 도메인 모델과 포트 계약, 정책 판정, 접근 규칙 판정, 등급 병합, 요청 해석(Catalog), GuardService, 승인 프로토콜, 응답 게이트 | 이 호출을 보내도 되는가, 보낸 뒤 Task 상태는 어떻게 바뀌는가 |
+| C 보안 기반·검증 | 저장소 독립 검증, 위험 연산 모듈(경로·URL·프로세스·ID·비밀값·로그), 서버 등록·검사, 로컬 파일 MCP 서버, Codex L1 설정·모델 정보·L2 시험, fixture와 수신 계수, 통합·공격·실험·결함 주입 테스트, CI | 판정이 실제로 집행되었음을 측정으로 증명할 수 있는가, 코드에 진단 대상 약점이 남지 않는가 |
 
 분담 원칙:
 
@@ -107,8 +107,8 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 | `services/registry.py` | C | B | 등록 상태 전이, 검사 결과 판정 규칙 |
 | `adapters/cisco.py` | C | B | |
 | `adapters/mcp_transport.py` | A | B | |
-| `adapters/agt.py` | A(번역·연결) | B(합성 규칙) | 10.3절 분리 |
-| `adapters/model_client.py`, `services/runner.py` | A | B | |
+| `core` 접근 규칙 함수 | B | C | 10.3절. A는 Guard에 연결 |
+| `services/runner.py` (Codex 세션 관리자) | A | B, C | 10.4절. L1 설정·모델 정보·L2는 C |
 | `services/bridge.py`, `ui/*`, `__main__.py` | A | C | |
 | `fixtures/*`, `attack_fixtures/*` | C | A | |
 | `tests/contract`, `integration`, `attacks`, `faults`, `experiments` | C | 해당 모듈 주 담당 | |
@@ -146,7 +146,7 @@ flowchart TB
     end
 
     subgraph Core["백엔드 (asyncio 전용 스레드)"]
-        Runner[Codex 세션 관리자]
+        Runner[Runner<br/>Codex 세션 관리자]
         Guard[GuardService<br/>유일한 실행 입구]
         Catalog[Catalog<br/>출처·목적지·서버 해석]
         Policy[policy.evaluate<br/>순수 함수]
@@ -154,7 +154,7 @@ flowchart TB
         Appr[ApprovalService]
         Gate[ResponseGate]
         Store[(SQLite)]
-        AGT[AGT Adapter]
+        Access[접근 규칙<br/>core 순수 함수]
         Scan[Cisco Adapter]
         TW[Transport Worker<br/>세션 소유]
     end
@@ -174,7 +174,7 @@ flowchart TB
     ApprTab -- 제어 큐 --> Appr
     Runner -- ProposedCall --> Guard
     Guard --> Catalog
-    Guard --> AGT
+    Guard --> Access
     Guard --> Policy
     Guard --> Appr
     Guard --> TW
@@ -198,7 +198,7 @@ sequenceDiagram
     participant M as Codex/세션 관리자
     participant G as GuardService
     participant C as Catalog
-    participant A as AGT Adapter
+    participant A as 접근 규칙
     participant P as policy.evaluate
     participant S as Store
     participant T as TransportWorker
@@ -282,14 +282,12 @@ mcp-runtime-guard/
       approvals.py             〔B〕 승인 생성·결정·소비
       response_gate.py         〔B〕 결과 격리·분류·공개
       registry.py              〔C〕 서버 등록 상태 전이
-      runner.py                〔A〕 모델 ↔ Guard 변환
+      runner.py                〔A〕 Codex 세션 관리자: codex app-server ↔ Guard 변환
       bridge.py                〔A〕 Qt ↔ asyncio 명령·이벤트 다리
-    ports.py                   〔B〕 Transport, AccessChecker, Scanner, Store, ModelClient
+    ports.py                   〔B〕 Transport, AccessChecker, Scanner, Store
     adapters/
       mcp_transport.py         〔A〕 MCP SDK 연결, 세션 소유 worker
-      agt.py                   〔A 연결 / B 판정 합성〕 AGT 어댑터
       cisco.py                 〔C〕 Scanner 어댑터
-      model_client.py          〔A〕 모델 제공자 어댑터
     security/                  위험 연산의 유일한 구현 위치
       paths.py                 〔C〕 safe_path
       endpoints.py             〔C〕 normalize_endpoint
@@ -504,7 +502,7 @@ class PolicyDecision(Frozen):
 | `policy_version` | 정책·Profile·목적지·서버 설정 파일 내용이 바뀜 (정규화한 설정의 해시) | Task는 생성 시점 버전에 묶임. 불일치 시 Task 정지 |
 | `security_version` | Task의 high-watermark, Unclassified, status 중 보안 의미가 있는 값이 바뀜 | 승인 사본에 포함. 대기 중 상태가 바뀌면 승인 무효 |
 | `row_revision` | DB 행이 갱신될 때마다 | 낙관적 동시성 제어. 승인 PENDING→APPROVED처럼 보안과 무관한 변경이 승인을 스스로 무효화하지 않도록 `security_version`과 분리 |
-| `fingerprint` | 도구 이름·설명·inputSchema·annotations 중 하나라도 바뀜 | 등록 지문과 다르면 PENDING 복귀 (I10) |
+| `fingerprint` | 도구 정의(Tool 객체의 모든 필드) 중 하나라도 바뀜 | 등록 지문과 다르면 PENDING 복귀 (I10) |
 
 ---
 
@@ -664,7 +662,7 @@ def evaluate(inp: PolicyInput) -> PolicyDecision:
 
     reasons = tuple(v.reason for v in verdicts if v.decision == final)
     if access == final and final is Decision.DENY:
-        reasons += (Reason.AGT_ERROR if inp.access.error else Reason.AGT_DENY,)
+        reasons += (Reason.ACCESS_ERROR if inp.access.error else Reason.ACCESS_DENY,)   # 이름은 AGT-04에서 확정
     return PolicyDecision(decision=final, reasons=reasons, verdicts=tuple(verdicts),
                           policy_version=inp.policy_version,
                           security_version=inp.state.security_version)
@@ -687,8 +685,8 @@ def _preconditions(inp: PolicyInput) -> tuple[str, ...]:
 
 설계 포인트:
 
-- **합성은 `max()` 하나로 끝난다.** Decision을 `IntEnum`으로 정의해 DENY > ASK > ALLOW가 수치 순서와 일치하므로, 서버·목적지·AGT 결과를 섞어도 "가장 엄격한 것"이 자동으로 선택된다.
-- **AGT는 거부권만 가진다.** AGT의 허용은 ALLOW(0)로 매핑되어 다른 결과를 완화할 수 없다. AGT가 정책을 느슨하게 만드는 경로가 구조적으로 없다.
+- **합성은 `max()` 하나로 끝난다.** Decision을 `IntEnum`으로 정의해 DENY > ASK > ALLOW가 수치 순서와 일치하므로, 서버·목적지·접근 규칙 결과를 섞어도 "가장 엄격한 것"이 자동으로 선택된다.
+- **접근 규칙은 거부권만 가진다.** 접근 규칙의 허용은 ALLOW(0)로 매핑되어 다른 결과를 완화할 수 없다. 접근 규칙이 정책을 느슨하게 만드는 경로가 구조적으로 없다.
 - **모든 사유를 남긴다.** 서버와 목적지가 모두 DENY면 두 사유를 모두 기록해야 승인 화면과 감사에서 원인을 설명할 수 있다.
 - **판정 시점(phase)을 입력에 포함한다.** 새 호출은 RUNNING 상태에서만, 승인 후 재평가는 WAITING_APPROVAL 상태에서만 유효하다. 상태 검사를 한 함수 안에서 하면서도 두 경로가 서로의 상태를 잘못 통과시키지 않는다.
 - **함수는 순수하다.** 같은 `PolicyInput`이면 같은 결과다. 시간, 난수, I/O에 의존하지 않는다. 그래서 replay 실험(14.4절)이 의미를 가진다.
@@ -712,7 +710,7 @@ def effective_label(state: TaskState, mode: str) -> Label:
 | `last_read` | 맥락은 보되 누적하지 않음 | 주 대조군. 등급 세탁(기밀 조회 → 공개 조회 → 전송)에서 차이가 드러남 |
 | `none` | 맥락 없음 | 참고값. 데이터 기반 제한을 하지 않으므로 단독 비교 대상으로 쓰지 않음 |
 
-세 모드 모두 등록 상태, 지문, 목적지 화이트리스트, AGT, 서버 경계 판정은 그대로 동작한다. 모드 사이의 차이는 `effective_label` 계산 하나뿐이다.
+세 모드 모두 등록 상태, 지문, 목적지 화이트리스트, 접근 규칙, 서버 경계 판정은 그대로 동작한다. 모드 사이의 차이는 `effective_label` 계산 하나뿐이다.
 
 주 비교를 `last_read`로 두는 이유는 `none`과의 비교로는 누적 방식의 기여를 보일 수 없기 때문이다. `none`은 정의상 등급에 따른 제한을 하지 않으므로 제한 성공률 차이가 자명하게 생긴다. `last_read`와 비교하면 누적이 막아내는 사례(제한 성공률)와 누적 때문에 생기는 과잉 제한(과잉 제한률)을 같은 조건에서 함께 보여줄 수 있다.
 
@@ -748,7 +746,7 @@ def effective_label(state: TaskState, mode: str) -> Label:
 | `TASK_NOT_RUNNING` | DENY | 정지·결과불명·종료 상태 |
 | `POLICY_CHANGED` | DENY | Task 생성 이후 정책 변경 |
 | `STATE_MISSING` | DENY | 상태 로드 실패 |
-| `AGT_DENY` / `AGT_ERROR` | DENY | AGT 거절 / 오류·형식 불명 |
+| `ACCESS_DENY` / `ACCESS_ERROR` | DENY | 접근 규칙 거절 / 오류. 이름은 AGT-04에서 확정 |
 | `INTERNAL_ERROR` | DENY | fail-closed 래퍼가 잡은 예외 |
 
 dispatch 이후와 승인 단계의 코드는 판정이 아니라 처리 결과를 나타낸다.
@@ -858,8 +856,8 @@ SEND 도구의 응답(예: `{"status": "created", "id": "..."}`)은 우리 자�
 | 대상 | 이유 |
 | --- | --- |
 | `TaskState` (PUBLIC, unclassified=False) | 등급 승계 금지 |
-| 모델 대화 이력, 시스템 프롬프트 사본 | 이전 Task의 본문이 컨텍스트로 넘어오는 것 차단 |
-| 모델 제공자의 대화 핸들·캐시 키 | 제공자 측 대화 이어붙이기 차단 |
+| `codex app-server` 프로세스와 thread(`ephemeral`) | 이전 Task의 대화·맥락이 넘어오는 것 차단. Task마다 새로 띄움 |
+| Codex `sqlite_home` 폴더 | 이전 Task의 로그 DB 원문이 남지 않게 함. Task 종료 뒤 삭제(11.4절) |
 | MCP 세션의 Task 관련 상태 | 서버가 세션 메모리를 가진 경우 대비 (서버 측은 범위 밖, 클라이언트 측만 보장) |
 
 "Task 이름만 바꾸고 등급만 초기화"하는 API는 만들지 않는다. 초기화 경로가 하나(새 Task)여야 우회가 없다.
@@ -896,7 +894,7 @@ class GuardService:
             return Denied(None, (Reason.INTERNAL_ERROR,))
         state = await self._store.load_task(task_id)        # 없으면 STATE_MISSING
         req = self._catalog.resolve(state, call)            # 실패 시 ResolutionError → DENY
-        access = await self._agt.check_access(req, self._ctx(state))
+        access = await self._access.check_access(req, self._ctx(state))
         inp = PolicyInput(request=req, state=state,
                           effective_label=effective_label(state, self._mode),
                           registration_status=self._registry.status(req.tool.server_id),
@@ -1101,7 +1099,7 @@ COMMIT;
 - 승인·거절·취소·긴급 차단은 UI의 **제어 큐**로만 들어온다. 실행 큐와 분리되어 있어 실행이 막혀도 제어는 처리된다.
 - 이 기능들은 모델에 노출되는 도구 목록에 존재하지 않는다. MCP 서버나 도구 결과가 승인 함수를 호출할 경로가 없다.
 - 승인자는 이 PC의 사용자 본인 한 명이다. 다른 사람이 승인하는 구조는 없다. 인증 구현이 아니라 전제이며, 승인 레코드에 `approver_id`(로컬 사용자 식별값)를 남겨 사본과 대조한다.
-- AGT의 허용은 사람 승인을 대체하지 않는다. ASK는 반드시 사람을 거친다.
+- 접근 규칙의 허용은 사람 승인을 대체하지 않는다. ASK는 반드시 사람을 거친다.
 
 ---
 
@@ -1242,22 +1240,22 @@ servers:
       - { name: post_issue, kind: send, destination_arg: destination_id }
 ```
 
-도구 지문은 `tools/list` 결과에서 해당 도구의 `name`, `description`, `inputSchema`, `annotations`를 정규화 JSON으로 묶어 SHA-256을 취한 값이다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다.
+도구 지문은 `tools/list` 결과의 Tool 객체 전체(모든 필드)를 키 정렬·공백 없는 UTF-8 JSON으로 직렬화해 SHA-256을 취한 값이다. 배열 순서가 바뀌어도 변경으로 본다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다. Registry는 DB의 ACTIVE 상태만 믿지 않고 연결할 때마다 실제 지문을 등록 지문과 대조한다.
 
 등록 상태 전이:
 
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING: 신규 등록
-    PENDING --> PENDING: 검사 실패 · 미완료 · 높은 위험
-    PENDING --> ACTIVE: 필수 분석기 완료 + 사용자 확인
+    PENDING --> PENDING: 검사 진행 중
+    PENDING --> ACTIVE: 사용자 확인 (검사 경고는 표시만)
     ACTIVE --> PENDING: 도구 지문 변경 · 재검토 요청
     ACTIVE --> BLOCKED: 사용자 차단
     PENDING --> BLOCKED: 사용자 차단
     BLOCKED --> PENDING: 사용자 재검토 요청
 ```
 
-검사 통과만으로 ACTIVE가 되지 않는다. 사용자 확인이 항상 필요하다. 반대로 ACTIVE에서 지문이 바뀌면 사람 개입 없이 즉시 PENDING으로 내려간다. 올라가는 건 느리고, 내려가는 건 즉시다.
+검사 결과만으로 ACTIVE가 되거나 막히지 않는다. 사용자가 경고를 보고 확인해야 ACTIVE가 된다. 반대로 ACTIVE에서 지문이 바뀌면 사람 개입 없이 즉시 PENDING으로 내려간다. 올라가는 건 느리고, 내려가는 건 즉시다.
 
 ### 10.2 Cisco MCP Scanner 어댑터 〔C〕
 
@@ -1279,60 +1277,45 @@ class ScanReport(Frozen):
     scanner_version: str
 ```
 
-판정 규칙(`registry.py`, C):
+처리 규칙(`registry.py`, C). Scanner는 경고만 하고 등록을 막지 않는다:
 
 | 조건 | 결과 |
 | --- | --- |
-| 필수 분석기 중 하나라도 skipped·failed | PENDING 유지 (`SCAN_INCOMPLETE`) |
-| 결과 파싱 실패, 형식 불명 | PENDING 유지 (`SCAN_MALFORMED`) |
-| `max_severity`가 HIGH 이상 | PENDING 유지 (`SCAN_HIGH_RISK`), 사용자 검토 화면에 표시 |
-| 모두 완료, HIGH 미만 | 사용자 확인 대기 (ACTIVE 후보) |
+| 분석기 중 하나라도 skipped·failed, 키 누락, 시간 초과 | 미완료 경고(`SCAN_INCOMPLETE`)와 고정 오류 코드. 사용자 확인으로 계속 사용 가능 |
+| 결과 파싱 실패, 형식 불명 | 미완료 경고(`SCAN_MALFORMED`) |
+| finding 있음 | 도구별 위험도·출처(LLM/YARA)·모델 설명을 등록 화면과 승인 창에 경고로 표시 |
+| 모두 완료, finding 없음 | 경고 없음. 사용자 확인 대기 |
 | `fingerprint_set`이 현재 지문과 다름 | 검사 결과 무효, 재검사 |
 
-"위험 없음"과 "필수 검사가 모두 끝남"은 다른 값이다. `findings`가 비어 있어도 `analyzers_completed`가 필수 목록을 덮지 않으면 통과가 아니다.
+"위험 없음"과 "검사가 모두 끝남"은 다른 값이다. 실패·미완료를 findings 0개·완료·안전으로 바꾸지 않는다. 경고가 있는 도구의 ALLOW 호출을 ASK로 올리지 않는다. Guard의 경계·등급·승인 판정은 Scanner 결과와 무관하다. 위험도는 SDK 값을 그대로 쓰고, LLM 자체 평가(`overall_risk`)는 표시만 한다.
 
 구현 메모:
 
 - 입력은 도구 정의(metadata)만 보낸다. 문서 본문, 인증정보는 검사기로 가지 않는다.
-- Scanner가 제공하는 분석기 중 외부 API나 LLM을 호출하는 것이 있으면, 그 분석기는 선택으로 두고 오프라인 규칙 기반 분석기를 필수로 지정한다. 어떤 분석기가 오프라인인지는 고정 버전에서 확인한다.
+- 분석기는 LLM(`openai/gpt-6-luna`, `reasoning_effort=low`)과 YARA를 함께 돌린다. 같은 전체 정의를 각각 전달하고, 분석기별 완료·실패를 따로 기록한다. LLM API 키는 사용자가 준비해 Windows 자격증명 관리자에 저장한다.
+- 입력·수신·시간·동시성 상한은 [공통 계약](contracts.md#사용자-결정)의 Scanner 운영 상한을 따른다. 초과하면 자르지 않고 미완료 경고로 끝낸다.
 - 호출 방식(라이브러리 API 또는 CLI + JSON 출력)은 스파이크로 결정한다. CLI를 쓰면 실행은 `security.launcher`를 거친다.
 - 검사기는 별도 가상환경·프로세스로 분리할 수 있지만, 이는 의존성 충돌 회피이지 악성 서버 격리가 아니다.
 
-### 10.3 AGT 어댑터 〔A 연결 / B 판정 합성 / C 검증〕
+### 10.3 접근 규칙 〔B 판정 / A 연결 / C 검증〕
 
-2026-10-13 A18 반영: 현재 합성 앱은 동일 프로세스의 로컬 AGT core 5.0.0 판정과
-명시적 mock을 선택한다. [실제 연결 기록](archive/tasks/a-agt-integration.md)에 범위와 검증을 남겼다.
-로컬 ASK가 나왔다는 이유로 전체 인자를 원격 AGT에 먼저 보내지 않는다.
-원격 판정은 별도 수신 경계·최소 입력·승인을 확정하기 전까지 연결하지 않는다.
-현재 로컬 adapter의 입력은 등록 도구 식별자·종류의 해시뿐이며 제품 규칙·mode 영속 감사는 남아 있다.
-상세 목적·선정 기준·담당 제안·착수 전 결정 조건은 [AGT 결정표](archive/tasks/a-review-fixes.md#agt-경계와-남은-결정)를 따른다.
-Guard access_timeout_seconds가 총 상한이고 adapter I/O 상한은 그보다 짧게 파생한다.
-AGT 취소가 늦어도 Guard는 late 결과를 폐기하고 제어 큐를 진행시킨다.
-
+AGT는 쓰지 않는다(2026-10-15 결정). 접근 규칙은 같은 프로세스의 동기 순수 함수로 B가 `core`에 구현한다.
 
 ```python
 class AccessChecker(Protocol):                  # ports.py, B 소유
     async def check_access(self, req: ResolvedRequest, ctx: TrustedContext) -> AccessResult: ...
 ```
 
-역할 분리:
+- **범위:** (서버, 도구) 정확 일치 허용·거부 목록, 기본 deny. 규칙은 신뢰 설정 파일에서만 읽는다.
+- **버전 결속:** 규칙이 바뀌면 `policy_version`이 올라가고 대기 중 승인은 무효가 된다(6.6절).
+- **범위 밖:** 인자 내용 검사, 호출 횟수 제한, 조건식, 원격 정책, 서명 규칙.
+- **합성:** Guard는 접근 규칙 결과를 거부권으로만 쓴다(5.2절). 거절·오류는 DENY다.
 
 | 담당 | 작업 |
 | --- | --- |
-| A | AGT 설치·버전 호환 확인, 호출 전 지점에 hook을 거는 방법 확인, 우리 `ResolvedRequest`를 AGT 입력으로 번역, AGT 출력을 `AccessResult`로 번역 |
-| B | `AccessChecker` 계약, `AccessResult` → Decision 매핑(허용=ALLOW, 거절·오류=DENY), 시간초과 정책, 합성 규칙 단위 테스트 |
-| C | AGT 거절·오류·시간초과·형식 불명 시 `host_dispatch == 0` 확인 |
-
-스파이크에서 확인할 질문:
-
-1. AGT가 도구 호출 전 단계에서 동기적으로 거절을 반환할 수 있는가, 아니면 자체적으로 호출을 감싸 실행하는 구조인가
-2. 후자라면, AGT가 실행 권한을 가지지 않도록 "판정만 받고 실행은 Guard가 하는" 형태로 쓸 수 있는가
-3. AGT의 승인·감사 기능을 쓸 경우 우리 승인 프로토콜(8장)과 이중 승인이 되지 않는가
-4. AGT의 MCP 관련 추가 의존성이 우리가 고정한 MCP SDK 버전과 충돌하지 않는가
-
-2번이 불가능하면 AGT를 실행 경로에 두지 않고 `check_access`만 쓰거나, 모의 어댑터로 두고 문서·UI에 "모의 연동"으로 표시한다. 어떤 경우에도 AGT의 허용이 Guard의 판정을 완화하지 못한다는 계약(5.2절)은 바뀌지 않는다.
-
-모의 어댑터는 규칙 파일 기반으로 동작하고, UI의 서버·검사 탭과 감사 레코드에 `agt_mode: mock`을 표시한다.
+| B | 규칙 판정 함수, `AccessResult` → Decision 매핑, reason code 정리(AGT-04), 단위 테스트 |
+| A | `AccessChecker` 포트로 Guard에 연결, 규칙 설정 로딩 연결 |
+| C | 규칙 거절·오류 시 `host_dispatch == 0` 확인 |
 
 ### 10.4 모델 연결: Codex 하네스와 세션 관리자 〔A 세션 관리자 / C L1·L2〕
 
@@ -1502,7 +1485,7 @@ Codex 로그 DB는 이 규칙 밖이다. Codex가 도구 결과 원문을 자체
 ### 12.1 스레드 모델
 
 2026-10-13 구현 보정: cancel/emergency_halt는 인증 후 Task lock 밖에서 stop 요청을 먼저
-기록한다. AGT 대기는 stop과 함께 기다리며, 예약 전과 실제 전송 직전에 다시 검사한다.
+기록한다. stop 요청은 예약 전과 실제 전송 직전에 다시 검사한다.
 예약 이후 실패는 기존 READ 미공개 / SEND 결과 불명 의미를 유지한다.
 UI 버튼 클릭은 요청됨이며 Store 조회 확인 전까지 적용됨으로 표시하지 않는다.
 
@@ -1707,10 +1690,10 @@ def new_id(prefix: str) -> str:
 
 # security/secrets.py
 def load_secret(name: str) -> str:
-    v = os.environ.get(name)
+    v = keyring.get_password(APP_SERVICE, name) # Windows 자격증명 관리자(DPAPI)
     if not v:
         raise SecretMissing(name)               # 기본값 없음. 없으면 기능 비활성
-    return v
+    return v                                    # .env는 개발·실험용이며 제품 경로는 읽지 않음
 
 # security/redact.py
 class RedactFilter(logging.Filter):
@@ -1846,7 +1829,7 @@ rules:
 ruff check  →  mypy --strict (domain, core, security)  →  lint-imports
    →  pytest tests/unit tests/contract  →  pytest tests/integration
    →  bandit -r src -ll  →  semgrep --config tools/ci/semgrep.yml --error
-   →  pip-audit -r requirements.lock
+   →  pip-audit (uv.lock 기준)
 ```
 
 - `attack_fixtures/`는 스캔 대상에서 제외하고 별도 디렉터리로 관리한다. 의도적으로 취약한 코드가 제품 코드의 약점 수에 섞이지 않게 한다.
@@ -1968,12 +1951,12 @@ app = WireCounter(mcp.streamable_http_app())
 | T14 | 수신 후 응답 유실 | UNKNOWN_OUTCOME, Task 잠금 | I8 | 공격 | C |
 | T15 | 결과 불명 후 새 호출 ID로 재요청 | DENY | I8 | 공격 | C |
 | T16 | 307·308 redirect, 재연결 | 미승인 목적지 전송 0 | I2, I8 | 공격 | C |
-| T17 | 검사기 skip·오류·불완전 | PENDING 유지 | I10 | 계약 | C |
+| T17 | 검사기 skip·오류·불완전 | 미완료 경고, 완료·안전으로 바뀌지 않음 | — | 계약 | C |
 | T18 | 승인 화면의 HTML·링크 | 일반 텍스트, 외부 요청 0 | — | UI | A |
 | T19 | stderr·로그·progress에 기밀 표지 | 공개 전 유출 0 | I5, I9 | 공격 | C |
 | T20 | 승인 대기 중 취소·긴급 차단 | 제어 큐 처리, 교착 없음 | — | 통합 | C |
 | T21 | 새 Task에 이전 대화·캐시 유입 | 분리 확인 | I4 | 통합 | C |
-| T22 | 승인되지 않은 모델 환경 | 민감 시나리오 시작 거부 | — | 통합 | C |
+| T22 | Codex 자체 도구 확인 실패(L2) | Task 시작 거부 | — | 통합 | C |
 | T23 | 3개 모드 replay | 모드 간 차이가 `effective_label` 계산에서만 발생 | — | 실험 | C |
 | T24 | INTERNAL 조회 후 무관한 공개 질의 | 과잉 제한으로 기록 | — | 실험 | C |
 | T25 | 조회 실패(자료 미반환) | 등급 변화 없음 | I4 | 단위 | B |
@@ -2037,7 +2020,7 @@ async def run_case(case, mode: str) -> list[CallResult]:
     for c in case.calls:
         t0 = time.perf_counter_ns()
         res = await guard.submit(task.task_id, ProposedCall(**c))
-        decide_ns = guard.last_decision_ns           # resolve + AGT + evaluate 구간만
+        decide_ns = guard.last_decision_ns           # resolve + 접근 규칙 + evaluate 구간만
         if isinstance(res, Pending):
             res = await auto_approve(guard, res)     # 실험에서는 자동 승인으로 흐름 유지
         out.append(CallResult(case.case_id, mode, c, res, decide_ns))
@@ -2084,7 +2067,7 @@ def p50_p95(ns: list[int]) -> tuple[float, float]:
 | --- | --- | --- | --- | --- |
 | ADR-1 | 작업 단위 high-watermark로 등급 추적 | 문장·토큰·객체 단위 출처 추적 | 모델 내부에서 정보가 섞이는 방식을 관찰할 수 없으므로, 관찰 가능한 단위(Task)에서 보수적으로 추적 | 무관한 후속 호출도 제한됨 → 과잉 제한률로 측정·공개 |
 | ADR-2 | 서버 경계와 목적지 경계를 각각 평가 | 최종 목적지만 평가 | 외부 MCP가 중간 수신자로서 본문을 받는 순간이 이미 반출 | 등록 정보가 두 배로 필요 |
-| ADR-3 | AGT는 거부권만 가짐 | AGT와 자체 정책의 다수결·우선순위 | 외부 제품 설정 실수로 정책이 느슨해지는 경로 제거 | AGT 고유 기능 일부를 활용하지 못할 수 있음 |
+| ADR-3 | 접근 규칙은 거부권만 가짐. AGT는 제거하고 (서버, 도구) 정확 일치 목록을 자체 구현 | AGT 연동, 접근 규칙과 정책의 다수결·우선순위 | 외부 제품 설정 실수로 정책이 느슨해지는 경로 제거, 의존성 축소 | 인자 내용 검사·횟수 제한·조건식은 없음 |
 | ADR-4 | 재시작 시 모든 승인 무효 | 승인 사본을 DB에 저장해 복원 | 원문을 디스크에 남기지 않음(I9), 오래된 승인의 재사용 차단 | 재시작 시 사용자가 다시 승인해야 함 |
 | ADR-5 | 서버별 세션 소유 worker | 공유 세션 객체 | 비동기 컨텍스트의 진입·종료 task 일치, 동시 호출 경쟁 제거 | 서버별 처리량이 직렬화됨 |
 | ADR-6 | 기밀성 레이블만 추적, 무결성 레이블 없음 | 신뢰도 레이블로 인젝션 결과 격리 | 범위 축소. 인젝션 영향은 경계 통제로 흡수 | 허용된 작업의 오용(PUBLIC 자료의 지시로 사용자 본인 대상에 쓰기)은 막지 못함 |
@@ -2131,8 +2114,8 @@ where = ["src"]
 
 1. 후보 버전으로 새 가상환경을 만든다.
 2. MCP SDK로 stdio 조회 1회, Streamable HTTP 전송 1회를 실제로 왕복한다.
-3. AGT·Cisco Scanner를 설치해 MCP SDK와의 의존성 충돌을 확인한다. 충돌하면 Scanner는 별도 가상환경에서 실행한다.
-4. 확인한 조합만 `requirements.lock`에 기록한다(`pip freeze` 또는 `uv pip compile`).
+3. Cisco Scanner를 설치해 MCP SDK와의 의존성 충돌을 확인한다. 충돌하면 Scanner는 별도 가상환경에서 실행한다.
+4. 확인한 조합만 `uv.lock`에 기록한다.
 5. 새 가상환경에서 lock으로 설치해 2번을 다시 통과시킨다.
 
 같은 설정 안에서 서로 다른 MCP 프로토콜 개정판을 쓰는 SDK 버전을 섞지 않는다. 서버(fixture)와 클라이언트(Guard)가 같은 SDK 버전을 쓰도록 한 가상환경에서 관리한다.
@@ -2150,4 +2133,4 @@ where = ["src"]
 | I7 신뢰 출처 분리 | 타입(`extra="forbid"`) | T06, T32 | — |
 | I8 재전송 금지 | — | — | T14~T16, T36 |
 | I9 로그 비노출 | Bandit, Semgrep | S04 | T19 |
-| I10 정의 변경 감지 | — | T17 | T10 |
+| I10 정의 변경 감지 | — | — | T10 |
