@@ -142,7 +142,7 @@ flowchart TB
     end
 
     subgraph Core["백엔드 (asyncio 전용 스레드)"]
-        Runner[Agent Runner]
+        Runner[Codex 세션 관리자]
         Guard[GuardService<br/>유일한 실행 입구]
         Catalog[Catalog<br/>출처·목적지·서버 해석]
         Policy[policy.evaluate<br/>순수 함수]
@@ -160,7 +160,13 @@ flowchart TB
         Remote[Remote Send MCP<br/>Streamable HTTP]
     end
 
+    Codex[codex app-server<br/>고정 버전, Task마다 실행]
+    Model[(모델 제공자)]
+
     RunTab -- 명령 큐 --> Runner
+    Runner -- stdio JSON-RPC<br/>turn/start·interrupt --> Codex
+    Codex -- item/tool/call --> Runner
+    Codex --> Model
     ApprTab -- 제어 큐 --> Appr
     Runner -- ProposedCall --> Guard
     Guard --> Catalog
@@ -179,11 +185,13 @@ flowchart TB
     Scan --> Store
 ```
 
+모델 호출과 대화 루프는 Codex(`codex app-server`)가 맡고, 우리는 그 앞에 세션 관리자를 둔다. 세션 관리자는 Codex에 Guard 도구만 등록하고, 모델의 도구 호출(`item/tool/call`)을 `ProposedCall`로 바꿔 Guard에 넘긴다. Codex 자체 도구는 끄고 시작할 때마다 시험으로 확인한다(10.4절). 사용자 화면은 우리 GUI 하나다. Codex TUI는 Guard 도구 등록과 감시를 건너뛰는 별도 클라이언트라서 쓰지 않는다.
+
 ### 1.2 호출 수명주기
 
 ```mermaid
 sequenceDiagram
-    participant M as Model/Runner
+    participant M as Codex/세션 관리자
     participant G as GuardService
     participant C as Catalog
     participant A as AGT Adapter
@@ -1322,18 +1330,29 @@ class AccessChecker(Protocol):                  # ports.py, B 소유
 
 모의 어댑터는 규칙 파일 기반으로 동작하고, UI의 서버·검사 탭과 감사 레코드에 `agt_mode: mock`을 표시한다.
 
-### 10.4 모델 클라이언트와 Runner 〔A〕
+### 10.4 모델 연결: Codex 하네스와 세션 관리자 〔A 세션 관리자 / C L1·L2〕
 
-```python
-class ModelClient(Protocol):
-    async def step(self, conversation: Conversation, tools: list[ToolView]) -> ModelTurn: ...
+모델 호출, 대화 이어가기, 맥락 관리는 Codex가 한다. 우리가 만드는 것은 Codex와 통신하는 세션 관리자다. 세부 규칙은 [공통 계약](contracts.md#사용자-결정)의 2026-10-15 하네스 결정을 따른다.
+
+```text
+GUI ─ 명령 큐 ─▶ 세션 관리자 ─ stdio JSON-RPC ─▶ codex app-server ─▶ 모델 제공자
+                    │  ▲                              │
+                    │  └──── item/tool/call ──────────┘
+                    ▼
+               Guard.submit
 ```
 
-- 모델에게 주는 도구 목록은 ACTIVE 서버의 등록 도구만, 네임스페이스 이름(`server__tool`)과 등록 시점 스키마로 만든다. 서버가 보낸 원본 설명문 대신 관리자가 검토한 설명을 쓰는 옵션을 둔다.
-- 승인·취소·정책 조회 같은 제어 기능은 도구 목록에 없다.
-- 모델 출력의 tool call은 `ProposedCall`로만 변환한다. 모델이 출력한 `task_id`, `label` 같은 필드는 버려진다(extra="forbid"로 실패).
-- Runner는 Guard의 `Denied`·`Pending` 결과를 모델에 짧은 고정 문구로 돌려준다(예: "이 요청은 정책에 의해 차단되었습니다: INTERNAL_TO_EXTERNAL"). 판정 내부 정보(경계 ID, 버전)는 모델에 주지 않는다.
-- 모델 API로 나가는 프롬프트에는 이미 공개 승인된 결과만 들어간다. 그러나 모델 제공자 자체가 외부 수신자라는 문제는 이 Guard의 집행 범위 밖이며, 시연은 합성 자료와 승인된 모델 환경에서만 한다.
+- **실행:** Task마다 고정 버전 `codex app-server`를 새로 띄운다. CODEX_HOME은 앱 전용 폴더, config는 Task마다 새로 쓴다. `initialize`(experimentalApi) → `thread/start`(Guard 도구를 `dynamicTools`로 등록, `environments=[]`, `ephemeral`, `approvalsReviewer="user"`, `baseInstructions`) → `turn/start` 순서다.
+- **도구 목록:** ACTIVE 서버의 등록 도구만, `서버이름.도구이름` namespace와 등록 시점 스키마로 만든다. 서버가 보낸 원본 설명문 대신 관리자가 검토한 설명을 쓰는 옵션을 둔다. `deferLoading`은 쓰지 않는다. 승인·취소·정책 조회 같은 제어 기능은 도구 목록에 없다.
+- **호출 변환:** `item/tool/call`은 `ProposedCall`로만 변환한다. 모델이 출력한 `task_id`, `label` 같은 필드는 버려진다(extra="forbid"로 실패). Task 식별자는 세션 관리자가 thread와 묶어 둔 값을 쓴다(I7). 호출은 받은 순서대로 하나씩 처리한다.
+- **결과 반환:** `Released`만 `success:true`로 돌려준다. `Denied`·거절·만료는 `success:false`와 짧은 고정 문구다(예: "이 요청은 정책에 의해 차단되었습니다: INTERNAL_TO_EXTERNAL"). 판정 내부 정보(경계 ID, 버전)는 모델에 주지 않는다.
+- **Codex 자체 도구 차단:** L1 설정으로 끄고, L2 시작 시험(가짜 모델 서버로 도구 목록 대조·금지 도구 강제 호출 거부)으로 확인하며, 실패하면 시작을 거부한다(T22). 실행 중에는 L3가 허용 항목 밖의 이벤트·승인 요청을 거절하고 `turn/interrupt` 뒤 Task를 정지한다.
+- **대기 상한:** Codex는 도구 호출 대기 상한이 없다. 세션 관리자가 호출별 감시 상한(ASK 5분+MCP 실행 상한+여유)을 넘기면 interrupt하고 Task를 정지한다. SEND 전송 뒤면 결과 불명이다(I8).
+- **로그인:** ChatGPT 기기 코드 또는 API 키. 자격증명은 Windows 자격증명 관리자(keyring)에 둔다. Scanner는 별도 API 키를 쓴다.
+- **원문:** Codex 로그 DB는 도구 결과 원문을 저장하고 끌 수 없다. `sqlite_home`을 Task 전용 폴더로 두고 Codex 종료 뒤·앱 시작 때 지운다(11.4절).
+- **화면:** 사용자 화면은 GUI 하나다. Codex TUI(`codex --remote`)는 app-server에 직접 붙는 별도 클라이언트라서 Guard 도구 등록·L3 감시를 건너뛰고 설정을 바꿀 수 있으므로 쓰지 않는다. 터미널 화면이 필요하면 세션 관리자 위에 붙인다.
+- 모델 제공자로 나가는 프롬프트에는 이미 공개 승인된 결과만 들어간다. 그러나 모델 제공자 자체가 외부 수신자라는 문제는 이 Guard의 집행 범위 밖이며, 시연은 합성 자료와 승인된 모델 환경에서만 한다.
+- 한계는 [보안약점 대장](weakness_register.md#발견-항목과-조치) C-CODEX-01–05에 둔다. codex.exe는 해시 고정 신뢰 구성요소이며 OS 격리는 하지 않는다.
 
 ---
 
@@ -1469,6 +1488,8 @@ async def commit_send_outcome(self, req):
 ### 11.4 기록하지 않는 것
 
 문서 본문, 도구 인자 원문, 도구 결과 원문, 인증 헤더·토큰, 승인 사본 원문. 짧은 민감 값의 해시도 사전 대입으로 역산될 수 있으므로, 해시는 인자 전체처럼 엔트로피가 충분한 대상에만 쓴다.
+
+Codex 로그 DB는 이 규칙 밖이다. Codex가 도구 결과 원문을 자체 로그 DB에 쓰고 끌 수 없으므로, 이 DB에는 "Task 종료 뒤 원문 비잔존"을 적용한다. `sqlite_home`을 사용자 전용 권한의 Task 전용 폴더로 두고 Codex 종료 뒤와 앱 시작 때 지운다. Task 중 평문 존재와 삭제 파일 복구 가능성은 남는 한계다(C-CODEX-01).
 
 ---
 
@@ -2070,6 +2091,8 @@ def p50_p95(ns: list[int]) -> tuple[float, float]:
 | ADR-11 | 예외 처리를 `DISPATCHING` 예약 전후로 나눔 | 전 구간을 하나의 fail-closed 래퍼로 감쌈 | 전송 이후 예외를 DENY로 보고하면 실제로 나간 요청이 "차단"으로 기록됨 | 래퍼가 둘이 되고, 넓은 예외 허용 지점이 세 곳으로 늘어남 |
 | ADR-12 | 비교 대조군을 `last_read`·`none` 두 단계로 둠 | 누적만 끈 `none` 하나 | `none`은 등급에 따른 제한을 하지 않아 비교가 자명해짐. `last_read`는 맥락은 보되 누적하지 않는 공정한 대조군 | TaskState에 실험 전용 필드 1개 추가 |
 | ADR-13 | READ 도구를 자원형·도구 단위형으로 구분 | 모든 READ에 자원 식별자 요구 | 검색·조회 API는 대조할 자원 경로가 없음. 도구 단위 규칙이 없으면 여전히 Unclassified | 도구 단위형은 결과 내용과 무관하게 한 등급으로 고정됨 |
+| ADR-14 | 모델 루프는 Codex app-server에 맡기고 Guard 도구만 등록 | 모델 API를 직접 부르는 자체 대화 루프 | 대화·맥락 관리를 만들지 않음, ChatGPT 로그인 사용 가능 | Codex 자체 도구 차단(L1–L3)과 버전 고정이 필요, Codex 로그 DB 원문 |
+| ADR-15 | 사용자 화면은 GUI 하나, Codex TUI 미사용 | `codex --remote`로 TUI를 app-server에 연결 | TUI는 세션 관리자를 건너뛰어 Guard 도구 등록·L3 감시가 빠지고 설정을 바꿀 수 있음 | 터미널 화면이 필요하면 세션 관리자 위에 따로 만듦 |
 
 ---
 
