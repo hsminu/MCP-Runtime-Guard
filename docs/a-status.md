@@ -55,7 +55,8 @@
 - [ ] A53 B의 AGT 코드 제거 중 A 소유 파일 리뷰 — 막힘: B PR
 - [ ] A19·A20 Codex 세션 관리자(app-server 하네스, 10.4절) — 막힘: `ModelClient` 포트·NOTIFY-01·정지 입구(#20), 고정 버전·launcher·L2 입구(#21)
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
-- [ ] A50 Codex 프레이밍·메서드 연결 — 막힘: 고정 버전([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21) 1번)
+- [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
+- [ ] A50 Codex 프레이밍·메서드 연결 — 막힘: 고정 버전([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21) 1번, 형식은 0.159.0으로만 확인)
 - [x] A21·A22 Runner expected_epoch·승인 resume 연결
 - [ ] A21·A22 실제 모델 세션 격리(T21) — 막힘: A19·A20
 - [x] A23 B 리뷰: AGT 지연 중 긴급 차단 수정·회귀 · [기록](archive/tasks/a-b-review.md)
@@ -80,6 +81,7 @@
 - [ ] A49 등록·출처 규칙 연결 — 막힘: C Registry·safe_path·설정 로딩 담당(#19)
 - [ ] A52 Codex 로그인 화면(ChatGPT 기기 코드·API 키) — 막힘: 고정 버전·자격증명 저장 담당(#21 1·8번)
 - [ ] A54 등록 화면 서버 ID 즉시 안내(`valid_server_id`) — 막힘: 사용 방식([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20) 6번)
+- [ ] A56 A가 정한 입력 규칙 확인(키 앞뒤 공백 제거·4자 이하 키는 끝자리 숨김·폴더 규칙 최소 1개) — 막힘: 사용자 확인(contracts에 없음)
 
 ## 통합·패키징
 
@@ -91,4 +93,5 @@
 - [ ] A43 Ruff·포맷·mypy 기준선 축소(포맷 제외 22개, Ruff 면제, mypy 완화) · [통합 기록](archive/integration-a-b.md)
 - [ ] A44 시연 앱의 `tests.unit.test_guard` 대역 import 제거 — 막힘: B AGT 제거 PR과 같은 파일(`examples`)
 - [ ] A45 `guard-app` 콘솔 명령이 checkout 안에서도 실패(`__main__.py:40`이 패키지 밖 `examples`를 import) — 막힘: 제품 시작 구성(A24–A27)
-- [x] A46 HTTP transport TLS 문맥을 이벤트 루프 밖에서 생성 · [기록](archive/a/A46-tls-off-loop.md)
+- [x] A46 HTTP transport TLS 문맥을 이벤트 루프 밖에서 생성(반복 연결 정지 해소) · [기록](archive/a/A46-tls-off-loop.md)
+- [ ] A46 첫 연결의 `httpcore` 최초 import 정지(이 PC 약 75ms)·C 측정값(210–280ms) 재현 확인 — 미착수
