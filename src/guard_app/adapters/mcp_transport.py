@@ -25,12 +25,14 @@ import httpx
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.exceptions import McpError
 from mcp.shared.session import ProgressFnT
 from mcp.types import (
     CallToolRequest,
     CallToolRequestParams,
     CallToolResult,
     ClientRequest,
+    ListToolsResult,
     RequestParams,
 )
 from pydantic import AnyUrl, BaseModel
@@ -45,6 +47,8 @@ class _ToolSession(Protocol):
     async def initialize(self) -> object: ...
 
     async def call_tool(self, name: str, arguments: dict[str, object]) -> CallToolResult: ...
+
+    async def list_tools(self, cursor: str | None = None) -> ListToolsResult: ...
 
 
 class _UnvalidatedClientSession(ClientSession):
@@ -405,6 +409,112 @@ async def _check_result_budget(result: object, *, max_copy_bytes: int) -> None:
             pending.extend((child, depth + 1) for child in children)
 
 
+@dataclass(frozen=True, slots=True)
+class ToolListLimits:
+    """tools/list collection bounds (contracts 2026-10-15 Scanner operating limits).
+
+    Defaults are the decided values and stay configurable. The 1 MiB page and
+    8 MiB per-listing byte limits (contracts 2026-10-13) are measured on the
+    JSON-RPC bytes before parsing; the MCP SDK parses inside its stream reader,
+    so they wait for C's stream ingress (GitHub #21 item 5) and are not here.
+    """
+
+    max_tools: int = 256
+    max_pages: int = 32
+    max_json_depth: int = 64
+    page_timeout_s: float = 10.0
+    collection_timeout_s: float = 30.0
+
+    def __post_init__(self) -> None:
+        for count in (self.max_tools, self.max_pages, self.max_json_depth):
+            if type(count) is not int or count < 1:
+                raise ValueError("positive tools/list count limits required")
+        for timeout in (self.page_timeout_s, self.collection_timeout_s):
+            if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+                raise ValueError("positive finite tools/list timeouts required")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ToolListing:
+    """One server's collected tool definitions, or why the listing is incomplete.
+
+    ``tools`` holds every definition only when ``complete``. An incomplete
+    listing keeps no partial definitions and is never "0 tools, done, safe";
+    ``reason`` is a fixed code without server text. Definitions are untrusted
+    server data for C's Registry/Scanner, not Guard policy input.
+    """
+
+    complete: bool
+    tools: tuple[FrozenJsonObject, ...]
+    reason: str | None
+
+    def __repr__(self) -> str:
+        count = len(self.tools)
+        return f"ToolListing(complete={self.complete}, tools={count}, reason={self.reason})"
+
+
+def _incomplete_listing(reason: str) -> ToolListing:
+    return ToolListing(complete=False, tools=(), reason=reason)
+
+
+def _json_depth_exceeds(value: object, limit: int) -> bool:
+    """Whether container nesting is deeper than ``limit`` (the Tool object is 1)."""
+
+    pending: list[tuple[object, int]] = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if type(item) is dict:
+            children: list[object] = list(cast("dict[str, object]", item).values())
+        elif type(item) is list:
+            children = cast("list[object]", item)
+        else:
+            continue
+        if depth > limit:
+            return True
+        pending.extend((child, depth + 1) for child in children)
+    return False
+
+
+async def collect_tool_definitions(session: _ToolSession, limits: ToolListLimits) -> ToolListing:
+    """Page through tools/list within ``limits`` and keep each Tool object whole.
+
+    Each definition is the SDK's parse of the wire object with only the fields
+    the server sent (``exclude_unset``), including unknown extra fields. Byte-
+    exact originals are not available after SDK parsing. Exceeding any bound is
+    an incomplete listing: definitions are never truncated or guessed.
+    """
+
+    tools: list[FrozenJsonObject] = []
+    cursor: str | None = None
+    try:
+        async with asyncio.timeout(limits.collection_timeout_s):
+            for _page in range(limits.max_pages):
+                async with asyncio.timeout(limits.page_timeout_s):
+                    page = await session.list_tools(cursor)
+                if not isinstance(page, ListToolsResult):
+                    return _incomplete_listing("TOOLS_LIST_MALFORMED")
+                if len(tools) + len(page.tools) > limits.max_tools:
+                    return _incomplete_listing("TOOLS_LIST_TOO_MANY_TOOLS")
+                for tool in page.tools:
+                    definition = tool.model_dump(mode="json", by_alias=True, exclude_unset=True)
+                    if _json_depth_exceeds(definition, limits.max_json_depth):
+                        return _incomplete_listing("TOOL_DEFINITION_TOO_DEEP")
+                    tools.append(FrozenJsonObject(definition))
+                cursor = page.nextCursor
+                if cursor is None:
+                    return ToolListing(complete=True, tools=tuple(tools), reason=None)
+                # Let shutdown/control run between pages of a long listing.
+                await asyncio.sleep(0)
+            return _incomplete_listing("TOOLS_LIST_TOO_MANY_PAGES")
+    except TimeoutError:
+        return _incomplete_listing("TOOLS_LIST_TIMEOUT")
+    except McpError:
+        return _incomplete_listing("TOOLS_LIST_FAILED")
+    except ValueError:
+        # Pydantic ValidationError and FrozenJsonObject rejections are ValueError.
+        return _incomplete_listing("TOOLS_LIST_MALFORMED")
+
+
 def _exception_name(exc: Exception) -> str:
     name = type(exc).__name__
     return name if name.isascii() and name.isidentifier() and len(name) <= 64 else "Exception"
@@ -466,9 +576,12 @@ class ServerWorker:
         max_result_copy_bytes: int,
         max_pending_commands: int = _DEFAULT_PENDING_COMMANDS,
         on_dispatch: Callable[[str], None] | None = None,
+        tool_list_limits: ToolListLimits | None = None,
     ) -> None:
         if not callable(session_factory):
             raise TypeError("session factory required")
+        if tool_list_limits is not None and type(tool_list_limits) is not ToolListLimits:
+            raise TypeError("tools/list limits have invalid type")
         for timeout in (call_timeout_s, startup_timeout_s, close_timeout_s):
             if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
                 raise ValueError("positive finite worker timeouts required")
@@ -486,6 +599,8 @@ class ServerWorker:
             raise ValueError("bounded positive pending command limit required")
         self._session_factory = session_factory
         self._on_dispatch = on_dispatch
+        self._tool_list_limits = tool_list_limits
+        self._tool_listing: ToolListing | None = None
         self._call_timeout_s = float(call_timeout_s)
         self._startup_timeout_s = float(startup_timeout_s)
         self._close_timeout_s = float(close_timeout_s)
@@ -510,14 +625,26 @@ class ServerWorker:
         self._state = _State.STARTING
         self._owner = asyncio.create_task(self._run(), name="mcp-server-worker")
         self._owner.add_done_callback(self._consume_task_exception)
+        start_budget = self._startup_timeout_s
+        if self._tool_list_limits is not None:
+            # initialize keeps its own bound in _run and the listing has its own.
+            # The extra second lets an expired listing report itself as
+            # incomplete before this outer wait gives up on the start.
+            start_budget += self._tool_list_limits.collection_timeout_s + 1.0
         try:
-            await asyncio.wait_for(self._ready.wait(), timeout=self._startup_timeout_s)
+            await asyncio.wait_for(self._ready.wait(), timeout=start_budget)
         except TimeoutError:
             self._state = _State.CLOSING
             self._owner.cancel()
             raise DispatchError("SessionStartTimeout") from None
         if self._state is not _State.READY:
             raise DispatchError("SessionStartFailed")
+
+    @property
+    def tool_listing(self) -> ToolListing | None:
+        """The startup tools/list result, or None when collection is not enabled."""
+
+        return self._tool_listing
 
     async def call(self, req: ResolvedRequest) -> RawResult:
         if self._state is not _State.READY:
@@ -604,8 +731,19 @@ class ServerWorker:
         try:
             tracker = _SessionExitTracker(self._session_factory())
             async with tracker as session:
-                await session.initialize()
+                if self._tool_list_limits is None:
+                    await session.initialize()
+                else:
+                    async with asyncio.timeout(self._startup_timeout_s):
+                        await session.initialize()
                 self._initialized = True
+                if self._tool_list_limits is not None:
+                    # Before READY, so no Guard call reaches a session whose
+                    # listing is still running. An incomplete listing is a
+                    # warning for Registry/Scanner and does not stop the worker.
+                    self._tool_listing = await collect_tool_definitions(
+                        session, self._tool_list_limits
+                    )
                 if self._state is _State.STARTING:
                     self._state = _State.READY
                 self._ready.set()
@@ -766,6 +904,7 @@ class McpTransport:
         max_result_copy_bytes: int = _MAX_RESULT_COPY_BYTES,
         max_pending_commands: int = _DEFAULT_PENDING_COMMANDS,
         on_dispatch: Callable[[str], None] | None = None,
+        tool_list_limits: ToolListLimits | None = None,
     ) -> None:
         if not isinstance(server_streams, Mapping):
             raise TypeError("server stream mapping required")
@@ -792,6 +931,7 @@ class McpTransport:
                 max_result_copy_bytes=max_result_copy_bytes,
                 max_pending_commands=max_pending_commands,
                 on_dispatch=on_dispatch,
+                tool_list_limits=tool_list_limits,
             )
             for server_id, stream_factory in server_streams.items()
         }
@@ -856,6 +996,16 @@ class McpTransport:
         if worker is None:
             raise DispatchError("UnknownServer")
         return await worker.call(req)
+
+    def tool_listing(self, server_id: str) -> ToolListing | None:
+        """One server's startup tools/list result for the composition root.
+
+        None means collection is disabled or the server is unknown. Only the
+        trusted composition root hands this to C's Registry/Scanner; it is
+        never shown to the model or used as Guard trust input.
+        """
+        worker = self._workers.get(server_id)
+        return None if worker is None else worker.tool_listing
 
     def discard_queued(self, task_id: str) -> int:
         """Synchronously keep a stopped Task's queued commands off every server.
