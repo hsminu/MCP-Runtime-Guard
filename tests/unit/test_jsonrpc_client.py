@@ -185,6 +185,36 @@ async def test_failing_handler_closes_the_client_and_fails_pending() -> None:
 
 
 @pytest.mark.asyncio
+async def test_failing_notification_handler_is_reported_apart_from_channel_failure() -> None:
+    def handler(_method: str, _params: object) -> None:
+        raise RuntimeError(MARKER)
+
+    channel = FakeChannel()
+    client = _client(channel, on_notification=handler)
+    waiting = asyncio.create_task(client.request("pending"))
+    await channel.next_sent()
+    channel.push({"jsonrpc": "2.0", "method": "note"})
+    with pytest.raises(JsonRpcError) as failed:
+        await waiting
+    assert failed.value.reason == "HANDLER_FAILED"
+    assert MARKER not in str(failed.value)
+    await client.close()
+
+    class BrokenChannel(FakeChannel):
+        async def receive(self) -> bytes | None:
+            raise OSError(MARKER)
+
+    broken = BrokenChannel()
+    broken_client = _client(broken)
+    for _ in range(20):
+        if broken_client.closed_reason is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert broken_client.closed_reason == "CHANNEL_FAILED"
+    await broken_client.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "frame",
     [
@@ -273,6 +303,37 @@ async def test_pending_limit_and_lifecycle_rules() -> None:
 def test_invalid_configuration_is_rejected(kwargs: dict[str, object]) -> None:
     with pytest.raises(ValueError, match="required"):
         JsonRpcClient(FakeChannel(), **kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_codex_envelope_without_version_field() -> None:
+    # Codex 0.159.0 schema: no "jsonrpc" member in any envelope (pinned version: #21 item 1).
+    channel = FakeChannel()
+    seen: list[str] = []
+    client = _client(
+        channel, version_field=False, on_notification=lambda method, _p: seen.append(method)
+    )
+    waiting = asyncio.create_task(client.request("initialize", {"x": 1}))
+    assert await channel.next_sent() == {"id": 1, "method": "initialize", "params": {"x": 1}}
+    channel.push({"method": "note"})
+    channel.push({"id": 1, "result": {"ok": True}})
+    assert await waiting == {"ok": True}
+    assert seen == ["note"]
+    second = asyncio.create_task(client.request("next"))
+    await channel.next_sent()
+    channel.push({"jsonrpc": "2.0", "id": 2, "result": None})
+    with pytest.raises(JsonRpcError) as failed:
+        await second
+    assert failed.value.reason == "PROTOCOL_ERROR"
+    await client.close()
+    with pytest.raises(ValueError, match="version_field"):
+        JsonRpcClient(
+            FakeChannel(),
+            request_timeout_s=1,
+            max_frame_bytes=1,
+            max_pending=1,
+            version_field=1,  # type: ignore[arg-type]
+        )
 
 
 def test_codec_round_trip_keeps_unicode_and_rejects_nan() -> None:

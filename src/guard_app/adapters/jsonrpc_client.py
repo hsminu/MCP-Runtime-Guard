@@ -9,6 +9,12 @@ until the pinned Codex version is chosen (GitHub #21 item 1), so framing lives
 in the channel and the JSON codec is replaceable. No Codex method is
 implemented here.
 
+The ``"jsonrpc": "2.0"`` member is a constructor choice. The locally installed
+Codex 0.159.0 schema (``codex app-server generate-json-schema``) has no such
+member in any envelope, so a client for that protocol is built with
+``version_field=False``: the member is never sent and a peer message carrying
+it is rejected. The pinned version must be rechecked before relying on this.
+
 Fail closed: a malformed frame, an oversize frame, a broken handler or EOF
 closes the client and fails every pending request with a fixed reason.
 Message bodies, parameters and remote error text are never logged or kept in
@@ -126,7 +132,10 @@ class JsonRpcClient:
         on_notification: NotificationHandler | None = None,
         on_server_request: ServerRequestHandler | None = None,
         codec: MessageCodec | None = None,
+        version_field: bool = True,
     ) -> None:
+        if type(version_field) is not bool:
+            raise ValueError("boolean version_field required")
         if (
             type(request_timeout_s) not in (int, float)
             or not math.isfinite(request_timeout_s)
@@ -138,6 +147,7 @@ class JsonRpcClient:
                 raise ValueError("positive integer limits required")
         self._channel = channel
         self._codec: MessageCodec = codec if codec is not None else JsonCodec()
+        self._version_field = version_field
         self._timeout = float(request_timeout_s)
         self._max_frame_bytes = max_frame_bytes
         self._max_pending = max_pending
@@ -149,6 +159,7 @@ class JsonRpcClient:
         self._send_lock = asyncio.Lock()
         self._reader: asyncio.Task[None] | None = None
         self._closed_reason: str | None = None
+        self._in_notification = False
 
     @property
     def closed_reason(self) -> str | None:
@@ -195,11 +206,10 @@ class JsonRpcClient:
         if self._closed_reason is not None:
             raise JsonRpcError(self._closed_reason)
 
-    @staticmethod
-    def _message(**fields: object) -> dict[str, object]:
+    def _message(self, **fields: object) -> dict[str, object]:
         if "method" in fields and (type(fields["method"]) is not str or not fields["method"]):
             raise ValueError("method name required")
-        message: dict[str, object] = {"jsonrpc": "2.0"}
+        message: dict[str, object] = {"jsonrpc": "2.0"} if self._version_field else {}
         message.update({key: value for key, value in fields.items() if value is not None})
         return message
 
@@ -229,7 +239,10 @@ class JsonRpcClient:
                 return
 
     def _dispatch(self, message: dict[str, object]) -> None:
-        if message.get("jsonrpc") != "2.0":
+        if self._version_field:
+            if message.get("jsonrpc") != "2.0":
+                raise InvalidMessageError()
+        elif "jsonrpc" in message:
             raise InvalidMessageError()
         method = message.get("method")
         has_id = "id" in message
@@ -241,7 +254,11 @@ class JsonRpcClient:
         params = message.get("params")
         if not has_id:
             if self._on_notification is not None:
+                # If the handler raises, the reader ends with this flag still set
+                # and _reader_done reports HANDLER_FAILED instead of CHANNEL_FAILED.
+                self._in_notification = True
                 self._on_notification(method, params)
+                self._in_notification = False
             return
         request_id = message["id"]
         if not _valid_id(request_id):
@@ -291,7 +308,7 @@ class JsonRpcClient:
         if task.cancelled():
             self._shutdown("CLOSED")
         elif task.exception() is not None:
-            self._shutdown("CHANNEL_FAILED")
+            self._shutdown("HANDLER_FAILED" if self._in_notification else "CHANNEL_FAILED")
 
     def _shutdown(self, reason: str) -> None:
         if self._closed_reason is None:
