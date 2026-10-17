@@ -32,6 +32,7 @@
 | 2026-10-17 | 제품은 개인 사용자 한 명이 자기 PC에서 쓰는 앱으로 정한다. 서버 등록·폴더 등급·정책 수정·승인을 모두 같은 사용자가 한다 | 관리자·팀원 같은 역할 구분, 계정, 원격 관리는 두지 않는다. 사용자 본인은 신뢰하고, 사용자의 의도적 정책 완화는 위협 모델 밖이다. 등급 이름(`INTERNAL` 등)과 `trust_tier` 값은 코드 열거형이라 그대로 두고 개인 자료 기준으로 설명한다. 판정 규칙·승인 프로토콜은 바뀌지 않는다. 개발문서 0장·8.5절 |
 | 2026-10-17 | 사용자 화면은 A의 GUI 하나로 하고 Codex TUI는 쓰지 않는다 | Codex TUI(`codex --remote`)는 app-server에 직접 붙는 별도 클라이언트라 세션 관리자를 건너뛴다. 그러면 Guard 도구 등록·`item/tool/call` 중계·L3 감시가 빠지고, 클라이언트가 설정과 turn 권한을 바꿀 수 있다. 세션 관리자는 화면과 무관하게 필요하다. 터미널 화면이 필요하면 세션 관리자 위에 붙인다. 개발문서 10.4절·ADR-15 |
 | 2026-10-17 | 개발문서를 현재 기준서로 한다. 결정은 이 문서에 기록하고 같은 변경에서 개발문서 해당 절을 고친다 | 이전 규칙("개발문서 원본은 고치지 않는다")을 대체한다. AGT 제거·Scanner 경고만·지문 전체·자격증명 관리자·하네스 결정에 밀린 개발문서 절을 이번에 맞췄다 |
+| 2026-10-17 | 하네스 연결의 빈 곳 다섯 개를 정한다 | (1) 세션 관리자가 `namespace`와 `tool`을 `__`로 이어 `tool_ref`를 만들고, 서버 ID의 `__`와 끝의 `_`는 등록에서 거부한다(도구 이름은 제한 없음). (2) Guard는 `Pending` 요청마다 최종 결과 알림을 한 번 내고 세션 관리자가 이를 기다려 답한다(B 알림 계약, A 대기). (3) `Withheld`·`OutcomeUnknown`은 고정 문구로 답하고 바로 interrupt·종료한다. (4) codex.exe는 `security.launcher`로만 띄우고 실행할 때마다 해시를 대조한다. (5) 불변식 I11(모델이 쓸 수 있는 도구는 Guard 도구뿐)과 T39–T45를 추가하고 I9에 Codex 로그 DB 예외를 적는다. 개발문서 0.4·8.3·10.4·14.3절·부록 B |
 
 측정 기준
 
@@ -46,7 +47,7 @@ Scanner 결과는 아직 B ScanReport에 연결하지 않았다. 필수 분석�
 | 계약 | 정의 담당 / 구현 담당 | 필수 의미 | 근거 |
 | --- | --- | --- | --- |
 | domain 모델 | B / B | 신뢰하지 않는 `ProposedCall`과 신뢰 해석 `ResolvedRequest` 분리, frozen·strict·extra forbid | 3장 |
-| Guard 입구와 결과 | B / B | 일반 도구 실행은 `submit`; 결과 `Denied`, `Pending`, `Released`, `Withheld`, `OutcomeUnknown` | 0.5·7장 |
+| Guard 입구와 결과 | B / B | 일반 도구 실행은 `submit`; 결과 `Denied`, `Pending`, `Released`, `Withheld`, `OutcomeUnknown`. `Pending` 요청은 `request_id`별 최종 결과 알림을 정확히 한 번 낸다 | 0.5·7장·8.3절 |
 | Transport | B / A | 서버별 세션 소유 worker, 명령 future의 성공·예외 확정, 원시 결과 격리, 쓰기 자동 재전송 금지 | 9장 |
 | AccessChecker | B / A | 요청·신뢰 맥락 입력, `AccessResult` 반환, 거절·오류는 DENY, 형식 불명·시간초과는 `error=True` | 10.3절 |
 | Scanner | B / C | 정의 metadata만 입력, 필수·완료·skip·failed 분석기와 지문 집합을 명시 | 10.2절 |

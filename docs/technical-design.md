@@ -54,6 +54,7 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 | 모델의 실수 | 목적지 오기, 불필요한 데이터 포함 | 목적지 화이트리스트, ASK 시 전송 내용 전체 표시 |
 | 승인 화면 기만 | 긴 문자열 말줄임, 보이지 않는 문자, HTML 렌더링 | 일반 텍스트 렌더링, 전체 열람, 비가시 문자 시각화 |
 | 네트워크·SDK 동작 | redirect, 재연결, 자동 재시도로 의도치 않은 재전송 | redirect 비활성, 쓰기 자동 재시도 금지, wire 계수로 검증 |
+| Codex 하네스 변화 | 버전업·서버 모델 정보로 Codex 자체 도구가 다시 켜짐, 예상 밖 승인·입력 요청 | 버전·해시·모델 정보 고정, L1 설정, L2 시작 시험, L3 실행 중 감시(10.4절, I11) |
 
 사용자 본인은 신뢰한다. Guard가 막는 대상은 모델, 프롬프트 인젝션, 악성 MCP이고 사용자가 아니다. 등급 지정과 정책 수정도 사용자 권한이므로, 사용자가 규칙을 느슨하게 바꾸면 Guard는 그 규칙대로 판정한다. 대신 정책 변경은 실행 중 Task를 정지시키고(6.6절) 감사에 남는다.
 
@@ -73,8 +74,9 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 | I6 | 판단 불가(예외, 필드 누락, 시간초과, 형식 불명)는 DENY 또는 Task 정지로 귀결된다 |
 | I7 | 등급·경계·승인자·Task 식별자는 모델 출력이나 도구 출력에서 도출되지 않는다 |
 | I8 | 결과가 불명확한 쓰기 호출은 자동으로 재전송되지 않는다 |
-| I9 | 문서 원문, 인증정보, 전체 인자는 기본 로그에 기록되지 않는다 |
+| I9 | 문서 원문, 인증정보, 전체 인자는 기본 로그에 기록되지 않는다. 끌 수 없는 Codex 로그 DB는 예외이며 Task 종료 뒤 남지 않게 지운다(11.4절) |
 | I10 | 등록된 도구 정의가 바뀌면 해당 서버는 PENDING으로 돌아가고 기존 승인은 무효가 된다 |
+| I11 | 모델이 쓸 수 있는 도구는 Guard 도구뿐이다. Codex 자체 도구가 꺼졌음을 확인하지 못하면 Task를 시작하지 않는다 |
 
 ### 0.5 역할 분담
 
@@ -526,6 +528,8 @@ def resolve_tool(self, tool_ref: str) -> ToolSpec:
 ```
 
 인자는 등록 시점에 고정한 `input_schema`로 검증한다(`jsonschema`, `additionalProperties: false` 강제). 서버가 나중에 스키마를 바꿔도 Guard는 등록본으로 검증하며, 지문 불일치로 PENDING이 된다.
+
+서버 ID에는 `__`를 쓸 수 없고 `_`로 끝날 수 없다(`valid_server_id`). 처음 나오는 `__`에서 자르므로 도구 이름에는 제한이 없다. Codex 하네스에서는 세션 관리자가 namespace와 도구 이름을 이어 이 형식을 만든다(10.4절).
 
 도구 설명의 `annotations`(예: `readOnlyHint`)는 서버가 스스로 주장하는 힌트일 뿐이므로 `ToolKind` 결정에 쓰지 않는다. `ToolKind`는 사용자가 등록 시 지정한다.
 
@@ -1084,6 +1088,8 @@ COMMIT;
 
 재평가부터 응답 커밋까지는 `GuardService.task_lock`(submit과 같은 Task별 lock) 안에서 실행한다. SQL이 소비 시점에 Task를 RUNNING으로 되돌리더라도 lock이 응답 게이트의 커밋까지 유지되므로, 그 사이 같은 Task의 다른 호출이 이전 상태로 판정되지 않는다. 승인된 호출이 외부 서버의 READ여서 결과가 등급을 올리는 경우에도 다음 판정은 올라간 등급을 본다.
 
+`submit`이 `Pending`을 돌려준 요청은 나중에 최종 결과가 정해진다. Guard는 `request_id`별 최종 결과 알림을 정확히 한 번 낸다. 내용은 승인 실행 결과(`Released`·`Withheld`·`OutcomeUnknown`) 또는 거절·만료·취소·무효다. 세션 관리자는 이 알림을 기다렸다가 Codex의 대기 중인 도구 호출에 답한다(10.4절). 알림 계약은 B가, 대기는 A가 만든다.
+
 ### 8.4 시간 처리
 
 | 용도 | 시계 | 이유 |
@@ -1224,7 +1230,7 @@ async def _execute(self, session, cmd: Command):
 servers:
   - id: local_docs
     transport: stdio
-    command: /opt/guard/venv/bin/python        # 절대 경로
+    command: C:/Users/<사용자>/AppData/Local/MCPRuntimeGuard/venv/Scripts/python.exe   # 절대 경로
     args: ["-m", "fixtures.local_docs.server"]
     env_allow: ["LANG"]                         # 전달할 환경변수 화이트리스트
     tier: internal
@@ -1329,10 +1335,11 @@ GUI ─ 명령 큐 ─▶ 세션 관리자 ─ stdio JSON-RPC ─▶ codex app-s
                Guard.submit
 ```
 
-- **실행:** Task마다 고정 버전 `codex app-server`를 새로 띄운다. CODEX_HOME은 앱 전용 폴더, config는 Task마다 새로 쓴다. `initialize`(experimentalApi) → `thread/start`(Guard 도구를 `dynamicTools`로 등록, `environments=[]`, `ephemeral`, `approvalsReviewer="user"`, `baseInstructions`) → `turn/start` 순서다.
-- **도구 목록:** ACTIVE 서버의 등록 도구만, `서버이름.도구이름` namespace와 등록 시점 스키마로 만든다. 서버가 보낸 원본 설명문 대신 사용자가 검토한 설명을 쓰는 옵션을 둔다. `deferLoading`은 쓰지 않는다. 승인·취소·정책 조회 같은 제어 기능은 도구 목록에 없다.
-- **호출 변환:** `item/tool/call`은 `ProposedCall`로만 변환한다. 모델이 출력한 `task_id`, `label` 같은 필드는 버려진다(extra="forbid"로 실패). Task 식별자는 세션 관리자가 thread와 묶어 둔 값을 쓴다(I7). 호출은 받은 순서대로 하나씩 처리한다.
-- **결과 반환:** `Released`만 `success:true`로 돌려준다. `Denied`·거절·만료는 `success:false`와 짧은 고정 문구다(예: "이 요청은 정책에 의해 차단되었습니다: INTERNAL_TO_EXTERNAL"). 판정 내부 정보(경계 ID, 버전)는 모델에 주지 않는다.
+- **실행:** Task마다 고정 버전 `codex app-server`를 새로 띄운다. CODEX_HOME은 앱 전용 폴더, config는 Task마다 새로 쓴다. `initialize`(experimentalApi) → `thread/start`(Guard 도구를 `dynamicTools`로 등록, `environments=[]`, `ephemeral`, `approvalsReviewer="user"`, `baseInstructions`) → `turn/start` 순서다. codex.exe는 `security.launcher`로만 띄우고, launcher가 실행할 때마다 SHA-256을 고정값과 대조해 다르면 시작을 거부한다.
+- **도구 목록:** ACTIVE 서버의 등록 도구만, 서버 ID를 namespace 이름으로 하고 그 아래 도구 이름과 등록 시점 스키마로 만든다(모델에는 `서버이름.도구이름`처럼 보인다). 서버가 보낸 원본 설명문 대신 사용자가 검토한 설명을 쓰는 옵션을 둔다. `deferLoading`은 쓰지 않는다. 승인·취소·정책 조회 같은 제어 기능은 도구 목록에 없다.
+- **호출 변환:** `item/tool/call`은 `namespace`와 `tool`을 따로 보낸다. 세션 관리자는 둘을 `__`로 이어 `ProposedCall.tool_ref`(`server_id__tool_name`, 4.1절)를 만든다. `namespace`가 없으면 Guard에 넘기지 않고 DENY 고정 문구로 답한다. `item/tool/call`은 `ProposedCall`로만 변환한다. 모델이 출력한 `task_id`, `label` 같은 필드는 버려진다(extra="forbid"로 실패). Task 식별자는 세션 관리자가 thread와 묶어 둔 값을 쓴다(I7). 호출은 받은 순서대로 하나씩 처리한다.
+- **결과 반환:** `Released`만 `success:true`로 돌려준다. `Denied`·거절·만료·취소는 `success:false`와 짧은 고정 문구다(예: "이 요청은 정책에 의해 차단되었습니다: INTERNAL_TO_EXTERNAL"). `Withheld`·`OutcomeUnknown`은 `success:false`와 "작업이 정지되었습니다"로 답한 뒤 바로 `turn/interrupt`하고 codex 프로세스를 끝낸다. Task는 이미 HALTED·UNKNOWN_OUTCOME이다. 판정 내부 정보(경계 ID, 버전)는 모델에 주지 않는다.
+- **승인 대기:** `Pending`을 받으면 도구 호출에 바로 답하지 않고 Guard의 `request_id`별 최종 결과 알림을 기다린다(8.3절). 승인 실행 결과면 위 규칙대로, 거절·만료·취소면 `success:false`와 고정 문구로 답한다.
 - **Codex 자체 도구 차단:** L1 설정으로 끄고, L2 시작 시험(가짜 모델 서버로 도구 목록 대조·금지 도구 강제 호출 거부)으로 확인하며, 실패하면 시작을 거부한다(T22). 실행 중에는 L3가 허용 항목 밖의 이벤트·승인 요청을 거절하고 `turn/interrupt` 뒤 Task를 정지한다.
 - **대기 상한:** Codex는 도구 호출 대기 상한이 없다. 세션 관리자가 호출별 감시 상한(ASK 5분+MCP 실행 상한+여유)을 넘기면 interrupt하고 Task를 정지한다. SEND 전송 뒤면 결과 불명이다(I8).
 - **로그인:** ChatGPT 기기 코드 또는 API 키. 자격증명은 Windows 자격증명 관리자(keyring)에 둔다. Scanner는 별도 API 키를 쓴다.
@@ -1540,7 +1547,7 @@ class Bridge:
 
 | 탭 | 구독 이벤트 | 명령 |
 | --- | --- | --- |
-| 작업 실행 | TaskCreated, TaskStatusChanged, LabelEscalated, ResultReleased | NewTask, Run, StopRequest |
+| 작업 실행 | TaskCreated, TaskStatusChanged, LabelEscalated, ResultReleased, ModelMessage(모델 답변 스트리밍), HarnessCheckFailed(L1·L2 실패), LoginRequired, RateLimited, UserInputRequested(빈 응답 처리 사실만 표시), CodexExited | NewTask, Run, StopRequest, Login, Logout |
 | 요청·승인 | ApprovalPending, ApprovalResolved, RequestDispatched, OutcomeUnknown | Approve, Reject, Cancel |
 | 서버·검사 | RegistrationChanged, ScanCompleted, FingerprintMismatch | Register, Scan, Activate, Block |
 | 기록·정책 | Decided, AuditAppended | Filter, EmergencyBlock |
@@ -1624,7 +1631,7 @@ def safe_path(root: Path, user_path: str) -> Path:
     cur = root_r
     for part in rel.parts:                     # 중간 경로의 심볼릭 링크 거부
         cur = cur / part
-        if cur.is_symlink():
+        if cur.is_symlink() or cur.is_junction():   # Windows 디렉터리 정션은 is_symlink()로 잡히지 않음
             raise PathRejected("symlink")
     resolved = cur.resolve(strict=True)
     if not resolved.is_relative_to(root_r):
@@ -1632,7 +1639,7 @@ def safe_path(root: Path, user_path: str) -> Path:
     return resolved
 ```
 
-검사와 열기 사이의 경쟁(TOCTOU)은 이 함수만으로 완전히 없앨 수 없다. fixture 루트는 Guard만 쓰기 권한을 갖는 디렉터리로 두고, 열 때 `O_NOFOLLOW`를 지원하는 플랫폼에서는 함께 사용한다.
+검사와 열기 사이의 경쟁(TOCTOU)은 이 함수만으로 완전히 없앨 수 없다. 파일 서버 루트는 사용자 전용 권한 폴더로 두고, Windows에는 `O_NOFOLLOW`가 없으므로 열기 직전 재검사와 결과 `resource_id` 대조(T33)로 보완한다.
 
 ```python
 # security/endpoints.py
@@ -1829,7 +1836,7 @@ rules:
 ruff check  →  mypy --strict (domain, core, security)  →  lint-imports
    →  pytest tests/unit tests/contract  →  pytest tests/integration
    →  bandit -r src -ll  →  semgrep --config tools/ci/semgrep.yml --error
-   →  pip-audit (uv.lock 기준)
+   →  pip-audit (uv.lock 기준)  →  Codex 하네스 시험(T22, T39, T40, T44)
 ```
 
 - `attack_fixtures/`는 스캔 대상에서 제외하고 별도 디렉터리로 관리한다. 의도적으로 취약한 코드가 제품 코드의 약점 수에 섞이지 않게 한다.
@@ -1973,6 +1980,13 @@ app = WireCounter(mcp.streamable_http_app())
 | T36 | dispatch 이후 예외 주입(결과 변환 실패, McpError) | READ: HALTED·미공개 / SEND: UNKNOWN_OUTCOME. `Denied`로 보고되지 않음. worker 생존 | I6, I8 | 결함 주입 | C |
 | T37 | 승인된 외부 READ 실행 중 같은 Task에 submit | 결과 커밋 이후의 등급으로 판정 | I4, I5 | 통합 | C |
 | T38 | 도구 단위형 READ: 규칙 있음 / 없음 | 규칙 등급 적용 / Unclassified·HALTED | I4 | 단위 | B |
+| T39 | L1 설정 적용 후 모델 요청의 도구 목록(가짜 모델) | Guard 도구와 `request_user_input`만 | I11 | 통합 | C |
+| T40 | 금지 도구 7종 강제 호출(가짜 모델) | 전부 거부, Guard 밖 실행 0 | I11 | 통합 | C |
+| T41 | 실행 중 허용 밖 항목·승인 요청(L3) | 거절, `turn/interrupt`, Task 정지 | I11 | 통합 | C |
+| T42 | 승인 대기·도구 실행이 감시 상한 초과 | interrupt, Task 정지, SEND면 UNKNOWN_OUTCOME | I6, I8 | 통합 | C |
+| T43 | 표지 결과 주입 후 Task 종료 | 앱 폴더 전체에 표지 없음(Codex 로그 DB 포함) | I9 | 통합 | C |
+| T44 | codex.exe 해시 불일치 | 실행 거부 | I11 | 단위 | C |
+| T45 | 승인 후 결과 알림 | 최종 결과 알림 1회, 대기 중 도구 호출에 정확히 1회 응답 | I3, I5 | 통합 | C |
 | S01 | 경로 탈출 (`..`, 절대경로, 심볼릭 링크, `\`) | 거부 | — | 단위 | C |
 | S02 | 엔드포인트 함정 (userinfo, IDN, 인코딩) | 거부 또는 정확한 정규화 | — | 단위 | C |
 | S03 | 인자에 SQL 특수문자 | 바인딩으로 무해 | — | 단위 | C |
@@ -2126,11 +2140,12 @@ where = ["src"]
 | --- | --- | --- | --- |
 | I1 단일 입구 | import-linter, Semgrep | — | T08 |
 | I2 DENY 비실행 | — | 성질(거부 흡수) | T03, T16, T26, T31 |
-| I3 승인 1회 | — | T13 | T02, T09~T12 |
+| I3 승인 1회 | — | T13 | T02, T09~T12, T45 |
 | I4 등급 단조 | — | 성질(단조성), T05, T25, T38 | T21, T33, T34, T35, T37 |
 | I5 커밋 후 공개 | — | — | T07, T19, T37 |
-| I6 fail-closed | Semgrep(no-swallow, broad-except-only-in-allowed) | S05, T04 | T07, T36 |
+| I6 fail-closed | Semgrep(no-swallow, broad-except-only-in-allowed) | S05, T04 | T07, T36, T42 |
 | I7 신뢰 출처 분리 | 타입(`extra="forbid"`) | T06, T32 | — |
-| I8 재전송 금지 | — | — | T14~T16, T36 |
-| I9 로그 비노출 | Bandit, Semgrep | S04 | T19 |
+| I8 재전송 금지 | — | — | T14~T16, T36, T42 |
+| I9 로그 비노출 | Bandit, Semgrep | S04 | T19, T43 |
 | I10 정의 변경 감지 | — | — | T10 |
+| I11 Guard 도구만 | — | T44 | T22, T39~T41 |
