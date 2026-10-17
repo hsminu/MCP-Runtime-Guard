@@ -1,6 +1,6 @@
 # 3인 협업 규칙
 
-설계 기준은 [기술 설계 및 개발 문서](technical-design.md)이며, 현행 역할·리뷰는 이 문서의 소유권 표를 따른다. 개발문서와 다른 담당 배정(예: SQLite는 B)과 확정 결정은 [공통 계약](contracts.md#사용자-결정)에 있다. 개발문서 원문은 고치지 않는다.
+설계 기준은 [기술 설계 및 개발 문서](technical-design.md)이며, 현행 역할·리뷰는 이 문서의 소유권 표를 따른다. 확정 결정은 [공통 계약](contracts.md#사용자-결정)에 날짜와 함께 기록하고, 같은 변경에서 개발문서의 해당 절도 고친다(2026-10-17 결정).
 
 ## 브랜치와 작업 문서
 
@@ -72,8 +72,11 @@
 | `storage/*` · SQLite·스키마·마이그레이션·감사 저장·영속 순번·시작 복구 | B | C |
 | `services/registry.py`, `adapters/cisco.py` | C | B |
 | `adapters/mcp_transport.py` | A | B |
-| `adapters/agt.py` 연결·번역 | A | B, 합성 규칙은 B 담당 |
-| `adapters/model_client.py`, `services/runner.py` | A | B |
+| `core` 접근 규칙 함수, 기존 AGT 코드 제거 | B | C. AGT 제거 중 A 소유 파일을 고친 부분은 A |
+| `AccessChecker` 연결 | A | B |
+| `services/runner.py` (Codex 세션 관리자) | A | B·C |
+| Codex L1 설정·모델 정보 파일·설치 스크립트·L2 시작 시험 | C | A |
+| 로컬 파일 MCP 서버 | C | B |
 | `services/bridge.py`, `ui/*`, `__main__.py` | A | C |
 | `fixtures/*`, `attack_fixtures/*` | C | A |
 | `tests/contract`, `integration`, `attacks`, `faults`, `experiments` | C | 관련 모듈 담당, C 소유 모듈의 테스트는 B |
@@ -88,8 +91,8 @@
 
 | 단계 | A | B | C | 완료 조건 |
 | --- | --- | --- | --- | --- |
-| 0 · 공통 계약 | Transport·AccessChecker·ModelClient·UI 이벤트 요구 제공 | domain·ports·결과·상태 계약 초안 | Store·Scanner·Registry·계수 요구 제공 | 세 사람이 계약 및 미확정 항목 확인 |
-| 1 · 독립 구현 | SDK stdio·HTTP·AGT 호환 확인, 어댑터 구현 | 순수 정책·등급 병합·Catalog·SQLite·단위 테스트 구현 | 안전 연산·fixture·수신 계수 구현, 저장소 계약 검증 준비 | 동일 SDK 조합과 계약 테스트 기반 확보 |
+| 0 · 공통 계약 | Transport·AccessChecker·Codex 세션 관리자·UI 이벤트 요구 제공 | domain·ports·결과·상태 계약 초안 | Store·Scanner·Registry·계수 요구 제공 | 세 사람이 계약 및 미확정 항목 확인 |
+| 1 · 독립 구현 | SDK stdio·HTTP 호환 확인, 어댑터·Codex 세션 관리자 구현 | 순수 정책·접근 규칙·등급 병합·Catalog·SQLite·단위 테스트 구현, AGT 코드 제거 | 안전 연산·fixture·수신 계수, Codex L1·L2, 로컬 파일 서버 구현, 저장소 계약 검증 준비 | 동일 SDK 조합과 계약 테스트 기반 확보 |
 | 2 · 실행 경로 | worker·Runner를 Guard에 연결 | Guard·승인·응답 게이트와 원자적 저장소 연결 | Registry·Scanner 연결, 저장소 리뷰·통합·결함 주입 | ALLOW/ASK/DENY와 커밋 후 공개를 계수로 증명 |
 | 3 · 화면과 공격 | bridge·GUI·승인 렌더링, T18 | 공격·경쟁 실패 수정, 계약 유지 | T/S 검증·replay·CI·약점 관리대장 | 담당 리뷰, 불변식 검증, 제한과 과잉 제한 보고 |
 
@@ -126,6 +129,6 @@ git merge origin/main
 - 구현 변경마다 PR 설명과 완료 기록에 담당 범위, 관련 I/T/S ID, 검증 결과, 계약 변경 여부를 적는다.
 - `domain/*`·`ports.py` 변경은 A·B·C의 합의 근거를 기록한다. 다른 변경은 소유권 표의 리뷰 담당이 확인한다.
 - 판정·승인 경로는 B가 구현하고 C가 실제 수신 계수로 검증한다. 실패 수정은 관련 모듈 담당이 한다.
-- Scanner 완료·관리자 활성화, AGT 모의·실제 연동을 구분해서 기록한다.
-- CI 규칙 예외는 원문 13.5절에 따라 사유와 리뷰어 1인 승인을 `docs/weakness_register.md`에 남긴다. 이미 승인된 예외는 반복 승인하지 않는다.
+- Scanner 검사 완료·경고와 사용자 활성화를 구분해서 기록한다.
+- CI 규칙 예외는 개발문서 13.5절에 따라 사유와 리뷰어 1인 승인을 `docs/weakness_register.md`에 남긴다. 이미 승인된 예외는 반복 승인하지 않는다.
 - 날짜·성능값·스캔 결과는 실제 측정값만 기록한다. 미실행 항목은 미실행으로 둔다.
