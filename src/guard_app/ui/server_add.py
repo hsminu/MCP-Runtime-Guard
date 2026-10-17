@@ -543,3 +543,235 @@ class ServerAddForm(QWidget):
         self._prepared = True
         self._refresh()
         self.localDraftPrepared.emit(self._preview_for(draft))
+
+
+# ---- 로컬 파일 MCP 서버의 폴더 등급 초안 (contracts 2026-10-15 로컬 파일 접근 결정) ----
+
+_LABELS = (
+    ("공개 · PUBLIC", "PUBLIC"),
+    ("내부 · INTERNAL", "INTERNAL"),
+    ("기밀 · CONFIDENTIAL", "CONFIDENTIAL"),
+)
+
+
+def _folder_error(root: str) -> str | None:
+    if _has_hidden_char(root):
+        return "폴더 경로에 보이지 않는 문자나 제어 문자를 넣지 마."
+    if root[:2] in ("\\\\", "//", "\\/", "/\\"):
+        return "네트워크 공유(UNC)·장치 경로는 쓸 수 없어. 이 PC의 로컬 폴더 경로를 입력해."
+    if not Path(root).is_absolute():
+        return "루트 폴더는 절대 경로여야 해."
+    return None
+
+
+def _prefix_parts(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
+    """Lexical segment-prefix check only; C's safe_path resolves real paths."""
+
+    if raw == "":
+        return (), None
+    if _has_hidden_char(raw):
+        return None, "폴더 이름에 보이지 않는 문자나 제어 문자를 넣지 마."
+    if "\\" in raw:
+        return None, "하위 폴더는 /로 구분해. 역슬래시는 쓰지 마."
+    parts = tuple(raw.split("/"))
+    if any(part in ("", ".", "..") for part in parts):
+        return None, "앞뒤의 /, 빈 이름, 점(.)·점 두 개(..) 없이 루트 기준 상대 경로로 입력해."
+    return parts, None
+
+
+@dataclass(frozen=True, slots=True)
+class FolderLabelRule:
+    """One segment-prefix rule relative to the root; () is the whole root."""
+
+    prefix: tuple[str, ...]
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class LocalFolderDraft:
+    """Locally syntax-checked folder labels; never an accepted Registry record."""
+
+    root: str
+    rules: tuple[FolderLabelRule, ...]
+
+
+class _FolderRuleRow(QWidget):
+    changed = Signal()
+    removeRequested = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        row = QHBoxLayout()
+        self.prefix = QLineEdit()
+        self.prefix.setAccessibleName("루트 기준 하위 폴더, 비우면 루트 전체")
+        self.prefix.setPlaceholderText("예: personal/notes · 비우면 루트 전체")
+        row.addWidget(self.prefix, 1)
+        self.label = QComboBox()
+        self.label.setAccessibleName("이 폴더의 등급")
+        self.label.addItem("등급 선택", None)
+        for title, value in _LABELS:
+            self.label.addItem(title, value)
+        row.addWidget(self.label)
+        self.remove_button = KeyboardActionButton("삭제")
+        self.remove_button.setAccessibleName("이 폴더 규칙 삭제")
+        row.addWidget(self.remove_button)
+        layout.addLayout(row)
+        self.error = plain_label(name="folderRuleError")
+        self.error.setAccessibleName("폴더 규칙 입력 오류")
+        self.error.setVisible(False)
+        layout.addWidget(self.error)
+        self.prefix.textChanged.connect(lambda _text: self.changed.emit())
+        self.label.currentIndexChanged.connect(lambda _index: self.changed.emit())
+        self.remove_button.clicked.connect(lambda: self.removeRequested.emit(self))
+
+
+class LocalFolderRulesForm(QWidget):
+    """Root folder and per-subfolder labels for the app's read-only file server.
+
+    Convenience checks only. C's Registry and ``safe_path`` must validate the
+    root and every rule again; overlapping rules take the highest label and a
+    file matching no rule is Unclassified (B Catalog, design 4.2).
+    """
+
+    folderDraftPrepared = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._validated_draft: LocalFolderDraft | None = None
+        self._prepared = False
+        self.rows: list[_FolderRuleRow] = []
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(10)
+        outer.addWidget(plain_label("로컬 파일 서버 · 폴더 등급", name="sectionTitle"))
+        outer.addWidget(
+            plain_label(
+                "루트 폴더와 하위 폴더별 등급을 정해. 규칙이 겹치면 더 높은 등급이 적용되고, "
+                "어느 규칙에도 맞지 않는 파일을 읽으면 미분류로 작업이 멈춰. "
+                "여기서는 입력 형식만 확인하고, 실제 경로 검증은 등록 단계에서 다시 해.",
+                name="secondary",
+            )
+        )
+        self.root = QLineEdit()
+        self.root.setObjectName("folderRootInput")
+        self.root.setAccessibleName("로컬 파일 서버 루트 폴더 절대 경로")
+        self.root.setPlaceholderText("루트 폴더의 절대 경로")
+        outer.addWidget(self.root)
+        self.root_error = plain_label(name="folderRootError")
+        self.root_error.setAccessibleName("루트 폴더 입력 오류")
+        outer.addWidget(self.root_error)
+        self._rows_layout = QVBoxLayout()
+        self._rows_layout.setSpacing(6)
+        outer.addLayout(self._rows_layout)
+        self.rules_error = plain_label(name="folderRulesError")
+        outer.addWidget(self.rules_error)
+        actions = QHBoxLayout()
+        self.add_button = KeyboardActionButton("폴더 규칙 추가")
+        self.add_button.setAccessibleName("하위 폴더 등급 규칙 추가")
+        actions.addWidget(self.add_button)
+        self.prepare_button = KeyboardActionButton("폴더 등급 초안 확인")
+        self.prepare_button.setAccessibleName("입력 형식 확인 후 폴더 등급 초안 준비")
+        actions.addWidget(self.prepare_button)
+        actions.addStretch(1)
+        outer.addLayout(actions)
+        self.status = plain_label(name="folderDraftStatus")
+        outer.addWidget(self.status)
+
+        self.root.textChanged.connect(self._input_changed)
+        self.add_button.clicked.connect(self.add_rule)
+        self.prepare_button.clicked.connect(self._prepare)
+        self.add_rule()
+
+    @property
+    def validated_draft(self) -> LocalFolderDraft | None:
+        """Return the locally checked draft after a click; C must revalidate."""
+
+        return self._validated_draft
+
+    def add_rule(self) -> _FolderRuleRow:
+        row = _FolderRuleRow()
+        row.changed.connect(self._input_changed)
+        row.removeRequested.connect(self._remove_rule)
+        self.rows.append(row)
+        self._rows_layout.addWidget(row)
+        self._input_changed()
+        return row
+
+    def _remove_rule(self, row: _FolderRuleRow) -> None:
+        if row not in self.rows:
+            return
+        self.rows.remove(row)
+        self._rows_layout.removeWidget(row)
+        row.deleteLater()
+        self._input_changed()
+
+    def _input_changed(self, *_args: object) -> None:
+        self._prepared = False
+        self._validated_draft = None
+        self._refresh()
+
+    def _build_draft(self) -> LocalFolderDraft | None:
+        root = self.root.text().strip()
+        if not root:
+            root_error: str | None = "루트 폴더 절대 경로를 입력해."
+        elif len(root) >= self.root.maxLength():
+            root_error = "경로가 입력 칸 한도를 넘어 잘렸을 수 있어. 경로를 확인해."
+        else:
+            root_error = _folder_error(root)
+        self.root_error.setText(root_error or "")
+        self.root_error.setVisible(root_error is not None)
+        failed = root_error is not None
+
+        rules: list[FolderLabelRule] = []
+        seen: set[tuple[str, ...]] = set()
+        for row in self.rows:
+            parts, error = _prefix_parts(row.prefix.text().strip())
+            if parts is not None and parts in seen:
+                error = "같은 폴더 규칙을 두 번 적지 마."
+            elif error is None and row.label.currentData() is None:
+                error = "이 폴더의 등급을 선택해."
+            row.error.setText(error or "")
+            row.error.setVisible(error is not None)
+            if parts is not None:
+                seen.add(parts)
+            if error is not None or parts is None:
+                failed = True
+                continue
+            rules.append(FolderLabelRule(parts, str(row.label.currentData())))
+        rules_error = None if self.rows else "폴더 규칙을 하나 이상 추가해."
+        self.rules_error.setText(rules_error or "")
+        self.rules_error.setVisible(rules_error is not None)
+        if failed or rules_error is not None:
+            return None
+        return LocalFolderDraft(root, tuple(rules))
+
+    def _refresh(self) -> None:
+        draft = self._build_draft()
+        self.prepare_button.setEnabled(draft is not None and not self._prepared)
+        self.status.setText(
+            "폴더 등급 초안 확인 완료 · 아직 등록되지 않았어."
+            if self._prepared
+            else "입력 형식만 확인해. 등록은 아직 연결되지 않았어."
+        )
+
+    def _prepare(self) -> None:
+        if self._prepared:
+            return
+        draft = self._build_draft()
+        if draft is None:
+            self._refresh()
+            return
+        self._validated_draft = draft
+        self._prepared = True
+        self._refresh()
+        shown = [
+            {"folder": "/".join(rule.prefix) or "(루트 전체)", "label": rule.label}
+            for rule in draft.rules
+        ]
+        text = json.dumps(
+            {"root": "입력됨 · 값 미표시", "rules": shown}, ensure_ascii=False, indent=2
+        )
+        self.folderDraftPrepared.emit(LocalDraftPreview(transport="stdio", text=text))
