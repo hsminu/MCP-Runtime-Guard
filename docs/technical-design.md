@@ -1146,7 +1146,7 @@ class ServerWorker:
             params = StdioServerParameters(
                 command=self._reg.command, args=list(self._reg.args),
                 env=self._reg.minimal_env())                        # 부모 환경 전체 상속 금지
-            return stdio_client(params, errlog=self._quarantine.stderr_file())
+            return stdio_client(params, errlog=self._quarantine.stderr_file())   # 2026-10-18: C launcher 파이프 + 바이트 상한 층으로 교체(아래)
         return streamablehttp_client(
             self._reg.url, timeout=self._reg.timeout_s,
             httpx_client_factory=no_redirect_client_factory)        # redirect 비활성
@@ -1155,7 +1155,8 @@ class ServerWorker:
 - `errlog`는 stdio 서버의 stderr를 받는다. 서버가 오류 출력에 문서 내용을 흘릴 수 있으므로 일반 로그가 아닌 격리 파일로 보낸다(실제 파일 객체 필요).
 - `logging_callback`, `message_handler`로 들어오는 서버 로그·진행 알림도 격리 대상이다. 출처 확인 전에는 모델·UI·로그에 나가지 않는다.
 - HTTP 클라이언트 팩토리 인자 이름과 존재 여부는 SDK 버전마다 다를 수 있다. 제공되지 않으면 redirect 비활성 여부를 wire 계수(9.4절)로 실측해 확인한다.
-- stdio 실행은 SDK 내부에서 프로세스를 띄우지만, 실행 파일·인자·환경은 `servers.yaml`의 등록 값만 쓴다. 등록 값 자체는 `security.launcher`의 검증 규칙(절대 경로, 화이트리스트, 인자 리스트)을 통과해야 로드된다.
+- stdio MCP 서버는 SDK의 `stdio_client`가 띄우지 않고 C의 `security.launcher`가 띄워 파이프를 넘긴다(codex.exe와 같은 API). 실행 파일·인자·환경은 `servers.yaml`의 등록 값만 쓰고, 등록 값은 launcher의 검증 규칙(절대 경로, 화이트리스트, 인자 리스트)을 통과해야 로드된다.
+- transport(A)는 그 파이프에서 JSON-RPC 메시지를 한 단위씩 읽으며 바이트를 세고, `tools/list` 수신 상한(페이지 1MiB, 조회 누적 8MiB, contracts 측정 기준 2)을 넘지 않은 메시지만 파싱해 SDK 세션에 넘긴다. HTTP는 응답 본문을 받는 단계에서 같은 기준으로 센다. 초과하면 자르지 않고 미완료 경고로 끝낸다(2026-10-18).
 
 ### 9.2 호출 실행과 시간초과
 
@@ -1345,6 +1346,7 @@ GUI ─ 명령 큐 ─▶ 세션 관리자 ─ stdio JSON-RPC ─▶ codex app-s
 - **Codex 자체 도구 차단:** L1 설정으로 끄고, L2 시작 시험(가짜 모델 서버로 도구 목록 대조·금지 도구 강제 호출 거부)으로 확인하며, 실패하면 시작을 거부한다(T22). 실행 중에는 L3가 허용 항목 밖의 이벤트·승인 요청을 거절하고 `turn/interrupt` 뒤 Task를 정지한다.
 - **대기 상한:** Codex는 도구 호출 대기 상한이 없다. 세션 관리자가 호출별 감시 상한(ASK 5분+MCP 실행 상한+여유)을 넘기면 interrupt하고 Task를 정지한다. SEND 전송 뒤면 결과 불명이다(I8).
 - **로그인:** ChatGPT 기기 코드 또는 API 키, 둘 다 Codex 안의 로그인이다. 동시 실행 중 토큰 갱신이 겹쳐 한 Task의 인증이 실패하면 그 Task만 정지하고 새 Task로 다시 시작하라고 안내한다(Codex 0.162.1은 프로세스 사이 갱신 잠금이 없다). 자격증명은 Codex가 직접 Windows 자격증명 관리자(keyring)에 저장하고 우리 `secrets.py`는 관여하지 않는다. OpenAI API를 직접 부르는 모델 경로는 두지 않는다(2026-10-18). Scanner는 별도 API 키를 쓴다.
+- **실행 환경과 경로(C):** 앱 폴더는 `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 사용자 전용 권한이다. codex 설치 폴더(버전별), CODEX_HOME, Task 폴더(`tasks\<task_id>`)를 둔다. launcher는 환경변수를 허용 목록(`SYSTEMROOT`·`WINDIR`·`TEMP`·`TMP`·`LOCALAPPDATA`·`APPDATA`·`USERPROFILE`·`CODEX_HOME`)만 넘기고 `CODEX_*`·`OPENAI_*`·프록시 변수는 넘기지 않는다. Task 폴더는 `-c sqlite_home=<Task 폴더>`로 넘긴다. Codex는 설정의 `sqlite_home`을 환경변수 `CODEX_SQLITE_HOME`과 CODEX_HOME보다 우선한다(0.162.1 `core/src/config/mod.rs`). stderr는 Task 폴더의 격리 파일로 보내고 함께 지운다. L1 설정 파일과 모델 정보 파일은 저장소 `config/codex/`에 두고, 앱 시작 때 CODEX_HOME에 쓴다.
 - **원문:** Codex 로그 DB는 도구 결과 원문을 저장하고 끌 수 없다. `sqlite_home`을 Task 전용 폴더로 두고 Codex 종료 뒤·앱 시작 때 지운다(11.4절).
 - **화면:** 사용자 화면은 GUI 하나다. Codex TUI(`codex --remote`)는 app-server에 직접 붙는 별도 클라이언트라서 Guard 도구 등록·L3 감시를 건너뛰고 설정을 바꿀 수 있으므로 쓰지 않는다. 터미널 화면이 필요하면 세션 관리자 위에 붙인다.
 - 모델 제공자로 나가는 프롬프트에는 이미 공개 승인된 결과만 들어간다. 그러나 모델 제공자 자체가 외부 수신자라는 문제는 이 Guard의 집행 범위 밖이며, 시연은 합성 자료와 승인된 모델 환경에서만 한다.
