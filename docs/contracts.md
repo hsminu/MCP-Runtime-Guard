@@ -39,6 +39,8 @@
 | 2026-10-18 | 여러 Task를 동시에 실행할 수 있다 | Task마다 codex 프로세스를 따로 띄운다. config는 모든 Task에 같은 내용으로 앱 시작 때 한 번 쓰고, Task 시작마다 해시로 확인만 한다. `sqlite_home` 등 Task별 값은 실행 인자로 넘긴다. Codex 0.162.1의 ChatGPT 토큰 갱신은 프로세스 사이 잠금이 없어(`login/src/auth/manager.rs:2846`) 두 Task가 거의 동시에 갱신하면 한쪽이 "refresh token already used"로 실패할 수 있다. 이때 그 Task만 정지하고 새 Task로 다시 시작하라고 안내한다. 드물고 fail-closed라 받아들인다. 검증은 T46(C)(#19 3번) |
 | 2026-10-18 | 하네스 연결의 담당 세부를 정한다 | L2 결과 입구는 A가 주입형 포트로 열고 C가 구현을 채운다. 입구가 없으면 시작을 거부하고 개발용 건너뛰기는 두지 않는다(#21 3번). Codex 자격증명은 Codex가 직접 keyring에 저장하고 `secrets.py`는 관여하지 않는다. CODEX_HOME에 인증 파일을 따로 쓰는지는 C가 T43에서 확인한다(#21 8번) |
 | 2026-10-18 | 남은 담당을 정한다 | 설정 파일·Profile 로딩: B가 읽어 Catalog에 넣고, C가 경로·실행 파일을 검증하고, A가 앱 시작에 연결한다(#19 1번). 정책 변경: 화면은 A, 변경 명령과 Task 정지 처리는 B(#19 4번). 모델에 돌려줄 고정 문구표: B 작성, A 검토(#19 5번). C-CODEX-05 약관 재확인: C가 최종 제출 전에 한다(#19 8번). `pyproject.toml`·lock: ENV-01 참고(#19 2번) |
+| 2026-10-18 | B 미결 요청 세 개를 정한다 | NOTIFY-01: 만료 확정은 Guard(B) 타이머, 요청마다 정확히 한 번 알림. ACCESS-01: 동기 `AccessChecker`, AGT용 대기 장치 제거(3인 합의). FP-01: 지문은 RFC 8785(JCS), B `digest.py`의 별도 함수. 세부는 미결 요청 표. 개발문서 3.4·8.1·8.3·10.1·10.3절 |
+| 2026-10-18 | A가 정한 입력·수집 규칙 다섯 개를 승인한다(A56) | API 키 앞뒤 공백 제거, 4자 이하 키는 끝자리도 숨김, 파일 서버 등록은 폴더 규칙 최소 1개, `tools/list`에서 같은 cursor가 반복되면 수집 중단, 도구 이름이 중복되면 수집 중단. 중단은 미완료 경고로 처리한다(측정 기준 3) |
 
 측정 기준
 
@@ -46,7 +48,7 @@
 2. 목록 수신: 프레이밍을 제거하고 HTTP 압축을 푼 뒤의 응답 JSON-RPC 메시지 UTF-8 바이트(공백·envelope 포함). stdio는 해당 메시지, HTTP는 JSON 응답 또는 SSE 이벤트 payload에 적용한다. 파싱 후 재직렬화한 크기로 대신하지 않는다. 오래 유지되는 SSE 스트림 전체에는 페이지 상한을 적용하지 않는다.
 3. 상한 초과나 수집 실패를 도구 0개·검사 완료·안전으로 취급하지 않는다. 원문·인증정보를 경고에 넣지 않고, 수집되지 않은 정의를 추정해서 호출하지 않는다.
 
-Scanner 결과는 아직 B ScanReport에 연결하지 않았다. 필수 분석기·완료/생략/실패·지문·severity 번역 계약은 미결이다. 서버별 도구 수·페이지 수·조회 시간·검사 동시성 상한은 2026-10-15 Scanner 운영 상한 결정으로 정했다.
+Scanner 결과는 아직 B ScanReport에 연결하지 않았다. `ScanReport` 필드 확장은 SCAN-01이다. 필수 분석기·완료/생략/실패·지문·severity 번역 계약은 미결이다. 서버별 도구 수·페이지 수·조회 시간·검사 동시성 상한은 2026-10-15 Scanner 운영 상한 결정으로 정했다.
 
 ## 합의할 계약
 
@@ -93,7 +95,7 @@ Scanner 결과는 아직 B ScanReport에 연결하지 않았다. 필수 분석�
 
 ## 미결 요청
 
-질문과 제안의 세부는 [B6 계약 변경안](archive/b6-contract-proposal.md), [A·C 공동 검토 요청](archive/ac-contract-review-request.md), [영속 순번·복구 설계안](archive/b6-sequence-recovery-design.md)에 있다. 회신을 받으면 상태를 고치고, 확정한 내용은 아래 합의 기록에 남긴다.
+질문과 제안의 세부는 [B6 계약 변경안](archive/b6-contract-proposal.md), [A·C 공동 검토 요청](archive/ac-contract-review-request.md), [영속 순번·복구 설계안](archive/b6-sequence-recovery-design.md)에 있다. 회신을 받으면 상태를 고치고, 확정한 내용은 아래 합의 기록에 남긴다. SEQ·REC에 대한 A 회신(2026-10-13)은 [A 회신](archive/tasks/a-seq-rec-reply-2026-10-13.md)에 있다.
 
 | ID | 대상 | 상태 |
 | --- | --- | --- |
@@ -109,14 +111,20 @@ Scanner 결과는 아직 B ScanReport에 연결하지 않았다. 필수 분석�
 | AGT-04 | AGT 제거에 따른 reason code(`AGT_DENY`·`AGT_ERROR`)와 domain 정리 | 요청 초안. `domain/*` 변경이라 3인 합의 필요 |
 | SCHEMA-01 | 전체 스키마 검증과 C launcher 연결 | 요청 초안. B 방향은 정규식 기능을 유지하고 전체 검증을 종료 가능한 프로세스에서 실행하는 것이다([연결안](archive/b-schema-validation-proposal.md)) |
 | ENV-01 | 통합 버전·lock·검사 도구·Scanner 조합 | 2026-10-18 결정으로 편집 절차 확정: 의존성은 각 담당이 main PR로 제안, C가 CI로 확인, 사용자가 병합. 버전 고정 묶음(Codex 설치 스크립트 포함)은 C. 조합 자체의 합의 기록은 없다 |
-| SEQ-01 | Task ID 생애 계수·초기값·공백/커밋 배정 회수 금지 | 설계안 작성 |
-| SEQ-02 | 영속 콜백/Store 입구·epoch 인자·오류/ACK·할당 감사 | 설계안 작성 |
-| SEQ-03 | 계수 구조·schema 이관·legacy/삭제/백업 보장 범위 | 설계안 작성 |
-| REC-01 | 이전 실행자 종료·DB 단일 소유·시작 gate/준비 ACK | 설계안 작성 |
-| REC-02 | 요청/승인/Task 상태 표·split 중단·v1 kind 유실·U8 충돌 | 설계안 작성 |
-| REC-03 | epoch 증가와 새 Task의 영속 관계·과거 epoch 보존 | 설계안 작성 |
-| REC-04 | 버전·반복 적용·run 표식·UTC/감사·RecoveryReport | 설계안 작성 |
-| REC-05 | 전체 복구 TX·불명 COMMIT·예산·백업/미확정 메모리 | 설계안 작성 |
+| SEQ-01 | Task ID 생애 계수·초기값·공백/커밋 배정 회수 금지 | 설계안 작성. A 동의, C 미회신 |
+| SEQ-02 | 영속 콜백/Store 입구·epoch 인자·오류/ACK·할당 감사 | 설계안 작성. A 조건부 동의(할당 COMMIT 불명을 Store 조회로 노출, 고정 실패 Reason), C 미회신 |
+| SEQ-03 | 계수 구조·schema 이관·legacy/삭제/백업 보장 범위 | 설계안 작성. A 동의, 이관 시점(자동/명시)·백업 책임을 B에 질문, C 미회신 |
+| REC-01 | 이전 실행자 종료·DB 단일 소유·시작 gate/준비 ACK | 설계안 작성. A 동의(수정 요청: DB 단일 소유 잠금은 C 안전 연산으로), C 미회신 |
+| REC-02 | 요청/승인/Task 상태 표·split 중단·v1 kind 유실·U8 충돌 | 설계안 작성. A 부분 동의, v1 kind 유실 행은 게이트 닫기 대신 격리 대안 선호, C 미회신 |
+| REC-03 | epoch 증가와 새 Task의 영속 관계·과거 epoch 보존 | 설계안 작성. A는 B안(옛 epoch 보존·새 Task 관계 기록) 선호, C 미회신 |
+| REC-04 | 버전·반복 적용·run 표식·UTC/감사·RecoveryReport | 설계안 작성. A 동의, RecoveryReport 필드 후보 제시, C 미회신 |
+| REC-05 | 전체 복구 TX·불명 COMMIT·예산·백업/미확정 메모리 | 설계안 작성. A 동의, 복구 시간 예산 질문, C 미회신 |
+| FP-01 | 도구 지문 정규화: float 표기 규칙, 승인 해시(`canonical_json`)와 분리한 함수의 위치·담당 | 2026-10-18 결정: RFC 8785(JCS) 표기, B가 `digest.py`에 승인 해시와 분리한 지문 함수를 둔다. C Registry·Scanner는 그 함수를 쓴다 |
+| NOTIFY-01 | `Pending` 최종 결과 알림: 형식, 정확히 한 번, 아무 조작 없이 만료 시각이 지났을 때의 확정 주체, Runner 감시 상한과의 순서, 앱 종료 시 처리 | 2026-10-18 결정: 만료 확정은 Guard(B) 타이머. 거절·만료·취소·무효·지문 무효화·승인 실행 결과를 `request_id`마다 정확히 한 번 알리고 bridge 결과와 중복 전달하지 않는다(T45). 세션 관리자 감시 상한은 알림이 없을 때의 마지막 안전장치. 형식·앱 종료 시 처리는 B 계약 초안 |
+| SCAN-01 | `ScanReport` 확장: `overall_risk`(참고)·`threat_summary`(300자) 필드 형식 | 요청 초안. 2026-10-15 Scanner 결정의 후속(B 정의, C 번역·C4.9) |
+| ACCESS-01 | 접근 규칙 연결: `AccessChecker` 포트의 비동기·시간 제한 유지 여부, 구현체 형태(A가 B 판정 함수를 감싸는지), 규칙 설정의 `policy_version` 반영·계산 주체 | 2026-10-18 결정: `AccessChecker`를 동기 포트로 바꾸고 Guard의 AGT용 대기 장치(시간 제한·동시 수·정리·미완료 추적)를 제거한다. 판정기 안 I/O 금지, 예외는 `fail_closed`로 DENY, 형식 불명은 `error=True`. `policy_version`은 설정 로딩 담당 B가 계산. `ports.py` 변경이라 AGT-04와 함께 3인 합의 |
+| STOP-01 | 세션 관리자용 Task 정지 입구: 감시 상한 초과(T42)·L3 허용 밖 항목(T41)·로그인 실패·사용량 한도·인증 갱신 충돌의 정지 API, 사유 코드, 감사(`request_user_input`은 사실만 기록) | 요청 초안. 사람용 `HumanControl.cancel`과 분리(8.5절). B 정의, A 사용(#20 2번) |
+| DESC-01 | Catalog의 검토된 설명 필드: 서버 원본 설명 대신 사용자가 검토한 설명을 도구 목록에 쓰는 옵션(10.4절) | 요청 초안. 현재 `Catalog.tool_views`는 빈 설명 고정. B 정의, A 등록 화면 입력(#20 3번) |
 
 ## 합의 기록
 
