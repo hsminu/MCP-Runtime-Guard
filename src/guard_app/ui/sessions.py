@@ -30,6 +30,7 @@ from guard_app.services.bridge import (
     TaskProjection,
 )
 
+from .presentation import codex_failure_notice
 from .task_status import status_title
 from .untrusted_text import untrusted_display_text
 from .widgets import KeyboardActionButton, plain_label
@@ -282,6 +283,7 @@ class SessionWorkspace(QWidget):
 
     def _refresh_view(self, view: SessionView) -> None:
         snapshot = view.snapshot
+        failure_notice = "" if snapshot is None else codex_failure_notice(snapshot.connection_code)
         active = snapshot is not None
         busy = bool(snapshot and (snapshot.task_id, snapshot.epoch) in self._busy_scopes)
         writable = bool(
@@ -291,6 +293,7 @@ class SessionWorkspace(QWidget):
             and snapshot is not None
             and snapshot.status is TaskStatus.RUNNING
             and snapshot.can_accept_message
+            and not failure_notice
             and view.pending_command is None
         )
         view.send.setEnabled(writable and bool(view.draft.toPlainText().strip()))
@@ -321,7 +324,9 @@ class SessionWorkspace(QWidget):
                 f"{status_title(snapshot.status)} · Task {snapshot.task_id} "
                 f"· epoch {snapshot.epoch}"
             )
-            if snapshot.status is TaskStatus.WAITING_APPROVAL:
+            if failure_notice:
+                note = failure_notice
+            elif snapshot.status is TaskStatus.WAITING_APPROVAL:
                 note = "승인 대기 중 · 결과 · 실행 활동에서 요청 사본을 확인해."
             elif snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
                 note = (
@@ -336,12 +341,7 @@ class SessionWorkspace(QWidget):
                     "Store의 Task 상태는 위에 표시된 값이야. 새 세션에서 다시 시작해."
                 )
             elif not snapshot.model_ready:
-                note = {
-                    "CODEX_SESSION_UNAVAILABLE": "Codex 연결이 준비되지 않아 실행할 수 없어.",
-                    "CODEX_SESSION_INVALID": "Codex 연결을 확인하지 못해 실행할 수 없어.",
-                    "CODEX_L2_UNAVAILABLE": "Codex 시작 검사가 준비되지 않아 실행할 수 없어.",
-                    "CODEX_L2_FAILED": "Codex 시작 검사를 통과하지 못해 실행할 수 없어.",
-                }.get(snapshot.connection_code, "모델 연결을 확인하지 못해 실행할 수 없어.")
+                note = "모델 연결을 확인하지 못해 실행할 수 없어."
             elif busy or view.pending_command:
                 note = "실행 요청 처리 중 · 백엔드 결과를 기다리는 중이야."
             elif not self._ready:
@@ -436,20 +436,21 @@ class SessionWorkspace(QWidget):
         for view in self.sessions.values():
             if view.pending_command == command_id:
                 view.pending_command = None
-                if code == "MESSAGE_UNAVAILABLE":
+                # Always replace the pending notice, including unknown failures.
+                view.command_notice = ""
+                failure_notice = codex_failure_notice(code, creating=view.snapshot is None)
+                if failure_notice:
+                    view.command_notice = failure_notice
+                elif code == "MESSAGE_UNAVAILABLE":
                     view.command_notice = "메시지를 접수하지 않았어. 현재 Task 상태를 다시 확인해."
-                elif code.startswith("SESSION_CREATION_"):
+                elif code == "SESSION_CREATION_UNAVAILABLE":
                     view.command_notice = "이 실행 구성에는 새 Task 생성 기능이 연결되지 않았어."
-                elif code == "CODEX_L2_UNAVAILABLE":
-                    view.command_notice = "Codex 시작 검사가 준비되지 않아 세션을 시작하지 않았어."
-                elif code == "CODEX_L2_FAILED":
-                    view.command_notice = "Codex 시작 검사를 통과하지 못해 세션을 시작하지 않았어."
-                elif code == "CODEX_SESSION_UNAVAILABLE":
-                    view.command_notice = "Codex 연결이 준비되지 않아 세션을 시작하지 않았어."
-                elif code == "CODEX_SESSION_INVALID":
-                    view.command_notice = "Codex 연결을 확인하지 못해 세션을 시작하지 않았어."
+                elif code == "SESSION_CREATION_UNCONFIRMED":
+                    view.command_notice = "새 Task 생성 결과를 확인하지 못했어. 연결 상태를 확인해."
                 elif code in ("BACKEND_UNCONFIRMED", "NOT_READY", "STARTUP_FAILED"):
                     view.command_notice = "요청 처리를 확인하지 못했어. 연결 상태를 확인해."
+                elif view.snapshot is None:
+                    view.command_notice = "세션 시작 결과를 확인하지 못했어. 연결 상태를 확인해."
                 self._refresh_view(view)
 
     def _refresh_list(self, *_args: object) -> None:
@@ -458,6 +459,8 @@ class SessionWorkspace(QWidget):
         for view in sorted(self.sessions.values(), key=lambda item: item.updated, reverse=True):
             if view.snapshot is None:
                 status = "초안 · 미연결"
+            elif view.snapshot.connection_code == "CODEX_CLEANUP_UNCONFIRMED":
+                status = "정리 완료 미확인"
             elif view.snapshot.status is TaskStatus.WAITING_APPROVAL:
                 status = "승인 필요 · 대기 중"
             elif not view.snapshot.model_ready:

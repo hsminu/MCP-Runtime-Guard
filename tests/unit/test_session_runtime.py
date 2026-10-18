@@ -13,6 +13,12 @@ from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.services.bridge import ControlAction, SessionOptions
 from guard_app.services.runner import CodexAuthenticationError, RunnerStateError
+from guard_app.services.session_preparation import (
+    ConfigurationReceipt,
+    SessionPreparation,
+    StartupReceipt,
+    TaskResources,
+)
 from guard_app.services.session_runtime import SessionRuntime, SessionRuntimeError
 from guard_app.storage.sqlite_store import SQLiteStore
 
@@ -45,11 +51,34 @@ async def passed_l2():
     return True
 
 
+def synthetic_preparation(l2=passed_l2):
+    configuration = ConfigurationReceipt("a" * 64, "b" * 64, "c" * 64)
+
+    async def startup():
+        if l2 is None:
+            return StartupReceipt(configuration, None, False)
+        return StartupReceipt(configuration, configuration, await l2())
+
+    async def verify(expected):
+        return expected
+
+    async def prepare(task_id, expected):
+        return TaskResources(task_id, expected, task_id, object())
+
+    async def confirm(resources):
+        return True
+
+    async def cleanup(resources):
+        pass
+
+    return SessionPreparation(startup, verify, prepare, confirm, cleanup)
+
+
 def make_runtime(tmp_path, *, l2=passed_l2):
     store = SQLiteStore(tmp_path / "sessions.db", audit_id_factory=lambda: "unit-audit")
     sessions = []
 
-    async def factory(state, options):
+    async def factory(state, options, resources):
         assert state.status is TaskStatus.RUNNING
         assert options == SessionOptions()
         session = Session()
@@ -59,7 +88,7 @@ def make_runtime(tmp_path, *, l2=passed_l2):
     runtime = SessionRuntime(
         store,
         session_factory=factory,
-        startup_l2_check=l2,
+        preparation=synthetic_preparation(l2),
         close_store=store.close,
     )
     return runtime, sessions
@@ -251,7 +280,7 @@ def test_close_during_factory_creation_reclaims_late_session(tmp_path):
         entered = asyncio.Event()
         session = Session()
 
-        async def factory(state, options):
+        async def factory(state, options, resources):
             entered.set()
             try:
                 await asyncio.Future()
@@ -309,7 +338,7 @@ def test_stubborn_factory_close_is_bounded_and_late_session_reclaimed(tmp_path, 
         entered, released = asyncio.Event(), asyncio.Event()
         session = Session()
 
-        async def factory(state, options):
+        async def factory(state, options, resources):
             entered.set()
             try:
                 await released.wait()
@@ -354,7 +383,8 @@ def test_failed_creation_cleanup_is_bounded(tmp_path, monkeypatch):
         try:
             with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
                 await asyncio.wait_for(runtime.create_session(SessionOptions()), 1)
-            assert not runtime._sessions
+            assert runtime._sessions
+            assert runtime._resources
             assert not runtime._creating
         finally:
             released.set()

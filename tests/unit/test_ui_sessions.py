@@ -409,3 +409,143 @@ def test_missing_codex_dependency_keeps_draft_and_shows_persistent_rejection(
     assert view.notice.text() == message
     assert view.draft.toPlainText() == "retained first instruction"
     assert not any(item.snapshot for item in shell.sessions.sessions.values())
+
+
+@pytest.mark.parametrize(
+    ("code", "detail"),
+    [
+        ("CODEX_CONFIG_UNAVAILABLE", "설정 검증이 준비되지 않았어"),
+        ("CODEX_CONFIG_MISMATCH", "시작 검사에서 확인한 설정과 달라"),
+        ("CODEX_PREPARATION_FAILED", "세션 준비를 완료하지 못했어"),
+        ("CODEX_CLEANUP_UNCONFIRMED", "정리 완료를 확인하지 못했어"),
+    ],
+)
+def test_preparation_rejection_replaces_pending_notice_only_for_its_draft(
+    window, monkeypatch, code, detail
+):
+    shell, panel, bridge = window
+    requests = []
+    monkeypatch.setattr(
+        bridge,
+        "request_new_session",
+        lambda key, options, *, command_id: requests.append((key, command_id)),
+    )
+    rejected = shell.sessions.current
+    rejected.draft.setPlainText("retained instruction")
+    rejected.start.click()
+    draft_key, command = requests[0]
+    assert "확인 중" in rejected.notice.text()
+    shell.new_session_button.click()
+    selected = shell.sessions.current
+    selected.draft.setPlainText("other draft")
+    other_notice = selected.notice.text()
+    bridge.command_changed.emit(
+        CommandEvent(command, "execution", "new_session", draft_key, CommandStage.REJECTED, code)
+    )
+    assert rejected.pending_command is None
+    assert detail in rejected.notice.text()
+    assert "확인 중" not in rejected.notice.text()
+    assert rejected.draft.toPlainText() == "retained instruction"
+    assert rejected.snapshot is None
+    assert shell.sessions.current is selected
+    assert selected.notice.text() == other_notice
+    assert selected.draft.toPlainText() == "other draft"
+    if code == "CODEX_CLEANUP_UNCONFIRMED":
+        assert "시작하지 않았어" not in rejected.notice.text()
+        assert "자동으로 다시 실행하지 않아" in rejected.notice.text()
+        assert "정리 상태를 확인해" in rejected.notice.text()
+    else:
+        assert "시작하지 않았어" in rejected.notice.text()
+        assert "앱 설정을 확인" in rejected.notice.text()
+    notice = rejected.notice.text()
+    panel.state_changed.emit()
+    shell.sessions.set_ready(True)
+    assert rejected.notice.text() == notice
+    bridge.session_created.emit(SessionCreated(command, draft_key, snapshot()))
+    shell.sessions.settle_command(command, "CODEX_CONFIG_MISMATCH")
+    assert rejected.snapshot is None  # Late completion cannot adopt a refused draft.
+    assert rejected.notice.text() == notice
+
+
+@pytest.mark.parametrize(
+    "status", [TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL, TaskStatus.HALTED]
+)
+@pytest.mark.parametrize(
+    ("code", "detail"),
+    [
+        ("CODEX_CONFIG_UNAVAILABLE", "설정 검증이 준비되지 않았어"),
+        ("CODEX_CONFIG_MISMATCH", "시작 검사에서 확인한 설정과 달라"),
+        ("CODEX_PREPARATION_FAILED", "세션 준비를 완료하지 못했어"),
+        ("CODEX_CLEANUP_UNCONFIRMED", "정리 완료를 확인하지 못했어"),
+    ],
+)
+def test_existing_task_preparation_notice_preserves_scope_and_disables_send(
+    window, status, code, detail
+):
+    shell, _, bridge = window
+    alpha = snapshot(can_accept_message=True, model_mode="codex")
+    bridge.task_changed.emit(alpha)
+    failed = shell.sessions.current
+    beta = replace(alpha, task_id="task-beta")
+    bridge.task_changed.emit(beta)
+    shell.sessions.select("task:task-beta:1")
+    selected = shell.sessions.current
+    selected.draft.setPlainText("other Task draft")
+    other_notice = selected.notice.text()
+    bridge.task_changed.emit(
+        replace(alpha, status=status, connection_code=code, runner_state="stopped")
+    )
+    assert detail in failed.notice.text()
+    assert "시작하지 않았어" not in failed.notice.text()
+    assert not failed.send.isEnabled()
+    if code == "CODEX_CLEANUP_UNCONFIRMED":
+        row = next(
+            shell.sessions.list.item(index)
+            for index in range(shell.sessions.list.count())
+            if shell.sessions.list.item(index).data(Qt.ItemDataRole.UserRole) == failed.key
+        )
+        assert "정리 완료 미확인" in row.text()
+        assert "연결 필요" not in row.text()
+    assert shell.sessions.current is selected
+    assert selected.notice.text() == other_notice
+    assert selected.draft.toPlainText() == "other Task draft"
+    assert selected.send.isEnabled()
+
+
+def test_unknown_creation_failure_clears_pending_notice_without_echoing_raw_text(
+    window, monkeypatch
+):
+    shell, _, bridge = window
+    monkeypatch.setattr(bridge, "request_new_session", lambda *args, **kwargs: None)
+    view = shell.sessions.current
+    view.start.click()
+    command = view.pending_command
+    assert command is not None
+    raw = r"C:\private\codex: secret exception text"
+    shell.sessions.settle_command(command, raw)
+    assert "세션 시작 결과를 확인하지 못했어" in view.notice.text()
+    assert "확인 중" not in view.notice.text()
+    assert raw not in view.notice.text()
+    assert "secret exception" not in view.notice.text()
+
+
+@pytest.mark.parametrize(
+    ("code", "detail"),
+    [
+        ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않았어"),
+        ("SESSION_CREATION_UNCONFIRMED", "새 Task 생성 결과를 확인하지 못했어"),
+    ],
+)
+def test_creation_unavailable_and_unconfirmed_have_distinct_notices(
+    window, monkeypatch, code, detail
+):
+    shell, _, bridge = window
+    monkeypatch.setattr(bridge, "request_new_session", lambda *args, **kwargs: None)
+    view = shell.sessions.current
+    view.start.click()
+    assert view.pending_command is not None
+    shell.sessions.settle_command(view.pending_command, code)
+    assert detail in view.notice.text()
+    assert "확인 중" not in view.notice.text()
+    if code == "SESSION_CREATION_UNCONFIRMED":
+        assert "기능이 연결되지" not in view.notice.text()

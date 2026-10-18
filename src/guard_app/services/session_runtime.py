@@ -26,13 +26,21 @@ from guard_app.services.bridge import (
     TaskProjection,
 )
 from guard_app.services.runner import CodexSession, CodexTaskRunner
+from guard_app.services.session_preparation import (
+    ConfigurationReceipt,
+    SessionPreparation,
+    StartupReceipt,
+    TaskResources,
+    valid_configuration,
+)
 from guard_app.storage.sqlite_store import SQLiteStore
 
 # A-local proposal only: A's factory must use C's executable/config/model hash
 # verification and separate app-server, then perform account/read and relay setup.
-# The L2 callback runs once per app lifetime and must return exactly True.
-type CodexSessionFactory = Callable[[TaskState, SessionOptions], Awaitable[CodexSession]]
-type StartupL2Check = Callable[[], Awaitable[bool]]
+# Receipts and callbacks are A-local composition seams, not final B/C APIs.
+type CodexSessionFactory = Callable[
+    [TaskState, SessionOptions, TaskResources], Awaitable[CodexSession]
+]
 
 SESSION_CLEANUP_TIMEOUT_S = 0.5
 
@@ -47,14 +55,15 @@ class SessionRuntime:
         store: Store,
         *,
         session_factory: CodexSessionFactory | None = None,
-        startup_l2_check: StartupL2Check | None = None,
+        preparation: SessionPreparation | None = None,
         close_store: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
         self._session_factory = session_factory
-        self._startup_l2_check = startup_l2_check
+        self._preparation = preparation
         self._startup_lock = asyncio.Lock()
-        self._l2_ready = False
+        self._configuration: ConfigurationReceipt | None = None
+        self._startup_attempted = False
         self._close_store = close_store
         self._runners: dict[str, CodexTaskRunner] = {}
         self._sessions: dict[str, CodexSession] = {}
@@ -62,26 +71,85 @@ class SessionRuntime:
         self._codes: dict[str, str] = {}
         self._closed = False
         self._creating: set[asyncio.Task[object]] = set()
+        self._creating_ids: dict[asyncio.Task[object], str] = {}
         self._defer_store_close = False
         self._cleanup_unconfirmed = False
+        self._resources: dict[str, TaskResources] = {}
+        self._cleanup_started: set[str] = set()
+        self._cleanup_operations: set[asyncio.Task[None]] = set()
 
     def runner_for_task(self, task_id: str) -> CodexTaskRunner:
         if self._closed or task_id not in self._runners:
             raise SessionRuntimeError("SESSION_UNAVAILABLE")
         return self._runners[task_id]
 
-    async def _check_startup(self) -> None:
+    def _check_creation_allowed(self) -> None:
+        current = asyncio.current_task()
+        if self._closed or (current is not None and current.cancelling()):
+            raise SessionRuntimeError("SESSION_UNAVAILABLE")
+        if self._cleanup_unconfirmed:
+            raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
+
+    @staticmethod
+    async def _prepared[Result](action: Callable[[], Awaitable[Result]]) -> Result:
+        """Translate callback faults without swallowing cancellation or raw text."""
+
+        async def invoke() -> Result:
+            return await action()
+
+        operation = asyncio.create_task(invoke())
+        try:
+            return await operation
+        finally:
+            if operation.done() and not operation.cancelled() and operation.exception() is not None:
+                raise SessionRuntimeError("CODEX_PREPARATION_FAILED") from None
+
+    async def _check_startup(self) -> ConfigurationReceipt:
         async with self._startup_lock:
-            if self._closed:
-                raise SessionRuntimeError("SESSION_UNAVAILABLE")
-            if not self._l2_ready:
-                if self._startup_l2_check is None:
+            self._check_creation_allowed()
+            preparation = self._preparation
+            if type(preparation) is not SessionPreparation or not all(
+                callable(callback)
+                for callback in (
+                    preparation.prepare_startup,
+                    preparation.verify_configuration,
+                    preparation.prepare_task,
+                    preparation.confirm_exit,
+                    preparation.cleanup_task,
+                )
+            ):
+                raise SessionRuntimeError("CODEX_CONFIG_UNAVAILABLE")
+            if self._configuration is None:
+                if self._startup_attempted:
+                    raise SessionRuntimeError("CODEX_PREPARATION_FAILED")
+                self._startup_attempted = True
+                receipt = await self._prepared(preparation.prepare_startup)
+                self._check_creation_allowed()
+                if type(receipt) is not StartupReceipt or not valid_configuration(
+                    receipt.configuration
+                ):
+                    raise SessionRuntimeError("CODEX_PREPARATION_FAILED")
+                if receipt.l2_configuration is None:
                     raise SessionRuntimeError("CODEX_L2_UNAVAILABLE")
-                if await self._startup_l2_check() is not True:
+                if receipt.l2_passed is not True:
                     raise SessionRuntimeError("CODEX_L2_FAILED")
-                self._l2_ready = True
-            if self._closed:
-                raise SessionRuntimeError("SESSION_UNAVAILABLE")
+                if not valid_configuration(receipt.l2_configuration):
+                    raise SessionRuntimeError("CODEX_PREPARATION_FAILED")
+                if receipt.configuration != receipt.l2_configuration:
+                    raise SessionRuntimeError("CODEX_CONFIG_MISMATCH")
+                self._configuration = receipt.configuration
+            return self._configuration
+
+    async def _verify_configuration(self, expected: ConfigurationReceipt) -> None:
+        preparation = self._preparation
+        if preparation is None:
+            raise SessionRuntimeError("CODEX_CONFIG_UNAVAILABLE")
+        actual = await self._prepared(lambda: preparation.verify_configuration(expected))
+        self._check_creation_allowed()
+        if not valid_configuration(actual):
+            raise SessionRuntimeError("CODEX_PREPARATION_FAILED")
+        if actual != expected:
+            raise SessionRuntimeError("CODEX_CONFIG_MISMATCH")
 
     async def create_session(self, options: SessionOptions) -> TaskProjection:
         if self._closed or type(options) is not SessionOptions:
@@ -94,12 +162,15 @@ class SessionRuntime:
             return await self._create_session(options)
         finally:
             self._creating.discard(current)
+            self._creating_ids.pop(current, None)
             if self._defer_store_close and not self._creating:
                 self._close_store_once()
 
     async def _create_session(self, options: SessionOptions) -> TaskProjection:
-        await self._check_startup()
-        if self._session_factory is None:
+        expected = await self._check_startup()
+        await self._verify_configuration(expected)
+        factory = self._session_factory
+        if factory is None:
             raise SessionRuntimeError("CODEX_SESSION_UNAVAILABLE")
         state = TaskState(
             task_id=f"session-{uuid4().hex}",
@@ -108,26 +179,58 @@ class SessionRuntime:
             policy_version="codex-pending-v1",
             status=TaskStatus.RUNNING,
         )
-        # No Store RUNNING row exists while C's secure launch is unconfirmed.
-        session = await self._session_factory(state, options)
-        if any(session is existing for existing in self._sessions.values()):
-            # Do not close another Task's handle when a factory violates isolation.
-            raise SessionRuntimeError("CODEX_SESSION_INVALID")
+        current = asyncio.current_task()
+        if current is not None:
+            self._creating_ids[current] = state.task_id
+        preparation = self._preparation
+        if preparation is None:
+            raise SessionRuntimeError("CODEX_CONFIG_UNAVAILABLE")
         created = adopted = False
         try:
+            resources = await self._prepared(
+                lambda: preparation.prepare_task(state.task_id, expected)
+            )
+            if (
+                type(resources) is not TaskResources
+                or resources.task_id != state.task_id
+                or type(resources.owner_token) is not str
+                or not resources.owner_token
+                or len(resources.owner_token) > 256
+                or resources.handle is None
+                or any(
+                    resources.owner_token == owned.owner_token or resources.handle is owned.handle
+                    for owned in self._resources.values()
+                )
+            ):
+                # A mismatched/shared receipt never grants ownership to erase it.
+                # Its partial resource ownership is nevertheless unconfirmed;
+                # reject additional allocations until the app is restarted.
+                self._cleanup_unconfirmed = True
+                raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
+            self._resources[state.task_id] = resources
+            self._check_creation_allowed()
+            if not valid_configuration(resources.configuration):
+                raise SessionRuntimeError("CODEX_PREPARATION_FAILED")
+            if resources.configuration != expected:
+                raise SessionRuntimeError("CODEX_CONFIG_MISMATCH")
+            # Recheck after resource setup, immediately before session creation.
+            await self._verify_configuration(expected)
+            # No Store RUNNING row exists while C's secure launch is unconfirmed.
+            session = await self._prepared(lambda: factory(state, options, resources))
+            if any(session is existing for existing in self._sessions.values()):
+                raise SessionRuntimeError("CODEX_SESSION_INVALID")
+            self._sessions[state.task_id] = session
             if not all(
                 callable(getattr(session, name, None)) for name in ("send", "interrupt", "aclose")
             ):
                 raise SessionRuntimeError("CODEX_SESSION_INVALID")
-            if self._closed:
-                raise SessionRuntimeError("SESSION_UNAVAILABLE")
+            self._check_creation_allowed()
             await self.store.create_task(state, created_at_utc=datetime.now(UTC))
             created = True
             confirmed = await self.store.load_task(state.task_id)
             if confirmed != state:
                 raise StoreError()
-            if self._closed:
-                raise SessionRuntimeError("SESSION_UNAVAILABLE")
+            self._check_creation_allowed()
             runner = CodexTaskRunner(
                 state.task_id,
                 state.epoch,
@@ -139,8 +242,7 @@ class SessionRuntime:
             self._options[state.task_id] = options
             self._codes[state.task_id] = "READY_CODEX"
             snapshot = await self.snapshot(state.task_id)
-            if self._closed:
-                raise SessionRuntimeError("SESSION_UNAVAILABLE")
+            self._check_creation_allowed()
             adopted = True
             return snapshot
         finally:
@@ -148,14 +250,10 @@ class SessionRuntime:
                 discarded = self._runners.pop(state.task_id, None)
                 if discarded is not None:
                     discarded.close()
-                self._sessions.pop(state.task_id, None)
                 self._options.pop(state.task_id, None)
                 self._codes.pop(state.task_id, None)
                 try:
-                    close = getattr(session, "aclose", None)
-                    if callable(close) and not await self._bounded_cleanup(close):
-                        self._cleanup_unconfirmed = True
-                        raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
+                    await self._close_session(state.task_id)
                 finally:
                     if created:
                         await self._halt_store_task(state.task_id)
@@ -221,13 +319,14 @@ class SessionRuntime:
         finally:
             await self._close_session(task_id, interrupt=True)
 
-    @staticmethod
-    async def _bounded_cleanup(action: Callable[[], Awaitable[None]]) -> bool:
+    async def _bounded_cleanup(self, action: Callable[[], Awaitable[object]]) -> bool:
         async def invoke() -> None:
-            await action()
+            if await action() is not None:
+                raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
 
         operation = asyncio.create_task(invoke())
-        operation.add_done_callback(SessionRuntime._consume_cleanup)
+        self._cleanup_operations.add(operation)
+        operation.add_done_callback(self._consume_cleanup)
         try:
             done, _ = await asyncio.wait({operation}, timeout=SESSION_CLEANUP_TIMEOUT_S)
             return bool(done) and not operation.cancelled() and operation.exception() is None
@@ -235,27 +334,63 @@ class SessionRuntime:
             if not operation.done():
                 operation.cancel()
 
-    @staticmethod
-    def _consume_cleanup(operation: asyncio.Task[None]) -> None:
+    def _consume_cleanup(self, operation: asyncio.Task[None]) -> None:
+        self._cleanup_operations.discard(operation)
         if not operation.cancelled():
             operation.exception()
 
     async def _close_session(self, task_id: str, *, interrupt: bool = False) -> None:
-        session = self._sessions.pop(task_id, None)
-        if session is not None:
-            interrupted = closed = False
-            try:
-                interrupted = not interrupt or await self._bounded_cleanup(session.interrupt)
-            finally:
-                closed = await self._bounded_cleanup(session.aclose)
-            if not interrupted or not closed:
-                self._cleanup_unconfirmed = True
-                self._sessions[task_id] = session
-                self._codes[task_id] = "CODEX_CLEANUP_UNCONFIRMED"
+        session = self._sessions.get(task_id)
+        resources = self._resources.get(task_id)
+        if session is None and resources is None:
+            return
+        if task_id in self._cleanup_started:
+            raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
+        self._cleanup_started.add(task_id)
+        complete = False
+        try:
+            interrupted = not interrupt or session is None
+            closed = session is None
+            if session is not None:
+                interrupt_session = getattr(session, "interrupt", None)
+                close_session = getattr(session, "aclose", None)
+                try:
+                    if interrupt and callable(interrupt_session):
+                        interrupted = await self._bounded_cleanup(interrupt_session)
+                finally:
+                    if callable(close_session):
+                        closed = await self._bounded_cleanup(close_session)
+            confirmed = cleaned = resources is None
+            preparation = self._preparation
+            if resources is not None and preparation is not None:
+
+                async def confirm() -> None:
+                    nonlocal confirmed
+                    confirmed = await preparation.confirm_exit(resources) is True
+
+                confirmation_finished = await self._bounded_cleanup(confirm)
+                # No removal until termination is positively confirmed. If a
+                # timed-out callback later returns True, this path stays closed.
+                if closed and confirmation_finished and confirmed:
+                    cleaned = await self._bounded_cleanup(
+                        lambda: preparation.cleanup_task(resources)
+                    )
+                    if cleaned:
+                        self._resources.pop(task_id, None)
+            complete = interrupted and closed and confirmed and cleaned
+            if not complete:
                 raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
+            self._sessions.pop(task_id, None)
+            self._cleanup_started.discard(task_id)
+        finally:
+            if not complete:
+                self._cleanup_unconfirmed = True
+                self._codes[task_id] = "CODEX_CLEANUP_UNCONFIRMED"
 
     async def close(self) -> None:
         if self._closed:
+            if self._cleanup_unconfirmed:
+                raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
             return
         self._closed = True
         # Bridge normally cancels creation first; direct callers get the same
@@ -276,7 +411,11 @@ class SessionRuntime:
             results = await asyncio.gather(
                 *(
                     self._close_session(task_id, interrupt=True)
-                    for task_id in tuple(self._sessions)
+                    for task_id in tuple(self._sessions.keys() | self._resources.keys())
+                    # A pending factory can still launch a process. Its creator
+                    # exclusively owns cleanup until it returns/fails, even if
+                    # shutdown's bounded wait has already elapsed.
+                    if task_id not in self._creating_ids.values()
                 ),
                 return_exceptions=True,
             )
@@ -285,6 +424,7 @@ class SessionRuntime:
                 or unfinished_creation
                 or any(isinstance(result, BaseException) for result in results)
             ):
+                self._cleanup_unconfirmed = True
                 raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
         finally:
             self._runners.clear()
@@ -313,18 +453,18 @@ async def bootstrap_product(
     db_path: str,
     *,
     session_factory: CodexSessionFactory | None = None,
-    startup_l2_check: StartupL2Check | None = None,
+    preparation: SessionPreparation | None = None,
 ) -> BackendBindings:
     store = SQLiteStore(db_path, audit_id_factory=lambda: f"audit-{uuid4().hex}")
     runtime = SessionRuntime(
         store,
         session_factory=session_factory,
-        startup_l2_check=startup_l2_check,
+        preparation=preparation,
         close_store=store.close,
     )
     adopted = False
     try:
-        if startup_l2_check is not None:
+        if preparation is not None:
             await runtime._check_startup()
         bindings = runtime.bindings()
         adopted = True

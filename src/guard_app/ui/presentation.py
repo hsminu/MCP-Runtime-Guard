@@ -162,6 +162,31 @@ PAGES = {
     "settings": "설정",
 }
 
+# Fixed capability failures are shared by draft creation and existing Task views.
+# Backend exception text, filesystem paths and unknown codes are never echoed.
+_CODEX_FAILURE_DETAILS = {
+    "CODEX_SESSION_UNAVAILABLE": "Codex 연결이 준비되지 않았어.",
+    "CODEX_SESSION_INVALID": "Codex 연결을 확인하지 못했어.",
+    "CODEX_L2_UNAVAILABLE": "Codex 시작 검사가 준비되지 않았어.",
+    "CODEX_L2_FAILED": "Codex 시작 검사를 통과하지 못했어.",
+    "CODEX_CONFIG_UNAVAILABLE": "Codex 설정 검증이 준비되지 않았어.",
+    "CODEX_CONFIG_MISMATCH": "Codex 설정이 시작 검사에서 확인한 설정과 달라.",
+    "CODEX_PREPARATION_FAILED": "Codex 세션 준비를 완료하지 못했어.",
+    "CODEX_CLEANUP_UNCONFIRMED": "Codex 종료·임시 자료 정리 완료를 확인하지 못했어.",
+}
+
+
+def codex_failure_notice(code: str, *, creating: bool = False) -> str:
+    """Describe only known failures; cleanup uncertainty never implies no launch."""
+
+    detail = _CODEX_FAILURE_DETAILS.get(code)
+    if detail is None:
+        return ""
+    if code == "CODEX_CLEANUP_UNCONFIRMED":
+        return detail + " 자동으로 다시 실행하지 않아. 앱을 종료하고 정리 상태를 확인해."
+    context = " 세션을 시작하지 않았어." if creating else " 이 Task를 실행할 수 없어."
+    return detail + context + " 앱 설정을 확인하고 앱을 다시 시작해."
+
 
 def fixed(mapping: dict[str, str], value: str | None, *, default: str = "미확인") -> str:
     """Avoid echoing an unknown backend status or reason as arbitrary text."""
