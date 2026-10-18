@@ -1,0 +1,34 @@
+{
+  "date": "2026-10-18",
+  "baseline_commit": "74cb30a",
+  "python": "3.12.15",
+  "mcp": "1.29.0",
+  "command": "python -m pytest -q tests/unit/test_mcp_http.py -p stream_probe -W error::pytest.PytestUnraisableExceptionWarning",
+  "environment": {
+    "PYTHONWARNINGS": "error::ResourceWarning"
+  },
+  "diagnostic_method": "Test-only instrumentation of AnyIO stream __post_init__ and __del__; records allocation stacks when _closed is false. No production dependency modifications.",
+  "result": {
+    "passed": 47,
+    "failed": 4,
+    "unclosed_receive_streams": 6
+  },
+  "allocations": [
+    {
+      "module": "mcp/server/streamable_http.py",
+      "function": "_handle_get_request",
+      "line": 710,
+      "count": 2
+    },
+    {
+      "module": "mcp/server/streamable_http.py",
+      "function": "_handle_post_request",
+      "line": 614,
+      "count": 4
+    }
+  ],
+  "limitations": [
+    "The reported failing test can be later than the allocating test because garbage collection is delayed.",
+    "This identifies the observed HTTP ResourceWarning only; earlier intermittent B assertion failures were not reproduced or attributed."
+  ]
+}
