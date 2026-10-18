@@ -16,7 +16,7 @@
 ## C1 · 계약과 관측 기반
 
 - [x] C1.1 Store 계약 요구 초안(세 원자 연산·U1–U8) · [기록](archive/tasks/c-store-requirements.md)
-- [ ] C1.2 Scanner·Registry 요구 초안(입력 범위·분석기 완료/실패·지문·관리자 활성화·승인 무효화)
+- [ ] C1.2 Scanner·Registry 요구 초안(입력 범위·분석기 완료/실패·지문·사용자 활성화·승인 무효화)
 - [ ] C1.3 관측 요구 초안(approval_consumed·host_dispatch·wire tools/call·receiver_effect)
 - [ ] C1.4 환경·인수 요구 초안. Cisco Scanner 조사 부분은 완료 · [기록](archive/tasks/c-cisco-scanner-spike.md)
 - [x] C1.5 Store 계약 처리 제안 v1 · [기록](archive/tasks/c-store-proposal.md)
@@ -64,7 +64,7 @@
 - [x] C4.8 Scanner 준비가 이벤트 루프를 막지 않게 수정(C-CISCO-06) · #8
 - [ ] C4.9 Scanner 결과를 B ScanReport로 번역(필수 분석기·완료/생략/실패·지문·severity) — 막힘: B 계약
 - [ ] C4.10 Registry 등록·지문 영속화와 변경 시 승인 무효화. DB의 ACTIVE만으로 실행하지 않고 연결마다 실제 지문과 대조 · [결정](contracts.md#사용자-결정) — 막힘: B6-06
-- [ ] C4.11 신규 서버 PENDING, 관리자 확인 후 ACTIVE
+- [ ] C4.11 신규 서버 PENDING, 사용자 확인 후 ACTIVE
 - [ ] C4.12 정의 전체로 도구 지문 계산(B digest, float 표기 포함) · [결정](contracts.md#사용자-결정)
 - [ ] C4.13 경고 데이터를 등록 화면과 도구 호출 승인 창에 제공 · [결정](contracts.md#사용자-결정) — 막힘: A 화면
 - [ ] C4.14 Scanner 검사 예산 구현(동시성·작업 10분·YARA native 5초·대기열 8건) · [결정](contracts.md#사용자-결정)
