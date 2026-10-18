@@ -36,7 +36,7 @@
 - [x] B2.5 `accumulate` 기본, last_read·none은 비교 모드
 - [x] B2.6 high-watermark 단조성·Unclassified 해제 금지, 보안 의미 변화에만 security_version 증가
 - [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증
-- [ ] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계)
+- [x] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계) · [기록](archive/b/B2.8-access-rules.md)
 - [ ] B2.9 AccessChecker 동기 포트·Guard의 AGT용 대기 장치 제거(ACCESS-01) — 막힘: 3인 합의, A 연결
 - [ ] B2.10 AGT-04 reason code·AccessResult 정리 — 막힘: 3인 합의
 - [ ] B2.11 기존 AGT 코드 제거(B 범위, A 소유 파일은 A 리뷰) — 막힘: A 병합 순서
