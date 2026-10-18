@@ -550,6 +550,19 @@ class SQLiteStore:
         }
         return updated
 
+    async def list_tasks(self) -> tuple[TaskState, ...]:
+        """정책 변경의 전체 Task 조회 공급자. 기존 Store 포트·스키마는 변경하지 않는다.
+
+        Guard.apply_policy_change(task_source=store.list_tasks)로 연결한다.
+        단일 읽기 트랜잭션에서 현재 Task를 복원하며 상태를 변경하지 않는다.
+        """
+        return _store_result(self._list_tasks)
+
+    def _list_tasks(self) -> tuple[TaskState, ...]:
+        with self._transaction(write=False) as connection:
+            rows = connection.execute("SELECT task_id FROM tasks ORDER BY task_id").fetchall()
+            return tuple(self._load_task_locked(connection, row["task_id"]) for row in rows)
+
     async def record_decision(
         self,
         req: ResolvedRequest,

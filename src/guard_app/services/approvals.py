@@ -236,12 +236,46 @@ class ApprovalService:
         self._causes: dict[str, PendingFinalCause] = {}
         self._expiry_tasks: dict[str, asyncio.Task[None]] = {}
         self._closed = False
+        self._policy_invalidations = 0
 
     def pending_result(self, request_id: str) -> PendingResultHandle:
         """Pending 반환 전에 등록한 핸들. 완료 후 늦은 조회도 한 번 소비할 수 있다."""
         if type(request_id) is not str or request_id not in self._results:
             raise PendingResultError("대기 가능한 최종 결과가 없다")
         return self._results[request_id]
+
+    def _replace_policy(self, catalog: Catalog, ttl_seconds: int) -> None:
+        """Guard가 Task 정리와 판정 대기 장벽 안에서만 호출한다. await하지 않는다."""
+        if type(ttl_seconds) is not int or ttl_seconds <= 0:
+            raise ApprovalConfigError("승인 유효 시간은 양의 정수여야 한다")
+        self._catalog = catalog
+        self._ttl_seconds = ttl_seconds
+
+    def _policy_pending_task_ids(self) -> set[str]:
+        return {
+            owner.task_id for owner in self._pending.values() if not owner.handle._completed
+        } | {owner.task_id for owner in self._opening.values()}
+
+    async def _invalidate_policy_task(self, task_id: str) -> None:
+        """Task lock 안에서 승인 종결을 저장하고 Task 정지 ACK까지 알림을 미룬다."""
+        await self.invalidate_task(
+            task_id, Reason.POLICY_CHANGED, cause="invalidated", notify=False
+        )
+
+    def _fail_policy_change(self) -> None:
+        """global halt 뒤 유휴·종결 중 핸들은 고정 실패로 깨운다. 실행 결과는 보존한다."""
+        for approval_id, owner in tuple(self._pending.items()):
+            if (
+                not owner.handle._completed
+                and approval_id not in self._inflight_tasks
+                and not self._host.task_lock(owner.task_id).locked()
+            ):
+                self._discard_snapshot(approval_id)
+                self._complete(
+                    approval_id,
+                    Denied(request_id=owner.request_id, reasons=(Reason.INTERNAL_ERROR,)),
+                    "failed",
+                )
 
     def human_channel(self, operator_id: str) -> HumanControl:
         """A의 신뢰 UI 제어 큐에만 전달할 capability. 모델 제안으로 만들지 않는다."""
@@ -418,6 +452,12 @@ class ApprovalService:
         selected_cause = cause or self._causes.get(approval_id, "failed")
         if not isinstance(outcome, Denied):
             selected_cause = "executed"
+        if (
+            selected_cause == "invalidated"
+            and isinstance(outcome, Denied)
+            and Reason.POLICY_CHANGED in outcome.reasons
+        ):
+            self._policy_invalidations += 1
         owner.handle._complete(
             PendingFinal(
                 task_id=owner.task_id,
@@ -1096,6 +1136,18 @@ class ApprovalService:
         snapshot = None if approval_id is None else self._memory_snapshots.get(approval_id)
 
         async def on_error(exc: BaseException) -> Denied:
+            if (
+                isinstance(exc, ResolutionError)
+                and exc.reason is Reason.POLICY_CHANGED
+                and task_id is not None
+                and snapshot is not None
+            ):
+                await self.invalidate_task(
+                    task_id, Reason.POLICY_CHANGED, cause="invalidated", notify=False
+                )
+                await self._halt_snapshot_task(snapshot, Reason.POLICY_CHANGED)
+                self._publish_task_invalidations(task_id, Reason.POLICY_CHANGED)
+                return Denied(request_id=None, reasons=(Reason.POLICY_CHANGED,))
             if approval_id is not None:
                 self._causes[approval_id] = "failed"
             for known_id, owner in self._pending.items():

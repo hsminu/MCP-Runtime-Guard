@@ -10,7 +10,7 @@ import asyncio
 import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from weakref import WeakValueDictionary, finalize
 
@@ -40,7 +40,7 @@ from guard_app.ports import AccessChecker, PendingResult, Registry, Store, Trans
 from guard_app.security.digest import json_digest
 from guard_app.security.failclosed import after_dispatch, fail_closed
 from guard_app.services.approvals import ApprovalService, HumanControl, _ApprovalTaskMismatchError
-from guard_app.services.catalog import Catalog
+from guard_app.services.catalog import Catalog, LoadedProfile, PreparedPolicyChange
 from guard_app.services.response_gate import ResponseGate
 from guard_app.services.state_checks import (
     checked_status_change,
@@ -70,12 +70,37 @@ class GuardConfigError(ValueError):
     """고정 문구의 서비스 구성 오류."""
 
 
+class PolicyChangeError(ValueError):
+    """정책 적용의 고정 오류. 저장소·설정·예외 원문을 포함하지 않는다."""
+
+
+type PolicyTaskSource = Callable[[], Awaitable[tuple[TaskState, ...]]]
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyChanged:
+    """UI 표시용 적용 ACK. 설정 원문·파일 경로·명령은 포함하지 않는다."""
+
+    previous_policy_version: str
+    policy_version: str
+    profile_id: str
+    changed: bool
+    stopped_task_ids: tuple[str, ...]
+    invalidated_approval_count: int
+    applied_at_utc: datetime
+
+    @property
+    def stopped_task_count(self) -> int:
+        return len(self.stopped_task_ids)
+
+
 class _TaskStopSignal(asyncio.Event):
     """종결 ACK를 받은 정지 의도만 수명 종료 후 제거한다."""
 
     def __init__(self) -> None:
         super().__init__()
         self.terminal_epoch: int | None = None
+        self.reason = Reason.TASK_NOT_RUNNING
 
 
 class GuardService:
@@ -159,6 +184,7 @@ class GuardService:
         self._utc_now = utc_now
         self._monotonic = monotonic
         self._mode = taint_mode
+        self._max_result_bytes = max_result_bytes
         self._access_timeout = float(access_timeout_seconds)
         self._max_access_checks = max_access_checks
         self._access_cleanup_timeout = float(access_cleanup_timeout_seconds)
@@ -168,6 +194,9 @@ class GuardService:
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._global_halt = False
         self._stop_requests: dict[str, _TaskStopSignal] = {}
+        self._policy_apply_lock = asyncio.Lock()
+        self._policy_ready = asyncio.Event()
+        self._policy_ready.set()
         self._gate = ResponseGate(
             store,
             catalog,
@@ -208,6 +237,167 @@ class GuardService:
         self._halt_globally()
         await self._approvals.aclose()
 
+    async def apply_policy_change(
+        self,
+        change: PreparedPolicyChange,
+        access_checker: AccessChecker,
+        *,
+        task_source: PolicyTaskSource,
+    ) -> PolicyChanged:
+        """신뢰 구성 코드 전용. 준비 → A/C의 문서 저장 → 저장 성공 후 적용 순서다.
+
+        저장 실패면 호출하지 않는다. task_source는 이 Guard가 관할하는 전체 Task의
+        최신 사본을 반환해야 한다(SQLiteStore.list_tasks 연결 가능). 기존 Store 포트는
+        바꾸지 않는다. 적용 중 submit은 대기하고 기존 호출은 같은 Task lock으로 정리한다.
+        성공 뒤 새 Task는 반환한 profile_id·policy_version으로 생성해야 한다.
+        기록 실패는 global halt와 PolicyChangeError이며 성공 ACK를 반환하지 않는다.
+        """
+        if (
+            type(change) is not PreparedPolicyChange
+            or type(change.loaded_profile) is not LoadedProfile
+            or not callable(getattr(access_checker, "check_access", None))
+            or not callable(task_source)
+        ):
+            raise PolicyChangeError("정책 적용 입력이 유효하지 않다")
+        async with self._policy_apply_lock:
+            if change.previous_policy_version != self._policy_version:
+                raise PolicyChangeError("준비한 정책 기준 버전이 현재와 다르다")
+            if not change.changed:
+                return PolicyChanged(
+                    self._policy_version,
+                    self._policy_version,
+                    self._profile_id,
+                    False,
+                    (),
+                    0,
+                    self._policy_time(),
+                )
+            if self._global_halt:
+                raise PolicyChangeError("정지된 Guard에는 정책을 적용할 수 없다")
+            self._policy_ready.clear()
+
+            async def on_error(exc: BaseException) -> None:
+                self._halt_globally()
+                self._approvals._fail_policy_change()
+
+            def fallback(exc: BaseException) -> None:
+                self._halt_globally()
+                self._approvals._fail_policy_change()
+
+            try:
+                result: PolicyChanged | None = await fail_closed(
+                    lambda: self._apply_policy_change(change, access_checker, task_source),
+                    on_error=on_error,
+                    on_containment_error=fallback,
+                )
+            finally:
+                self._policy_ready.set()
+            if result is None:
+                raise PolicyChangeError("정책 적용을 확정하지 못해 Guard가 정지되었다") from None
+            return result
+
+    def _policy_time(self) -> datetime:
+        now = self._utc_now()
+        if type(now) is not datetime or now.tzinfo is None or now.utcoffset() != timedelta(0):
+            raise PolicyChangeError("정책 적용 시각이 유효하지 않다")
+        return now
+
+    async def _apply_policy_change(
+        self,
+        change: PreparedPolicyChange,
+        access_checker: AccessChecker,
+        task_source: PolicyTaskSource,
+    ) -> PolicyChanged:
+        loaded = change.loaded_profile
+        stopped: set[str] = set()
+        invalidations_before = self._approvals._policy_invalidations
+        observed: set[tuple[str, int, int, TaskStatus]] = set()
+        while True:
+            states = self._checked_policy_tasks(await task_source())
+            pending_ids = self._approvals._policy_pending_task_ids()
+            if not pending_ids <= {state.task_id for state in states}:
+                raise StoreError(Reason.STATE_MISSING)
+            candidates = tuple(
+                state
+                for state in states
+                if (state.profile_id, state.policy_version)
+                != (loaded.profile.profile_id, loaded.policy_version)
+                and (
+                    state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+                    or state.task_id in pending_ids
+                )
+            )
+            if not candidates:
+                break
+            keys = {
+                (state.task_id, state.epoch, state.row_revision, state.status)
+                for state in candidates
+            }
+            if observed & keys:
+                raise StoreError(Reason.STATE_COMMIT_FAILED)
+            observed.update(keys)
+            for state in candidates:
+                if state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+                    self._request_stop(state.task_id, reason=Reason.POLICY_CHANGED)
+            for state in candidates:
+                async with self._task_lock(state.task_id):
+                    current = checked_task(
+                        await self._store.load_task(state.task_id),
+                        task_id=state.task_id,
+                        epoch=state.epoch,
+                    )
+                    await self._approvals._invalidate_policy_task(state.task_id)
+                    if current.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+                        await self._halt_task(
+                            state.task_id, Reason.POLICY_CHANGED, expected_epoch=state.epoch
+                        )
+                    self._approvals._publish_task_invalidations(
+                        state.task_id, Reason.POLICY_CHANGED
+                    )
+                    if state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+                        stopped.add(state.task_id)
+            # lock 대기 중 생성된 옛 버전 Task도 새 조회에서 정리한다.
+        if self._global_halt:
+            raise StoreError(Reason.STATE_COMMIT_FAILED)
+        applied_at = self._policy_time()
+        settings = loaded.guard_settings
+        gate = ResponseGate(
+            self._store,
+            loaded.catalog,
+            utc_now=self._utc_now,
+            global_halt=self._halt_globally,
+            max_result_bytes=self._max_result_bytes,
+        )
+        # await 없는 발행 구간. Task lock을 가진 기존 판정·응답은 위에서 모두 끝났다.
+        self._approvals._replace_policy(loaded.catalog, settings.approval_ttl_seconds)
+        self._catalog = loaded.catalog
+        self._profile_id = settings.profile_id
+        self._policy_version = settings.policy_version
+        self._access_checker = access_checker
+        self._mode = settings.taint_mode
+        self._gate = gate
+        return PolicyChanged(
+            change.previous_policy_version,
+            settings.policy_version,
+            settings.profile_id,
+            True,
+            tuple(sorted(stopped)),
+            self._approvals._policy_invalidations - invalidations_before,
+            applied_at,
+        )
+
+    @staticmethod
+    def _checked_policy_tasks(value: object) -> tuple[TaskState, ...]:
+        if type(value) is not tuple:
+            raise StoreError(Reason.STATE_MISSING)
+        try:
+            states = tuple(TaskState.model_validate(state) for state in value)
+        except ValidationError:
+            raise StoreError(Reason.STATE_MISSING) from None
+        if len({state.task_id for state in states}) != len(states):
+            raise StoreError(Reason.STATE_MISSING)
+        return states
+
     async def submit(
         self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
     ) -> Outcome:
@@ -227,15 +417,19 @@ class GuardService:
             raise ResolutionError(Reason.STATE_MISSING)
         if self._global_halt:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
-        async with self._task_lock(task_id):
-            decided = await fail_closed(
-                lambda: self._decide(task_id, call, expected_epoch=expected_epoch),
-                lambda exc: self._pre_dispatch_failure(task_id, exc),
-                on_containment_error=self._pre_failure_fallback,
-            )
-            if not isinstance(decided, _Allowed):
-                return decided
-            return await self._dispatch_reserved(decided.request, decided.state)
+        while True:
+            await self._policy_ready.wait()
+            async with self._task_lock(task_id):
+                if not self._policy_ready.is_set():
+                    continue
+                decided = await fail_closed(
+                    lambda: self._decide(task_id, call, expected_epoch=expected_epoch),
+                    lambda exc: self._pre_dispatch_failure(task_id, exc),
+                    on_containment_error=self._pre_failure_fallback,
+                )
+                if not isinstance(decided, _Allowed):
+                    return decided
+                return await self._dispatch_reserved(decided.request, decided.state)
 
     def _task_lock(self, task_id: str) -> asyncio.Lock:
         lock = self._locks.get(task_id)
@@ -270,11 +464,12 @@ class GuardService:
             signal.terminal_epoch = state.epoch
             self._cleanup_task_resources(state.task_id)
 
-    def _request_stop(self, task_id: str) -> None:
-        """인증된 사람 제어만 호출한다. lock을 기다리기 전에 정지 의도를 고정한다."""
+    def _request_stop(self, task_id: str, *, reason: Reason = Reason.TASK_NOT_RUNNING) -> None:
+        """신뢰된 사람·구성 제어가 lock 대기 전에 정지 의도를 고정한다."""
         if type(task_id) is not str or not task_id:
             raise ResolutionError(Reason.STATE_MISSING)
         signal = self._stop_requests.setdefault(task_id, _TaskStopSignal())
+        signal.reason = reason
         # 새 제어의 확인을 이전 제어의 종결 ACK로 대신하지 않는다.
         signal.terminal_epoch = None
         signal.set()
@@ -282,7 +477,7 @@ class GuardService:
     def _check_stop(self, task_id: str) -> None:
         event = self._stop_requests.get(task_id)
         if event is not None and event.is_set():
-            raise ResolutionError(Reason.TASK_NOT_RUNNING)
+            raise ResolutionError(event.reason)
 
     def _policy_matches(self, state: TaskState) -> bool:
         return (
@@ -520,6 +715,11 @@ class GuardService:
                 raise ResolutionError(Reason.APPROVAL_STALE)
         self._check_stop(req.task_id)
         raw = await self._transport.call(req)
+        stop = self._stop_requests.get(req.task_id)
+        if stop is not None and stop.is_set() and stop.reason is Reason.POLICY_CHANGED:
+            # 정책 전환 중 전송이 끝난 raw는 gate에 넘기지 않는다. after_dispatch가
+            # READ 미공개·HALTED / SEND UNKNOWN_OUTCOME을 기존 연산으로 확정한다.
+            raise ResolutionError(Reason.POLICY_CHANGED)
         return await self._gate.handle(req, raw, expected_state=state)
 
     async def _halt_task(
