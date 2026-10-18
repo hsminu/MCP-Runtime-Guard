@@ -147,8 +147,8 @@ class TaskRunner:
         state: TaskState,
         *,
         model_client_factory: Callable[[], ModelClient],
-        guard: GuardService,
-        catalog: Catalog,
+        guard: GuardService | None,
+        catalog: Catalog | None,
         store: Store,
         server_ids: tuple[str, ...],
         system_message: str,
@@ -161,6 +161,10 @@ class TaskRunner:
             or any(type(server_id) is not str for server_id in server_ids)
             or type(system_message) is not str
             or not callable(model_client_factory)
+            or (
+                (guard is None or catalog is None)
+                and (guard is not None or catalog is not None or server_ids)
+            )
         ):
             raise RunnerStateError()
         self.task_id = state.task_id
@@ -185,12 +189,17 @@ class TaskRunner:
         self._awaiting_user = True
         self._stopped = False
         self._closed = False
+        self._last_status = "idle"
         self._lock = asyncio.Lock()
 
     @property
     def pending_approval_id(self) -> str | None:
         """이번 Runner가 Pending으로 받은 ID만 제공한다. 실행 권한은 아니다."""
         return self._pending.approval_id if self._pending is not None else None
+
+    @property
+    def runtime_status(self) -> str:
+        return self._last_status
 
     @property
     def can_accept_message(self) -> bool:
@@ -237,7 +246,7 @@ class TaskRunner:
         if task_status != "running":
             return self._update(task_status)
         try:
-            views = self._catalog.tool_views(self._server_ids)
+            views = () if self._catalog is None else self._catalog.tool_views(self._server_ids)
         except CatalogConfigError:
             self._stopped = True
             return self._update("stopped")
@@ -469,6 +478,10 @@ class TaskRunner:
         )
 
     async def _dispatch(self, calls: tuple[ProposedCall, ...]) -> RunUpdate:
+        if self._guard is None:
+            # Explicit conversation-only mode has no tool capability at all.
+            self._stopped = True
+            return self._update("model_error")
         for index, call in enumerate(calls):
             if self._closed:
                 return self._update("closed")
@@ -590,6 +603,7 @@ class TaskRunner:
         approval_id: str | None = None,
         assistant_text: str | None = None,
     ) -> RunUpdate:
+        self._last_status = status
         return RunUpdate(
             task_id=self.task_id,
             epoch=self.epoch,

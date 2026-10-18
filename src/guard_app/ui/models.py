@@ -21,6 +21,8 @@ class LoadState(StrEnum):
 
 
 class RuntimeMode(StrEnum):
+    API = "api"
+    CLI = "cli"
     UNCONFIGURED = "unconfigured"
     MOCK = "mock"
     REAL = "real"

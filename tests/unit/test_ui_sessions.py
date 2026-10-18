@@ -19,6 +19,7 @@ from guard_app.services.bridge import (
     BridgeState,
     ConversationEvent,
     LifecycleEvent,
+    SessionCreated,
     TaskProjection,
 )
 from guard_app.ui.presentation import PAGES
@@ -214,3 +215,56 @@ def test_projection_change_of_other_session_does_not_overwrite_selected_draft(wi
     )
     assert shell.sessions.current is view
     assert view.draft.toPlainText() == "retained input"
+
+
+def test_selected_task_controls_all_status_identity_and_title_even_after_background_update(window):
+    shell, panel, bridge = window
+    shell.set_runtime_context("unit product")
+    alpha = snapshot(model_mode="api")
+    bridge.task_changed.emit(alpha)
+    alpha_key = shell.sessions.current_key
+    shell.new_session_button.click()
+    draft = shell.sessions.current
+    draft.pending_command = "new-beta"
+    beta = replace(alpha, task_id="task-beta", model_mode="cli", model_ready=False)
+    bridge.session_created.emit(SessionCreated("new-beta", draft.key, beta))
+    bridge.task_changed.emit(beta)
+    assert "CLI" in shell.runtime_identity.text()
+    assert "cli" in shell.windowTitle()
+    shell.sessions.select(alpha_key)
+    bridge.task_changed.emit(replace(alpha, status=TaskStatus.HALTED))
+    bridge.task_changed.emit(beta)
+    assert panel.current.task_id == alpha.task_id
+    assert shell.task_status_card.status is TaskStatus.HALTED
+    assert "API" in shell.runtime_identity.text()
+    assert "api" in shell.windowTitle()
+    shell.sessions.select(draft.key)
+    assert shell.task_status_card.status is TaskStatus.RUNNING
+    assert "CLI" in shell.runtime_identity.text()
+
+
+def test_task_adoption_keeps_friendly_title_and_reports_model_connection_needed(window):
+    shell, _, bridge = window
+    view = shell.sessions.current
+    friendly = view.title.replace("새 세션", "세션", 1)
+    view.pending_command = "created"
+    state = replace(snapshot(), task_id="session-" + "a" * 32, model_ready=False)
+    bridge.session_created.emit(SessionCreated("created", view.key, state))
+    assert view.title == friendly
+    assert all(
+        state.task_id not in shell.sessions.list.item(index).text()
+        for index in range(shell.sessions.list.count())
+    )
+    assert "연결 필요" in shell.sessions.list.currentItem().text()
+    assert state.task_id in view.status.text()
+    shell.new_session_button.click()
+    second = shell.sessions.current
+    second.pending_command = "created-second"
+    bridge.session_created.emit(
+        SessionCreated(
+            "created-second",
+            second.key,
+            replace(state, task_id="session-other"),
+        )
+    )
+    assert second.title != view.title

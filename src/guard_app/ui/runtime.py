@@ -56,6 +56,7 @@ _NO_TASK_SUMMARY: dict[BridgeState | None, str] = {
 class RuntimePanel(QWidget):
     state_changed = Signal()
     message_rejected = Signal(str)
+    selected_snapshot_changed = Signal(object)
 
     def __init__(self, bridge: BackendBridge, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -66,8 +67,10 @@ class RuntimePanel(QWidget):
         self._review_command: str | None = None
         self._reviewed: str | None = None
         self._commands: dict[str, ControlAction | str] = {}
+        self._command_scopes: dict[str, tuple[str, int]] = {}
         self._scope_enabled = False
         self._scope: tuple[str, int] | None = None
+        self._snapshots: dict[tuple[str, int], TaskProjection] = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
@@ -217,6 +220,7 @@ class RuntimePanel(QWidget):
                 and not self._busy
                 and current.status is TaskStatus.RUNNING
                 and current.can_advance
+                and current.model_ready
             ),
             self.review_button: bool(
                 current is not None and waiting and not self._busy and current.approval_id
@@ -244,13 +248,20 @@ class RuntimePanel(QWidget):
         for button, value in enabled.items():
             button.setEnabled(value)
         self.state_changed.emit()
+        self.selected_snapshot_changed.emit(self.current)
 
     def set_scope(self, scope: tuple[str, int] | None) -> None:
         """Approval copies and controls are bound to the selected session."""
         self._scope_enabled = True
         if scope != self._scope:
             self._clear_review()
+            self.message.setText("선택한 세션의 백엔드 상태를 표시해.")
         self._scope = scope
+        self.current = self._snapshots.get(scope) if scope is not None else None
+        if self.current is not None:
+            self._render_snapshot(self.current)
+        else:
+            self.summary.setText("새 세션 · 연결할 모델을 고르고 세션을 시작해.")
         self._refresh()
 
     def send_message(self, task_id: str, epoch: int, text: str, command_id: str) -> None:
@@ -268,6 +279,7 @@ class RuntimePanel(QWidget):
         self._busy = True
         self._clear_review()
         self._commands[command_id] = "message"
+        self._command_scopes[command_id] = (task_id, epoch)
         self.message.setText("메시지 요청됨 · 백엔드 결과 대기")
         self._refresh()
         self.bridge.request_message(task_id, epoch, text, command_id=command_id)
@@ -286,6 +298,7 @@ class RuntimePanel(QWidget):
         self._refresh()
         command_id = uuid4().hex
         self._commands[command_id] = _RUN
+        self._command_scopes[command_id] = (self.current.task_id, self.current.epoch)
         self.bridge.request_run(self.current.task_id, command_id=command_id)
 
     def _control(self, action: ControlAction) -> None:
@@ -306,9 +319,10 @@ class RuntimePanel(QWidget):
         self._refresh()
         command_id = uuid4().hex
         self._commands[command_id] = action
+        self._command_scopes[command_id] = (self.current.task_id, self.current.epoch)
         if action is ControlAction.REVIEW:
             self._review_command = command_id
-        self.bridge.request_control(action, target, command_id=command_id)
+        self.bridge.request_control(action, target, command_id=command_id, epoch=self.current.epoch)
 
     def _lifecycle(self, event: LifecycleEvent) -> None:
         self._ready = event.state is BridgeState.READY
@@ -325,21 +339,31 @@ class RuntimePanel(QWidget):
         self._refresh()
 
     def set_snapshot(self, snapshot: TaskProjection) -> None:
+        self._snapshots[(snapshot.task_id, snapshot.epoch)] = snapshot
+        if self._scope_enabled and self._scope != (snapshot.task_id, snapshot.epoch):
+            return
         self._clear_review()
         self.current = snapshot
+        self._render_snapshot(snapshot)
+        self._refresh()
+
+    def _render_snapshot(self, snapshot: TaskProjection) -> None:
         lines = [
             f"Task: {snapshot.task_id} · {status_title(snapshot.status)}",
             f"AGT: {snapshot.agt_mode} · 모델: {snapshot.model_mode}",
             f"호스트 dispatch: {snapshot.host_dispatch} · 수신 부작용: {snapshot.receiver_effect}",
         ]
-        if snapshot.status is TaskStatus.RUNNING and not snapshot.can_advance:
+        if not snapshot.model_ready:
+            lines.append("모델 연결 미완료 · 현재 세션에서는 메시지를 보낼 수 없어.")
+        elif snapshot.runner_state in ("model_error", "guard_error", "stopped"):
+            lines.append("Runner가 멈췄어 · 자동 재전송하지 않아. 새 세션에서 다시 시작해.")
+        elif snapshot.status is TaskStatus.RUNNING and not snapshot.can_advance:
             # RUNNING with a disabled run button must not look like a stuck UI.
             lines.append(
                 "다음 사용자 지시를 기다리는 중이라 실행할 모델 단계가 없어. "
                 "여기서 끝내려면 '작업 취소'를 눌러."
             )
         self.summary.setText("\n".join(lines))
-        self._refresh()
 
     def _review(self, review: ApprovalReview) -> None:
         if (
@@ -373,7 +397,13 @@ class RuntimePanel(QWidget):
         ):
             return
         del self._commands[event.command_id]
+        scope = self._command_scopes.pop(event.command_id, None)
         self._busy = bool(self._commands)
+        if scope is not None and (
+            self.current is None or scope != (self.current.task_id, self.current.epoch)
+        ):
+            self._refresh()
+            return
         if event.stage is CommandStage.BACKEND_RETURNED:
             text = self._result_text(action, event.code)
         elif event.stage is CommandStage.REJECTED:
@@ -389,6 +419,10 @@ class RuntimePanel(QWidget):
     def _result_text(self, action: ControlAction | str, code: str) -> str:
         if code == "MESSAGE_UNAVAILABLE":
             return "현재 Task가 메시지를 받을 수 없어. 백엔드 상태를 확인해."
+        if code == "SESSION_STOP_RETURNED":
+            if self.current is not None and self.current.status is TaskStatus.HALTED:
+                return "작업 정지를 확인했어. 새 세션에서 다시 시작해."
+            return "정지 적용 여부를 확인하지 못했어. Task 상태를 확인해."
         if code == "RUNNER_UNAVAILABLE":
             return RUN_RESULTS[code]
         name = _STOP_NAMES.get(action) if isinstance(action, ControlAction) else None

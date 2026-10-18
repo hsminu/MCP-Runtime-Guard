@@ -25,6 +25,7 @@ from guard_app.services.bridge import BridgeState, CommandStage, LifecycleEvent
 from .approvals import ApprovalListPage, ApprovalPage, ApprovalQuery
 from .call_logs import CallLogPage, DetailRequest, PublicCallDetail, PublicCallSummary
 from .icons import line_icon
+from .model_settings import ModelCredentialForm
 from .models import (
     OverviewSnapshot,
     RuntimeIdentity,
@@ -98,6 +99,7 @@ class GuardWindow(QMainWindow):
         self._page_indices: dict[str, int] = {}
         self._compact_navigation = False
         self._runtime_panel: RuntimePanel | None = None
+        self._runtime_context = ""
         self.sessions = SessionWorkspace()
 
         central = QWidget()
@@ -245,11 +247,14 @@ class GuardWindow(QMainWindow):
         settings_layout.addWidget(plain_label("설정", name="pageTitle"))
         settings_layout.addWidget(
             plain_label(
-                "모델 API · CLI 연결은 준비 중이야. 현재 앱은 합성 모델 mock으로 동작해.",
+                "API는 Windows 자격증명 연결이 필요해. "
+                "CLI 실행과 보안 검사 기능은 아직 준비 중이야.",
                 name="secondary",
             )
         )
         self.scanner_key_form = ScannerKeyForm()
+        self.model_credential_form = ModelCredentialForm()
+        settings_layout.addWidget(self.model_credential_form)
         settings_layout.addWidget(self.scanner_key_form)
         settings_layout.addStretch(1)
         self._page_indices["settings"] = self.stack.addWidget(_scroll_page(settings))
@@ -301,8 +306,16 @@ class GuardWindow(QMainWindow):
         self.runtime_layout.insertWidget(2, panel)
         panel.set_scope(None)
         panel.state_changed.connect(lambda: self.sessions.set_busy(panel._busy))
+        panel.selected_snapshot_changed.connect(self._sync_selected_task)
         bridge = panel.bridge
+        self.model_credential_form.bind(bridge)
         bridge.task_changed.connect(self.sessions.set_snapshot)
+        bridge.session_created.connect(self.sessions.session_created)
+        self.sessions.new_session_requested.connect(
+            lambda key, options, command: bridge.request_new_session(
+                key, options, command_id=command
+            )
+        )
         bridge.conversation_ready.connect(self.sessions.conversation)
         self.sessions.message_requested.connect(panel.send_message)
         panel.message_rejected.connect(
@@ -319,10 +332,36 @@ class GuardWindow(QMainWindow):
 
         def lifecycle(event: LifecycleEvent) -> None:
             self.sessions.set_ready(event.state is BridgeState.READY)
+            if event.state is BridgeState.READY:
+                bridge.request_credential("status")
             if event.state in (BridgeState.FAILED, BridgeState.CLOSING, BridgeState.CLOSED):
                 self.sessions.clear_content()
 
         bridge.lifecycle_changed.connect(lifecycle)
+
+    def set_runtime_context(self, context: str) -> None:
+        self._runtime_context = context
+        self._sync_selected_task(
+            None if self._runtime_panel is None else self._runtime_panel.current
+        )
+
+    def _sync_selected_task(self, snapshot) -> None:
+        """One source for the selected Task's status, mode badge and title."""
+        self.set_task_status(None if snapshot is None else snapshot.status)
+        if snapshot is None:
+            identity = RuntimeIdentity()
+            mode = "새 세션"
+        else:
+            try:
+                identity = RuntimeIdentity(
+                    RuntimeMode(snapshot.agt_mode), RuntimeMode(snapshot.model_mode)
+                )
+            except ValueError:
+                identity = RuntimeIdentity()
+            mode = snapshot.model_mode
+        self.set_runtime_identity(identity)
+        context = f" · {self._runtime_context}" if self._runtime_context else ""
+        self.setWindowTitle(f"MCP Runtime Guard{context} / 모델 {mode}")
 
     def clear_session_content(self) -> None:
         self.sessions.clear_content()
@@ -416,6 +455,8 @@ class GuardWindow(QMainWindow):
             RuntimeMode.UNCONFIGURED: "미설정",
             RuntimeMode.MOCK: "mock",
             RuntimeMode.REAL: "real",
+            RuntimeMode.API: "API",
+            RuntimeMode.CLI: "CLI",
         }
         self.runtime_identity.setText(
             f"AGT: {labels.get(identity.agt_mode, '미확인')} · "

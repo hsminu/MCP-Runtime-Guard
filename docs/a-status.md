@@ -90,6 +90,7 @@
 - [ ] A56 A가 정한 규칙 확인(키 앞뒤 공백 제거·4자 이하 키 끝자리 숨김·폴더 규칙 최소 1개·tools/list 반복 cursor·중복 이름 중단) — 막힘: 사용자 확인(contracts에 없음, 이슈 등록 필요)
 - [x] A61 Qt 시안 컴포넌트·실행/승인/중지 카드·아이콘·작은 화면 배치 · [기록](archive/a/A61-ui-components.md)
 - [x] A63 세션 중심 대화·결과 화면·기존 기능 진입·Task/epoch 메시지 연결·원문 폐기·독립 GUI QA · [기록](archive/a/A63-session-workspace.md)
+- [x] A64 SQLite 새 Task·모델 API 어댑터·키 설정 주입·세션 격리 연결부 — 실제 키 저장·API 사용·CLI 실행은 사용자 선택에 따라 C 구현 대기 · [기록](archive/a/A64-api-session-connections.md)
 
 ## 통합·패키징
 

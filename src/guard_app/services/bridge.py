@@ -95,11 +95,43 @@ class BackendBindings:
     """
 
     runner_for_task: Callable[[str], TaskRunner]
-    human_control: HumanControl
+    human_control: HumanControl | None
     close: Callable[[], Awaitable[None]] | None = None
     snapshot: Callable[[str], Awaitable[TaskProjection]] | None = None
     initial_task_id: str | None = None
     discard_queued: Callable[[str], int] | None = None
+    create_session: Callable[[SessionOptions], Awaitable[TaskProjection]] | None = None
+    stop_session: Callable[[str, int, ControlAction], Awaitable[None]] | None = None
+    credential_status: Callable[[], Awaitable[CredentialState]] | None = None
+    save_credential: Callable[[str], Awaitable[CredentialState]] | None = None
+    delete_credential: Callable[[], Awaitable[CredentialState]] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionOptions:
+    mode: str = "api"
+    model: str = ""
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("api", "cli") or type(self.model) is not str or len(self.model) > 128:
+            raise ValueError("Invalid model selection")
+        if any(ord(char) < 33 or ord(char) > 126 for char in self.model):
+            raise ValueError("Invalid model selection")
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialState:
+    available: bool
+    stored: bool = False
+    suffix: str = ""
+    code: str = "WINDOWS_CREDENTIALS_UNAVAILABLE"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCreated:
+    command_id: str
+    draft_key: str
+    snapshot: TaskProjection
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +146,11 @@ class TaskProjection:
     model_mode: str = "unconfigured"
     can_advance: bool = False
     can_accept_message: bool = False
+    model_ready: bool = True
+    model_id: str = ""
+    connection_code: str = ""
+    runner_state: str = ""
+    tools_available: bool = True
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -145,6 +182,8 @@ class _Command:
     target_id: str
     epoch: int | None = None
     user_text: str | None = field(default=None, repr=False)
+    options: SessionOptions | None = None
+    secret: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +252,8 @@ class BackendBridge(QObject):
     task_changed = Signal(object)
     review_ready = Signal(object)
     conversation_ready = Signal(object)
+    session_created = Signal(object)
+    credential_changed = Signal(object)
 
     def __init__(
         self,
@@ -343,6 +384,7 @@ class BackendBridge(QObject):
         target_id: str,
         *,
         command_id: str | None = None,
+        epoch: int | None = None,
     ) -> str:
         self._require_qt_thread()
         if type(action) is not ControlAction:
@@ -352,6 +394,7 @@ class BackendBridge(QObject):
             "control",
             action.value,
             self._id(target_id),
+            epoch=epoch,
         )
         self._submit(command)
         return command.command_id
@@ -367,6 +410,44 @@ class BackendBridge(QObject):
             raise ValueError("Message text is invalid")
         command = _Command(
             self._id(command_id, generate=True), "run", "message", self._id(task_id), epoch, text
+        )
+        self._submit(command)
+        return command.command_id
+
+    def request_new_session(
+        self, draft_key: str, options: SessionOptions, *, command_id: str | None = None
+    ) -> str:
+        self._require_qt_thread()
+        if type(options) is not SessionOptions:
+            raise ValueError("Invalid model selection")
+        command = _Command(
+            self._id(command_id, generate=True),
+            "run",
+            "new_session",
+            self._id(draft_key),
+            options=options,
+        )
+        self._submit(command)
+        return command.command_id
+
+    def request_credential(
+        self, action: str, secret: str | None = None, *, command_id: str | None = None
+    ) -> str:
+        self._require_qt_thread()
+        if action not in ("status", "save", "delete"):
+            raise ValueError("Invalid credential operation")
+        if action == "save" and (
+            type(secret) is not str or not secret.strip() or len(secret) > 8192
+        ):
+            raise ValueError("Invalid credential value")
+        if action != "save" and secret is not None:
+            raise ValueError("Invalid credential value")
+        command = _Command(
+            self._id(command_id, generate=True),
+            "control",
+            f"credential_{action}",
+            "model-api",
+            secret=secret,
         )
         self._submit(command)
         return command.command_id
@@ -716,7 +797,11 @@ class BackendBridge(QObject):
             not adopted
             or bindings is None
             or not callable(bindings.runner_for_task)
-            or not isinstance(bindings.human_control, HumanControl)
+            or (
+                bindings.human_control is not None
+                and not isinstance(bindings.human_control, HumanControl)
+            )
+            or (bindings.human_control is None and not callable(bindings.stop_session))
             or (bindings.close is not None and not callable(bindings.close))
             or (bindings.discard_queued is not None and not callable(bindings.discard_queued))
         ):
@@ -881,6 +966,33 @@ class BackendBridge(QObject):
     async def _execute(self, command: _Command) -> str:
         bindings = self._bindings
         assert bindings is not None
+        if command.action == "new_session":
+            if bindings.create_session is None or command.options is None:
+                return "SESSION_CREATION_UNAVAILABLE"
+            created_snapshot = await bindings.create_session(command.options)
+            if type(created_snapshot) is not TaskProjection:
+                return "SESSION_CREATION_UNCONFIRMED"
+            self.session_created.emit(
+                SessionCreated(command.command_id, command.target_id, created_snapshot)
+            )
+            await self._publish_after(created_snapshot.task_id)
+            return "SESSION_CREATED"
+        if command.action.startswith("credential_"):
+            operation = {
+                "credential_status": bindings.credential_status,
+                "credential_delete": bindings.delete_credential,
+            }.get(command.action)
+            if command.action == "credential_save" and bindings.save_credential is not None:
+                assert command.secret is not None
+                credential_state = await bindings.save_credential(command.secret)
+            elif operation is not None:
+                credential_state = await operation()
+            else:
+                credential_state = CredentialState(False)
+            if type(credential_state) is not CredentialState:
+                return "CREDENTIAL_UNCONFIRMED"
+            self.credential_changed.emit(credential_state)
+            return credential_state.code
         if command.lane == "run":
             runner = bindings.runner_for_task(command.target_id)
             if not isinstance(runner, TaskRunner) or runner.task_id != command.target_id:
@@ -895,6 +1007,7 @@ class BackendBridge(QObject):
                         or state.task_id != command.target_id
                         or state.epoch != command.epoch
                         or runner.epoch != command.epoch
+                        or not state.model_ready
                         or state.status is not TaskStatus.RUNNING
                         or not runner.can_accept_message
                     ):
@@ -931,6 +1044,18 @@ class BackendBridge(QObject):
                 # an older projection; Store decides what is displayed.
                 await self._publish_after(command.target_id)
         control = bindings.human_control
+        if control is None:
+            if command.action not in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
+                return "CONTROL_UNAVAILABLE"
+            if bindings.stop_session is None or command.epoch is None:
+                return "CONTROL_UNAVAILABLE"
+            try:
+                await bindings.stop_session(
+                    command.target_id, command.epoch, ControlAction(command.action)
+                )
+                return "SESSION_STOP_RETURNED"
+            finally:
+                await self._publish_after(command.target_id)
         if command.action == ControlAction.REVIEW:
             snapshot = await control.review(command.target_id)
             if snapshot is None:
@@ -1028,10 +1153,12 @@ class BackendBridge(QObject):
                 snapshot,
                 can_accept_message=(
                     snapshot.status is TaskStatus.RUNNING
+                    and snapshot.model_ready
                     and runner.task_id == snapshot.task_id
                     and getattr(runner, "epoch", None) == snapshot.epoch
                     and bool(getattr(runner, "can_accept_message", False))
                 ),
+                runner_state=getattr(runner, "runtime_status", ""),
             )
         self.task_changed.emit(snapshot)
 
