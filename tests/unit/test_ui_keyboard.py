@@ -161,9 +161,7 @@ def test_minimum_window_keeps_identity_label_and_status_visible(
         True,
     ]
     assert table.horizontalHeaderItem(0).text() == "서버 ID"
-    assert table.columnViewportPosition(4) + table.columnWidth(4) <= (
-        table.viewport().width()
-    )
+    assert table.columnViewportPosition(4) + table.columnWidth(4) <= (table.viewport().width())
     assert table.horizontalScrollBar().maximum() == 0
 
     table.selectRow(0)
@@ -283,9 +281,7 @@ def test_plain_detail_escape_returns_focus_to_opener(app: QApplication) -> None:
     opener.setFocus()
 
     detail = PlainDetailDialog(host)
-    detail.show_detail(
-        title="합성 상세", text="literal <b>text</b>", return_focus=opener
-    )
+    detail.show_detail(title="합성 상세", text="literal <b>text</b>", return_focus=opener)
     app.processEvents()
     assert detail.body.hasFocus()
     assert detail.body.toPlainText() == "literal <b>text</b>"
@@ -448,9 +444,7 @@ def test_approval_keyboard_changes_lane_and_sort_without_action_buttons(
         assert page.sort.currentIndex() == 1
         assert requests[-1].sort.value == "newest"
         assert requests[-1].lane.value == "history"
-        button_texts = {
-            button.text() for button in page.findChildren(KeyboardActionButton)
-        }
+        button_texts = {button.text() for button in page.findChildren(KeyboardActionButton)}
         assert "승인" not in button_texts
         assert "거절" not in button_texts
     finally:
@@ -530,9 +524,7 @@ def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(
         close_button = dialog.focusWidget()
         assert isinstance(close_button, KeyboardActionButton)
         assert close_button.text() == "닫기"
-        assert [
-            button.text() for button in dialog.findChildren(KeyboardActionButton)
-        ] == ["닫기"]
+        assert [button.text() for button in dialog.findChildren(KeyboardActionButton)] == ["닫기"]
         repeated_press = QKeyEvent(
             QEvent.Type.KeyPress,
             Qt.Key.Key_Return,

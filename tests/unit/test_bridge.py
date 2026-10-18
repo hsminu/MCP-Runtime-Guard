@@ -1403,6 +1403,7 @@ def test_start_gate_is_atomic_and_waits_for_reported_thread_exit():
         lingering.join(timeout=2)
     assert gate.try_start(object()) is None
 
+
 def test_distinct_tasks_run_while_same_task_commands_wait_and_shutdown_settles_all(app):
     """A-local concurrency; no Codex process/T46 claim."""
     first_gate, first_entered = threading.Event(), threading.Event()
@@ -1432,7 +1433,8 @@ def test_distinct_tasks_run_while_same_task_commands_wait_and_shutdown_settles_a
         close_bridge(app, bridge)
         for command in [first, *waiting, second]:
             assert receiver.stages(command)[-1].stage in (
-                CommandStage.UNCONFIRMED, CommandStage.REJECTED,
+                CommandStage.UNCONFIRMED,
+                CommandStage.REJECTED,
             )
         assert not bridge._records
         assert not bridge._operations

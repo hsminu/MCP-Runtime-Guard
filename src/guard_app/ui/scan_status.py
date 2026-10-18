@@ -21,7 +21,7 @@ _SCAN_STATES = {
     "not_started": "검사 미실행",
     "requested": "검사 요청 중 · backend 결과 대기",
     "running": "검사 진행 중",
-    "completed": "검사 실행 완료 · 관리자 활성화 별도",
+    "completed": "검사 실행 완료 · 사용자 활성화 별도",
     "failed": "검사 실패",
     "malformed": "검사 결과 형식 불명",
 }

@@ -154,6 +154,127 @@ async def test_server_request_is_answered_while_reading_continues() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("request_id", [7, "7"])
+@pytest.mark.parametrize("version_field", [True, False])
+async def test_duplicate_inflight_server_request_closes_without_a_second_handler(
+    request_id: int | str, version_field: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    # I6/I9: fail closed before a second dispatch, without logging peer data.
+    channel = FakeChannel()
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    calls = 0
+
+    async def handler(_method: str, _params: object) -> object:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    client = _client(channel, version_field=version_field, on_server_request=handler)
+    waiting = asyncio.create_task(client.request("pending"))
+    await channel.next_sent()
+    request: dict[str, object] = {"id": request_id, "method": "run", "params": MARKER}
+    if version_field:
+        request["jsonrpc"] = "2.0"
+    channel.push(request)
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    # A different method still cannot reuse the outstanding request ID.
+    channel.push({**request, "method": "different"})
+    with pytest.raises(JsonRpcError) as failed:
+        await waiting
+    assert failed.value.reason == "PROTOCOL_ERROR"
+    await client.close()
+    assert calls == 1
+    assert cancelled.is_set()
+    assert channel.sent == []
+    assert not client._server_tasks
+    assert not client._server_request_ids
+    assert MARKER not in str(failed.value)
+    assert MARKER not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_duplicate_is_reserved_before_the_handler_task_starts() -> None:
+    channel = FakeChannel()
+    calls = 0
+
+    async def handler(_method: str, _params: object) -> object:
+        nonlocal calls
+        calls += 1
+        return None
+
+    client = _client(channel, on_server_request=handler)
+    # Both queued frames are read without yielding to the newly created task.
+    for _ in range(2):
+        channel.push({"jsonrpc": "2.0", "id": "same", "method": "run"})
+    await asyncio.wait_for(client._closed.wait(), timeout=1)
+    await client.close()
+    assert client.closed_reason == "PROTOCOL_ERROR"
+    assert calls == 0
+    assert not client._server_tasks
+    assert not client._server_request_ids
+
+
+@pytest.mark.asyncio
+async def test_server_ids_preserve_types_and_are_separate_from_outgoing_ids() -> None:
+    channel = FakeChannel()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[object] = []
+
+    async def handler(_method: str, params: object) -> object:
+        calls.append(params)
+        if len(calls) == 2:
+            entered.set()
+        await release.wait()
+        return params
+
+    client = _client(channel, on_server_request=handler)
+    waiting = asyncio.create_task(client.request("outgoing"))
+    assert (await channel.next_sent())["id"] == 1
+    channel.push({"jsonrpc": "2.0", "id": 1, "method": "run", "params": "integer"})
+    channel.push({"jsonrpc": "2.0", "id": "1", "method": "run", "params": "string"})
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    channel.push({"jsonrpc": "2.0", "id": 1, "result": "outgoing result"})
+    assert await waiting == "outgoing result"
+    release.set()
+    replies = [await channel.next_sent(), await channel.next_sent()]
+    assert {(type(reply["id"]), reply["id"], reply["result"]) for reply in replies} == {
+        (int, 1, "integer"),
+        (str, "1", "string"),
+    }
+    assert calls == ["integer", "string"]
+    assert client.closed_reason is None
+    await client.close()
+    assert not client._server_request_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_id", [0, "reuse"])
+async def test_server_request_id_can_be_reused_after_completion(request_id: int | str) -> None:
+    channel = FakeChannel()
+    calls: list[object] = []
+
+    async def handler(_method: str, params: object) -> object:
+        calls.append(params)
+        return params
+
+    client = _client(channel, max_pending=1, on_server_request=handler)
+    for value in ("first", "second"):
+        channel.push({"jsonrpc": "2.0", "id": request_id, "method": "run", "params": value})
+        assert await channel.next_sent() == {"jsonrpc": "2.0", "id": request_id, "result": value}
+        await asyncio.gather(*client._server_tasks)
+        assert not client._server_request_ids
+    assert calls == ["first", "second"]
+    assert client.closed_reason is None
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_server_request_without_handler_gets_method_not_found() -> None:
     channel = FakeChannel()
     client = _client(channel)
@@ -182,6 +303,7 @@ async def test_failing_handler_closes_the_client_and_fails_pending() -> None:
     with pytest.raises(JsonRpcError):
         await client.request("after")
     await client.close()
+    assert not client._server_request_ids
 
 
 @pytest.mark.asyncio
@@ -307,7 +429,7 @@ def test_invalid_configuration_is_rejected(kwargs: dict[str, object]) -> None:
 
 @pytest.mark.asyncio
 async def test_codex_envelope_without_version_field() -> None:
-    # Codex 0.159.0 schema: no "jsonrpc" member in any envelope (pinned version: #21 item 1).
+    # Official rust-v0.162.1 app-server-protocol/src/rpc.rs omits "jsonrpc".
     channel = FakeChannel()
     seen: list[str] = []
     client = _client(
@@ -396,6 +518,7 @@ async def test_handler_may_close_the_client_without_deadlock() -> None:
         await asyncio.sleep(0.01)
     assert client.closed_reason == "CLOSED"
     assert not client._server_tasks
+    assert not client._server_request_ids
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,7 @@
 | Pending 최종 알림 형식·종료 처리(NOTIFY-01)·시스템 Task 정지(STOP-01)·검토된 설명(DESC-01) ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | B | A19–A22, A47 |
 | 접근 규칙 판정 함수·동기 포트 구현(ACCESS-01)·AGT 코드 제거·계약 합의 | B·A·C | A02·A06, A41, A44, A51, A53 |
 | Codex 0.162.1 launcher·L1/L2 구현·T43/T46·stream ingress·경로·ScanReport·Scanner 자격증명 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
-| 설정·Profile 로딩(B)과 경로·실행 파일 검증(C) ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | B·C | A24–A27, A45, A49 |
+| 설정·Profile 로딩(B)과 경로·실행 파일 검증(C) ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | B·C | A24–A27, A49 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | B의 AGT 제거 PR(같은 파일) | B | A44 |
 
@@ -60,7 +60,10 @@
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
 - [x] A58 JSON-RPC 전송 마감·처리기 안 close 교착·종료 사유 보정 · [기록](archive/a/A58-jsonrpc-send-and-close.md)
-- [ ] A50 Codex 0.162.1 프레이밍·메서드 연결 — 막힘: C launcher·L1/L2 구현([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21), 기존 형식 검증은 0.159.0)
+- [x] A67 JSON-RPC 진행 중 ID 중복 차단·Codex 0.162.1 공식 envelope/메서드 schema 대조 · [기록](archive/a/A67-jsonrpc-duplicate-and-codex-schema.md)
+- [ ] A50 Codex 0.162.1 실제 프레이밍·메서드 연결 — 막힘: B 세션 계약·C launcher·L1/L2 구현([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21))
+- [x] A68 Task별 도구 호출 FIFO·callId 중복 거부·취소/종료 격리의 A 내부 연결부 · [기록](archive/a/A68-task-tool-call-fifo.md)
+- [ ] A68 실제 Guard 호출·Pending/STOP·세션 관리자에 FIFO 연결 — 막힘: B·C 계약 및 A19·A20
 - [x] A21·A22 Runner expected_epoch·승인 resume 연결
 - [ ] A21·A22 실제 모델 세션 격리(T21) — 막힘: A19·A20
 - [x] A23 B 리뷰: AGT 지연 중 긴급 차단 수정·회귀 · [기록](archive/tasks/a-b-review.md)
@@ -69,7 +72,8 @@
 ## bridge·화면
 
 - [x] A24–A27 프로세스 시작 게이트(W1)·옛 Task 실행/제어 거부(W2)·`--store sqlite` 연결·시작 실패 처리
-- [ ] A24–A27 제품 Store·Registry 구성(지금은 메모리 기본·B 대역) — 막힘: B-SQL-01–06·C·설정 로딩 담당(#19)
+- [x] A24–A27 제품 SQLite 기본 시작·새 Task 연결부 · [기록](archive/a/A65-codex-only-concurrent-tasks.md)
+- [ ] A24–A27 제품 Registry·설정/Profile 로딩·시작 복구 통합 — 막힘: B-SQL-01–06·C·설정 로딩 담당(#19)
 - [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
 - [ ] A33·A34 과거 승인·제품 목록 통합 — 막힘: B-SQL-02/03
@@ -78,7 +82,8 @@
 - [x] A36·A37 확정/요청 상태 분리·한글 표시
 - [ ] A36·A37 전체 GUI 인수 — 막힘: C
 - [x] A47 신뢰하지 않는 텍스트 표시 위젯(모델 답변·서버 설명·threat_summary) · [기록](archive/a/A47-untrusted-text-view.md)
-- [ ] A47 실행 탭·등록 화면·Scanner 경고에 연결 — 막힘: UI 이벤트 계약(B1.5)·검토된 설명(#20 3번)·SCAN-01
+- [x] A47 모델 대화의 비신뢰 텍스트·일반 텍스트 표시 연결 · [기록](archive/a/A63-session-workspace.md)
+- [ ] A47 등록 화면·Scanner 경고에 연결 — 막힘: UI 이벤트 계약(B1.5)·검토된 설명(#20 3번)·SCAN-01
 - [x] A48 Scanner API 키 입력 화면(가림·끝 4자리·주입형 저장) · [기록](archive/a/A48-scanner-key-form.md)
 - [ ] A48 자격증명 관리자 저장 연결 — 막힘: C2.10([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21) 8번)
 - [x] A49 로컬 파일 서버 루트·하위 폴더 등급 입력 폼 · [기록](archive/a/A49-local-folder-labels-form.md)
@@ -92,6 +97,7 @@
 - [x] A64 SQLite 새 Task·모델 API 어댑터·키 설정 주입·세션 격리 연결부 — 실제 키 저장·API 사용·CLI 실행은 사용자 선택에 따라 C 구현 대기 · [기록](archive/a/A64-api-session-connections.md)
 - [x] A65 직접 모델 API 제거·Codex 전용 주입부·L2 시작 게이트·Task별 동시 실행과 정지 격리 · [기록](archive/a/A65-codex-only-concurrent-tasks.md)
 - [x] A66 세션 관리자 인터페이스 제안 v1·담당 경계 명확화 · [기록](archive/a/A66-session-interface-proposal.md)
+- [x] A69 개인 사용자 문구·Withheld 상태 안내·SQLite/대화 연결 현황 보정 · [기록](archive/a/A69-ui-wording-and-status.md)
 
 ## 통합·패키징
 
@@ -100,10 +106,12 @@
 - [x] A41 lock·설치·단위 검증, CI 1단계(#4)
 - [ ] A41 보안 스캔(CI 2단계) — 막힘: AGT 제거 뒤 C CI 2단계(C6.3)
 - [ ] A42 인수: 리뷰 결과와 검증 인계
-- [ ] A43 기준선 축소: UI 린트 예외 제거·포맷 제외 22→12·RuntimePanel 타입 억제 제거, UI 밖 기준선 남음 · [기록](archive/a/A61-ui-components.md)
+- [x] A71 A 단위 테스트 포맷 제외 대상 정리·AST 동일 검증 · [기록](archive/a/A71-a-unit-format-baseline.md)
+- [ ] A43 공통 포맷 제외 목록·타입/린트 예외 축소 — 막힘: 공통 설정 main 검토·잔여 린트 정리
 - [ ] A44 시연 앱의 `tests.unit.test_guard` 대역 import 제거 — 막힘: B AGT 제거 PR과 같은 파일(`examples`)
-- [ ] A45 `guard-app` 콘솔 명령이 checkout 안에서도 실패(`__main__.py:40`이 패키지 밖 `examples`를 import) — 막힘: 제품 시작 구성(A24–A27)
+- [x] A45 제품 wheel 외부 설치·콘솔·offscreen 시작/종료·C 미제공 시작 거부 검증 · [기록](archive/a/A45-installed-wheel-product-smoke.md)
 - [x] A46 HTTP transport TLS 문맥을 이벤트 루프 밖에서 생성(반복 연결 정지 해소) · [기록](archive/a/A46-tls-off-loop.md)
-- [ ] A60 전체 단위 테스트 간헐 실패(실행마다 다른 B 테스트 1개, 오늘 작업 전 HEAD에서도 재현)·SDK HTTP 스트림 미닫힘 ResourceWarning — 원인 미분석
+- [ ] A60 SDK HTTP 전체 경고 해소·B 간헐 실패 재현 — SDK 1.30.0 SSE 재현은 해소, 별도 소켓 경고와 B 실패 원인 미확정·공통 버전 검토 대기
+- [x] A70 SDK 수정 버전 공식 소스 조사·격리 비교 검증 · [기록](archive/a/A70-sdk-http-upgrade-validation.md)
 - [x] A46 첫 연결의 `httpcore` 최초 import 정지를 모듈 import로 이동 · [기록](archive/a/A46-httpcore-preload.md)
 - [ ] A46 이전 a-status의 "C 측정 210–280ms" 재측정 — 막힘: C 환경(출처 기록 미확인)

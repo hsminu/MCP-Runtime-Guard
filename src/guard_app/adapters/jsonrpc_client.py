@@ -4,16 +4,15 @@ It owns request/response correlation, notification dispatch, replies to
 server-initiated requests, a per-request deadline and a frame size bound.
 It never starts a process: the caller injects a ``FrameChannel`` built over
 streams that ``security.launcher`` opened. Message framing on the wire and the
-Codex method schema (``thread/start``, ``item/tool/call`` ...) are not fixed
-until the pinned Codex version is chosen (GitHub #21 item 1), so framing lives
-in the channel and the JSON codec is replaceable. No Codex method is
-implemented here.
+Codex method schema (``thread/start``, ``item/tool/call`` ...) belong to the
+session manager, so framing lives in the channel and the JSON codec is
+replaceable. No Codex method is implemented here.
 
-The ``"jsonrpc": "2.0"`` member is a constructor choice. The locally installed
-Codex 0.159.0 schema (``codex app-server generate-json-schema``) has no such
-member in any envelope, so a client for that protocol is built with
+The ``"jsonrpc": "2.0"`` member is a constructor choice. The official Codex
+``rust-v0.162.1`` source (``app-server-protocol/src/rpc.rs``) omits this
+member in every envelope, so a client for that protocol is built with
 ``version_field=False``: the member is never sent and a peer message carrying
-it is rejected. The pinned version must be rechecked before relying on this.
+it is rejected. Recheck the schema when changing the pinned version.
 
 Fail closed: a malformed frame, an oversize frame, a broken handler or EOF
 closes the client and fails every pending request with a fixed reason.
@@ -27,6 +26,7 @@ import asyncio
 import json
 import math
 from collections.abc import Awaitable, Callable
+from functools import partial
 from itertools import count
 from typing import Protocol, cast
 
@@ -119,7 +119,8 @@ class JsonRpcClient:
     reading continues while it waits (for example on a human approval); the
     handler's return value becomes the ``result``. The session manager, not
     this client, decides ordering and which methods it accepts. A handler that
-    raises closes the client.
+    raises closes the client. Reusing an incoming request ID while its reply
+    is in flight is a protocol failure; integer and string IDs are distinct.
     """
 
     def __init__(
@@ -156,6 +157,7 @@ class JsonRpcClient:
         self._ids = count(1)
         self._pending: dict[int, asyncio.Future[object]] = {}
         self._server_tasks: set[asyncio.Task[None]] = set()
+        self._server_request_ids: dict[JsonId, asyncio.Task[None]] = {}
         self._send_lock = asyncio.Lock()
         self._reader: asyncio.Task[None] | None = None
         self._closed_reason: str | None = None
@@ -212,6 +214,11 @@ class JsonRpcClient:
         ]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        # Already-finished tasks can still have queued done callbacks. Release
+        # their IDs before returning, including tasks cancelled before starting.
+        for request_id, task in tuple(self._server_request_ids.items()):
+            if task.done():
+                self._server_task_done(task, request_id=request_id)
 
     def _require_open(self) -> None:
         if self._reader is None:
@@ -307,14 +314,24 @@ class JsonRpcClient:
         request_id = message["id"]
         if not _valid_id(request_id):
             raise InvalidMessageError()
+        request_id = cast("JsonId", request_id)
+        previous = self._server_request_ids.get(request_id)
+        if previous is not None:
+            if not previous.done():
+                raise InvalidMessageError()
+            # The reader can run before the completed task's done callback.
+            self._server_task_done(previous, request_id=request_id)
+            if self._closed_reason is not None:
+                return
         if len(self._server_tasks) >= self._max_pending:
             self._shutdown("TOO_MANY_SERVER_REQUESTS")
             return
         task = asyncio.create_task(
-            self._answer(cast("JsonId", request_id), method, params), name="jsonrpc-server-request"
+            self._answer(request_id, method, params), name="jsonrpc-server-request"
         )
         self._server_tasks.add(task)
-        task.add_done_callback(self._server_task_done)
+        self._server_request_ids[request_id] = task
+        task.add_done_callback(partial(self._server_task_done, request_id=request_id))
 
     def _dispatch_response(self, message: dict[str, object]) -> None:
         request_id = message.get("id")
@@ -341,8 +358,12 @@ class JsonRpcClient:
             reply["result"] = result
         await self._send(reply, deadline=asyncio.get_running_loop().time() + self._timeout)
 
-    def _server_task_done(self, task: asyncio.Task[None]) -> None:
+    def _server_task_done(self, task: asyncio.Task[None], *, request_id: JsonId) -> None:
         self._server_tasks.discard(task)
+        # A delayed callback for a completed request must not remove a later
+        # request that legitimately reused its ID.
+        if self._server_request_ids.get(request_id) is task:
+            del self._server_request_ids[request_id]
         if task.cancelled():
             return
         if task.exception() is not None:

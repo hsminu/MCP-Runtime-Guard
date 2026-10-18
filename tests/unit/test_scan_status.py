@@ -67,7 +67,7 @@ def test_scan_completion_does_not_imply_registration_or_connection(app) -> None:
         scanner_version="fixture-1",
         scanned_at=datetime(2026, 10, 12, 5, 35, tzinfo=UTC),
         max_severity="HIGH",
-        safe_finding_summary="높은 위험 1건 · 관리자 검토 필요",
+        safe_finding_summary="높은 위험 1건 · 사용자 검토 필요",
     )
     card = ScanStatusCard()
     card.set_snapshot(Surface(LoadState.READY, projection))
@@ -76,13 +76,13 @@ def test_scan_completion_does_not_imply_registration_or_connection(app) -> None:
     assert card.completed.text() == "1개 · offline-rules"
     assert card.skipped.text() == "1개 · schema"
     assert card.failed.text() == "1개 · network-check"
-    assert "검사 실행 완료" in card.scan_state.text()
+    assert card.scan_state.text() == "검사 실행 완료 · 사용자 활성화 별도"
     assert "지문과 불일치" in card.fingerprint.text()
     assert "PENDING" in card.registry_status.text()
     assert "연결 안 됨" in card.session_status.text()
     assert card.scanned_at.text() == "2026년 10월 12일 14:35:00 KST"
     assert "HIGH" in card.max_severity.text()
-    assert card.findings.text() == "높은 위험 1건 · 관리자 검토 필요"
+    assert card.findings.text() == "높은 위험 1건 · 사용자 검토 필요"
     assert "통과" not in card.scan_state.text()
     assert card.findChildren(QPushButton) == []
 

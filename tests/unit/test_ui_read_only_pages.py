@@ -64,9 +64,7 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
     assert window.log_page.detail_button.isEnabled()
     window.log_page.detail_button.click()
     request = log_requests[-1]
-    window.set_call_log_detail(
-        request, Surface(LoadState.READY, PublicCallDetail(call))
-    )
+    window.set_call_log_detail(request, Surface(LoadState.READY, PublicCallDetail(call)))
     dialog = window.log_page._detail_dialog
     assert dialog is not None
     assert "수신측 확인 필요" in dialog.body.toPlainText()
@@ -78,9 +76,7 @@ def test_server_scan_reply_is_bound_to_current_detail_opening(
     app: QApplication,
 ) -> None:
     window = GuardWindow()
-    window.set_server_snapshot(
-        Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),))
-    )
+    window.set_server_snapshot(Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),)))
     requested = []
     window.scan_snapshot_requested.connect(
         lambda server_id, token: requested.append((server_id, token))
@@ -120,9 +116,7 @@ def test_repeated_server_details_release_dialogs_and_reject_old_scan_reply(
     app: QApplication,
 ) -> None:
     window = GuardWindow()
-    window.set_server_snapshot(
-        Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),))
-    )
+    window.set_server_snapshot(Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),)))
     requested: list[tuple[str, int]] = []
     window.scan_snapshot_requested.connect(
         lambda server_id, token: requested.append((server_id, token))

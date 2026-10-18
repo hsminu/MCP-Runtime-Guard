@@ -34,9 +34,7 @@ from guard_app.domain.reasons import Reason
 from guard_app.services.guard import GuardService
 
 
-def _state(
-    task_id: str = "task-1", *, status: TaskStatus = TaskStatus.RUNNING
-) -> TaskState:
+def _state(task_id: str = "task-1", *, status: TaskStatus = TaskStatus.RUNNING) -> TaskState:
     return TaskState(
         task_id=task_id,
         epoch=1,
@@ -143,9 +141,7 @@ def test_released_content_reaches_next_model_turn_only_after_guard() -> None:
 
 def test_denied_stops_remaining_calls_and_uses_fixed_text() -> None:
     model = FakeModel(ModelTurn(calls=(_call(1), _call(2))), ModelTurn(text="later"))
-    guard = FakeGuard(
-        Denied(request_id="request-1", reasons=(Reason.INTERNAL_TO_EXTERNAL,))
-    )
+    guard = FakeGuard(Denied(request_id="request-1", reasons=(Reason.INTERNAL_TO_EXTERNAL,)))
     runner = _runner(_state(), model, guard)
     runner.add_user_message("first user request")
 
@@ -248,9 +244,7 @@ def test_denied_after_concurrent_task_change_rejects_new_input(
     class DelayedDeniedGuard:
         calls = 0
 
-        async def submit(
-            self, task_id: str, call: ProposedCall, *, expected_epoch: int
-        ) -> Denied:
+        async def submit(self, task_id: str, call: ProposedCall, *, expected_epoch: int) -> Denied:
             assert expected_epoch == state.epoch
             self.calls += 1
             entered.set()
@@ -516,9 +510,7 @@ def test_approval_race_after_task_stop_is_not_reported_pending(
             "halted",
         ),
         (
-            OutcomeUnknown(
-                request_id="request-1", reasons=(Reason.POST_DISPATCH_ERROR,)
-            ),
+            OutcomeUnknown(request_id="request-1", reasons=(Reason.POST_DISPATCH_ERROR,)),
             TaskStatus.UNKNOWN_OUTCOME,
             "outcome_unknown",
         ),
@@ -640,9 +632,7 @@ def test_close_during_reserved_send_keeps_unknown_outcome() -> None:
             self.calls += 1
             entered.set()
             await release.wait()
-            return OutcomeUnknown(
-                request_id="request-1", reasons=(Reason.POST_DISPATCH_ERROR,)
-            )
+            return OutcomeUnknown(request_id="request-1", reasons=(Reason.POST_DISPATCH_ERROR,))
 
     guard = DelayedGuard()
     runner = _runner(_state(), FakeModel(ModelTurn(calls=(_call(),))), guard)
@@ -770,9 +760,7 @@ def test_oversized_released_result_cannot_leave_for_next_model_turn() -> None:
     guard = FakeGuard(
         Released(
             request_id="request-1",
-            result=ReleasedResult(
-                text="한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3 + 1)
-            ),
+            result=ReleasedResult(text="한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3 + 1)),
             label=Label.INTERNAL,
         )
     )
@@ -810,9 +798,7 @@ def test_oversized_approved_result_preserves_pending_then_stops_egress() -> None
             "approval-1",
             Released(
                 request_id="request-1",
-                result=ReleasedResult(
-                    text="한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3 + 1)
-                ),
+                result=ReleasedResult(text="한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3 + 1)),
                 label=Label.INTERNAL,
             ),
         )
@@ -872,9 +858,7 @@ def test_epoch_change_between_calls_stops_before_second_guard_submission() -> No
             )
 
     guard = EpochChangingGuard()
-    runner = _runner(
-        state, FakeModel(ModelTurn(calls=(_call(1), _call(2)))), guard, store
-    )
+    runner = _runner(state, FakeModel(ModelTurn(calls=(_call(1), _call(2)))), guard, store)
     runner.add_user_message("read both")
 
     assert asyncio.run(runner.advance()).status == "stopped"
@@ -928,7 +912,6 @@ def test_close_during_approval_state_lookup_discards_late_release() -> None:
 
     assert asyncio.run(run()).status == "closed"
     assert len(guard.calls) == 1
-
 
 
 def _pending(request_id: str = "request-1", approval_id: str = "approval-1") -> Pending:

@@ -94,11 +94,11 @@ RUN_RESULTS = {
     ),
     "RUN_GUARD_ERROR_QUERY_REQUIRED": (
         "Guard 내부 오류로 이 Task 실행을 멈췄어 · 이어서 실행할 수 없어. "
-        "앱을 다시 시작하고 관리자에게 확인해."
+        "Task 상태를 확인하고 새 작업을 시작해. 문제가 반복되면 앱을 다시 시작해."
     ),
     "RUN_WITHHELD_QUERY_REQUIRED": (
         "도구 결과를 공개하지 않았어 · 모델에는 결과 대신 비공개 안내만 전달했어. "
-        "Task는 계속 실행 중이라 새 사용자 지시로 이어갈 수 있어."
+        "Task 상태와 이어서 실행할 수 있는지는 다시 조회된 표시를 확인해."
     ),
     "RUNNER_UNAVAILABLE": "이 실행에서 다룰 수 없는 작업이야 · 실행·제어하지 않았어.",
     "RUNNER_UNCONFIRMED": "실행 결과를 확인하지 못했어 · 위 Task 상태를 확인해.",
