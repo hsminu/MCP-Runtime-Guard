@@ -529,7 +529,7 @@ def resolve_tool(self, tool_ref: str) -> ToolSpec:
 
 인자는 등록 시점에 고정한 `input_schema`로 검증한다(`jsonschema`, `additionalProperties: false` 강제). 서버가 나중에 스키마를 바꿔도 Guard는 등록본으로 검증하며, 지문 불일치로 PENDING이 된다.
 
-서버 ID에는 `__`를 쓸 수 없고 `_`로 끝날 수 없다(`valid_server_id`). 등록할 때 Registry(C)가 거부하고 등록 화면(A)은 입력 즉시 안내한다. 둘 다 같은 함수를 쓰며 Catalog 검사는 마지막 방어다. 처음 나오는 `__`에서 자르므로 도구 이름에는 제한이 없다. Codex 하네스에서는 세션 관리자가 namespace와 도구 이름을 이어 이 형식을 만든다(10.4절).
+서버 ID에는 `__`를 쓸 수 없고 `_`로 끝날 수 없다(`valid_server_id`). 등록할 때 Registry(C)가 거부하고 등록 화면(A)은 bridge가 넘겨주는 같은 검사 결과로 입력 즉시 안내한다(UI는 services를 import하지 않는다, 2.2절). Catalog 검사는 마지막 방어다. 처음 나오는 `__`에서 자르므로 도구 이름에는 제한이 없다. Codex 하네스에서는 세션 관리자가 namespace와 도구 이름을 이어 이 형식을 만든다(10.4절).
 
 도구 설명의 `annotations`(예: `readOnlyHint`)는 서버가 스스로 주장하는 힌트일 뿐이므로 `ToolKind` 결정에 쓰지 않는다. `ToolKind`는 사용자가 등록 시 지정한다.
 
@@ -1335,14 +1335,14 @@ GUI ─ 명령 큐 ─▶ 세션 관리자 ─ stdio JSON-RPC ─▶ codex app-s
                Guard.submit
 ```
 
-- **실행:** Task마다 고정 버전 `codex app-server`를 새로 띄운다. CODEX_HOME은 앱 전용 폴더, config는 Task마다 새로 쓴다. `initialize`(experimentalApi) → `thread/start`(Guard 도구를 `dynamicTools`로 등록, `environments=[]`, `ephemeral`, `approvalsReviewer="user"`, `baseInstructions`) → `turn/start` 순서다. codex.exe는 `security.launcher`로만 띄우고, launcher가 실행할 때마다 SHA-256을 고정값과 대조해 다르면 시작을 거부한다.
+- **실행:** Task마다 고정 버전(0.162.1) `codex app-server`를 새로 띄운다. 여러 Task를 동시에 실행할 수 있다. CODEX_HOME은 앱 전용 폴더이고, config는 모든 Task에 같은 내용으로 앱 시작 때 한 번 쓴 뒤 Task 시작마다 해시로 확인한다. `sqlite_home` 같은 Task별 값은 실행 인자로 넘긴다. `initialize`(experimentalApi) → `thread/start`(Guard 도구를 `dynamicTools`로 등록, `environments=[]`, `ephemeral`, `approvalsReviewer="user"`, `baseInstructions`) → `turn/start` 순서다. codex.exe는 `security.launcher`로만 띄우고, launcher가 실행할 때마다 SHA-256을 고정값과 대조해 다르면 시작을 거부한다. L2 결과는 세션 관리자의 주입형 포트로 받고(C 구현), 결과가 없거나 실패면 시작을 거부한다. 개발용 건너뛰기는 없다.
 - **도구 목록:** ACTIVE 서버의 등록 도구만, 서버 ID를 namespace 이름으로 하고 그 아래 도구 이름과 등록 시점 스키마로 만든다(모델에는 `서버이름.도구이름`처럼 보인다). 서버가 보낸 원본 설명문 대신 사용자가 검토한 설명을 쓰는 옵션을 둔다. `deferLoading`은 쓰지 않는다. 승인·취소·정책 조회 같은 제어 기능은 도구 목록에 없다.
 - **호출 변환:** `item/tool/call`은 `namespace`와 `tool`을 따로 보낸다. 세션 관리자는 둘을 `__`로 이어 `ProposedCall.tool_ref`(`server_id__tool_name`, 4.1절)를 만든다. `namespace`가 없으면 Guard에 넘기지 않고 DENY 고정 문구로 답한다. `item/tool/call`은 `ProposedCall`로만 변환한다. 모델이 출력한 `task_id`, `label` 같은 필드는 버려진다(extra="forbid"로 실패). Task 식별자는 세션 관리자가 thread와 묶어 둔 값을 쓴다(I7). 호출은 받은 순서대로 하나씩 처리한다.
 - **결과 반환:** `Released`만 `success:true`로 돌려준다. `Denied`·거절·만료·취소는 `success:false`와 짧은 고정 문구다(예: "이 요청은 정책에 의해 차단되었습니다: INTERNAL_TO_EXTERNAL"). `Withheld`·`OutcomeUnknown`은 `success:false`와 "작업이 정지되었습니다"로 답한 뒤 바로 `turn/interrupt`하고 codex 프로세스를 끝낸다. Task는 이미 HALTED·UNKNOWN_OUTCOME이다. 판정 내부 정보(경계 ID, 버전)는 모델에 주지 않는다.
 - **승인 대기:** `Pending`을 받으면 도구 호출에 바로 답하지 않고 Guard의 `request_id`별 최종 결과 알림을 기다린다(8.3절). 승인 실행 결과면 위 규칙대로, 거절·만료·취소면 `success:false`와 고정 문구로 답한다.
 - **Codex 자체 도구 차단:** L1 설정으로 끄고, L2 시작 시험(가짜 모델 서버로 도구 목록 대조·금지 도구 강제 호출 거부)으로 확인하며, 실패하면 시작을 거부한다(T22). 실행 중에는 L3가 허용 항목 밖의 이벤트·승인 요청을 거절하고 `turn/interrupt` 뒤 Task를 정지한다.
 - **대기 상한:** Codex는 도구 호출 대기 상한이 없다. 세션 관리자가 호출별 감시 상한(ASK 5분+MCP 실행 상한+여유)을 넘기면 interrupt하고 Task를 정지한다. SEND 전송 뒤면 결과 불명이다(I8).
-- **로그인:** ChatGPT 기기 코드 또는 API 키. 자격증명은 Windows 자격증명 관리자(keyring)에 둔다. Scanner는 별도 API 키를 쓴다.
+- **로그인:** ChatGPT 기기 코드 또는 API 키, 둘 다 Codex 안의 로그인이다. 동시 실행 중 토큰 갱신이 겹쳐 한 Task의 인증이 실패하면 그 Task만 정지하고 새 Task로 다시 시작하라고 안내한다(Codex 0.162.1은 프로세스 사이 갱신 잠금이 없다). 자격증명은 Codex가 직접 Windows 자격증명 관리자(keyring)에 저장하고 우리 `secrets.py`는 관여하지 않는다. OpenAI API를 직접 부르는 모델 경로는 두지 않는다(2026-10-18). Scanner는 별도 API 키를 쓴다.
 - **원문:** Codex 로그 DB는 도구 결과 원문을 저장하고 끌 수 없다. `sqlite_home`을 Task 전용 폴더로 두고 Codex 종료 뒤·앱 시작 때 지운다(11.4절).
 - **화면:** 사용자 화면은 GUI 하나다. Codex TUI(`codex --remote`)는 app-server에 직접 붙는 별도 클라이언트라서 Guard 도구 등록·L3 감시를 건너뛰고 설정을 바꿀 수 있으므로 쓰지 않는다. 터미널 화면이 필요하면 세션 관리자 위에 붙인다.
 - 모델 제공자로 나가는 프롬프트에는 이미 공개 승인된 결과만 들어간다. 그러나 모델 제공자 자체가 외부 수신자라는 문제는 이 Guard의 집행 범위 밖이며, 시연은 합성 자료와 승인된 모델 환경에서만 한다.
@@ -1550,7 +1550,7 @@ class Bridge:
 | 작업 실행 | TaskCreated, TaskStatusChanged, LabelEscalated, ResultReleased, ModelMessage(모델 답변 스트리밍), HarnessCheckFailed(L1·L2 실패), LoginRequired, RateLimited, UserInputRequested(빈 응답 처리 사실만 표시), CodexExited | NewTask, Run, StopRequest, Login, Logout |
 | 요청·승인 | ApprovalPending, ApprovalResolved, RequestDispatched, OutcomeUnknown | Approve, Reject, Cancel |
 | 서버·검사 | RegistrationChanged, ScanCompleted, FingerprintMismatch | Register, Scan, Activate, Block |
-| 기록·정책 | Decided, AuditAppended | Filter, EmergencyBlock |
+| 기록·정책 | Decided, AuditAppended, PolicyChanged | Filter, EmergencyBlock, EditPolicy(변경 명령·Task 정지는 B) |
 
 UI는 판정하지 않는다. 버튼 상태는 백엔드가 확정한 상태에서만 파생된다. 낙관적 업데이트(먼저 초록색으로 바꾸고 나중에 백엔드에 알림)는 금지한다. 중지·긴급 차단은 "요청됨" → "적용됨"의 두 단계 표시를 쓴다.
 
@@ -1987,6 +1987,7 @@ app = WireCounter(mcp.streamable_http_app())
 | T43 | 표지 결과 주입 후 Task 종료 | 앱 폴더 전체에 표지 없음(Codex 로그 DB 포함) | I9 | 통합 | C |
 | T44 | codex.exe 해시 불일치 | 실행 거부 | I11 | 단위 | C |
 | T45 | 승인 후 결과 알림 | 최종 결과 알림 1회, 대기 중 도구 호출에 정확히 1회 응답 | I3, I5 | 통합 | C |
+| T46 | 두 Task 동시 실행 | config 해시 불변, Task별 `sqlite_home` 분리·각자 정리, 한 Task 인증 실패 시 그 Task만 정지 | I9 | 통합 | C |
 | S01 | 경로 탈출 (`..`, 절대경로, 심볼릭 링크, `\`) | 거부 | — | 단위 | C |
 | S02 | 엔드포인트 함정 (userinfo, IDN, 인코딩) | 거부 또는 정확한 정규화 | — | 단위 | C |
 | S03 | 인자에 SQL 특수문자 | 바인딩으로 무해 | — | 단위 | C |
@@ -2146,6 +2147,6 @@ where = ["src"]
 | I6 fail-closed | Semgrep(no-swallow, broad-except-only-in-allowed) | S05, T04 | T07, T36, T42 |
 | I7 신뢰 출처 분리 | 타입(`extra="forbid"`) | T06, T32 | — |
 | I8 재전송 금지 | — | — | T14~T16, T36, T42 |
-| I9 로그 비노출 | Bandit, Semgrep | S04 | T19, T43 |
+| I9 로그 비노출 | Bandit, Semgrep | S04 | T19, T43, T46 |
 | I10 정의 변경 감지 | — | — | T10 |
 | I11 Guard 도구만 | — | T44 | T22, T39~T41 |
