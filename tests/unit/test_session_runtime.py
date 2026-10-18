@@ -497,3 +497,35 @@ def test_creation_blocker_reports_known_refusals_in_creation_order(tmp_path):
         await runtime.close()
 
     asyncio.run(run())
+
+
+def test_product_bootstrap_without_c_components_starts_and_refuses_sessions(tmp_path):
+    from guard_app.services.session_runtime import bootstrap_product
+
+    async def run():
+        bindings = await bootstrap_product(str(tmp_path / "product.db"))
+        try:
+            assert bindings.human_control is None
+            assert bindings.create_session is not None
+            assert bindings.session_blocker is not None
+            assert bindings.session_blocker() == "CODEX_CONFIG_UNAVAILABLE"
+            with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_UNAVAILABLE"):
+                await bindings.create_session(SessionOptions())
+        finally:
+            assert bindings.close is not None
+            await bindings.close()
+
+    asyncio.run(run())
+    assert (tmp_path / "product.db").exists()
+
+
+def test_product_bootstrap_closes_the_store_when_startup_preparation_fails(tmp_path):
+    from guard_app.services.session_runtime import bootstrap_product
+
+    async def run():
+        with pytest.raises(SessionRuntimeError, match="CODEX_L2_UNAVAILABLE"):
+            await bootstrap_product(
+                str(tmp_path / "failed.db"), preparation=synthetic_preparation(l2=None)
+            )
+
+    asyncio.run(run())

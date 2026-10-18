@@ -130,7 +130,7 @@
 - [x] A41 lock·설치·단위 검증, CI 1단계(#4)
 - [ ] A41 보안 스캔(CI 2단계) — 막힘: AGT 제거 뒤 C CI 2단계(C6.3)
 - [ ] A42 인수: 리뷰 결과와 검증 인계
-- [ ] A84 제품 `CodexTaskRunner`·제품 시작 경로·icons/style 테스트 보강
+- [x] A84 제품 `CodexTaskRunner`·제품 시작 경로·icons/style 테스트 보강 · [기록](archive/a/A84-product-runner-and-startup-tests.md)
 - [ ] A92 B6-01–06·ACCESS-01·AGT-04 회신, B7.2 Guard·Catalog 리뷰, #21 C1.9 관측 지점 조율(게시 전 사용자 확인)
 - [ ] A93 A 브랜치 main 병합 PR
 - [x] A71 A 단위 테스트 포맷 제외 대상 정리·AST 동일 검증 · [기록](archive/a/A71-a-unit-format-baseline.md)
