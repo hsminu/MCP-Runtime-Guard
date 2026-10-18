@@ -78,6 +78,7 @@ class Receiver(QObject):
 class FakeRunner(TaskRunner):
     def __init__(self, task_id: str, gate: threading.Event, entered: threading.Event) -> None:
         self.task_id = task_id
+        self._conversation = []
         self._gate = gate
         self._entered = entered
         self.call_threads: list[int] = []
@@ -987,6 +988,7 @@ class PendingRunner(TaskRunner):
     """Returns one pending approval, then applies or fails the resume."""
 
     def __init__(self, task_id: str, resume: Callable[[Outcome], RunUpdate]) -> None:
+        self._conversation = []
         self.task_id = task_id
         self._resume = resume
         self.resumed: list[Outcome] = []

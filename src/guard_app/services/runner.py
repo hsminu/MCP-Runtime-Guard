@@ -193,6 +193,14 @@ class TaskRunner:
         return self._pending.approval_id if self._pending is not None else None
 
     @property
+    def can_accept_message(self) -> bool:
+        """A local input capability; Task state is still checked by the bridge."""
+        return bool(
+            self._awaiting_user
+            and not (self._closed or self._stopped or self._pending or self._lock.locked())
+        )
+
+    @property
     def can_advance(self) -> bool:
         return not (
             self._closed

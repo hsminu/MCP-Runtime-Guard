@@ -15,7 +15,8 @@ _STATUS_TEXT: dict[TaskStatus, tuple[str, str]] = {
     ),
     TaskStatus.RUNNING: (
         "진행 중 · RUNNING",
-        "Task가 진행 중이야. 취소나 긴급 차단을 요청했더라도 적용 여부는 백엔드 결과로 확인해야 해. 이미 전송된 쓰기는 수신됐을 수 있어.",
+        "Task가 진행 중이야. 취소나 긴급 차단을 요청했더라도 적용 여부는 백엔드 결과로 확인해야 "
+        "해. 이미 전송된 쓰기는 수신됐을 수 있어.",
     ),
     TaskStatus.WAITING_APPROVAL: (
         "승인 대기 · WAITING_APPROVAL",
@@ -52,12 +53,10 @@ class TaskStatusCard(QFrame):
     displayed as unconfirmed; this widget does not infer state from model text.
     """
 
-    def __init__(
-        self, status: TaskStatus | None = None, parent: QWidget | None = None
-    ) -> None:
+    def __init__(self, status: TaskStatus | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("placeholderCard")
-        self.setMinimumHeight(148)
+        self.setMinimumHeight(104)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(6)
@@ -76,9 +75,7 @@ class TaskStatusCard(QFrame):
     def set_status(self, status: TaskStatus | None) -> None:
         valid_status = status if isinstance(status, TaskStatus) else None
         self._status = valid_status
-        title, detail = (
-            _UNKNOWN_TEXT if valid_status is None else _STATUS_TEXT[valid_status]
-        )
+        title, detail = _UNKNOWN_TEXT if valid_status is None else _STATUS_TEXT[valid_status]
         self.status_label.setText(title)
         self.detail_label.setText(detail)
         self.setAccessibleName(f"Task 상태: {title}. {detail}")

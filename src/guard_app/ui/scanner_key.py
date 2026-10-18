@@ -63,6 +63,7 @@ class ScannerKeyForm(QWidget):
         layout.addWidget(self.key_input)
 
         self.save_button = KeyboardActionButton("저장")
+        self.save_button.set_visual(icon="check", variant="primary")
         self.save_button.clicked.connect(self._save)
         layout.addWidget(self.save_button, 0, Qt.AlignmentFlag.AlignLeft)
 

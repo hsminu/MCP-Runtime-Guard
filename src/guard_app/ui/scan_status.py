@@ -67,9 +67,7 @@ def _analyzer_text(values: tuple[str, ...] | None) -> str:
     return f"{len(values)}개 · {', '.join(values)}"
 
 
-def _fingerprint_text(
-    present: bool | None, stale: bool | None, *, query_stale: bool
-) -> str:
+def _fingerprint_text(present: bool | None, stale: bool | None, *, query_stale: bool) -> str:
     if stale is True:
         return "현재 도구 지문과 불일치 · 재검사 필요"
     if present is False:
@@ -134,10 +132,7 @@ class ScanStatusCard(QFrame):
 
         self.state_message.set_state(surface.state, as_of=surface.as_of)
         projection = surface.value
-        valid = (
-            surface.state in (LoadState.READY, LoadState.STALE)
-            and projection is not None
-        )
+        valid = surface.state in (LoadState.READY, LoadState.STALE) and projection is not None
         self.state_message.setVisible(not valid or surface.state == LoadState.STALE)
         if not valid or projection is None:
             if surface.state == LoadState.READY:
@@ -161,9 +156,7 @@ class ScanStatusCard(QFrame):
         self.scanned_at.setText(format_kst(projection.scanned_at))
         self.max_severity.setText(fixed(_SEVERITIES, projection.max_severity))
         self.findings.setText(projection.safe_finding_summary or "미제공")
-        self.registry_status.setText(
-            fixed(REGISTRY_STATUSES, projection.registry_status)
-        )
+        self.registry_status.setText(fixed(REGISTRY_STATUSES, projection.registry_status))
         self.session_status.setText(fixed(SESSION_STATUSES, projection.session_status))
 
     def _clear(self) -> None:

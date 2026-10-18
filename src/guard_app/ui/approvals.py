@@ -18,7 +18,6 @@ from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QBoxLayout,
-    QComboBox,
     QHeaderView,
     QLineEdit,
     QPlainTextEdit,
@@ -33,7 +32,7 @@ from guard_app.domain.enums import ApprovalStatus
 
 from .models import LoadState
 from .presentation import MISSING, format_kst, public_display_text
-from .widgets import KeyboardActionButton, StateMessage, plain_label
+from .widgets import KeyboardActionButton, SelectionBox, StateMessage, plain_label
 
 
 class ApprovalLane(StrEnum):
@@ -176,7 +175,7 @@ class ApprovalListPage(QWidget):
         self.server_filter.setAccessibleName("MCP 서버 ID 필터")
         self.server_filter.editingFinished.connect(self._filters_changed)
         self.filters.addWidget(self.server_filter, 1)
-        self.sort = QComboBox()
+        self.sort = SelectionBox()
         self.sort.addItem("오래된 순", ApprovalSort.OLDEST)
         self.sort.addItem("최신 순", ApprovalSort.NEWEST)
         self.sort.setAccessibleName("승인 목록 정렬")
@@ -221,9 +220,7 @@ class ApprovalListPage(QWidget):
         layout.addWidget(self.selection_detail)
 
         self.pager = QBoxLayout(QBoxLayout.Direction.TopToBottom)
-        self.count_label = plain_label(
-            "총건수 미제공 · 현재 페이지 0건", name="secondary"
-        )
+        self.count_label = plain_label("총건수 미제공 · 현재 페이지 0건", name="secondary")
         self.pager.addWidget(self.count_label)
         self.pager.addStretch(1)
         self.previous_button = KeyboardActionButton("이전")
@@ -235,6 +232,7 @@ class ApprovalListPage(QWidget):
         self.next_button.clicked.connect(self.next_page)
         self.pager.addWidget(self.next_button)
         self.refresh_button = KeyboardActionButton("새로고침")
+        self.refresh_button.set_visual(icon="refresh")
         self.refresh_button.clicked.connect(self.refresh)
         self.pager.addWidget(self.refresh_button)
         layout.addLayout(self.pager)
@@ -306,8 +304,7 @@ class ApprovalListPage(QWidget):
         else:
             fractions = (15, 13, 18, 16, 18)
             widths = {
-                column: available * percent // 100
-                for column, percent in enumerate(fractions)
+                column: available * percent // 100 for column, percent in enumerate(fractions)
             }
             widths[5] = available - sum(widths.values())
         for column, width in widths.items():
@@ -381,11 +378,7 @@ class ApprovalListPage(QWidget):
             self._request_page(self._query.page + 1)
 
     def previous_page(self) -> None:
-        if (
-            self._state is LoadState.READY
-            and self._query is not None
-            and self._query.page > 1
-        ):
+        if self._state is LoadState.READY and self._query is not None and self._query.page > 1:
             self._request_page(self._query.page - 1)
 
     def select_approval(self, approval_id: str) -> bool:
@@ -407,9 +400,7 @@ class ApprovalListPage(QWidget):
         self._query = ApprovalQuery(
             token=self._sequence,
             lane=(
-                ApprovalLane.PENDING
-                if self.lane_tabs.currentIndex() == 0
-                else ApprovalLane.HISTORY
+                ApprovalLane.PENDING if self.lane_tabs.currentIndex() == 0 else ApprovalLane.HISTORY
             ),
             search=self.search.text().strip(),
             server_id=self.server_filter.text().strip(),
@@ -423,9 +414,7 @@ class ApprovalListPage(QWidget):
         self._update_pager()
         self.query_requested.emit(self._query)
 
-    def set_page(
-        self, page: ApprovalPage, *, display_now: datetime | None = None
-    ) -> bool:
+    def set_page(self, page: ApprovalPage, *, display_now: datetime | None = None) -> bool:
         """Apply only a current, structurally valid backend response."""
 
         if type(page) is not ApprovalPage or page.query != self._query:
@@ -553,8 +542,7 @@ class ApprovalListPage(QWidget):
 
     def _update_pager(self) -> None:
         ready = self._state is LoadState.READY and self._query is not None
-        if ready:
-            assert self._query is not None
+        if ready and self._query is not None:
             self.count_label.setText(
                 f"전체 {self._total_count:,}건 · 현재 페이지 {len(self._rows)}건"
             )
@@ -593,9 +581,7 @@ class ApprovalListPage(QWidget):
                 ):
                     codepoint = ord(char)
                     parts.append(
-                        f"\\u{codepoint:04X}"
-                        if codepoint <= 0xFFFF
-                        else f"\\U{codepoint:08X}"
+                        f"\\u{codepoint:04X}" if codepoint <= 0xFFFF else f"\\U{codepoint:08X}"
                     )
                 else:
                     parts.append(char)
@@ -606,7 +592,8 @@ class ApprovalListPage(QWidget):
                 f"승인 ID: {one_line(row.approval_id)} · 서버 ID: {one_line(row.server_id)}",
                 f"상태: {_STATUS_TEXT[row.status]}",
                 f"Task ID: {one_line(row.task_id)} · 요청 ID: {one_line(row.request_id)}",
-                f"수신처 요약: {one_line(row.destination_summary) if row.destination_summary else MISSING}",
+                "수신처 요약: "
+                f"{one_line(row.destination_summary) if row.destination_summary else MISSING}",
                 f"요청 시각: {format_kst(row.created_at)}",
                 f"처리 시각: {format_kst(row.resolved_at)}",
             )

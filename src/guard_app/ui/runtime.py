@@ -4,8 +4,17 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QPlainTextEdit, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QResizeEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGridLayout,
+    QPlainTextEdit,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.services.bridge import (
@@ -45,7 +54,10 @@ _NO_TASK_SUMMARY: dict[BridgeState | None, str] = {
 
 
 class RuntimePanel(QWidget):
-    def __init__(self, bridge: BackendBridge, parent=None):
+    state_changed = Signal()
+    message_rejected = Signal(str)
+
+    def __init__(self, bridge: BackendBridge, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.bridge = bridge
         self.current: TaskProjection | None = None
@@ -54,19 +66,51 @@ class RuntimePanel(QWidget):
         self._review_command: str | None = None
         self._reviewed: str | None = None
         self._commands: dict[str, ControlAction | str] = {}
+        self._scope_enabled = False
+        self._scope: tuple[str, int] | None = None
         layout = QVBoxLayout(self)
-        self.summary = plain_label(_NO_TASK_SUMMARY[None])
-        self.message = plain_label("상태 확인 대기")
-        layout.addWidget(self.summary)
-        layout.addWidget(self.message)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+        session = QFrame()
+        session.setObjectName("runtimeCard")
+        session_layout = QVBoxLayout(session)
+        session_layout.setContentsMargins(20, 18, 20, 18)
+        session_layout.setSpacing(14)
+        session_layout.addWidget(plain_label("실행 컨트롤", name="cardTitle"))
+        self.summary = plain_label(_NO_TASK_SUMMARY[None], name="secondary")
+        self.summary.setMinimumWidth(0)
+        self.summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.message = plain_label("상태 확인 대기", name="runtimeMessage")
         self.run_button = KeyboardActionButton("실행 / 다음 모델 단계")
+        self.run_button.set_visual(icon="play", variant="primary")
+        self._session_actions = QGridLayout()
+        self._session_actions.setSpacing(12)
+        session_layout.addLayout(self._session_actions)
+        session_layout.addWidget(self.message)
+        layout.addWidget(session)
+
+        approval = QFrame()
+        approval.setObjectName("approvalCard")
+        approval_layout = QVBoxLayout(approval)
+        approval_layout.setContentsMargins(20, 18, 20, 18)
+        approval_layout.setSpacing(12)
+        approval_layout.addWidget(plain_label("승인 검토", name="cardTitle"))
+        approval_layout.addWidget(
+            plain_label("요청의 수신처와 전체 인자를 확인한 뒤 승인해.", name="secondary")
+        )
         self.review_button = KeyboardActionButton("승인 사본 확인")
+        self.review_button.set_visual(icon="eye", variant="soft")
         self.approve_button = KeyboardActionButton("확인한 사본 승인")
+        self.approve_button.set_visual(icon="check", variant="primary")
         self.reject_button = KeyboardActionButton("거절")
+        self.reject_button.set_visual(icon="close")
         self.cancel_button = KeyboardActionButton("작업 취소")
+        self.cancel_button.set_visual(icon="close")
         self.halt_button = KeyboardActionButton("긴급 차단")
-        for button in self.buttons:
-            layout.addWidget(button)
+        self.halt_button.set_visual(icon="stop", variant="danger")
+        self._approval_actions = QGridLayout()
+        self._approval_actions.setSpacing(8)
+        approval_layout.addLayout(self._approval_actions)
         for button in (self.cancel_button, self.halt_button):
             # Irreversible stops are never triggered by a default-button Enter.
             button.setAutoDefault(False)
@@ -75,8 +119,25 @@ class RuntimePanel(QWidget):
         self.detail.setAccessibleName("승인 사본 상세")
         self.detail.setReadOnly(True)
         self.detail.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.detail.setMinimumHeight(180)
-        layout.addWidget(self.detail)
+        self.detail.setMinimumHeight(150)
+        self.detail.setPlaceholderText(
+            "승인 요청이 도착하면 ‘승인 사본 확인’을 눌러 내용을 확인해."
+        )
+        approval_layout.addWidget(self.detail)
+        layout.addWidget(approval)
+
+        stop = QFrame()
+        stop.setObjectName("stopCard")
+        self._stop_actions = QGridLayout(stop)
+        self._stop_actions.setContentsMargins(20, 14, 20, 14)
+        self._stop_actions.setSpacing(8)
+        self._stop_label = plain_label("작업 제어", name="secondary")
+        layout.addWidget(stop)
+        self._compact_actions: bool | None = None
+        self._reflow_actions()
+        # Match keyboard order to the visual groups. Reflow never changes focus.
+        for previous, following in zip(self.buttons, self.buttons[1:], strict=False):
+            QWidget.setTabOrder(previous, following)
         self.run_button.clicked.connect(self._run)
         self.review_button.clicked.connect(lambda: self._control(ControlAction.REVIEW))
         self.approve_button.clicked.connect(lambda: self._control(ControlAction.APPROVE))
@@ -90,7 +151,7 @@ class RuntimePanel(QWidget):
         self._refresh()
 
     @property
-    def buttons(self):
+    def buttons(self) -> tuple[KeyboardActionButton, ...]:
         return (
             self.run_button,
             self.review_button,
@@ -100,27 +161,76 @@ class RuntimePanel(QWidget):
             self.halt_button,
         )
 
-    def _refresh(self):
-        active = self._ready and self.current is not None
-        waiting = active and self.current.status is TaskStatus.WAITING_APPROVAL
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_compact_actions"):
+            self._reflow_actions()
+
+    def _reflow_actions(self) -> None:
+        compact = self.width() < 600
+        if compact == self._compact_actions:
+            return
+        self._compact_actions = compact
+        for grid in (self._session_actions, self._approval_actions, self._stop_actions):
+            while grid.count():
+                grid.takeAt(0)
+            for column in range(4):
+                grid.setColumnStretch(column, 0)
+        if compact:
+            self._session_actions.addWidget(self.summary, 0, 0)
+            self._session_actions.addWidget(self.run_button, 1, 0)
+            for row, button in enumerate(
+                (self.review_button, self.approve_button, self.reject_button)
+            ):
+                self._approval_actions.addWidget(button, row, 0)
+            self._stop_actions.addWidget(self._stop_label, 0, 0)
+            self._stop_actions.addWidget(self.cancel_button, 1, 0)
+            self._stop_actions.addWidget(self.halt_button, 2, 0)
+        else:
+            self._session_actions.addWidget(self.summary, 0, 0)
+            self._session_actions.addWidget(self.run_button, 0, 1)
+            self._session_actions.setColumnStretch(0, 1)
+            for column, button in enumerate(
+                (self.review_button, self.approve_button, self.reject_button)
+            ):
+                self._approval_actions.addWidget(button, 0, column)
+            self._approval_actions.setColumnStretch(3, 1)
+            self._stop_actions.addWidget(self._stop_label, 0, 0)
+            self._stop_actions.addWidget(self.cancel_button, 0, 1)
+            self._stop_actions.addWidget(self.halt_button, 0, 2)
+            self._stop_actions.setColumnStretch(0, 1)
+
+    def _refresh(self) -> None:
+        current = self.current if self._ready else None
+        if self._scope_enabled and (
+            current is None or self._scope != (current.task_id, current.epoch)
+        ):
+            current = None
+        waiting = current is not None and current.status is TaskStatus.WAITING_APPROVAL
         stoppable = bool(
-            active and self.current.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+            current is not None
+            and current.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
         )
         enabled = {
             self.run_button: bool(
-                active
+                current is not None
                 and not self._busy
-                and self.current.status is TaskStatus.RUNNING
-                and self.current.can_advance
+                and current.status is TaskStatus.RUNNING
+                and current.can_advance
             ),
-            self.review_button: bool(waiting and not self._busy and self.current.approval_id),
+            self.review_button: bool(
+                current is not None and waiting and not self._busy and current.approval_id
+            ),
             self.approve_button: bool(
-                waiting
+                current is not None
+                and waiting
                 and not self._busy
-                and self._reviewed == self.current.approval_id
+                and self._reviewed == current.approval_id
                 and self._reviewed
             ),
-            self.reject_button: bool(waiting and not self._busy and self.current.approval_id),
+            self.reject_button: bool(
+                current is not None and waiting and not self._busy and current.approval_id
+            ),
             self.cancel_button: stoppable,
             self.halt_button: stoppable,
         }
@@ -133,13 +243,41 @@ class RuntimePanel(QWidget):
             self.detail.setFocus(Qt.FocusReason.OtherFocusReason)
         for button, value in enabled.items():
             button.setEnabled(value)
+        self.state_changed.emit()
 
-    def _clear_review(self):
+    def set_scope(self, scope: tuple[str, int] | None) -> None:
+        """Approval copies and controls are bound to the selected session."""
+        self._scope_enabled = True
+        if scope != self._scope:
+            self._clear_review()
+        self._scope = scope
+        self._refresh()
+
+    def send_message(self, task_id: str, epoch: int, text: str, command_id: str) -> None:
+        current = self.current
+        if (
+            current is None
+            or (current.task_id, current.epoch) != (task_id, epoch)
+            or not self._ready
+            or self._busy
+            or current.status is not TaskStatus.RUNNING
+            or not current.can_accept_message
+        ):
+            self.message_rejected.emit(command_id)
+            return
+        self._busy = True
+        self._clear_review()
+        self._commands[command_id] = "message"
+        self.message.setText("메시지 요청됨 · 백엔드 결과 대기")
+        self._refresh()
+        self.bridge.request_message(task_id, epoch, text, command_id=command_id)
+
+    def _clear_review(self) -> None:
         self._review_command = None
         self._reviewed = None
         self.detail.clear()
 
-    def _run(self):
+    def _run(self) -> None:
         if not self.run_button.isEnabled() or self.current is None:
             return
         self._busy = True
@@ -150,8 +288,10 @@ class RuntimePanel(QWidget):
         self._commands[command_id] = _RUN
         self.bridge.request_run(self.current.task_id, command_id=command_id)
 
-    def _control(self, action):
+    def _control(self, action: ControlAction) -> None:
         if self.current is None:
+            return
+        if self._scope_enabled and self._scope != (self.current.task_id, self.current.epoch):
             return
         target = (
             self.current.task_id
@@ -170,7 +310,7 @@ class RuntimePanel(QWidget):
             self._review_command = command_id
         self.bridge.request_control(action, target, command_id=command_id)
 
-    def _lifecycle(self, event: LifecycleEvent):
+    def _lifecycle(self, event: LifecycleEvent) -> None:
         self._ready = event.state is BridgeState.READY
         if not self._ready:
             self._clear_review()
@@ -184,7 +324,7 @@ class RuntimePanel(QWidget):
             self.summary.setText(_NO_TASK_SUMMARY.get(event.state, _NO_TASK_SUMMARY[None]))
         self._refresh()
 
-    def set_snapshot(self, snapshot: TaskProjection):
+    def set_snapshot(self, snapshot: TaskProjection) -> None:
         self._clear_review()
         self.current = snapshot
         lines = [
@@ -201,7 +341,7 @@ class RuntimePanel(QWidget):
         self.summary.setText("\n".join(lines))
         self._refresh()
 
-    def _review(self, review: ApprovalReview):
+    def _review(self, review: ApprovalReview) -> None:
         if (
             self.current is None
             or review.command_id != self._review_command
@@ -209,6 +349,7 @@ class RuntimePanel(QWidget):
             or review.task_id != self.current.task_id
             or review.epoch != self.current.epoch
             or self.current.status is not TaskStatus.WAITING_APPROVAL
+            or (self._scope_enabled and self._scope != (self.current.task_id, self.current.epoch))
         ):
             return
         self.detail.setPlainText(
@@ -221,7 +362,7 @@ class RuntimePanel(QWidget):
         self._reviewed = review.approval_id
         self._refresh()
 
-    def _command(self, event: CommandEvent):
+    def _command(self, event: CommandEvent) -> None:
         action = self._commands.get(event.command_id)
         if action is None:
             return
@@ -246,6 +387,8 @@ class RuntimePanel(QWidget):
         self._refresh()
 
     def _result_text(self, action: ControlAction | str, code: str) -> str:
+        if code == "MESSAGE_UNAVAILABLE":
+            return "현재 Task가 메시지를 받을 수 없어. 백엔드 상태를 확인해."
         if code == "RUNNER_UNAVAILABLE":
             return RUN_RESULTS[code]
         name = _STOP_NAMES.get(action) if isinstance(action, ControlAction) else None
@@ -262,5 +405,5 @@ class RuntimePanel(QWidget):
                     "이미 전송된 쓰기는 수신됐을 수 있어."
                 )
             return f"{name} 적용을 확인하지 못했어 · 위 Task 상태를 확인해."
-        results = RUN_RESULTS if action == _RUN else APPROVAL_RESULTS
+        results = RUN_RESULTS if action in (_RUN, "message") else APPROVAL_RESULTS
         return results.get(code, "백엔드 응답을 해석하지 못했어 · 위 Task 상태를 확인해.")

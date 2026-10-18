@@ -72,9 +72,11 @@ DECISIONS = {"ALLOW": "허용", "ASK": "승인 필요", "DENY": "차단"}
 # Backend command codes -> what happened and what the operator can do next.
 # The code itself stays visible only as secondary text.
 RUN_RESULTS = {
-    "RUN_CONTINUE_QUERY_REQUIRED": "호출 처리 완료 · '실행 / 다음 모델 단계'로 이어서 진행할 수 있어.",
+    "RUN_CONTINUE_QUERY_REQUIRED": "호출 처리 완료 · '실행 / 다음 모델 "
+    "단계'로 이어서 진행할 수 있어.",
     "RUN_COMPLETE_QUERY_REQUIRED": "모델 단계 완료 · 모델이 요청한 호출이 더 없어.",
-    "RUN_PENDING_QUERY_REQUIRED": "승인이 필요한 호출이 있어 · '승인 사본 확인' 후 승인하거나 거절해.",
+    "RUN_PENDING_QUERY_REQUIRED": "승인이 필요한 호출이 있어 · '승인 사본 "
+    "확인' 후 승인하거나 거절해.",
     "RUN_DENIED_QUERY_REQUIRED": (
         "호출이 차단됐어 · Guard 정책 또는 AGT가 허용하지 않아 실행하지 않았어. "
         "차단 사유 조회는 아직 이 화면에 연결되지 않았어."
@@ -104,7 +106,8 @@ RUN_RESULTS = {
 APPROVAL_RESULTS = {
     "CONTROL_RELEASED_QUERY_REQUIRED": "승인한 호출을 실행했어.",
     "CONTROL_PENDING_QUERY_REQUIRED": "승인 처리 후 다음 호출에 다시 승인이 필요해.",
-    "CONTROL_DENIED_QUERY_REQUIRED": "호출은 실행되지 않았어 · 거절, 만료 또는 상태 변경으로 처리가 끝났어.",
+    "CONTROL_DENIED_QUERY_REQUIRED": "호출은 실행되지 않았어 · 거절, "
+    "만료 또는 상태 변경으로 처리가 끝났어.",
     "CONTROL_WITHHELD_QUERY_REQUIRED": "호출은 실행됐지만 결과를 분류할 수 없어 공개하지 않았어.",
     "CONTROL_OUTCOME_UNKNOWN_QUERY_REQUIRED": (
         "전송 결과를 확인할 수 없어 · 수신측에서 실제 반영 여부를 확인해."
@@ -154,7 +157,8 @@ PAGES = {
     "server_add": "MCP 추가 초안",
     "policy": "정책 · 경계",
     "audit": "감사 기록",
-    "runs": "에이전트 실행",
+    "runs": "대화",
+    "results": "결과 · 실행 활동",
     "settings": "설정",
 }
 

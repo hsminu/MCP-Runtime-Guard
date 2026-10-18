@@ -38,19 +38,16 @@ def app():
 
 def test_missing_counts_and_failed_query_never_look_like_zero(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     assert window.overview.metric_cards[0].value.text() == "미제공"
     assert "조회 연결 대기" in window.overview.metrics_state.text()
 
-    window.set_overview_snapshot(
-        OverviewSnapshot(totals=Surface(state=LoadState.ERROR))
-    )
+    window.set_overview_snapshot(OverviewSnapshot(totals=Surface(state=LoadState.ERROR)))
     assert window.overview.metric_cards[0].value.text() == "미제공"
     assert "불러오지 못함" in window.overview.metrics_state.text()
 
     window.set_overview_snapshot(
-        OverviewSnapshot(
-            totals=Surface(state=LoadState.READY, value=OverviewTotals(0, 0, 0))
-        )
+        OverviewSnapshot(totals=Surface(state=LoadState.READY, value=OverviewTotals(0, 0, 0)))
     )
     assert window.overview.metric_cards[0].value.text() == "0건"
     assert window.overview.metric_cards[1].value.text() == "0건"
@@ -59,6 +56,7 @@ def test_missing_counts_and_failed_query_never_look_like_zero(app) -> None:
 
 def test_overview_order_and_server_preview_adapt_to_window_width(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     window.resize(320, 400)
     window.set_overview_snapshot(
         OverviewSnapshot(
@@ -105,10 +103,7 @@ def test_overview_order_and_server_preview_adapt_to_window_width(app) -> None:
             app.processEvents()
             assert len(window.overview._server_cards) == expected_cards
             assert len(window.overview._server_cards) == window.overview._server_columns
-            assert (
-                f"12개 중 {expected_cards}개"
-                in window.overview.server_preview_note.text()
-            )
+            assert f"12개 중 {expected_cards}개" in window.overview.server_preview_note.text()
             assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
 
         window.resize(320, 400)
@@ -124,6 +119,7 @@ def test_small_overview_exposes_attention_shortcut_and_prioritizes_related_serve
     app,
 ) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     window.resize(320, 360)
     window.set_overview_snapshot(
         OverviewSnapshot(
@@ -152,9 +148,7 @@ def test_small_overview_exposes_attention_shortcut_and_prioritizes_related_serve
         window.overview.attention_shortcut.click()
         app.processEvents()
         assert scroll.verticalScrollBar().value() > 0
-        header_top = window.overview.attention_header.mapTo(
-            scroll.viewport(), QPoint(0, 0)
-        ).y()
+        header_top = window.overview.attention_header.mapTo(scroll.viewport(), QPoint(0, 0)).y()
         assert 0 <= header_top <= 20
         first_card = window.overview.attention_layout.itemAt(0).widget()
         card_top = first_card.mapTo(scroll.viewport(), QPoint(0, 0)).y()
@@ -165,6 +159,7 @@ def test_small_overview_exposes_attention_shortcut_and_prioritizes_related_serve
 
 def test_server_preview_keeps_keyboard_focus_when_columns_collapse(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     window.resize(900, 700)
     window.set_overview_snapshot(
         OverviewSnapshot(
@@ -198,6 +193,7 @@ def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(
     app,
 ) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     window.resize(320, 400)
     attention = tuple(
         AttentionItem(
@@ -261,6 +257,7 @@ def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(
 
 def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     window.resize(320, 400)
     old_items = tuple(
         AttentionItem(
@@ -271,9 +268,7 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
         )
         for index in range(12)
     )
-    window.set_overview_snapshot(
-        OverviewSnapshot(attention=Surface(LoadState.READY, old_items))
-    )
+    window.set_overview_snapshot(OverviewSnapshot(attention=Surface(LoadState.READY, old_items)))
     window.show()
     window.activateWindow()
     app.processEvents()
@@ -283,9 +278,7 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
         page.attention_next.click()
         assert "12개 중 11–12개" in page.attention_page_note.text()
         page.attention_shortcut.setFocus()
-        urgent = AttentionItem(
-            "new-urgent", "outcome_unknown", server_id="urgent-server"
-        )
+        urgent = AttentionItem("new-urgent", "outcome_unknown", server_id="urgent-server")
         window.set_overview_snapshot(
             OverviewSnapshot(attention=Surface(LoadState.READY, (urgent,) + old_items))
         )
@@ -302,19 +295,16 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
         scroll = window.stack.currentWidget()
         assert isinstance(scroll, QScrollArea)
         first = page.attention_layout.itemAt(0).widget()
-        assert "MCP urgent-server" in (
-            label.text() for label in first.findChildren(QLabel)
-        )
+        assert "MCP urgent-server" in (label.text() for label in first.findChildren(QLabel))
         assert first.findChildren(type(page.attention_shortcut))[0].isEnabled() is False
-        assert first.mapTo(scroll.viewport(), QPoint(0, 0)).y() < (
-            scroll.viewport().height()
-        )
+        assert first.mapTo(scroll.viewport(), QPoint(0, 0)).y() < (scroll.viewport().height())
     finally:
         window.close()
 
 
 def test_runtime_mode_is_unconfigured_until_trusted_bootstrap_sets_it(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     assert window.runtime_identity.text() == "AGT: 미설정 · 모델: 미설정"
     window.set_runtime_identity(
         RuntimeIdentity(agt_mode=RuntimeMode.MOCK, model_mode=RuntimeMode.UNCONFIGURED)
@@ -324,6 +314,7 @@ def test_runtime_mode_is_unconfigured_until_trusted_bootstrap_sets_it(app) -> No
 
 def test_runs_page_only_displays_backend_status_without_controls(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     window.navigate("runs")
     assert "상태 미확인" in window.task_status_card.status_label.text()
 
@@ -335,16 +326,16 @@ def test_runs_page_only_displays_backend_status_without_controls(app) -> None:
 
 def test_server_add_navigation_is_local_draft_only(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     window.navigate("server_add")
     assert window.breadcrumb.text() == "Workspace / MCP 추가 초안"
-    assert (
-        "Registry 등록은 아직 연결되지 않았어" in window.server_add_form.status.text()
-    )
+    assert "Registry 등록은 아직 연결되지 않았어" in window.server_add_form.status.text()
     assert window.server_add_form.validated_draft is None
 
 
 def test_connected_server_is_not_inferred_from_active_registration(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     active_but_disconnected = ServerSummary(
         "registry-active",
         "등록 활성 서버",
@@ -365,9 +356,7 @@ def test_connected_server_is_not_inferred_from_active_registration(app) -> None:
     )
     window.set_overview_snapshot(
         OverviewSnapshot(
-            totals=Surface(
-                state=LoadState.READY, value=OverviewTotals(active_servers=1)
-            ),
+            totals=Surface(state=LoadState.READY, value=OverviewTotals(active_servers=1)),
             servers=Surface(
                 state=LoadState.READY,
                 value=(active_but_disconnected, connected_pending),
@@ -377,9 +366,7 @@ def test_connected_server_is_not_inferred_from_active_registration(app) -> None:
     assert window.overview.metric_cards[0].value.text() == "1건"
     assert len(window.overview._server_cards) == 1
     card = window.overview._server_cards[0]
-    texts = [
-        label.text() for label in card.findChildren(type(window.overview.metrics_state))
-    ]
+    texts = [label.text() for label in card.findChildren(type(window.overview.metrics_state))]
     assert "미지정 · 미제공" in texts
     assert "PENDING · 등록 검토 중" in texts
     assert "연결됨" in texts
@@ -388,6 +375,7 @@ def test_connected_server_is_not_inferred_from_active_registration(app) -> None:
 
 def test_attention_deduplicates_and_never_enables_missing_target(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     item = AttentionItem(
         "att-1",
         "outcome_unknown",
@@ -418,10 +406,9 @@ def test_attention_deduplicates_and_never_enables_missing_target(app) -> None:
 
 def test_navigation_only_emits_a_read_only_target(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     destinations: list[tuple[str, str]] = []
-    window.navigation_requested.connect(
-        lambda page, key: destinations.append((page, key))
-    )
+    window.navigation_requested.connect(lambda page, key: destinations.append((page, key)))
     window.overview.metric_cards[1].findChild(QPushButton).click()
     assert destinations == [("approvals", "")]
     assert window.breadcrumb.text() == "Workspace / 승인 대기"
@@ -429,6 +416,7 @@ def test_navigation_only_emits_a_read_only_target(app) -> None:
 
 def test_sidebar_navigation_accepts_return_key(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     window.resize(1100, 700)
     window.show()
     app.processEvents()
@@ -442,6 +430,7 @@ def test_sidebar_navigation_accepts_return_key(app) -> None:
 
 def test_registry_list_uses_its_own_public_snapshot_and_filters(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     public = ServerSummary(
         "public-docs",
         "공개 문서",
@@ -485,6 +474,7 @@ def test_registry_list_uses_its_own_public_snapshot_and_filters(app) -> None:
 
 def test_registry_detail_is_plain_text_and_stale_data_is_labeled(app) -> None:
     window = GuardWindow()
+    window.navigate("overview")
     server = ServerSummary(
         "safe-id",
         '<img src="https://example.invalid/secret">',
@@ -502,12 +492,10 @@ def test_registry_detail_is_plain_text_and_stale_data_is_labeled(app) -> None:
     dialog = window.server_page._detail_dialog
     assert dialog is not None
     assert '<img src="https://example.invalid/secret">' in [
-        label.text()
-        for label in dialog.findChildren(type(window.overview.metrics_state))
+        label.text() for label in dialog.findChildren(type(window.overview.metrics_state))
     ]
     assert "미지정 · 미제공" in [
-        label.text()
-        for label in dialog.findChildren(type(window.overview.metrics_state))
+        label.text() for label in dialog.findChildren(type(window.overview.metrics_state))
     ]
     dialog.close()
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .icons import line_icon
 from .models import (
     AttentionItem,
     FlowBucket,
@@ -88,9 +89,16 @@ class MetricCard(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._note = note
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(9)
-        layout.addWidget(plain_label(title, name="cardTitle"))
+        layout.setContentsMargins(22, 20, 22, 16)
+        layout.setSpacing(12)
+        heading = QHBoxLayout()
+        heading.addWidget(plain_label(title, name="cardTitle"), 1)
+        badge = plain_label(name="metricIcon")
+        badge.setFixedSize(34, 34)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setPixmap(line_icon(page, "#7566d5").pixmap(QSize(18, 18)))
+        heading.addWidget(badge)
+        layout.addLayout(heading)
         self.value = plain_label("—", name="metricValue")
         layout.addWidget(self.value)
         self.caption = plain_label("조회 연결 대기", name="secondary")
@@ -109,16 +117,12 @@ class MetricCard(QFrame):
         detail: str | None = None,
         unavailable: str = "조회 연결 대기",
     ) -> None:
-        valid = (
-            ready
-            and isinstance(value, int)
-            and not isinstance(value, bool)
-            and value >= 0
-        )
+        valid = ready and isinstance(value, int) and not isinstance(value, bool) and value >= 0
         self.value.setText(f"{value:,}건" if valid else "미제공")
-        self.caption.setText(
-            (detail or self._note) if ready else f"{self._note} · {unavailable}"
-        )
+        self.value.setProperty("unavailable", not valid)
+        self.value.style().unpolish(self.value)
+        self.value.style().polish(self.value)
+        self.caption.setText((detail or self._note) if ready else f"{self._note} · {unavailable}")
 
 
 def page_label(page: str) -> str:
@@ -144,20 +148,14 @@ class ServerCard(QFrame):
         layout.addWidget(_flex_label(public_display_text(server.server_id), name="mono"))
         layout.addWidget(SecurityLabel(server.max_label))
         layout.addWidget(_field("신뢰 경계 · tier", fixed(TIERS, server.tier)))
-        layout.addWidget(
-            _field("등록 상태", fixed(REGISTRY_STATUSES, server.registry_status))
-        )
-        layout.addWidget(
-            _field("세션 상태", fixed(SESSION_STATUSES, server.session_status))
-        )
+        layout.addWidget(_field("등록 상태", fixed(REGISTRY_STATUSES, server.registry_status)))
+        layout.addWidget(_field("세션 상태", fixed(SESSION_STATUSES, server.session_status)))
         layout.addWidget(_field("연결 방식", fixed(TRANSPORTS, server.transport)))
         link = KeyboardActionButton("서버 상세 보기 →")
         self.link = link
         link.setObjectName("linkButton")
         link.setAccessibleName(f"{public_display_text(server.server_id)} 서버 상세 보기")
-        link.clicked.connect(
-            lambda: self.navigate_requested.emit("servers", server.server_id)
-        )
+        link.clicked.connect(lambda: self.navigate_requested.emit("servers", server.server_id))
         layout.addWidget(link, 0, Qt.AlignmentFlag.AlignLeft)
 
 
@@ -170,9 +168,7 @@ class AttentionCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(17, 15, 17, 15)
         layout.setSpacing(8)
-        layout.addWidget(
-            plain_label(fixed(ATTENTION_KINDS, item.kind), name="cardTitle")
-        )
+        layout.addWidget(plain_label(fixed(ATTENTION_KINDS, item.kind), name="cardTitle"))
         layout.addWidget(_field("사유", fixed(REASONS, item.reason_code)))
         related = []
         if item.server_id:
@@ -181,9 +177,7 @@ class AttentionCard(QFrame):
             related.append(f"Task {public_display_text(item.task_id)}")
         if item.request_id:
             related.append(f"요청 {public_display_text(item.request_id)}")
-        layout.addWidget(
-            _field("관련 항목", " · ".join(related) if related else MISSING)
-        )
+        layout.addWidget(_field("관련 항목", " · ".join(related) if related else MISSING))
         layout.addWidget(_field("발생 시각", format_kst(item.occurred_at)))
         layout.addWidget(_field("대기 시작", format_kst(item.waiting_since)))
         actionable = item.action_available and item.target_page in PAGES
@@ -193,9 +187,7 @@ class AttentionCard(QFrame):
         link.setEnabled(actionable)
         if actionable:
             link.clicked.connect(
-                lambda: self.navigate_requested.emit(
-                    item.target_page or "", item.target_id or ""
-                )
+                lambda: self.navigate_requested.emit(item.target_page or "", item.target_id or "")
             )
         layout.addWidget(link, 0, Qt.AlignmentFlag.AlignLeft)
 
@@ -209,21 +201,16 @@ class RecentCallCard(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(17, 14, 17, 14)
         layout.setSpacing(6)
-        layout.addWidget(
-            _flex_label(public_display_text(call.tool_name), name="cardTitle")
-        )
+        layout.addWidget(_flex_label(public_display_text(call.tool_name), name="cardTitle"))
         layout.addWidget(
             _field(
                 "호출 / MCP",
-                f"{public_display_text(call.call_id)} · "
-                f"{public_display_text(call.server_id)}",
+                f"{public_display_text(call.call_id)} · {public_display_text(call.server_id)}",
             )
         )
         layout.addWidget(_field("일시", format_kst(call.occurred_at)))
         layout.addWidget(_field("최초 판정", fixed(DECISIONS, call.initial_decision)))
-        layout.addWidget(
-            _field("현재 상태", fixed(REQUEST_STATUSES, call.current_status))
-        )
+        layout.addWidget(_field("현재 상태", fixed(REQUEST_STATUSES, call.current_status)))
         link = KeyboardActionButton("호출 상세 보기 →")
         self.link = link
         link.setObjectName("linkButton")
@@ -248,9 +235,7 @@ class FlowCard(QFrame):
         bar.setRange(0, max(1, maximum))
         bar.setValue(max(0, bucket.call_count))
         bar.setTextVisible(False)
-        bar.setAccessibleName(
-            f"{format_kst(bucket.starts_at)} 호출 {bucket.call_count}건"
-        )
+        bar.setAccessibleName(f"{format_kst(bucket.starts_at)} 호출 {bucket.call_count}건")
         layout.addWidget(bar)
 
 
@@ -283,9 +268,7 @@ class OverviewPage(QWidget):
         outer.addWidget(plain_label("OVERVIEW", name="eyebrow"))
         outer.addWidget(plain_label("MCP 운영 현황", name="pageTitle"))
         outer.addWidget(
-            plain_label(
-                "연결 상태와 지금 처리가 필요한 요청부터 확인해.", name="secondary"
-            )
+            plain_label("연결 상태와 지금 처리가 필요한 요청부터 확인해.", name="secondary")
         )
         shortcut = QFrame()
         shortcut.setObjectName("attentionCard")
@@ -316,9 +299,7 @@ class OverviewPage(QWidget):
         outer.addWidget(self.metrics_state)
 
         outer.addWidget(
-            _section_header(
-                "연결된 MCP 서버", "세션 연결과 등록 ACTIVE는 서로 다른 상태야."
-            )
+            _section_header("연결된 MCP 서버", "세션 연결과 등록 ACTIVE는 서로 다른 상태야.")
         )
         self.servers_state = StateMessage()
         outer.addWidget(self.servers_state)
@@ -329,9 +310,7 @@ class OverviewPage(QWidget):
         outer.addWidget(self.server_preview_note)
         self.all_servers_button = KeyboardActionButton("서버 목록으로 이동 →")
         self.all_servers_button.setObjectName("linkButton")
-        self.all_servers_button.clicked.connect(
-            lambda: self.navigate_requested.emit("servers", "")
-        )
+        self.all_servers_button.clicked.connect(lambda: self.navigate_requested.emit("servers", ""))
         outer.addWidget(self.all_servers_button, 0, Qt.AlignmentFlag.AlignLeft)
 
         self.attention_header = _section_header(
@@ -358,9 +337,7 @@ class OverviewPage(QWidget):
         outer.addWidget(self.calls_pager)
 
         outer.addWidget(
-            _section_header(
-                "호출 흐름", "참고용 집계 · 백엔드 시계열이 제공될 때만 표시해."
-            )
+            _section_header("호출 흐름", "참고용 집계 · 백엔드 시계열이 제공될 때만 표시해.")
         )
         self.flow_state = StateMessage()
         outer.addWidget(self.flow_state)
@@ -378,13 +355,10 @@ class OverviewPage(QWidget):
         previous_ids = {item.item_id for item in previous_items}
         new_items = self._unresolved_attention(snapshot.attention)
         changed_preview = (
-            new_items[: self._PREVIEW_PAGE_SIZE]
-            != previous_items[: self._PREVIEW_PAGE_SIZE]
+            new_items[: self._PREVIEW_PAGE_SIZE] != previous_items[: self._PREVIEW_PAGE_SIZE]
         )
         has_new_item = any(item.item_id not in previous_ids for item in new_items)
-        if (focused is None or focused[0] != "attention") and (
-            changed_preview or has_new_item
-        ):
+        if (focused is None or focused[0] != "attention") and (changed_preview or has_new_item):
             self._attention_page = 0
         self._snapshot = snapshot
         self._card_links.clear()
@@ -422,11 +396,7 @@ class OverviewPage(QWidget):
 
     def _focused_card_key(self) -> tuple[str, str] | None:
         focused = QApplication.focusWidget()
-        return (
-            self._card_links.get(focused)
-            if isinstance(focused, KeyboardActionButton)
-            else None
-        )
+        return self._card_links.get(focused) if isinstance(focused, KeyboardActionButton) else None
 
     def _restore_card_focus(self, key: tuple[str, str]) -> None:
         for link, candidate in self._card_links.items():
@@ -439,21 +409,21 @@ class OverviewPage(QWidget):
         if key is None:
             return
         serial = self._focus_restore_serial
+        # Replacing a focused card can make Qt select the shell's Back button.
+        # Restore the corresponding live card before the deferred layout pass.
+        self._restore_card_focus(key)
 
         def restore() -> None:
             if serial != self._focus_restore_serial or not self.isVisible():
                 return
-            focused = QApplication.focusWidget()
-            scroll = self._scroll_host()
-            if focused is None or focused is scroll or self._focused_card_key() == key:
-                self._restore_card_focus(key)
+            # New cards become visible only after layout. Qt may have parked
+            # focus on a shell action while the old card was removed.
+            self._restore_card_focus(key)
 
         QTimer.singleShot(0, restore)
 
     def _remove_card_links(self, kind: str) -> None:
-        self._card_links = {
-            link: key for link, key in self._card_links.items() if key[0] != kind
-        }
+        self._card_links = {link: key for link, key in self._card_links.items() if key[0] != kind}
 
     def _scroll_host(self) -> QScrollArea | None:
         parent = self.parentWidget()
@@ -519,25 +489,16 @@ class OverviewPage(QWidget):
         if count > self._PREVIEW_PAGE_SIZE:
             start = page * self._PREVIEW_PAGE_SIZE + 1
             end = min(count, start + self._PREVIEW_PAGE_SIZE - 1)
-            getattr(self, f"{kind}_page_note").setText(
-                f"{count}개 중 {start}–{end}개 표시"
-            )
+            getattr(self, f"{kind}_page_note").setText(f"{count}개 중 {start}–{end}개 표시")
         getattr(self, f"{kind}_previous").setEnabled(page > 0)
         getattr(self, f"{kind}_next").setEnabled(page < last)
         return page
 
     def _render_totals(self, surface: Surface[OverviewTotals]) -> None:
-        ready = (
-            surface.state in (LoadState.READY, LoadState.STALE)
-            and surface.value is not None
-        )
-        totals = (
-            surface.value if ready and surface.value is not None else OverviewTotals()
-        )
+        ready = surface.state in (LoadState.READY, LoadState.STALE) and surface.value is not None
+        totals = surface.value if ready and surface.value is not None else OverviewTotals()
         unavailable = StateMessage._MESSAGES.get(surface.state, "상태 확인 필요")
-        self.metric_cards[0].set_count(
-            totals.active_servers, ready=ready, unavailable=unavailable
-        )
+        self.metric_cards[0].set_count(totals.active_servers, ready=ready, unavailable=unavailable)
         self.metric_cards[1].set_count(
             totals.pending_approvals, ready=ready, unavailable=unavailable
         )
@@ -560,9 +521,7 @@ class OverviewPage(QWidget):
         if surface.state == LoadState.READY:
             state_text = f"집계 기준 시각: {format_kst(surface.as_of)}"
         elif surface.state == LoadState.STALE:
-            state_text = (
-                f"이전 집계 · 다시 확인 필요 · 마지막 확인 {format_kst(surface.as_of)}"
-            )
+            state_text = f"이전 집계 · 다시 확인 필요 · 마지막 확인 {format_kst(surface.as_of)}"
         else:
             state_text = StateMessage._MESSAGES.get(surface.state, "상태 확인 필요")
         self.metrics_state.setText(state_text)
@@ -573,29 +532,18 @@ class OverviewPage(QWidget):
         _clear(self.servers_grid)
         self._server_cards.clear()
         self._server_card_limit = self._server_preview_limit()
-        ready = (
-            surface.state in (LoadState.READY, LoadState.STALE)
-            and surface.value is not None
-        )
+        ready = surface.state in (LoadState.READY, LoadState.STALE) and surface.value is not None
         connected = (
-            tuple(
-                server
-                for server in surface.value or ()
-                if server.session_status == "connected"
-            )
+            tuple(server for server in surface.value or () if server.session_status == "connected")
             if ready
             else ()
         )
         # Keep the backend's ordering within each group. A related unresolved
         # item makes that server more useful than an unrelated ID-first preview.
         connected = tuple(
-            server
-            for server in connected
-            if server.server_id in self._priority_server_ids
+            server for server in connected if server.server_id in self._priority_server_ids
         ) + tuple(
-            server
-            for server in connected
-            if server.server_id not in self._priority_server_ids
+            server for server in connected if server.server_id not in self._priority_server_ids
         )
         if ready:
             for server in connected[: self._server_card_limit]:
@@ -610,9 +558,7 @@ class OverviewPage(QWidget):
             else ""
         )
         self.all_servers_button.setVisible(ready and bool(connected))
-        show_message = (
-            not ready or not self._server_cards or surface.state == LoadState.STALE
-        )
+        show_message = not ready or not self._server_cards or surface.state == LoadState.STALE
         self.servers_state.setVisible(show_message)
         if show_message:
             if ready and not self._server_cards and surface.state == LoadState.READY:
@@ -624,14 +570,9 @@ class OverviewPage(QWidget):
         self._attention_surface = surface
         self._remove_card_links("attention")
         _clear(self.attention_layout)
-        ready = (
-            surface.state in (LoadState.READY, LoadState.STALE)
-            and surface.value is not None
-        )
+        ready = surface.state in (LoadState.READY, LoadState.STALE) and surface.value is not None
         items = self._unresolved_attention(surface) if ready else ()
-        self._attention_page = self._set_pager(
-            "attention", len(items), self._attention_page
-        )
+        self._attention_page = self._set_pager("attention", len(items), self._attention_page)
         first = self._attention_page * self._PREVIEW_PAGE_SIZE
         for item in items[first : first + self._PREVIEW_PAGE_SIZE]:
             card = AttentionCard(item)
@@ -648,9 +589,7 @@ class OverviewPage(QWidget):
                 f"확인 항목: {StateMessage._MESSAGES.get(surface.state, '상태 확인 필요')}"
             )
         self.attention_shortcut.setEnabled(ready)
-        self.attention_state.setVisible(
-            not ready or not items or surface.state == LoadState.STALE
-        )
+        self.attention_state.setVisible(not ready or not items or surface.state == LoadState.STALE)
         if not items and ready and surface.state == LoadState.READY:
             self.attention_state.set_message("지금 확인할 미해결 항목이 없어")
         else:
@@ -660,10 +599,7 @@ class OverviewPage(QWidget):
         self._calls_surface = surface
         self._remove_card_links("calls")
         _clear(self.calls_layout)
-        ready = (
-            surface.state in (LoadState.READY, LoadState.STALE)
-            and surface.value is not None
-        )
+        ready = surface.state in (LoadState.READY, LoadState.STALE) and surface.value is not None
         calls = tuple(surface.value or ()) if ready else ()
         self._calls_page = self._set_pager("calls", len(calls), self._calls_page)
         first = self._calls_page * self._PREVIEW_PAGE_SIZE
@@ -672,28 +608,19 @@ class OverviewPage(QWidget):
             card.navigate_requested.connect(self.navigate_requested)
             self.calls_layout.addWidget(card)
             self._card_links[card.link] = ("calls", call.call_id)
-        self.calls_state.setVisible(
-            not ready or not calls or surface.state == LoadState.STALE
-        )
+        self.calls_state.setVisible(not ready or not calls or surface.state == LoadState.STALE)
         self.calls_state.set_state(surface.state, as_of=surface.as_of)
 
     def _render_flow(self, surface: Surface[tuple[FlowBucket, ...]]) -> None:
         _clear(self.flow_layout)
-        ready = (
-            surface.state in (LoadState.READY, LoadState.STALE)
-            and surface.value is not None
-        )
+        ready = surface.state in (LoadState.READY, LoadState.STALE) and surface.value is not None
         buckets = tuple(surface.value or ()) if ready else ()
         maximum = max((bucket.call_count for bucket in buckets), default=0)
         for bucket in buckets[:24]:
             self.flow_layout.addWidget(FlowCard(bucket, maximum))
         if len(buckets) > 24:
-            self.flow_layout.addWidget(
-                plain_label("최근 24개 구간만 표시해.", name="secondary")
-            )
-        self.flow_state.setVisible(
-            not ready or not buckets or surface.state == LoadState.STALE
-        )
+            self.flow_layout.addWidget(plain_label("최근 24개 구간만 표시해.", name="secondary"))
+        self.flow_state.setVisible(not ready or not buckets or surface.state == LoadState.STALE)
         self.flow_state.set_state(surface.state, as_of=surface.as_of)
 
     def resizeEvent(self, event) -> None:
@@ -723,9 +650,7 @@ class OverviewPage(QWidget):
         if force or metric_columns != self._metric_columns:
             self._metric_columns = metric_columns
             for index, card in enumerate(self.metric_cards):
-                self.metrics_grid.addWidget(
-                    card, index // metric_columns, index % metric_columns
-                )
+                self.metrics_grid.addWidget(card, index // metric_columns, index % metric_columns)
         if force or server_rebuilt or server_columns != self._server_columns:
             self._server_columns = server_columns
             for index, server_card in enumerate(self._server_cards):

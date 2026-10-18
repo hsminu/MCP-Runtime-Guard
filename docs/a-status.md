@@ -88,6 +88,8 @@
 - [ ] A52 Codex 로그인 화면(ChatGPT 기기 코드·API 키) — 막힘: 고정 버전·자격증명 저장 담당(#21 1·8번)
 - [ ] A54 등록 화면 서버 ID 즉시 안내(`valid_server_id`) — 막힘: 사용 방식([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20) 6번)
 - [ ] A56 A가 정한 규칙 확인(키 앞뒤 공백 제거·4자 이하 키 끝자리 숨김·폴더 규칙 최소 1개·tools/list 반복 cursor·중복 이름 중단) — 막힘: 사용자 확인(contracts에 없음, 이슈 등록 필요)
+- [x] A61 Qt 시안 컴포넌트·실행/승인/중지 카드·아이콘·작은 화면 배치 · [기록](archive/a/A61-ui-components.md)
+- [x] A63 세션 중심 대화·결과 화면·기존 기능 진입·Task/epoch 메시지 연결·원문 폐기·독립 GUI QA · [기록](archive/a/A63-session-workspace.md)
 
 ## 통합·패키징
 
@@ -96,7 +98,7 @@
 - [x] A41 lock·설치·단위 검증, CI 1단계(#4)
 - [ ] A41 보안 스캔(CI 2단계) — 막힘: AGT 제거 뒤 C CI 2단계(C6.3)
 - [ ] A42 인수: 리뷰 결과와 검증 인계
-- [ ] A43 Ruff·포맷·mypy 기준선 축소(포맷 제외 22개, Ruff 면제, mypy 완화) · [통합 기록](archive/integration-a-b.md)
+- [ ] A43 기준선 축소: UI 린트 예외 제거·포맷 제외 22→12·RuntimePanel 타입 억제 제거, UI 밖 기준선 남음 · [기록](archive/a/A61-ui-components.md)
 - [ ] A44 시연 앱의 `tests.unit.test_guard` 대역 import 제거 — 막힘: B AGT 제거 PR과 같은 파일(`examples`)
 - [ ] A45 `guard-app` 콘솔 명령이 checkout 안에서도 실패(`__main__.py:40`이 패키지 밖 `examples`를 import) — 막힘: 제품 시작 구성(A24–A27)
 - [x] A46 HTTP transport TLS 문맥을 이벤트 루프 밖에서 생성(반복 연결 정지 해소) · [기록](archive/a/A46-tls-off-loop.md)

@@ -54,14 +54,14 @@ def main() -> int:
 
     class ApplicationWindow(GuardWindow):
         def closeEvent(self, event):
-            panel._clear_review()
+            self.clear_session_content()
             bridge.close()
             self.hide()
             event.ignore()
 
     window = ApplicationWindow()
     panel = RuntimePanel(bridge)
-    window.runtime_layout.insertWidget(2, panel)
+    window.attach_runtime(panel)
     bridge.task_changed.connect(lambda state: window.set_task_status(state.status))
     bridge.task_changed.connect(
         lambda state: window.set_runtime_identity(

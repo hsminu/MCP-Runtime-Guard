@@ -3,7 +3,8 @@
 This is an A-owned bridge kernel. Bootstrap runs in the backend thread and
 must supply existing TaskRunner instances and B's human-only capability. It
 does not create Tasks, authorize operators, or infer durable Task state.
-Only frozen, public lifecycle/command metadata crosses into Qt signals.
+Frozen lifecycle/command metadata and ephemeral public conversation events
+cross into Qt signals. Raw tool results never cross this boundary.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import math
 import threading
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC
 from enum import StrEnum
 from typing import Any
@@ -112,6 +113,18 @@ class TaskProjection:
     agt_mode: str = "unconfigured"
     model_mode: str = "unconfigured"
     can_advance: bool = False
+    can_accept_message: bool = False
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ConversationEvent:
+    """Ephemeral plain text for one Task/epoch, never command/audit metadata."""
+
+    task_id: str
+    epoch: int
+    role: str
+    text: str
+    command_id: str
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -130,6 +143,8 @@ class _Command:
     lane: str
     action: str
     target_id: str
+    epoch: int | None = None
+    user_text: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +212,7 @@ class BackendBridge(QObject):
     command_changed = Signal(object)
     task_changed = Signal(object)
     review_ready = Signal(object)
+    conversation_ready = Signal(object)
 
     def __init__(
         self,
@@ -336,6 +352,21 @@ class BackendBridge(QObject):
             "control",
             action.value,
             self._id(target_id),
+        )
+        self._submit(command)
+        return command.command_id
+
+    def request_message(
+        self, task_id: str, epoch: int, text: str, *, command_id: str | None = None
+    ) -> str:
+        """Queue a user turn through the existing Runner, without new sessions."""
+        self._require_qt_thread()
+        if type(epoch) is not int or epoch < 0:
+            raise ValueError("Message epoch is invalid")
+        if type(text) is not str or not text.strip() or len(text) > 32768:
+            raise ValueError("Message text is invalid")
+        command = _Command(
+            self._id(command_id, generate=True), "run", "message", self._id(task_id), epoch, text
         )
         self._submit(command)
         return command.command_id
@@ -844,6 +875,8 @@ class BackendBridge(QObject):
             finally:
                 self._operations.pop(command.command_id, None)
                 queue.task_done()
+                # The idle worker must not retain the last input command.
+                del command, operation
 
     async def _execute(self, command: _Command) -> str:
         bindings = self._bindings
@@ -853,11 +886,45 @@ class BackendBridge(QObject):
             if not isinstance(runner, TaskRunner) or runner.task_id != command.target_id:
                 return "RUNNER_UNAVAILABLE"
             try:
+                if command.action == "message":
+                    if bindings.snapshot is None:
+                        return "MESSAGE_UNAVAILABLE"
+                    state = await bindings.snapshot(command.target_id)
+                    if (
+                        type(state) is not TaskProjection
+                        or state.task_id != command.target_id
+                        or state.epoch != command.epoch
+                        or runner.epoch != command.epoch
+                        or state.status is not TaskStatus.RUNNING
+                        or not runner.can_accept_message
+                    ):
+                        return "MESSAGE_UNAVAILABLE"
+                    assert command.user_text is not None
+                    runner.add_user_message(command.user_text)
+                    self.conversation_ready.emit(
+                        ConversationEvent(
+                            command.target_id,
+                            state.epoch,
+                            "user",
+                            command.user_text,
+                            command.command_id,
+                        )
+                    )
                 update = await runner.advance()
                 if type(update) is not RunUpdate or update.task_id != command.target_id:
                     return "RUNNER_UNCONFIRMED"
                 if update.approval_id is not None:
                     self._pending_runs[update.approval_id] = (update.task_id, update.epoch)
+                if update.assistant_text is not None:
+                    self.conversation_ready.emit(
+                        ConversationEvent(
+                            update.task_id,
+                            update.epoch,
+                            "assistant",
+                            update.assistant_text,
+                            command.command_id,
+                        )
+                    )
                 return f"RUN_{update.status.upper()}_QUERY_REQUIRED"
             finally:
                 # Even a failed or unclassified run must not leave the UI on
@@ -952,6 +1019,20 @@ class BackendBridge(QObject):
             return
         if type(snapshot) is not TaskProjection or snapshot.task_id != task_id:
             raise ValueError("Invalid public Task projection")
+        runner = bindings.runner_for_task(task_id)
+        if isinstance(runner, TaskRunner):
+            if snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+                # Invalidate late model responses and drop terminal Task history.
+                runner.close()
+            snapshot = replace(
+                snapshot,
+                can_accept_message=(
+                    snapshot.status is TaskStatus.RUNNING
+                    and runner.task_id == snapshot.task_id
+                    and getattr(runner, "epoch", None) == snapshot.epoch
+                    and bool(getattr(runner, "can_accept_message", False))
+                ),
+            )
         self.task_changed.emit(snapshot)
 
     @staticmethod

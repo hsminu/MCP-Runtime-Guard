@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
-    QComboBox,
+    QBoxLayout,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from .presentation import is_hidden_char
-from .widgets import KeyboardActionButton, plain_label
+from .widgets import KeyboardActionButton, SelectionBox, plain_label
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _MAX_ARGS_JSON_CHARS = 65_536
@@ -116,9 +116,7 @@ def _parse_stdio_args(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
         parsed = json.loads(raw)
     except (TypeError, ValueError, RecursionError):
         return None, "JSON 문자열 배열 형식으로 입력해."
-    if not isinstance(parsed, list) or not all(
-        isinstance(value, str) for value in parsed
-    ):
+    if not isinstance(parsed, list) or not all(isinstance(value, str) for value in parsed):
         return None, "인자는 문자열만 담은 JSON 배열이어야 해."
     if len(parsed) > _MAX_ARGS_COUNT:
         return None, "인자는 256개 이하로 입력해."
@@ -191,10 +189,8 @@ class ServerAddForm(QWidget):
         self.display_name.setAccessibleName("표시 이름")
         self._add_field(common, "표시 이름", self.display_name, "display_name")
 
-        self.transport = QComboBox()
-        self.transport.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
-        )
+        self.transport = SelectionBox()
+        self.transport.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.transport.setObjectName("transportSelect")
         self.transport.setAccessibleName("연결 방식")
         self.transport.addItem("stdio", "stdio")
@@ -212,7 +208,7 @@ class ServerAddForm(QWidget):
         outer.addWidget(self.transport_fields)
 
         boundary = self._new_form()
-        self.tier = QComboBox()
+        self.tier = SelectionBox()
         self.tier.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.tier.setObjectName("tierSelect")
         self.tier.setAccessibleName("신뢰 경계")
@@ -221,10 +217,8 @@ class ServerAddForm(QWidget):
         self.tier.addItem("승인된 외부 · approved_external", "approved_external")
         self.tier.addItem("일반 외부 · general_external", "general_external")
         self._add_field(boundary, "신뢰 경계", self.tier, "tier")
-        self.max_label = QComboBox()
-        self.max_label.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
-        )
+        self.max_label = SelectionBox()
+        self.max_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.max_label.setObjectName("maxLabelSelect")
         self.max_label.setAccessibleName("최대 수신 등급")
         self.max_label.addItem("최대 수신 등급 선택", None)
@@ -246,7 +240,8 @@ class ServerAddForm(QWidget):
         outer.addWidget(self.preview)
         outer.addWidget(
             plain_label(
-                "env_allow에는 환경변수 이름만 적어. 인자와 URL에 인증값을 넣지 말고 별도 비밀 주입 계약을 사용해야 해.",
+                "env_allow에는 환경변수 이름만 적어. "
+                "인자와 URL에 인증값을 넣지 말고 별도 비밀 주입 계약을 사용해야 해.",
                 name="secondary",
             )
         )
@@ -254,6 +249,7 @@ class ServerAddForm(QWidget):
         outer.addWidget(self.status)
         actions = QHBoxLayout()
         self.prepare_button = KeyboardActionButton("로컬 초안 확인")
+        self.prepare_button.set_visual(icon="check", variant="primary")
         self.prepare_button.setObjectName("prepareDraftButton")
         self.prepare_button.setAccessibleName("입력 형식 확인 후 로컬 초안 준비")
         actions.addWidget(self.prepare_button)
@@ -300,9 +296,7 @@ class ServerAddForm(QWidget):
         for form in self._forms:
             form.setRowWrapPolicy(policy)
         margin = 12 if compact else 26
-        self._outer.setContentsMargins(
-            margin, 16 if compact else 28, margin, 20 if compact else 28
-        )
+        self._outer.setContentsMargins(margin, 16 if compact else 28, margin, 20 if compact else 28)
 
     def _new_form(self, parent: QWidget | None = None) -> QFormLayout:
         form = QFormLayout(parent)
@@ -333,9 +327,7 @@ class ServerAddForm(QWidget):
         self.env_allow.setPlaceholderText("LANG\nPATH")
         self.env_allow.setMaximumHeight(76)
         self.env_allow.setTabChangesFocus(True)
-        self._add_field(
-            form, "env_allow · 한 줄에 이름 하나", self.env_allow, "env_allow"
-        )
+        self._add_field(form, "env_allow · 한 줄에 이름 하나", self.env_allow, "env_allow")
         return page
 
     def _http_fields(self) -> QWidget:
@@ -348,9 +340,7 @@ class ServerAddForm(QWidget):
         self._add_field(form, "MCP endpoint URL", self.url, "url")
         return page
 
-    def _add_field(
-        self, form: QFormLayout, title: str, control: QWidget, key: str
-    ) -> None:
+    def _add_field(self, form: QFormLayout, title: str, control: QWidget, key: str) -> None:
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -405,9 +395,7 @@ class ServerAddForm(QWidget):
                 "서버 ID에 보이지 않는 문자나 제어 문자(NUL·방향 전환·zero-width 등)를 넣지 마."
             )
         elif server_id in self._known_ids:
-            errors["server_id"] = (
-                "현재 목록에 같은 ID가 있어. Registry에서도 다시 확인해야 해."
-            )
+            errors["server_id"] = "현재 목록에 같은 ID가 있어. Registry에서도 다시 확인해야 해."
         elif any(_id_key(server_id) == _id_key(known) for known in self._known_ids):
             errors["server_id"] = (
                 "현재 목록에 대소문자·전각 여부만 다른 같은 ID가 있어. 다른 ID를 입력해."
@@ -415,9 +403,7 @@ class ServerAddForm(QWidget):
         if not display_name:
             errors["display_name"] = "표시 이름을 입력해."
         elif len(display_name) > _MAX_DISPLAY_NAME_CHARS:
-            errors["display_name"] = (
-                f"표시 이름은 {_MAX_DISPLAY_NAME_CHARS}자 이하로 입력해."
-            )
+            errors["display_name"] = f"표시 이름은 {_MAX_DISPLAY_NAME_CHARS}자 이하로 입력해."
         elif _has_hidden_char(display_name):
             errors["display_name"] = "표시 이름에 보이지 않는 문자나 제어 문자를 넣지 마."
         if self.tier.currentData() is None:
@@ -444,14 +430,10 @@ class ServerAddForm(QWidget):
             if args_error is not None:
                 errors["args"] = args_error
             names = tuple(
-                line.strip()
-                for line in self.env_allow.toPlainText().splitlines()
-                if line.strip()
+                line.strip() for line in self.env_allow.toPlainText().splitlines() if line.strip()
             )
             if any(_ENV_NAME.fullmatch(name) is None for name in names):
-                errors["env_allow"] = (
-                    "이름만 한 줄에 하나씩 적어. 값이나 '='은 넣지 마."
-                )
+                errors["env_allow"] = "이름만 한 줄에 하나씩 적어. 값이나 '='은 넣지 마."
             elif len(names) != len(set(names)):
                 errors["env_allow"] = "같은 환경변수 이름을 두 번 적지 마."
             else:
@@ -605,11 +587,14 @@ class _FolderRuleRow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(3)
         row = QHBoxLayout()
+        row.setSpacing(4)
+        row.setDirection(QBoxLayout.Direction.TopToBottom)
+        self._row_actions = row
         self.prefix = QLineEdit()
         self.prefix.setAccessibleName("루트 기준 하위 폴더, 비우면 루트 전체")
         self.prefix.setPlaceholderText("예: personal/notes · 비우면 루트 전체")
         row.addWidget(self.prefix, 1)
-        self.label = QComboBox()
+        self.label = SelectionBox()
         self.label.setAccessibleName("이 폴더의 등급")
         self.label.addItem("등급 선택", None)
         for title, value in _LABELS:
@@ -626,6 +611,15 @@ class _FolderRuleRow(QWidget):
         self.prefix.textChanged.connect(lambda _text: self.changed.emit())
         self.label.currentIndexChanged.connect(lambda _index: self.changed.emit())
         self.remove_button.clicked.connect(lambda: self.removeRequested.emit(self))
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_row_actions"):
+            self._row_actions.setDirection(
+                QBoxLayout.Direction.TopToBottom
+                if self.width() < 450
+                else QBoxLayout.Direction.LeftToRight
+            )
 
 
 class LocalFolderRulesForm(QWidget):

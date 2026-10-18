@@ -8,7 +8,6 @@ from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QBoxLayout,
-    QComboBox,
     QDialog,
     QFrame,
     QHeaderView,
@@ -35,6 +34,7 @@ from .scan_status import ScanStatusCard, ScanStatusProjection
 from .widgets import (
     KeyboardActionButton,
     SecurityLabel,
+    SelectionBox,
     StateMessage,
     plain_label,
     size_detail_for_viewport,
@@ -123,16 +123,10 @@ class ServerDetailDialog(QDialog):
         self.server_id = server.server_id
         self.setWindowTitle(f"MCP 서버 상세 · {public_display_text(server.server_id)}")
         self.max_label_badge.set_label(server.max_label)
-        self._registry_status_value.setText(
-            fixed(REGISTRY_STATUSES, server.registry_status)
-        )
-        self._session_status_value.setText(
-            fixed(SESSION_STATUSES, server.session_status)
-        )
+        self._registry_status_value.setText(fixed(REGISTRY_STATUSES, server.registry_status))
+        self._session_status_value.setText(fixed(SESSION_STATUSES, server.session_status))
         self._tier_value.setText(fixed(TIERS, server.tier))
-        self._display_value.setText(
-            public_display_text(server.display_name or server.server_id)
-        )
+        self._display_value.setText(public_display_text(server.display_name or server.server_id))
         self._server_id_value.setText(public_display_text(server.server_id))
         self._transport_value.setText(fixed(TRANSPORTS, server.transport))
         self.scan_status_card.set_snapshot(Surface(LoadState.LOADING))
@@ -183,20 +177,16 @@ class ServerListPage(QWidget):
         filters.addWidget(self.search)
         self._choices = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self._choices.setSpacing(8)
-        self.transport_filter = QComboBox()
-        self.transport_filter.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
-        )
+        self.transport_filter = SelectionBox()
+        self.transport_filter.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.transport_filter.addItem("전체 transport", None)
         self.transport_filter.addItem("stdio", "stdio")
         self.transport_filter.addItem("Streamable HTTP", "streamable_http")
         self.transport_filter.setAccessibleName("전송 방식 필터")
         self.transport_filter.currentIndexChanged.connect(self._apply_filters)
         self._choices.addWidget(self.transport_filter)
-        self.status_filter = QComboBox()
-        self.status_filter.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
-        )
+        self.status_filter = SelectionBox()
+        self.status_filter.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.status_filter.addItem("전체 등록 상태", None)
         for status in ("active", "pending", "blocked"):
             self.status_filter.addItem(REGISTRY_STATUSES[status], status)
@@ -206,9 +196,7 @@ class ServerListPage(QWidget):
         filters.addLayout(self._choices)
         layout.addLayout(filters)
         layout.addWidget(
-            plain_label(
-                "필터는 현재 전달된 Registry 조회 결과에만 적용돼.", name="secondary"
-            )
+            plain_label("필터는 현재 전달된 Registry 조회 결과에만 적용돼.", name="secondary")
         )
         self.table_hint = plain_label(
             "좁은 화면에서는 연결 방식·신뢰 경계·세션을 서버 상세에서 확인해.",
@@ -235,9 +223,7 @@ class ServerListPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Interactive
-        )
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self.table.setColumnWidth(0, 250)
         for column in range(1, 6):
             self.table.horizontalHeader().setSectionResizeMode(
@@ -247,6 +233,7 @@ class ServerListPage(QWidget):
         self.table.itemActivated.connect(self._open_selected)
         layout.addWidget(self.table, 1)
         self.detail_button = KeyboardActionButton("선택한 서버 상세 보기")
+        self.detail_button.set_visual(icon="eye", variant="soft")
         self.detail_button.clicked.connect(self._open_selected)
         self.detail_button.setEnabled(False)
         layout.addWidget(self.detail_button, 0, Qt.AlignmentFlag.AlignLeft)
@@ -265,9 +252,7 @@ class ServerListPage(QWidget):
         if stacked != self._stacked_filters:
             self._stacked_filters = stacked
             self._choices.setDirection(
-                QBoxLayout.Direction.TopToBottom
-                if stacked
-                else QBoxLayout.Direction.LeftToRight
+                QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
             )
             margin = 12 if stacked else 26
             self._layout.setContentsMargins(
@@ -303,10 +288,7 @@ class ServerListPage(QWidget):
             self._detail_dialog = None
             self._active_scan_token = None
         self._state = surface.state
-        ready = (
-            surface.state in (LoadState.READY, LoadState.STALE)
-            and surface.value is not None
-        )
+        ready = surface.state in (LoadState.READY, LoadState.STALE) and surface.value is not None
         self._servers = tuple(surface.value or ()) if ready else ()
         self._set_filters_enabled(ready)
         self.state_message.set_state(surface.state, as_of=surface.as_of)
@@ -381,9 +363,7 @@ class ServerListPage(QWidget):
             return None
         row = selected_rows[0].row()
         return (
-            self._visible_servers[row].server_id
-            if 0 <= row < len(self._visible_servers)
-            else None
+            self._visible_servers[row].server_id if 0 <= row < len(self._visible_servers) else None
         )
 
     def _selection_changed(self) -> None:
@@ -399,11 +379,7 @@ class ServerListPage(QWidget):
         """Apply only the reply for the currently open server detail query."""
 
         dialog = self._detail_dialog
-        if (
-            dialog is None
-            or dialog.server_id != server_id
-            or self._active_scan_token != token
-        ):
+        if dialog is None or dialog.server_id != server_id or self._active_scan_token != token:
             return False
         dialog.scan_status_card.set_snapshot(surface)
         return True
@@ -435,9 +411,7 @@ class ServerListPage(QWidget):
         else:
             focused = self.focusWidget()
             self._detail_return_focus = (
-                focused
-                if focused in (self.table, self.detail_button)
-                else self.detail_button
+                focused if focused in (self.table, self.detail_button) else self.detail_button
             )
         dialog = self._cached_detail_dialog
         if dialog is None:
