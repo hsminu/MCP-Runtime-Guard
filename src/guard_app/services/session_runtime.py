@@ -1,202 +1,163 @@
-"""A-owned conversation-only composition over the existing B Store contract.
+"""A-local injectable Codex composition pending B/C agreement.
 
-No Registry, transport, process launcher or credential implementation lives here.
-Those capabilities must be explicitly injected; there are no fallback secrets.
+C supplies the startup L2 evidence and verified fresh session factory. Missing
+capabilities reject before Store Task creation. No launcher, login persistence,
+model API, Guard protocol or replacement B port is implemented here.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
 from uuid import uuid4
 
-from guard_app.adapters.model_client import ModelCompletionError
-from guard_app.domain.contracts import Conversation, ModelTurn, ToolView
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import TaskState
 from guard_app.domain.reasons import Reason
-from guard_app.ports import ModelClient, Store
+from guard_app.ports import Store
 from guard_app.services.bridge import (
     BackendBindings,
     ControlAction,
-    CredentialState,
     SessionOptions,
+    SessionStartError,
     TaskProjection,
 )
-from guard_app.services.runner import TaskRunner
+from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.storage.sqlite_store import SQLiteStore
 
+# A-local proposal only: C's factory must verify the executable/config/model
+# hashes, account/read, and create a separate app-server for this Task. The L2
+# callback runs once per app lifetime and must return exactly True to allow it.
+type CodexSessionFactory = Callable[[TaskState, SessionOptions], Awaitable[CodexSession]]
+type StartupL2Check = Callable[[], Awaitable[bool]]
 
-class ClosableModel(ModelClient, Protocol):
-    async def aclose(self) -> None: ...
-
-
-type ModelFactory = Callable[[str, str, str], ClosableModel]
-
-
-@dataclass(frozen=True, slots=True, repr=False)
-class CredentialOperations:
-    """A-local injected capability; C's Windows credential adapter is pending."""
-
-    status: Callable[[], Awaitable[CredentialState]]
-    load: Callable[[], Awaitable[str]]
-    save: Callable[[str], Awaitable[None]]
-    delete: Callable[[], Awaitable[None]]
+SESSION_CLEANUP_TIMEOUT_S = 0.5
 
 
-class SessionRuntimeError(ValueError):
-    def __init__(self, code: str) -> None:
-        self.code = code
-        super().__init__(code)
-
-
-class _UnavailableModel:
-    async def step(self, conversation: Conversation, tools: tuple[ToolView, ...]) -> ModelTurn:
-        raise ModelCompletionError()
-
-    async def aclose(self) -> None:
-        pass
+class SessionRuntimeError(SessionStartError):
+    pass
 
 
 class SessionRuntime:
-    """One backend thread, one Store writer, and a fresh client per Task."""
-
     def __init__(
         self,
         store: Store,
         *,
-        model_factory: ModelFactory | None = None,
-        credentials: CredentialOperations | None = None,
+        session_factory: CodexSessionFactory | None = None,
+        startup_l2_check: StartupL2Check | None = None,
         close_store: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
-        self._model_factory = model_factory
-        self._credentials = credentials
+        self._session_factory = session_factory
+        self._startup_l2_check = startup_l2_check
+        self._startup_lock = asyncio.Lock()
+        self._l2_ready = False
         self._close_store = close_store
-        self._runners: dict[str, TaskRunner] = {}
-        self._models: dict[str, ClosableModel] = {}
+        self._runners: dict[str, CodexTaskRunner] = {}
+        self._sessions: dict[str, CodexSession] = {}
         self._options: dict[str, SessionOptions] = {}
         self._codes: dict[str, str] = {}
         self._closed = False
+        self._creating: set[asyncio.Task[object]] = set()
+        self._defer_store_close = False
+        self._cleanup_unconfirmed = False
 
-    def runner_for_task(self, task_id: str) -> TaskRunner:
+    def runner_for_task(self, task_id: str) -> CodexTaskRunner:
         if self._closed or task_id not in self._runners:
             raise SessionRuntimeError("SESSION_UNAVAILABLE")
         return self._runners[task_id]
 
-    async def credential_status(self) -> CredentialState:
-        if self._credentials is None:
-            return CredentialState(False)
-        state = await self._credentials.status()
-        if type(state) is not CredentialState:
-            raise SessionRuntimeError("CREDENTIAL_UNCONFIRMED")
-        if len(state.suffix) > 4 or (state.suffix and not state.stored):
-            raise SessionRuntimeError("CREDENTIAL_UNCONFIRMED")
-        return state
-
-    async def save_credential(self, secret: str) -> CredentialState:
-        if self._credentials is None:
-            return CredentialState(False)
-        await self._credentials.save(secret)
-        return await self.credential_status()
-
-    async def delete_credential(self) -> CredentialState:
-        if self._credentials is None:
-            return CredentialState(False)
-        if any(self._codes.get(task_id) == "READY_CHAT_ONLY" for task_id in self._models):
-            current = await self.credential_status()
-            return CredentialState(
-                current.available, current.stored, current.suffix, "CREDENTIAL_IN_USE"
-            )
-        await self._credentials.delete()
-        return await self.credential_status()
-
-    async def _new_model(self, options: SessionOptions) -> tuple[ClosableModel, str]:
-        if options.mode == "cli":
-            return _UnavailableModel(), "CLI_DEPENDENCIES_UNAVAILABLE"
-        if not options.model:
-            return _UnavailableModel(), "MODEL_ID_REQUIRED"
-        state = await self.credential_status()
-        if not state.available:
-            return _UnavailableModel(), "WINDOWS_CREDENTIALS_UNAVAILABLE"
-        if not state.stored:
-            return _UnavailableModel(), "MODEL_KEY_MISSING"
-        if self._model_factory is None or self._credentials is None:
-            return _UnavailableModel(), "API_ADAPTER_UNAVAILABLE"
-        secret = await self._credentials.load()
-        if type(secret) is not str or not secret.strip():
-            raise SessionRuntimeError("MODEL_KEY_MISSING")
-        try:
-            client = self._model_factory(options.mode, options.model, secret)
-        finally:
-            del secret
-        if not callable(getattr(client, "step", None)) or not callable(
-            getattr(client, "aclose", None)
-        ):
-            raise SessionRuntimeError("MODEL_CLIENT_INVALID")
-        return client, "READY_CHAT_ONLY"
+    async def _check_startup(self) -> None:
+        async with self._startup_lock:
+            if self._closed:
+                raise SessionRuntimeError("SESSION_UNAVAILABLE")
+            if not self._l2_ready:
+                if self._startup_l2_check is None:
+                    raise SessionRuntimeError("CODEX_L2_UNAVAILABLE")
+                if await self._startup_l2_check() is not True:
+                    raise SessionRuntimeError("CODEX_L2_FAILED")
+                self._l2_ready = True
+            if self._closed:
+                raise SessionRuntimeError("SESSION_UNAVAILABLE")
 
     async def create_session(self, options: SessionOptions) -> TaskProjection:
         if self._closed or type(options) is not SessionOptions:
             raise SessionRuntimeError("SESSION_UNAVAILABLE")
-        client, code = await self._new_model(options)
+        current = asyncio.current_task()
+        if current is None:
+            raise SessionRuntimeError("SESSION_UNAVAILABLE")
+        self._creating.add(current)
+        try:
+            return await self._create_session(options)
+        finally:
+            self._creating.discard(current)
+            if self._defer_store_close and not self._creating:
+                self._close_store_once()
+
+    async def _create_session(self, options: SessionOptions) -> TaskProjection:
+        await self._check_startup()
+        if self._session_factory is None:
+            raise SessionRuntimeError("CODEX_SESSION_UNAVAILABLE")
         state = TaskState(
             task_id=f"session-{uuid4().hex}",
             epoch=1,
-            profile_id="conversation-only",
-            policy_version="conversation-only-v1",
+            profile_id="codex-pending-profile",
+            policy_version="codex-pending-v1",
             status=TaskStatus.RUNNING,
         )
-        created = False
-        adopted = False
+        # No Store RUNNING row exists while C's secure launch is unconfirmed.
+        session = await self._session_factory(state, options)
+        if any(session is existing for existing in self._sessions.values()):
+            # Do not close another Task's handle when a factory violates isolation.
+            raise SessionRuntimeError("CODEX_SESSION_INVALID")
+        created = adopted = False
         try:
+            if not all(
+                callable(getattr(session, name, None)) for name in ("send", "interrupt", "aclose")
+            ):
+                raise SessionRuntimeError("CODEX_SESSION_INVALID")
+            if self._closed:
+                raise SessionRuntimeError("SESSION_UNAVAILABLE")
             await self.store.create_task(state, created_at_utc=datetime.now(UTC))
             created = True
             confirmed = await self.store.load_task(state.task_id)
             if confirmed != state:
                 raise StoreError()
-            runner = TaskRunner(
-                state,
-                model_client_factory=lambda: client,
-                guard=None,
-                catalog=None,
-                store=self.store,
-                server_ids=(),
-                system_message=(
-                    "개인 사용자와 대화하는 모델이다. 현재 앱에는 사용할 수 있는 도구가 없다. "
-                    "파일 읽기, 네트워크 작업, 명령 실행을 했다고 주장하지 않는다."
-                ),
+            if self._closed:
+                raise SessionRuntimeError("SESSION_UNAVAILABLE")
+            runner = CodexTaskRunner(
+                state.task_id,
+                state.epoch,
+                session,
+                lambda code: self._fail_session(state.task_id, code),
             )
             self._runners[state.task_id] = runner
-            self._models[state.task_id] = client
+            self._sessions[state.task_id] = session
             self._options[state.task_id] = options
-            self._codes[state.task_id] = code
+            self._codes[state.task_id] = "READY_CODEX"
             snapshot = await self.snapshot(state.task_id)
+            if self._closed:
+                raise SessionRuntimeError("SESSION_UNAVAILABLE")
             adopted = True
             return snapshot
         finally:
             if not adopted:
+                discarded = self._runners.pop(state.task_id, None)
+                if discarded is not None:
+                    discarded.close()
+                self._sessions.pop(state.task_id, None)
+                self._options.pop(state.task_id, None)
+                self._codes.pop(state.task_id, None)
                 try:
-                    discarded_runner = self._runners.pop(state.task_id, None)
-                    if discarded_runner is not None:
-                        discarded_runner.close()
-                    self._models.pop(state.task_id, None)
-                    self._options.pop(state.task_id, None)
-                    self._codes.pop(state.task_id, None)
-                    await client.aclose()
+                    close = getattr(session, "aclose", None)
+                    if callable(close) and not await self._bounded_cleanup(close):
+                        self._cleanup_unconfirmed = True
+                        raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
                 finally:
                     if created:
-                        current = await self.store.load_task(state.task_id)
-                        await self.store.set_task_status(
-                            state.task_id,
-                            TaskStatus.HALTED,
-                            expected_row_revision=current.row_revision,
-                            at_utc=datetime.now(UTC),
-                            reason=Reason.INTERNAL_ERROR,
-                        )
+                        await self._halt_store_task(state.task_id)
 
     async def snapshot(self, task_id: str) -> TaskProjection:
         runner = self.runner_for_task(task_id)
@@ -210,20 +171,17 @@ class SessionRuntime:
             state.status,
             model_mode=options.mode,
             model_id=options.model,
-            model_ready=self._codes[task_id] == "READY_CHAT_ONLY",
+            model_ready=self._codes[task_id] == "READY_CODEX"
+            and state.status is TaskStatus.RUNNING,
             connection_code=self._codes[task_id],
             tools_available=False,
             can_advance=runner.can_advance,
+            can_accept_message=runner.can_accept_message and state.status is TaskStatus.RUNNING,
             runner_state=runner.runtime_status,
         )
 
-    async def stop_session(self, task_id: str, epoch: int, action: ControlAction) -> None:
-        if action not in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
-            raise SessionRuntimeError("CONTROL_UNAVAILABLE")
-        runner = self.runner_for_task(task_id)
+    async def _halt_store_task(self, task_id: str) -> None:
         state = await self.store.load_task(task_id)
-        if state.task_id != task_id or state.epoch != epoch or runner.epoch != epoch:
-            raise SessionRuntimeError("SESSION_STATE_MISMATCH")
         if state.status in (TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME, TaskStatus.CLOSED):
             return
         updated = await self.store.set_task_status(
@@ -235,46 +193,109 @@ class SessionRuntime:
         )
         if (
             updated.task_id != task_id
-            or updated.epoch != epoch
+            or updated.epoch != state.epoch
             or updated.status is not TaskStatus.HALTED
         ):
             raise SessionRuntimeError("SESSION_STOP_UNCONFIRMED")
-        runner.close()
-        await self._close_model(task_id)
 
-    async def _close_model(self, task_id: str) -> None:
-        model = self._models.pop(task_id, None)
-        if model is not None:
-            await model.aclose()
+    async def _fail_session(self, task_id: str, code: str) -> None:
+        self._codes[task_id] = code
+        runner = self._runners[task_id]
+        runner.close()
+        try:
+            await self._halt_store_task(task_id)
+        finally:
+            await self._close_session(task_id, interrupt=True)
+
+    async def stop_session(self, task_id: str, epoch: int, action: ControlAction) -> None:
+        if action not in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
+            raise SessionRuntimeError("CONTROL_UNAVAILABLE")
+        runner = self.runner_for_task(task_id)
+        state = await self.store.load_task(task_id)
+        if state.task_id != task_id or state.epoch != epoch or runner.epoch != epoch:
+            raise SessionRuntimeError("SESSION_STATE_MISMATCH")
+        runner.close()  # Invalidate late responses without waiting for the send lock.
+        try:
+            await self._halt_store_task(task_id)
+        finally:
+            await self._close_session(task_id, interrupt=True)
+
+    @staticmethod
+    async def _bounded_cleanup(action: Callable[[], Awaitable[None]]) -> bool:
+        async def invoke() -> None:
+            await action()
+
+        operation = asyncio.create_task(invoke())
+        operation.add_done_callback(SessionRuntime._consume_cleanup)
+        try:
+            done, _ = await asyncio.wait({operation}, timeout=SESSION_CLEANUP_TIMEOUT_S)
+            return bool(done) and not operation.cancelled() and operation.exception() is None
+        finally:
+            if not operation.done():
+                operation.cancel()
+
+    @staticmethod
+    def _consume_cleanup(operation: asyncio.Task[None]) -> None:
+        if not operation.cancelled():
+            operation.exception()
+
+    async def _close_session(self, task_id: str, *, interrupt: bool = False) -> None:
+        session = self._sessions.pop(task_id, None)
+        if session is not None:
+            interrupted = closed = False
+            try:
+                interrupted = not interrupt or await self._bounded_cleanup(session.interrupt)
+            finally:
+                closed = await self._bounded_cleanup(session.aclose)
+            if not interrupted or not closed:
+                self._cleanup_unconfirmed = True
+                self._sessions[task_id] = session
+                self._codes[task_id] = "CODEX_CLEANUP_UNCONFIRMED"
+                raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
 
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
+        # Bridge normally cancels creation first; direct callers get the same
+        # ownership rule so no late factory result can outlive the Store.
+        creating = tuple(task for task in self._creating if task is not asyncio.current_task())
+        for task in creating:
+            task.cancel()
+        unfinished_creation = False
+        if creating:
+            _, pending = await asyncio.wait(creating, timeout=SESSION_CLEANUP_TIMEOUT_S)
+            unfinished_creation = bool(pending)
+            self._defer_store_close = unfinished_creation
         try:
             for runner in self._runners.values():
                 runner.close()
-            # Try every client even if another close fails; propagate a fixed
-            # cleanup failure only after all clients have had their close call.
-            failed = False
-            for task_id in tuple(self._models):
-                completed = False
-                try:
-                    await self._close_model(task_id)
-                    completed = True
-                except (OSError, ValueError, RuntimeError):
-                    failed = True
-                finally:
-                    if not completed:
-                        failed = True
-            if failed:
-                raise SessionRuntimeError("MODEL_CLEANUP_UNCONFIRMED")
+            # Start every cleanup independently so a stalled Task cannot stop
+            # another session from receiving interrupt/close.
+            results = await asyncio.gather(
+                *(
+                    self._close_session(task_id, interrupt=True)
+                    for task_id in tuple(self._sessions)
+                ),
+                return_exceptions=True,
+            )
+            if (
+                self._cleanup_unconfirmed
+                or unfinished_creation
+                or any(isinstance(result, BaseException) for result in results)
+            ):
+                raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
         finally:
             self._runners.clear()
             self._options.clear()
             self._codes.clear()
-            if self._close_store is not None:
-                self._close_store()
+            if not self._defer_store_close or not self._creating:
+                self._close_store_once()
+
+    def _close_store_once(self) -> None:
+        close, self._close_store = self._close_store, None
+        if close is not None:
+            close()
 
     def bindings(self) -> BackendBindings:
         return BackendBindings(
@@ -284,23 +305,29 @@ class SessionRuntime:
             snapshot=self.snapshot,
             create_session=self.create_session,
             stop_session=self.stop_session,
-            credential_status=self.credential_status,
-            save_credential=self.save_credential,
-            delete_credential=self.delete_credential,
         )
 
 
 async def bootstrap_product(
     db_path: str,
     *,
-    model_factory: ModelFactory | None = None,
-    credentials: CredentialOperations | None = None,
+    session_factory: CodexSessionFactory | None = None,
+    startup_l2_check: StartupL2Check | None = None,
 ) -> BackendBindings:
     store = SQLiteStore(db_path, audit_id_factory=lambda: f"audit-{uuid4().hex}")
     runtime = SessionRuntime(
         store,
-        model_factory=model_factory,
-        credentials=credentials,
+        session_factory=session_factory,
+        startup_l2_check=startup_l2_check,
         close_store=store.close,
     )
-    return runtime.bindings()
+    adopted = False
+    try:
+        if startup_l2_check is not None:
+            await runtime._check_startup()
+        bindings = runtime.bindings()
+        adopted = True
+        return bindings
+    finally:
+        if not adopted:
+            await runtime.close()

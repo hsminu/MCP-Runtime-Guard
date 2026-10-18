@@ -58,16 +58,7 @@ def main() -> int:
     else:
         from guard_app.services.session_runtime import bootstrap_product
 
-        def model_factory(mode, model, key):
-            from guard_app.adapters.openai_model import OpenAIModelClient
-
-            if mode != "api":
-                raise ValueError("CLI_DEPENDENCIES_UNAVAILABLE")
-            return OpenAIModelClient(model=model, api_key=key)
-
-        # C's Windows credential capability is deliberately not substituted by
-        # environment variables, files, direct key passing, or a local clone.
-        bridge = BackendBridge(lambda: bootstrap_product(args.db_path, model_factory=model_factory))
+        bridge = BackendBridge(lambda: bootstrap_product(args.db_path))
 
     class ApplicationWindow(GuardWindow):
         def closeEvent(self, event):
@@ -80,7 +71,7 @@ def main() -> int:
     panel = RuntimePanel(bridge)
     window.attach_runtime(panel)
     window.set_runtime_context(
-        f"{'합성 개발 시연' if args.demo else '도구 없는 대화'} / {store_title}"
+        f"{'합성 개발 시연' if args.demo else 'Codex 연결 대기'} / {store_title}"
     )
     window.navigate("runs")
     timer = QTimer()

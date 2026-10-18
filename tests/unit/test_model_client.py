@@ -6,9 +6,8 @@ import asyncio
 import json
 
 import pytest
-
-from guard_app.adapters import model_client as model_client_module
-from guard_app.adapters.model_client import (
+from examples import legacy_model_client as model_client_module
+from examples.legacy_model_client import (
     MAX_MODEL_ARGUMENT_CHARS,
     MAX_MODEL_ARGUMENT_INTEGER_BITS,
     MAX_MODEL_ARGUMENT_NODES,
@@ -23,6 +22,7 @@ from guard_app.adapters.model_client import (
     ProviderNeutralModelClient,
     parse_model_turn,
 )
+
 from guard_app.domain.contracts import ConversationMessage, RegisteredServer, ToolView
 from guard_app.domain.enums import Label, RegStatus, ToolKind, TrustTier
 from guard_app.domain.json_types import Arguments, FrozenJsonObject
@@ -364,7 +364,7 @@ def test_oversized_call_list_fails_before_schema_validation(monkeypatch) -> None
         raise AssertionError("schema validation ran before the call count limit")
 
     monkeypatch.setattr(
-        "guard_app.adapters.model_client.Draft202012Validator.check_schema",
+        "examples.legacy_model_client.Draft202012Validator.check_schema",
         unexpected_validation,
     )
     calls = [
@@ -388,7 +388,7 @@ def test_encoded_argument_length_is_checked_before_json_parse(monkeypatch) -> No
     def unexpected_parse(*args, **kwargs):
         raise AssertionError("JSON parsing ran before the argument length limit")
 
-    monkeypatch.setattr("guard_app.adapters.model_client.json.loads", unexpected_parse)
+    monkeypatch.setattr("examples.legacy_model_client.json.loads", unexpected_parse)
     with pytest.raises(ModelFormatError):
         parse_model_turn(
             {
@@ -416,7 +416,7 @@ def test_raw_argument_size_is_checked_before_freezing(monkeypatch) -> None:
     def unexpected_freeze(*args, **kwargs):
         raise AssertionError("argument freezing ran before the raw object size limit")
 
-    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    monkeypatch.setattr("examples.legacy_model_client.Arguments", unexpected_freeze)
     with pytest.raises(ModelFormatError):
         parse_model_turn(
             {
@@ -431,7 +431,7 @@ def test_encoded_argument_structure_is_bounded_before_json_parse(monkeypatch) ->
     def unexpected_parse(*args, **kwargs):
         raise AssertionError("JSON parsing ran before the structure limit")
 
-    monkeypatch.setattr("guard_app.adapters.model_client.json.loads", unexpected_parse)
+    monkeypatch.setattr("examples.legacy_model_client.json.loads", unexpected_parse)
     encoded = (
         '{"path":['
         + ",".join("0" for _ in range(2 * MAX_MODEL_ARGUMENT_NODES + 1))
@@ -448,7 +448,7 @@ def test_decoded_argument_nodes_are_bounded_before_freezing(monkeypatch) -> None
     def unexpected_freeze(*args, **kwargs):
         raise AssertionError("argument freezing ran before the node limit")
 
-    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    monkeypatch.setattr("examples.legacy_model_client.Arguments", unexpected_freeze)
     encoded = json.dumps(
         {"path": [0] * (MAX_MODEL_ARGUMENT_NODES - 1)}, separators=(",", ":")
     )
@@ -482,7 +482,7 @@ def test_shared_raw_container_is_rejected_before_freezing(monkeypatch) -> None:
     def unexpected_freeze(*args, **kwargs):
         raise AssertionError("shared argument graph reached freezing")
 
-    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    monkeypatch.setattr("examples.legacy_model_client.Arguments", unexpected_freeze)
     shared: list[object] = []
     with pytest.raises(ModelFormatError):
         parse_model_turn(
@@ -497,7 +497,7 @@ def test_pending_node_budget_rejects_alias_amplification_before_freezing(
     def unexpected_freeze(*args, **kwargs):
         raise AssertionError("amplified argument graph reached freezing")
 
-    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    monkeypatch.setattr("examples.legacy_model_client.Arguments", unexpected_freeze)
     shared = [None] * (MAX_MODEL_ARGUMENT_NODES - 1)
     amplified = {"path": [shared] * (MAX_MODEL_ARGUMENT_NODES - 2)}
     with pytest.raises(ModelFormatError):
@@ -547,7 +547,7 @@ def test_deep_encoded_arguments_are_rejected_before_json_parse(monkeypatch) -> N
     def unexpected_parse(*args, **kwargs):
         raise AssertionError("JSON parsing ran before the depth limit")
 
-    monkeypatch.setattr("guard_app.adapters.model_client.json.loads", unexpected_parse)
+    monkeypatch.setattr("examples.legacy_model_client.json.loads", unexpected_parse)
     encoded = '{"path":' + "[" * 65 + "0" + "]" * 65 + "}"
     with pytest.raises(ModelFormatError):
         parse_model_turn(
@@ -559,7 +559,7 @@ def test_large_raw_integer_is_rejected_before_freezing(monkeypatch) -> None:
     def unexpected_freeze(*args, **kwargs):
         raise AssertionError("argument freezing ran before the integer size limit")
 
-    monkeypatch.setattr("guard_app.adapters.model_client.Arguments", unexpected_freeze)
+    monkeypatch.setattr("examples.legacy_model_client.Arguments", unexpected_freeze)
     with pytest.raises(ModelFormatError):
         parse_model_turn(
             {
@@ -579,7 +579,7 @@ def test_total_completion_budget_rejects_multiple_individually_bounded_calls(
         raise AssertionError("schema validation ran before the aggregate limit")
 
     monkeypatch.setattr(
-        "guard_app.adapters.model_client.Draft202012Validator.check_schema",
+        "examples.legacy_model_client.Draft202012Validator.check_schema",
         unexpected_validation,
     )
     argument = '{"path":"' + "x" * 60_000 + '"}'

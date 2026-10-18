@@ -1,7 +1,7 @@
 """Qt-thread command ingress and a separate asyncio backend lifetime.
 
 This is an A-owned bridge kernel. Bootstrap runs in the backend thread and
-must supply existing TaskRunner instances and B's human-only capability. It
+must supply TaskExecution instances and B's human-only capability. It
 does not create Tasks, authorize operators, or infer durable Task state.
 Frozen lifecycle/command metadata and ephemeral public conversation events
 cross into Qt signals. Raw tool results never cross this boundary.
@@ -33,7 +33,7 @@ from guard_app.domain.contracts import (
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.services.approvals import HumanControl
-from guard_app.services.runner import RunUpdate, TaskRunner
+from guard_app.services.runner import RunUpdate, TaskExecution
 
 
 class BackendCleanupError(StoreError):
@@ -85,8 +85,8 @@ class CommandEvent:
 class BackendBindings:
     """Construct only in the backend thread from trusted app composition.
 
-    ``runner_for_task`` must resolve a Store-created Task's TaskRunner. The
-    bridge invokes only ``TaskRunner.advance``; it accepts no user-supplied
+    ``runner_for_task`` must resolve a Store-created Task's execution handle. The
+    bridge invokes only ``TaskExecution.advance``; it accepts no user-supplied
     coroutine or direct transport operation. ``human_control`` is the B
     capability obtained from ``GuardService.human_control``.
     ``discard_queued`` settles a Task's queued, not-yet-active transport
@@ -94,7 +94,7 @@ class BackendBindings:
     cancel or emergency halt starts.
     """
 
-    runner_for_task: Callable[[str], TaskRunner]
+    runner_for_task: Callable[[str], TaskExecution]
     human_control: HumanControl | None
     close: Callable[[], Awaitable[None]] | None = None
     snapshot: Callable[[str], Awaitable[TaskProjection]] | None = None
@@ -102,29 +102,24 @@ class BackendBindings:
     discard_queued: Callable[[str], int] | None = None
     create_session: Callable[[SessionOptions], Awaitable[TaskProjection]] | None = None
     stop_session: Callable[[str, int, ControlAction], Awaitable[None]] | None = None
-    credential_status: Callable[[], Awaitable[CredentialState]] | None = None
-    save_credential: Callable[[str], Awaitable[CredentialState]] | None = None
-    delete_credential: Callable[[], Awaitable[CredentialState]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class SessionOptions:
-    mode: str = "api"
-    model: str = ""
+    mode: str = "codex"
+    model: str = "gpt-6.1-sol"
 
     def __post_init__(self) -> None:
-        if self.mode not in ("api", "cli") or type(self.model) is not str or len(self.model) > 128:
-            raise ValueError("Invalid model selection")
-        if any(ord(char) < 33 or ord(char) > 126 for char in self.model):
-            raise ValueError("Invalid model selection")
+        if self.mode != "codex" or self.model != "gpt-6.1-sol":
+            raise ValueError("Invalid Codex selection")
 
 
-@dataclass(frozen=True, slots=True)
-class CredentialState:
-    available: bool
-    stored: bool = False
-    suffix: str = ""
-    code: str = "WINDOWS_CREDENTIALS_UNAVAILABLE"
+class SessionStartError(ValueError):
+    """Fixed public rejection codes from trusted A session composition."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +178,6 @@ class _Command:
     epoch: int | None = None
     user_text: str | None = field(default=None, repr=False)
     options: SessionOptions | None = None
-    secret: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,7 +247,6 @@ class BackendBridge(QObject):
     review_ready = Signal(object)
     conversation_ready = Signal(object)
     session_created = Signal(object)
-    credential_changed = Signal(object)
 
     def __init__(
         self,
@@ -320,6 +313,7 @@ class BackendBridge(QObject):
         self._recent: OrderedDict[str, CommandEvent] = OrderedDict()
         self._operations: dict[str, asyncio.Task[object]] = {}
         self._pending_runs: dict[str, tuple[str, int]] = {}
+        self._run_locks: dict[str, asyncio.Lock] = {}
         # Bound commands before they become asyncio ready callbacks. A normal
         # command flood must leave an independent ingress slot for urgent work.
         self._ingress_lock = threading.Lock()
@@ -426,28 +420,6 @@ class BackendBridge(QObject):
             "new_session",
             self._id(draft_key),
             options=options,
-        )
-        self._submit(command)
-        return command.command_id
-
-    def request_credential(
-        self, action: str, secret: str | None = None, *, command_id: str | None = None
-    ) -> str:
-        self._require_qt_thread()
-        if action not in ("status", "save", "delete"):
-            raise ValueError("Invalid credential operation")
-        if action == "save" and (
-            type(secret) is not str or not secret.strip() or len(secret) > 8192
-        ):
-            raise ValueError("Invalid credential value")
-        if action != "save" and secret is not None:
-            raise ValueError("Invalid credential value")
-        command = _Command(
-            self._id(command_id, generate=True),
-            "control",
-            f"credential_{action}",
-            "model-api",
-            secret=secret,
         )
         self._submit(command)
         return command.command_id
@@ -667,6 +639,12 @@ class BackendBridge(QObject):
         with self._state_lock:
             if self._state is BridgeState.READY:
                 try:
+                    if (
+                        lane == "run"
+                        and sum(event.lane == "run" for event in self._records.values())
+                        >= self._run_queue_size + 1
+                    ):
+                        raise asyncio.QueueFull
                     queue.put_nowait(command)
                 except asyncio.QueueFull:
                     rejection = "QUEUE_FULL"
@@ -874,7 +852,7 @@ class BackendBridge(QObject):
             _, pending = await asyncio.wait(active, timeout=self._shutdown_timeout)
             unfinished = bool(pending)
         for command_id, event in tuple(self._records.items()):
-            if event.stage is CommandStage.PROCESSING:
+            if event.stage in (CommandStage.PROCESSING, CommandStage.ACCEPTED):
                 self._emit_command(
                     _Command(command_id, event.lane, event.action, event.target_id),
                     CommandStage.UNCONFIRMED,
@@ -947,21 +925,41 @@ class BackendBridge(QObject):
         assert queue is not None
         while True:
             command = await queue.get()
-            self._emit_command(command, CommandStage.PROCESSING, "BACKEND_STARTED")
-            operation = asyncio.create_task(self._execute(command))
+            operation = asyncio.create_task(self._operate(command, queue))
             operation.add_done_callback(self._consume_task)
             self._operations[command.command_id] = operation
-            try:
+            if lane != "run":
                 await asyncio.wait({operation})
-                if operation.cancelled() or operation.exception() is not None:
-                    self._emit_command(command, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
-                elif self._records[command.command_id].stage is CommandStage.PROCESSING:
-                    self._emit_command(command, CommandStage.BACKEND_RETURNED, operation.result())
-            finally:
-                self._operations.pop(command.command_id, None)
-                queue.task_done()
-                # The idle worker must not retain the last input command.
-                del command, operation
+            del command, operation
+
+    async def _operate(self, command: _Command, queue: asyncio.Queue[_Command]) -> None:
+        try:
+            if command.lane == "run":
+                lock = self._run_locks.setdefault(command.target_id, asyncio.Lock())
+                async with lock:
+                    await self._perform(command)
+            else:
+                await self._perform(command)
+        finally:
+            self._operations.pop(command.command_id, None)
+            queue.task_done()
+            if command.lane == "run" and not any(
+                event.lane == "run" and event.target_id == command.target_id
+                for event in self._records.values()
+            ):
+                self._run_locks.pop(command.target_id, None)
+
+    async def _perform(self, command: _Command) -> None:
+        self._emit_command(command, CommandStage.PROCESSING, "BACKEND_STARTED")
+        completed = False
+        try:
+            code = await self._execute(command)
+            completed = True
+            if self._records[command.command_id].stage is CommandStage.PROCESSING:
+                self._emit_command(command, CommandStage.BACKEND_RETURNED, code)
+        finally:
+            if not completed:
+                self._emit_command(command, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
 
     async def _execute(self, command: _Command) -> str:
         bindings = self._bindings
@@ -969,7 +967,10 @@ class BackendBridge(QObject):
         if command.action == "new_session":
             if bindings.create_session is None or command.options is None:
                 return "SESSION_CREATION_UNAVAILABLE"
-            created_snapshot = await bindings.create_session(command.options)
+            try:
+                created_snapshot = await bindings.create_session(command.options)
+            except SessionStartError as error:
+                return error.code
             if type(created_snapshot) is not TaskProjection:
                 return "SESSION_CREATION_UNCONFIRMED"
             self.session_created.emit(
@@ -977,25 +978,9 @@ class BackendBridge(QObject):
             )
             await self._publish_after(created_snapshot.task_id)
             return "SESSION_CREATED"
-        if command.action.startswith("credential_"):
-            operation = {
-                "credential_status": bindings.credential_status,
-                "credential_delete": bindings.delete_credential,
-            }.get(command.action)
-            if command.action == "credential_save" and bindings.save_credential is not None:
-                assert command.secret is not None
-                credential_state = await bindings.save_credential(command.secret)
-            elif operation is not None:
-                credential_state = await operation()
-            else:
-                credential_state = CredentialState(False)
-            if type(credential_state) is not CredentialState:
-                return "CREDENTIAL_UNCONFIRMED"
-            self.credential_changed.emit(credential_state)
-            return credential_state.code
         if command.lane == "run":
             runner = bindings.runner_for_task(command.target_id)
-            if not isinstance(runner, TaskRunner) or runner.task_id != command.target_id:
+            if not isinstance(runner, TaskExecution) or runner.task_id != command.target_id:
                 return "RUNNER_UNAVAILABLE"
             try:
                 if command.action == "message":
@@ -1073,7 +1058,7 @@ class BackendBridge(QObject):
             return "REVIEW_READY"
         if command.action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
             runner = bindings.runner_for_task(command.target_id)
-            if not isinstance(runner, TaskRunner) or runner.task_id != command.target_id:
+            if not isinstance(runner, TaskExecution) or runner.task_id != command.target_id:
                 return "RUNNER_UNAVAILABLE"
             try:
                 return await self._stop_task(bindings, control, command)
@@ -1145,7 +1130,7 @@ class BackendBridge(QObject):
         if type(snapshot) is not TaskProjection or snapshot.task_id != task_id:
             raise ValueError("Invalid public Task projection")
         runner = bindings.runner_for_task(task_id)
-        if isinstance(runner, TaskRunner):
+        if isinstance(runner, TaskExecution):
             if snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
                 # Invalidate late model responses and drop terminal Task history.
                 runner.close()

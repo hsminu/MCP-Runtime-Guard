@@ -14,6 +14,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from examples.legacy_runner import TaskRunner
 from PySide6.QtCore import QObject, QThread, QTimer, Slot
 from PySide6.QtWidgets import QApplication
 
@@ -34,7 +35,7 @@ from guard_app.services.bridge import (
     TaskProjection,
     _review_header,
 )
-from guard_app.services.runner import RunUpdate, TaskRunner
+from guard_app.services.runner import RunUpdate
 
 
 @pytest.fixture(scope="module")
@@ -78,6 +79,12 @@ class Receiver(QObject):
 class FakeRunner(TaskRunner):
     def __init__(self, task_id: str, gate: threading.Event, entered: threading.Event) -> None:
         self.task_id = task_id
+        self.epoch = 1
+        self._last_status = "idle"
+        self._awaiting_user = True
+        self._closed = self._stopped = False
+        self._pending = None
+        self._lock = asyncio.Lock()
         self._conversation = []
         self._gate = gate
         self._entered = entered
@@ -990,6 +997,12 @@ class PendingRunner(TaskRunner):
     def __init__(self, task_id: str, resume: Callable[[Outcome], RunUpdate]) -> None:
         self._conversation = []
         self.task_id = task_id
+        self.epoch = 1
+        self._last_status = "idle"
+        self._awaiting_user = True
+        self._closed = self._stopped = False
+        self._pending = None
+        self._lock = asyncio.Lock()
         self._resume = resume
         self.resumed: list[Outcome] = []
 
@@ -1389,3 +1402,42 @@ def test_start_gate_is_atomic_and_waits_for_reported_thread_exit():
         release.set()
         lingering.join(timeout=2)
     assert gate.try_start(object()) is None
+
+def test_distinct_tasks_run_while_same_task_commands_wait_and_shutdown_settles_all(app):
+    """A-local concurrency; no Codex process/T46 claim."""
+    first_gate, first_entered = threading.Event(), threading.Event()
+    second_gate, second_entered = threading.Event(), threading.Event()
+    one = FakeRunner("one", first_gate, first_entered)
+    two = FakeRunner("two", second_gate, second_entered)
+    runners = {"one": one, "two": two}
+
+    async def bootstrap():
+        return BackendBindings(runners.get, FakeControl())
+
+    bridge = BackendBridge(bootstrap, run_queue_size=8)
+    receiver = attach(bridge)
+    bridge.start()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY)
+        first = bridge.request_run("one")
+        pump_until(app, first_entered.is_set)
+        waiting = [bridge.request_run("one") for _ in range(4)]
+        second = bridge.request_run("two")
+        pump_until(app, second_entered.is_set)
+        assert one.calls == 1
+        assert two.calls == 1
+        assert not first_gate.is_set()
+        assert not second_gate.is_set()
+        pump_until(app, lambda: all(receiver.stages(command) for command in waiting))
+        close_bridge(app, bridge)
+        for command in [first, *waiting, second]:
+            assert receiver.stages(command)[-1].stage in (
+                CommandStage.UNCONFIRMED, CommandStage.REJECTED,
+            )
+        assert not bridge._records
+        assert not bridge._operations
+    finally:
+        first_gate.set()
+        second_gate.set()
+        if not bridge.thread_done:
+            close_bridge(app, bridge)

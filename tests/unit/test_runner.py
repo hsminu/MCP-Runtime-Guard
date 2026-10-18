@@ -8,12 +8,13 @@ from collections import deque
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
-from guard_app.adapters.model_client import (
+from examples.legacy_model_client import (
     MAX_MODEL_CONVERSATION_UTF8_BYTES,
     ModelFormatError,
     ProviderNeutralModelClient,
 )
+from examples.legacy_runner import RunnerStateError, TaskRunner
+
 from guard_app.domain.contracts import (
     ApprovalRecord,
     Denied,
@@ -31,7 +32,6 @@ from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.models import ProposedCall, TaskState
 from guard_app.domain.reasons import Reason
 from guard_app.services.guard import GuardService
-from guard_app.services.runner import RunnerStateError, TaskRunner
 
 
 def _state(

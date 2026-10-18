@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-18 · main `1d34276` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-18 · main `818b118` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -9,11 +9,11 @@
 | launcher·Registry·endpoint 검증·fixture·독립 인수 | C | A04, A07–A12, A14–A16, A23, A36–A40 |
 | 시작 복구·영속 call_seq·조회/감사 API (B-SQL-01–06) | B | A13, A24–A27, A33–A35 |
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
-| `ModelClient` 포트 대체·`valid_server_id` 사용 방식 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20) 5·6번) | A·B·C | A19–A22, A54 |
+| `ModelClient` 포트 제거·A 로컬 세션 관리자 입구의 공통 계약 합의 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20) 5번) | A·B·C | A19–A22 |
 | Pending 최종 결과 알림·만료 주체(NOTIFY-01, [#18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) 제안)·세션 관리자용 Task 정지 입구·검토된 설명 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20) 1–3번) | B | A19–A22, A47 |
 | 접근 규칙 판정 함수·연결 형태(ACCESS-01, [#18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) 제안)·AGT 코드 제거 | B | A02·A06, A41, A44, A51, A53 |
-| Codex 고정 버전·launcher·L2 입구·stream ingress·경로·ScanReport·자격증명 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
-| 설정 파일·Profile 로딩 담당 등 ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | 사용자 | A24–A27, A45, A49 |
+| Codex 0.162.1 launcher·L1/L2 구현·T43/T46·stream ingress·경로·ScanReport·Scanner 자격증명 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
+| 설정·Profile 로딩(B)과 경로·실행 파일 검증(C) ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | B·C | A24–A27, A45, A49 |
 | A가 정한 입력·동작 규칙 확인 | 사용자 | A56 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | B의 AGT 제거 PR(같은 파일) | B | A44 |
@@ -57,11 +57,11 @@
 - [ ] A18 dispatch 0 독립 인수 — 폐기: AGT 제거(자체 규칙은 C6.9로 검증)
 - [ ] A51 자체 접근 규칙을 `AccessChecker`로 Guard에 연결·규칙 설정 로딩 — 막힘: B 판정 함수·ACCESS-01
 - [ ] A53 B의 AGT 코드 제거 중 A 소유 파일 리뷰 — 막힘: B PR
-- [ ] A19·A20 Codex 세션 관리자(app-server 하네스, 10.4절) — 막힘: `ModelClient` 포트·NOTIFY-01·정지 입구(#20), 고정 버전·launcher·L2 입구(#21)
+- [ ] A19·A20 Codex 세션 관리자 실제 연결(app-server 0.162.1, 10.4절) — 막힘: 세션 관리자 공통 계약·NOTIFY-01·정지 입구(#20), C launcher·L1/L2 구현(#21)
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
 - [x] A58 JSON-RPC 전송 마감·처리기 안 close 교착·종료 사유 보정 · [기록](archive/a/A58-jsonrpc-send-and-close.md)
-- [ ] A50 Codex 프레이밍·메서드 연결 — 막힘: 고정 버전([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21) 1번, 형식은 0.159.0으로만 확인)
+- [ ] A50 Codex 0.162.1 프레이밍·메서드 연결 — 막힘: C launcher·L1/L2 구현([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21), 기존 형식 검증은 0.159.0)
 - [x] A21·A22 Runner expected_epoch·승인 resume 연결
 - [ ] A21·A22 실제 모델 세션 격리(T21) — 막힘: A19·A20
 - [x] A23 B 리뷰: AGT 지연 중 긴급 차단 수정·회귀 · [기록](archive/tasks/a-b-review.md)
@@ -85,12 +85,13 @@
 - [x] A49 로컬 파일 서버 루트·하위 폴더 등급 입력 폼 · [기록](archive/a/A49-local-folder-labels-form.md)
 - [x] A59 폴더 규칙 중복을 대소문자 무시로 검사 · [기록](archive/a/A59-folder-rule-case.md)
 - [ ] A49 등록·출처 규칙 연결 — 막힘: C Registry·safe_path·설정 로딩 담당(#19)
-- [ ] A52 Codex 로그인 화면(ChatGPT 기기 코드·API 키) — 막힘: 고정 버전·자격증명 저장 담당(#21 1·8번)
-- [ ] A54 등록 화면 서버 ID 즉시 안내(`valid_server_id`) — 막힘: 사용 방식([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20) 6번)
+- [ ] A52 Codex 로그인 실제 연결(ChatGPT 기기 코드·API 키, Codex가 keyring 저장) — 막힘: C launcher·T43 검증(#21); 직접 API 키 저장 화면은 A65에서 제거
+- [ ] A54 등록 화면 서버 ID 즉시 안내(`valid_server_id`) — bridge가 같은 검사 결과를 전달하는 방식으로 확정, 연결 구현 남음
 - [ ] A56 A가 정한 규칙 확인(키 앞뒤 공백 제거·4자 이하 키 끝자리 숨김·폴더 규칙 최소 1개·tools/list 반복 cursor·중복 이름 중단) — 막힘: 사용자 확인(contracts에 없음, 이슈 등록 필요)
 - [x] A61 Qt 시안 컴포넌트·실행/승인/중지 카드·아이콘·작은 화면 배치 · [기록](archive/a/A61-ui-components.md)
 - [x] A63 세션 중심 대화·결과 화면·기존 기능 진입·Task/epoch 메시지 연결·원문 폐기·독립 GUI QA · [기록](archive/a/A63-session-workspace.md)
 - [x] A64 SQLite 새 Task·모델 API 어댑터·키 설정 주입·세션 격리 연결부 — 실제 키 저장·API 사용·CLI 실행은 사용자 선택에 따라 C 구현 대기 · [기록](archive/a/A64-api-session-connections.md)
+- [x] A65 직접 모델 API 제거·Codex 전용 주입부·L2 시작 게이트·Task별 동시 실행과 정지 격리 · [기록](archive/a/A65-codex-only-concurrent-tasks.md)
 
 ## 통합·패키징
 

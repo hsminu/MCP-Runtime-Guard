@@ -34,7 +34,7 @@ from guard_app.services.bridge import BackendBindings, BackendCleanupError, Task
 from guard_app.services.catalog import Catalog
 from guard_app.services.catalog_sources import SourceRule
 from guard_app.services.guard import GuardService
-from guard_app.services.runner import TaskRunner
+from examples.legacy_runner import TaskRunner
 from guard_app.storage.sqlite_store import SQLiteStore
 from tests.unit.test_guard import _Registry, _Store
 

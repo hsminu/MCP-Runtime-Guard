@@ -10,7 +10,6 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
-    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -47,16 +46,16 @@ class SessionView:
     status: QLabel
     send: KeyboardActionButton
     results: KeyboardActionButton
-    model: QComboBox
+    model: QLabel
     header: QHBoxLayout
     controls: QHBoxLayout
-    model_name: QLineEdit
     start: KeyboardActionButton
     snapshot: TaskProjection | None = None
     updated: datetime = field(default_factory=datetime.now)
     pending_command: str | None = None
     content_present: bool = False
     focus_draft: bool = False
+    command_notice: str = ""
 
 
 class _SessionStack(QStackedWidget):
@@ -81,10 +80,9 @@ class SessionWorkspace(QWidget):
         self._next_session_number = 0
         self._active_key: str | None = None
         self._ready = False
-        self._busy = False
-        self._seen_events: set[tuple[str, str]] = set()
+        self._busy_scopes: frozenset[tuple[str, int]] = frozenset()
+        self._seen_events: set[tuple[str, int, str, str]] = set()
         self._terminal_keys: set[str] = set()
-        self._multi_session = False
         self.search = QLineEdit()
         self.search.setPlaceholderText("세션 검색")
         self.search.setAccessibleName("세션 제목과 상태 검색")
@@ -161,16 +159,9 @@ class SessionWorkspace(QWidget):
         draft.setMaximumHeight(130)
         composer.addWidget(draft)
         controls = QHBoxLayout()
-        model = QComboBox()
-        model.addItem("모델 API", "api")
-        model.addItem("CLI · 준비 중", "cli")
-        model.setAccessibleName("새 세션 모델 연결 방식")
+        model = plain_label("Codex · gpt-6.1-sol", name="secondary")
+        model.setAccessibleName("세션 모델 · Codex gpt-6.1-sol")
         controls.addWidget(model)
-        model_name = QLineEdit()
-        model_name.setPlaceholderText("모델 ID")
-        model_name.setAccessibleName("새 세션의 API 모델 ID")
-        model_name.setMaximumWidth(220)
-        controls.addWidget(model_name)
         controls.addStretch(1)
         start = KeyboardActionButton("세션 시작")
         start.set_visual(icon="plus", variant="primary")
@@ -198,7 +189,6 @@ class SessionWorkspace(QWidget):
             model,
             header,
             controls,
-            model_name,
             start,
         )
         self.sessions[key] = view
@@ -252,8 +242,8 @@ class SessionWorkspace(QWidget):
         for view in self.sessions.values():
             self._refresh_view(view)
 
-    def set_busy(self, busy: bool) -> None:
-        self._busy = busy
+    def set_busy_scopes(self, scopes: frozenset[tuple[str, int]]) -> None:
+        self._busy_scopes = scopes
         for view in self.sessions.values():
             self._refresh_view(view)
 
@@ -274,8 +264,6 @@ class SessionWorkspace(QWidget):
         first = self._active_key is None
         if key not in self.sessions:
             self._create(key, f"세션 · {snapshot.task_id}")
-        if not self._multi_session and self._active_key is not None and self._active_key != key:
-            self._clear_content(self.sessions[self._active_key])
         self._active_key = key
         view = self.sessions[key]
         view.snapshot = snapshot
@@ -294,11 +282,12 @@ class SessionWorkspace(QWidget):
 
     def _refresh_view(self, view: SessionView) -> None:
         snapshot = view.snapshot
-        active = snapshot is not None and (self._multi_session or view.key == self._active_key)
+        active = snapshot is not None
+        busy = bool(snapshot and (snapshot.task_id, snapshot.epoch) in self._busy_scopes)
         writable = bool(
             active
             and self._ready
-            and not self._busy
+            and not busy
             and snapshot is not None
             and snapshot.status is TaskStatus.RUNNING
             and snapshot.can_accept_message
@@ -308,16 +297,13 @@ class SessionWorkspace(QWidget):
         view.send.setVisible(snapshot is not None)
         view.start.setVisible(snapshot is None)
         view.start.setEnabled(self._ready and view.pending_command is None)
-        view.model.setEnabled(snapshot is None and view.pending_command is None)
-        view.model_name.setEnabled(snapshot is None and view.pending_command is None)
         view.results.setEnabled(active)
         if snapshot is not None:
-            index = view.model.findData(snapshot.model_mode)
-            if index < 0:
-                view.model.addItem(f"현재 모델: {snapshot.model_mode}", snapshot.model_mode)
-                index = view.model.count() - 1
-            view.model.setCurrentIndex(index)
-            view.model_name.setText(snapshot.model_id)
+            view.model.setText(
+                "Codex · gpt-6.1-sol"
+                if snapshot.model_mode == "codex"
+                else f"모델: {snapshot.model_mode}"
+            )
         view.draft.setReadOnly(
             bool(
                 snapshot
@@ -325,22 +311,25 @@ class SessionWorkspace(QWidget):
             )
         )
         if snapshot is None:
-            text = "새 세션 · 모델 연결을 선택하고 시작해"
-            note = (
-                "API 모델 ID를 입력하고 세션을 시작해. "
-                "CLI 실행과 보안 검사 기능은 아직 준비 중이야."
+            text = "새 세션 · Codex gpt-6.1-sol"
+            note = view.command_notice or (
+                "Codex 연결과 시작 검사가 확인되면 세션을 시작할 수 있어. "
+                "로그인은 설정에서 안내를 확인해."
             )
         else:
             text = (
                 f"{status_title(snapshot.status)} · Task {snapshot.task_id} "
                 f"· epoch {snapshot.epoch}"
             )
-            if not active:
-                note = "이 Task는 현재 연결 대상이 아니야. 새 실행 요청은 보내지 않아."
-            elif snapshot.status is TaskStatus.WAITING_APPROVAL:
+            if snapshot.status is TaskStatus.WAITING_APPROVAL:
                 note = "승인 대기 중 · 결과 · 실행 활동에서 요청 사본을 확인해."
             elif snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
-                note = "Task가 종료되거나 잠겼어. 대화·초안 원문을 지웠고 다시 실행할 수 없어."
+                note = (
+                    "Codex 인증이 만료되거나 갱신되지 않아 이 Task를 정지했어. "
+                    "새 세션에서 다시 시작해."
+                    if snapshot.connection_code == "CODEX_AUTH_FAILED"
+                    else "Task가 종료되거나 잠겼어. 대화·초안 원문을 지웠고 다시 실행할 수 없어."
+                )
             elif snapshot.runner_state in ("model_error", "guard_error", "stopped"):
                 note = (
                     "모델 응답을 완료하지 못해 이 Runner가 멈췄어. 자동 재전송하지 않아. "
@@ -348,19 +337,17 @@ class SessionWorkspace(QWidget):
                 )
             elif not snapshot.model_ready:
                 note = {
-                    "MODEL_ID_REQUIRED": "모델 ID가 없어. 새 세션에서 모델 ID를 입력해.",
-                    "WINDOWS_CREDENTIALS_UNAVAILABLE": (
-                        "Windows 자격증명 저장이 아직 연결되지 않아 API를 실행할 수 없어."
-                    ),
-                    "MODEL_KEY_MISSING": "저장된 모델 API 키가 없어. 설정에서 확인해.",
-                    "CLI_DEPENDENCIES_UNAVAILABLE": (
-                        "CLI 실행과 보안 검사 기능은 아직 준비 중이라 실행할 수 없어."
-                    ),
+                    "CODEX_SESSION_UNAVAILABLE": "Codex 연결이 준비되지 않아 실행할 수 없어.",
+                    "CODEX_SESSION_INVALID": "Codex 연결을 확인하지 못해 실행할 수 없어.",
+                    "CODEX_L2_UNAVAILABLE": "Codex 시작 검사가 준비되지 않아 실행할 수 없어.",
+                    "CODEX_L2_FAILED": "Codex 시작 검사를 통과하지 못해 실행할 수 없어.",
                 }.get(snapshot.connection_code, "모델 연결을 확인하지 못해 실행할 수 없어.")
-            elif self._busy or view.pending_command:
+            elif busy or view.pending_command:
                 note = "실행 요청 처리 중 · 백엔드 결과를 기다리는 중이야."
             elif not self._ready:
                 note = "백엔드 준비 상태를 확인하는 중이야."
+            elif view.command_notice:
+                note = view.command_notice
             elif snapshot.can_advance:
                 note = "진행할 모델 단계가 있어. 결과 · 실행 활동에서 실행을 눌러."
             elif writable:
@@ -380,6 +367,7 @@ class SessionWorkspace(QWidget):
             view.notice.setText("메시지는 32,768자 이하로 입력해.")
             return
         command = uuid4().hex
+        view.command_notice = ""
         view.pending_command = command
         self._refresh_view(view)
         self.message_requested.emit(view.snapshot.task_id, view.snapshot.epoch, text, command)
@@ -387,22 +375,17 @@ class SessionWorkspace(QWidget):
     def _start(self, view: SessionView) -> None:
         if not view.start.isEnabled() or view.snapshot is not None or view is not self.current:
             return
-        try:
-            options = SessionOptions(str(view.model.currentData()), view.model_name.text().strip())
-        except ValueError:
-            view.notice.setText("모델 ID는 공백 없는 영문·숫자·기호 128자 이하로 입력해.")
-            return
+        options = SessionOptions()
         command = uuid4().hex
+        view.command_notice = "새 Task 생성 요청됨 · 연결과 시작 검사 확인 중"
         view.pending_command = command
         self._refresh_view(view)
-        view.notice.setText("새 Task 생성 요청됨 · 백엔드 확인 중")
         self.new_session_requested.emit(view.key, options, command)
 
     def session_created(self, event: SessionCreated) -> None:
         view = self.sessions.get(event.draft_key)
         if view is None or view.pending_command != event.command_id or view.snapshot is not None:
             return
-        self._multi_session = True
         self.sessions.pop(view.key)
         key = f"task:{event.snapshot.task_id}:{event.snapshot.epoch}"
         was_selected = self.current_key == view.key
@@ -413,6 +396,7 @@ class SessionWorkspace(QWidget):
         if isinstance(heading, QLabel):
             heading.setText(view.title)
         view.pending_command = None
+        view.command_notice = ""
         self.sessions[key] = view
         if was_selected:
             self.current_key = key
@@ -423,11 +407,10 @@ class SessionWorkspace(QWidget):
     def conversation(self, event: ConversationEvent) -> None:
         key = f"task:{event.task_id}:{event.epoch}"
         view = self.sessions.get(key)
-        marker = (event.command_id, event.role)
+        marker = (event.task_id, event.epoch, event.command_id, event.role)
         if (
             not self._ready
             or view is None
-            or (not self._multi_session and key != self._active_key)
             or view.snapshot is None
             or view.snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
             or marker in self._seen_events
@@ -453,13 +436,21 @@ class SessionWorkspace(QWidget):
         for view in self.sessions.values():
             if view.pending_command == command_id:
                 view.pending_command = None
-                self._refresh_view(view)
                 if code == "MESSAGE_UNAVAILABLE":
-                    view.notice.setText("메시지를 접수하지 않았어. 현재 Task 상태를 다시 확인해.")
+                    view.command_notice = "메시지를 접수하지 않았어. 현재 Task 상태를 다시 확인해."
                 elif code.startswith("SESSION_CREATION_"):
-                    view.notice.setText("이 실행 구성에는 새 Task 생성 기능이 연결되지 않았어.")
+                    view.command_notice = "이 실행 구성에는 새 Task 생성 기능이 연결되지 않았어."
+                elif code == "CODEX_L2_UNAVAILABLE":
+                    view.command_notice = "Codex 시작 검사가 준비되지 않아 세션을 시작하지 않았어."
+                elif code == "CODEX_L2_FAILED":
+                    view.command_notice = "Codex 시작 검사를 통과하지 못해 세션을 시작하지 않았어."
+                elif code == "CODEX_SESSION_UNAVAILABLE":
+                    view.command_notice = "Codex 연결이 준비되지 않아 세션을 시작하지 않았어."
+                elif code == "CODEX_SESSION_INVALID":
+                    view.command_notice = "Codex 연결을 확인하지 못해 세션을 시작하지 않았어."
                 elif code in ("BACKEND_UNCONFIRMED", "NOT_READY", "STARTUP_FAILED"):
-                    view.notice.setText("새 Task 생성을 확인하지 못했어. 백엔드 상태를 확인해.")
+                    view.command_notice = "요청 처리를 확인하지 못했어. 연결 상태를 확인해."
+                self._refresh_view(view)
 
     def _refresh_list(self, *_args: object) -> None:
         needle = self.search.text().casefold().strip()

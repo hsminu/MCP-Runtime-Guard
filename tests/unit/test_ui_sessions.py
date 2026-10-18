@@ -17,6 +17,8 @@ from guard_app.services.bridge import (
     ApprovalReview,
     BackendBridge,
     BridgeState,
+    CommandEvent,
+    CommandStage,
     ConversationEvent,
     LifecycleEvent,
     SessionCreated,
@@ -220,27 +222,27 @@ def test_projection_change_of_other_session_does_not_overwrite_selected_draft(wi
 def test_selected_task_controls_all_status_identity_and_title_even_after_background_update(window):
     shell, panel, bridge = window
     shell.set_runtime_context("unit product")
-    alpha = snapshot(model_mode="api")
+    alpha = snapshot(model_mode="codex")
     bridge.task_changed.emit(alpha)
     alpha_key = shell.sessions.current_key
     shell.new_session_button.click()
     draft = shell.sessions.current
     draft.pending_command = "new-beta"
-    beta = replace(alpha, task_id="task-beta", model_mode="cli", model_ready=False)
+    beta = replace(alpha, task_id="task-beta", model_mode="mock", model_ready=False)
     bridge.session_created.emit(SessionCreated("new-beta", draft.key, beta))
     bridge.task_changed.emit(beta)
-    assert "CLI" in shell.runtime_identity.text()
-    assert "cli" in shell.windowTitle()
+    assert "mock" in shell.runtime_identity.text()
+    assert "mock" in shell.windowTitle()
     shell.sessions.select(alpha_key)
     bridge.task_changed.emit(replace(alpha, status=TaskStatus.HALTED))
     bridge.task_changed.emit(beta)
     assert panel.current.task_id == alpha.task_id
     assert shell.task_status_card.status is TaskStatus.HALTED
-    assert "API" in shell.runtime_identity.text()
-    assert "api" in shell.windowTitle()
+    assert "Codex" in shell.runtime_identity.text()
+    assert "codex" in shell.windowTitle()
     shell.sessions.select(draft.key)
     assert shell.task_status_card.status is TaskStatus.RUNNING
-    assert "CLI" in shell.runtime_identity.text()
+    assert "mock" in shell.runtime_identity.text()
 
 
 def test_task_adoption_keeps_friendly_title_and_reports_model_connection_needed(window):
@@ -268,3 +270,142 @@ def test_task_adoption_keeps_friendly_title_and_reports_model_connection_needed(
         )
     )
     assert second.title != view.title
+
+
+def test_busy_task_does_not_block_other_task_or_new_session_and_results_stay_scoped(
+    window, monkeypatch
+):
+    shell, panel, bridge = window
+    sent = []
+    monkeypatch.setattr(
+        bridge,
+        "request_message",
+        lambda task, epoch, text, *, command_id: sent.append((task, epoch, command_id)),
+    )
+    alpha = snapshot(can_accept_message=True, model_mode="codex")
+    beta = replace(alpha, task_id="task-beta")
+    bridge.task_changed.emit(alpha)
+    alpha_view = shell.sessions.current
+    alpha_view.draft.setPlainText("alpha draft")
+    alpha_view.send.click()
+    alpha_command = alpha_view.pending_command
+    assert alpha_command
+    assert not alpha_view.send.isEnabled()
+
+    bridge.task_changed.emit(beta)
+    shell.sessions.select("task:task-beta:1")
+    beta_view = shell.sessions.current
+    beta_view.draft.setPlainText("beta draft")
+    assert alpha_view.draft.toPlainText() == "alpha draft"
+    assert beta_view.send.isEnabled()
+    assert not panel._busy
+    beta_view.send.click()
+    beta_command = beta_view.pending_command
+    assert beta_command
+    assert [task for task, _, _ in sent] == ["task-one", "task-beta"]
+    assert panel._busy
+
+    bridge.command_changed.emit(
+        CommandEvent(
+            alpha_command,
+            "execution",
+            "message",
+            "task-one",
+            CommandStage.REJECTED,
+            "NOT_READY",
+        )
+    )
+    assert panel._busy
+    assert not beta_view.send.isEnabled()
+    assert "NOT_READY" not in panel.message.text()
+    assert alpha_view.pending_command is None
+    assert beta_view.pending_command == beta_command
+
+    shell.sessions.select(alpha_view.key)
+    assert not panel._busy
+    assert alpha_view.send.isEnabled()
+    assert "NOT_READY" in panel.message.text()
+    shell.new_session_button.click()
+    assert shell.sessions.current.start.isEnabled()
+    assert beta_view.pending_command == beta_command
+
+
+def test_approval_and_stop_are_bound_to_selected_task_and_keep_other_task_text(window, monkeypatch):
+    shell, panel, bridge = window
+    calls = []
+    monkeypatch.setattr(
+        bridge,
+        "request_control",
+        lambda action, target, *, command_id, epoch: calls.append((action, target, epoch)),
+    )
+    alpha = snapshot()
+    alpha = replace(alpha, status=TaskStatus.WAITING_APPROVAL, approval_id="alpha-approval")
+    beta = replace(
+        alpha,
+        task_id="task-beta",
+        status=TaskStatus.RUNNING,
+        approval_id=None,
+        can_accept_message=True,
+    )
+    bridge.task_changed.emit(alpha)
+    alpha_view = shell.sessions.current
+    bridge.task_changed.emit(beta)
+    shell.sessions.select("task:task-beta:1")
+    beta_view = shell.sessions.current
+    beta_view.draft.setPlainText("beta retained")
+    bridge.conversation_ready.emit(
+        ConversationEvent("task-beta", 1, "assistant", "beta answer", "b")
+    )
+    assert beta_view.send.isEnabled()
+    assert not panel.approve_button.isEnabled()
+    shell.sessions.select(alpha_view.key)
+    panel.review_button.click()
+    assert calls[-1][1] == "alpha-approval"
+    panel.halt_button.click()
+    assert calls[-1][1] == "task-one"
+    bridge.task_changed.emit(replace(alpha, status=TaskStatus.HALTED, approval_id=None))
+    shell.sessions.select(beta_view.key)
+    assert beta_view.send.isEnabled()
+    assert panel.halt_button.isEnabled()
+    assert beta_view.draft.toPlainText() == "beta retained"
+    assert "beta answer" in beta_view.transcript.toPlainText()
+    assert "승인 대기" not in beta_view.notice.text()
+
+
+@pytest.mark.parametrize("code", ["CODEX_L2_UNAVAILABLE", "CODEX_SESSION_UNAVAILABLE"])
+def test_missing_codex_dependency_keeps_draft_and_shows_persistent_rejection(
+    window, monkeypatch, code
+):
+    shell, panel, bridge = window
+    requests = []
+    monkeypatch.setattr(
+        bridge,
+        "request_new_session",
+        lambda key, options, *, command_id: requests.append((key, options, command_id)),
+    )
+    view = shell.sessions.current
+    view.draft.setPlainText("retained first instruction")
+    view.start.click()
+    key, options, command = requests[0]
+    assert options.mode == "codex"
+    assert options.model == "gpt-6.1-sol"
+    bridge.command_changed.emit(
+        CommandEvent(
+            command,
+            "execution",
+            "new_session",
+            key,
+            CommandStage.BACKEND_RETURNED,
+            code,
+        )
+    )
+    assert view.snapshot is None
+    assert view.pending_command is None
+    assert view.start.isEnabled()
+    assert "시작하지 않았어" in view.notice.text()
+    message = view.notice.text()
+    panel.state_changed.emit()
+    shell.sessions.set_ready(True)
+    assert view.notice.text() == message
+    assert view.draft.toPlainText() == "retained first instruction"
+    assert not any(item.snapshot for item in shell.sessions.sessions.values())

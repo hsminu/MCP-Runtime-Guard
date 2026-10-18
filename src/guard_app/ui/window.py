@@ -25,7 +25,7 @@ from guard_app.services.bridge import BridgeState, CommandStage, LifecycleEvent
 from .approvals import ApprovalListPage, ApprovalPage, ApprovalQuery
 from .call_logs import CallLogPage, DetailRequest, PublicCallDetail, PublicCallSummary
 from .icons import line_icon
-from .model_settings import ModelCredentialForm
+from .model_settings import CodexLoginInfo
 from .models import (
     OverviewSnapshot,
     RuntimeIdentity,
@@ -247,14 +247,13 @@ class GuardWindow(QMainWindow):
         settings_layout.addWidget(plain_label("설정", name="pageTitle"))
         settings_layout.addWidget(
             plain_label(
-                "API는 Windows 자격증명 연결이 필요해. "
-                "CLI 실행과 보안 검사 기능은 아직 준비 중이야.",
+                "모델 연결과 Scanner 설정을 확인해.",
                 name="secondary",
             )
         )
         self.scanner_key_form = ScannerKeyForm()
-        self.model_credential_form = ModelCredentialForm()
-        settings_layout.addWidget(self.model_credential_form)
+        self.codex_login_info = CodexLoginInfo()
+        settings_layout.addWidget(self.codex_login_info)
         settings_layout.addWidget(self.scanner_key_form)
         settings_layout.addStretch(1)
         self._page_indices["settings"] = self.stack.addWidget(_scroll_page(settings))
@@ -305,10 +304,9 @@ class GuardWindow(QMainWindow):
         self._runtime_panel = panel
         self.runtime_layout.insertWidget(2, panel)
         panel.set_scope(None)
-        panel.state_changed.connect(lambda: self.sessions.set_busy(panel._busy))
+        panel.state_changed.connect(lambda: self.sessions.set_busy_scopes(panel.busy_scopes))
         panel.selected_snapshot_changed.connect(self._sync_selected_task)
         bridge = panel.bridge
-        self.model_credential_form.bind(bridge)
         bridge.task_changed.connect(self.sessions.set_snapshot)
         bridge.session_created.connect(self.sessions.session_created)
         self.sessions.new_session_requested.connect(
@@ -332,8 +330,6 @@ class GuardWindow(QMainWindow):
 
         def lifecycle(event: LifecycleEvent) -> None:
             self.sessions.set_ready(event.state is BridgeState.READY)
-            if event.state is BridgeState.READY:
-                bridge.request_credential("status")
             if event.state in (BridgeState.FAILED, BridgeState.CLOSING, BridgeState.CLOSED):
                 self.sessions.clear_content()
 
@@ -455,8 +451,7 @@ class GuardWindow(QMainWindow):
             RuntimeMode.UNCONFIGURED: "미설정",
             RuntimeMode.MOCK: "mock",
             RuntimeMode.REAL: "real",
-            RuntimeMode.API: "API",
-            RuntimeMode.CLI: "CLI",
+            RuntimeMode.CODEX: "Codex",
         }
         self.runtime_identity.setText(
             f"AGT: {labels.get(identity.agt_mode, '미확인')} · "
