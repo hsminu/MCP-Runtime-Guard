@@ -501,7 +501,7 @@ class PolicyDecision(Frozen):
 
 | 필드 | 증가 조건 | 쓰임 |
 | --- | --- | --- |
-| `policy_version` | 정책·Profile·목적지·서버 설정 파일 내용이 바뀜 (정규화한 설정의 해시) | Task는 생성 시점 버전에 묶임. 불일치 시 Task 정지 |
+| `policy_version` | 정책·Profile·목적지·서버·접근 규칙(10.3절) 설정 파일 내용이 바뀜 (정규화한 설정의 해시. 설정 로딩 담당 B가 계산) | Task는 생성 시점 버전에 묶임. 불일치 시 Task 정지 |
 | `security_version` | Task의 high-watermark, Unclassified, status 중 보안 의미가 있는 값이 바뀜 | 승인 사본에 포함. 대기 중 상태가 바뀌면 승인 무효 |
 | `row_revision` | DB 행이 갱신될 때마다 | 낙관적 동시성 제어. 승인 PENDING→APPROVED처럼 보안과 무관한 변경이 승인을 스스로 무효화하지 않도록 `security_version`과 분리 |
 | `fingerprint` | 도구 정의(Tool 객체의 모든 필드) 중 하나라도 바뀜 | 등록 지문과 다르면 PENDING 복귀 (I10) |
@@ -898,7 +898,7 @@ class GuardService:
             return Denied(None, (Reason.INTERNAL_ERROR,))
         state = await self._store.load_task(task_id)        # 없으면 STATE_MISSING
         req = self._catalog.resolve(state, call)            # 실패 시 ResolutionError → DENY
-        access = await self._access.check_access(req, self._ctx(state))
+        access = self._access.check_access(req, self._ctx(state))
         inp = PolicyInput(request=req, state=state,
                           effective_label=effective_label(state, self._mode),
                           registration_status=self._registry.status(req.tool.server_id),
@@ -1005,6 +1005,7 @@ def digest(b: bytes) -> str:
 
 - **유니코드 정규화(NFC)를 하지 않는다.** 정규화하면 화면에 보인 문자열과 실제 전송 바이트가 달라질 수 있다. 대신 바이트 그대로 해시하고, 승인 화면에서 비가시·혼동 문자를 시각화한다(12.4절).
 - MVP는 인자 값 타입을 `str/int/bool/list/dict/None`으로 제한한다. 부동소수점이 필요해지면 RFC 8785(JCS) 정규화로 교체한다.
+- 도구 지문(10.1절)은 이 함수를 쓰지 않는다. 지문은 float를 거부하지 않고 RFC 8785(JCS)로 정규화하는 별도 함수를 같은 `digest.py`에 둔다(B, FP-01).
 - 정규화 원문(인자 바이트)은 메모리에만 두고 DB에는 해시만 저장한다(I9). 그래서 프로세스 재시작 후에는 승인을 복원할 수 없고, 복원하지 않는 것이 의도다.
 
 ### 8.2 승인 상태 전이
@@ -1088,7 +1089,7 @@ COMMIT;
 
 재평가부터 응답 커밋까지는 `GuardService.task_lock`(submit과 같은 Task별 lock) 안에서 실행한다. SQL이 소비 시점에 Task를 RUNNING으로 되돌리더라도 lock이 응답 게이트의 커밋까지 유지되므로, 그 사이 같은 Task의 다른 호출이 이전 상태로 판정되지 않는다. 승인된 호출이 외부 서버의 READ여서 결과가 등급을 올리는 경우에도 다음 판정은 올라간 등급을 본다.
 
-`submit`이 `Pending`을 돌려준 요청은 나중에 최종 결과가 정해진다. Guard는 `request_id`별 최종 결과 알림을 정확히 한 번 낸다. 내용은 승인 실행 결과(`Released`·`Withheld`·`OutcomeUnknown`) 또는 거절·만료·취소·무효다. 세션 관리자는 이 알림을 기다렸다가 Codex의 대기 중인 도구 호출에 답한다(10.4절). 알림 계약은 B가, 대기는 A가 만든다.
+`submit`이 `Pending`을 돌려준 요청은 나중에 최종 결과가 정해진다. Guard는 `request_id`별 최종 결과 알림을 정확히 한 번 낸다. 내용은 승인 실행 결과(`Released`·`Withheld`·`OutcomeUnknown`) 또는 거절·만료·취소·무효다. 세션 관리자는 이 알림을 기다렸다가 Codex의 대기 중인 도구 호출에 답한다(10.4절). 알림 계약은 B가, 대기는 A가 만든다. 아무 조작 없이 만료 시각이 지나면 ApprovalService(B)의 타이머가 만료를 확정한다. 알림은 bridge로 돌아가는 사람 조작 결과와 중복되지 않게 요청마다 정확히 한 번이다(T45). 세션 관리자의 감시 상한(10.4절)은 알림이 오지 않을 때의 마지막 안전장치다(NOTIFY-01).
 
 ### 8.4 시간 처리
 
@@ -1246,7 +1247,7 @@ servers:
       - { name: post_issue, kind: send, destination_arg: destination_id }
 ```
 
-도구 지문은 `tools/list` 결과의 Tool 객체 전체(모든 필드)를 키 정렬·공백 없는 UTF-8 JSON으로 직렬화해 SHA-256을 취한 값이다. 배열 순서가 바뀌어도 변경으로 본다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다. Registry는 DB의 ACTIVE 상태만 믿지 않고 연결할 때마다 실제 지문을 등록 지문과 대조한다.
+도구 지문은 `tools/list` 결과의 Tool 객체 전체(모든 필드)를 키 정렬·공백 없는 UTF-8 JSON으로 직렬화해 SHA-256을 취한 값이다. 배열 순서가 바뀌어도 변경으로 본다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다. float는 거부하지 않고 정해진 표기로 처리한다(2026-10-15 결정). 승인 사본의 `canonical_json`(8.1절)과는 다른 함수이며, RFC 8785(JCS)로 정규화하고 B의 `digest.py`에 둔다. Registry·Scanner는 그 함수를 쓴다(FP-01). Registry는 DB의 ACTIVE 상태만 믿지 않고 연결할 때마다 실제 지문을 등록 지문과 대조한다.
 
 등록 상태 전이:
 
@@ -1293,7 +1294,7 @@ class ScanReport(Frozen):
 | 모두 완료, finding 없음 | 경고 없음. 사용자 확인 대기 |
 | `fingerprint_set`이 현재 지문과 다름 | 검사 결과 무효, 재검사 |
 
-"위험 없음"과 "검사가 모두 끝남"은 다른 값이다. 실패·미완료를 findings 0개·완료·안전으로 바꾸지 않는다. 경고가 있는 도구의 ALLOW 호출을 ASK로 올리지 않는다. Guard의 경계·등급·승인 판정은 Scanner 결과와 무관하다. 위험도는 SDK 값을 그대로 쓰고, LLM 자체 평가(`overall_risk`)는 표시만 한다.
+"위험 없음"과 "검사가 모두 끝남"은 다른 값이다. 실패·미완료를 findings 0개·완료·안전으로 바꾸지 않는다. 경고가 있는 도구의 ALLOW 호출을 ASK로 올리지 않는다. Guard의 경계·등급·승인 판정은 Scanner 결과와 무관하다. 위험도는 SDK 값을 그대로 쓰고, LLM 자체 평가(`overall_risk`)는 표시만 한다. `overall_risk`와 모델 설명(`threat_summary`)을 담는 `ScanReport` 필드 형식은 미결이다(SCAN-01).
 
 구현 메모:
 
@@ -1309,13 +1310,14 @@ AGT는 쓰지 않는다(2026-10-15 결정). 접근 규칙은 같은 프로세스
 
 ```python
 class AccessChecker(Protocol):                  # ports.py, B 소유
-    async def check_access(self, req: ResolvedRequest, ctx: TrustedContext) -> AccessResult: ...
+    def check_access(self, req: ResolvedRequest, ctx: TrustedContext) -> AccessResult: ...   # 동기(ACCESS-01)
 ```
 
 - **범위:** (서버, 도구) 정확 일치 허용·거부 목록, 기본 deny. 규칙은 신뢰 설정 파일에서만 읽는다.
 - **버전 결속:** 규칙이 바뀌면 `policy_version`이 올라가고 대기 중 승인은 무효가 된다(6.6절).
 - **범위 밖:** 인자 내용 검사, 호출 횟수 제한, 조건식, 원격 정책, 서명 규칙.
 - **합성:** Guard는 접근 규칙 결과를 거부권으로만 쓴다(5.2절). 거절·오류는 DENY다.
+- **포트 형태(ACCESS-01):** `AccessChecker`는 동기 포트다. 판정기 안에서 I/O를 하지 않는다. Guard의 AGT용 대기 장치(시간 제한·동시 수·정리·미완료 추적)는 제거한다. 판정기 예외는 `fail_closed`로 DENY, 형식 불명은 `error=True`다. 규칙 설정의 `policy_version`은 설정 로딩 담당 B가 계산한다. `ports.py` 변경이라 3인 합의로 확정한다.
 
 | 담당 | 작업 |
 | --- | --- |
