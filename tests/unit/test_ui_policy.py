@@ -97,5 +97,24 @@ def test_activation_dialog_with_policy_command_warns_and_reports_the_choice(app)
     assert dialog.warning.text() == STOP_WARNING
     dialog.boxes["send"].setChecked(False)
     dialog.save_button.click()
-    assert requested == [("docs", ("read",), ("send", "misc"))]
+    # The OTHER tool is not a choice B3.10 takes; only READ/SEND are reported.
+    assert requested == [("docs", ("read",), ("send",))]
+    page.close()
+
+
+def test_activation_dialog_other_tool_is_shown_disabled_and_never_reported(app) -> None:
+    page = PolicyPage()
+    page.set_view(view(change=True))
+    dialog = page.open_allow_dialog(view().servers[0])
+    assert dialog is not None
+    assert set(dialog.boxes) == {"read", "send", "misc"}  # still shown
+    assert dialog.boxes["read"].isEnabled()
+    assert dialog.boxes["send"].isEnabled()
+    assert not dialog.boxes["misc"].isEnabled()
+    # Even a forced check cannot turn an OTHER tool into an allow (I11).
+    dialog.boxes["misc"].setChecked(True)
+    assert dialog.selection() == (("read", "send"), ())
+    dialog.boxes["misc"].setChecked(False)
+    assert dialog.selection() == (("read", "send"), ())
+    dialog.close()
     page.close()

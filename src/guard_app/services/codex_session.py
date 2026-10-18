@@ -132,9 +132,19 @@ class CodexAppServerSession:
         self._texts: dict[str, list[str]] = {}
         self._deltas: dict[str, list[str]] = {}
         self._streamed: dict[str, int] = {}
+        self._finals: dict[str, list[str]] = {}
+        self._answer_chars: dict[str, int] = {}
         self._changed = asyncio.Event()
-        self._deferred_stop: str | None = None
+        # Stops decided while answering, applied after that method's reply.
+        self._deferred_stops: dict[str, str] = {}
+        self._sending = False
+        self._stop_handler: Callable[[str], None] | None = None
+        self._stop_reported = False
         self._closed = False
+
+    def set_stop_handler(self, handler: Callable[[str], None] | None) -> None:
+        """Called once when the session stops while no send() is waiting."""
+        self._stop_handler = handler
 
     @property
     def stop_code(self) -> str | None:
@@ -160,6 +170,13 @@ class CodexAppServerSession:
         self._thread_id = thread_id
 
     async def send(self, text: str) -> str:
+        self._sending = True
+        try:
+            return await self._send(text)
+        finally:
+            self._sending = False
+
+    async def _send(self, text: str) -> str:
         thread_id = self._require_running()
         try:
             params = turn_start_params(thread_id, text)
@@ -198,6 +215,10 @@ class CodexAppServerSession:
         thread_id, turn_id = self._thread_id, self._turn_id
         if thread_id is None or turn_id is None or turn_id in self._turns:
             return
+        if self._client.closed_reason is not None:
+            # Nothing can be sent anymore; process exit is confirmed by the
+            # launcher's confirm_exit, not by this protocol courtesy.
+            return
         self.observations.interrupts_sent += 1
         try:
             await self._client.request("turn/interrupt", turn_interrupt_params(thread_id, turn_id))
@@ -229,9 +250,16 @@ class CodexAppServerSession:
                 answer = item.get("text")
                 if type(turn_id) is str and type(answer) is str:
                     self._texts.setdefault(turn_id, []).append(answer)
+                    if item.get("phase") == "final_answer":
+                        self._finals.setdefault(turn_id, []).append(answer)
         elif method == "item/agentMessage/delta":
             turn_id, delta = body.get("turnId"), body.get("delta")
             if type(turn_id) is str and type(delta) is str:
+                total = self._answer_chars.get(turn_id, 0) + len(delta)
+                self._answer_chars[turn_id] = total
+                if total > MAX_ANSWER_CHARS:
+                    self._stop("CODEX_ANSWER_TOO_LARGE")
+                    return
                 self._deltas.setdefault(turn_id, []).append(delta)
                 if turn_id == self._turn_id:
                     self._stream(turn_id)
@@ -251,7 +279,7 @@ class CodexAppServerSession:
             return await self._tool_call(params)
         if method in _DECLINED_APPROVALS:
             # Codex approvals are out of scope (L1/L3): decline, then stop.
-            self._deferred_stop = self._deferred_stop or "CODEX_L3_VIOLATION"
+            self._defer_stop(method, "CODEX_L3_VIOLATION")
             return {"decision": "decline"}
         if method == "item/tool/requestUserInput":
             self.observations.user_input_requests += 1
@@ -265,30 +293,35 @@ class CodexAppServerSession:
         try:
             call = parse_dynamic_tool_call(params)
         except CodexProtocolError:
-            self._deferred_stop = self._deferred_stop or "CODEX_TOOL_CALL_INVALID"
+            self._defer_stop("item/tool/call", "CODEX_TOOL_CALL_INVALID")
             return stopped
         if call.thread_id != self._thread_id or self.stop_code is not None:
-            self._deferred_stop = self._deferred_stop or "CODEX_TOOL_CALL_INVALID"
+            self._defer_stop("item/tool/call", "CODEX_TOOL_CALL_INVALID")
             return stopped
         try:
-            result = await asyncio.wait_for(
-                self._queue.enqueue(call.call_id, call), self._limits.call_watchdog_s
-            )
-        except TimeoutError:
-            self._deferred_stop = self._deferred_stop or "CODEX_WATCHDOG_TIMEOUT"
-            return stopped
+            result = await self._queue.enqueue(call.call_id, call)
         except ToolCallQueueError:
-            self._deferred_stop = self._deferred_stop or "CODEX_TOOL_CALL_INVALID"
+            self._defer_stop("item/tool/call", "CODEX_TOOL_CALL_INVALID")
             return stopped
         counts = self.observations.responses_by_call
         counts[call.call_id] = counts.get(call.call_id, 0) + 1
         if result.stop_code is not None:
-            self._deferred_stop = self._deferred_stop or result.stop_code
+            self._defer_stop("item/tool/call", result.stop_code)
         return result.response
 
     async def _handle_call(self, _task_id: str, call: DynamicToolCall) -> RelayResult:
+        stopped = tool_call_response(*_as_texts(fixed_model_message(ModelMessageKind.STOPPED)))
+        if self.stop_code is not None:
+            # Already queued calls never reach Guard once the session stopped.
+            return RelayResult(stopped)
         self.observations.guard_submits += 1
-        return await self._relay(call)
+        try:
+            # The watchdog covers this call's own processing (incl. approval
+            # wait), not the time it spent queued behind earlier calls (A80).
+            async with asyncio.timeout(self._limits.call_watchdog_s):
+                return await self._relay(call)
+        except TimeoutError:
+            return RelayResult(stopped, "CODEX_WATCHDOG_TIMEOUT")
 
     def _stream(self, turn_id: str) -> None:
         if self._on_partial is None:
@@ -298,15 +331,23 @@ class CodexAppServerSession:
             self._on_partial(delta)
         self._streamed[turn_id] = len(deltas)
 
+    def _defer_stop(self, method: str, code: str) -> None:
+        self._deferred_stops.setdefault(method, code)
+
     def _reply_sent(self, method: str) -> None:
-        if self._deferred_stop is not None:
-            code, self._deferred_stop = self._deferred_stop, None
+        code = self._deferred_stops.pop(method, None)
+        if code is not None:
             self._stop(code)
 
     def _stop(self, code: str) -> None:
         if self.observations.stop_code is None:
             self.observations.stop_code = code
         self._wake()
+        # With no send() to raise it, the owner must stop the Task itself.
+        if not self._sending and not self._closed and not self._stop_reported:
+            self._stop_reported = True
+            if self._stop_handler is not None:
+                self._stop_handler(self.observations.stop_code)
 
     def _wake(self) -> None:
         self._changed.set()
@@ -322,8 +363,14 @@ class CodexAppServerSession:
         turn = self._turns[turn_id]
         status = turn.get("status")
         if status == "completed":
-            parts = self._texts.get(turn_id) or self._deltas.get(turn_id) or []
-            answer = "".join(parts)
+            finals = self._finals.get(turn_id)
+            texts = self._texts.get(turn_id)
+            if finals:
+                answer = "\n\n".join(finals)
+            elif texts:
+                answer = "\n\n".join(texts)
+            else:
+                answer = "".join(self._deltas.get(turn_id, []))
             if len(answer) > MAX_ANSWER_CHARS:
                 raise CodexSessionError("CODEX_ANSWER_TOO_LARGE")
             return answer

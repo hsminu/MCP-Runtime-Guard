@@ -172,6 +172,61 @@ def test_bridge_publishes_session_capability_before_ready(app, blocker, create, 
         close_bridge(app, bridge)
 
 
+def test_backend_task_event_republishes_the_task_without_a_command(app):
+    """Approval waits and asynchronous session stops reach the UI (I8): the
+    bridge re-reads the authoritative snapshot, never a value from the event."""
+    import asyncio
+
+    status = {"value": TaskStatus.RUNNING}
+    registered, loops, blockers = [], [], []
+
+    async def snapshot(task_id):
+        return TaskProjection(task_id, 1, status["value"])
+
+    async def create_session(_options):
+        raise AssertionError("not requested")
+
+    def blocker():
+        blockers.append(True)
+
+    async def bootstrap():
+        loops.append(asyncio.get_running_loop())
+        return BackendBindings(
+            lambda task_id: None,
+            FakeControl(),
+            snapshot=snapshot,
+            create_session=create_session,
+            session_blocker=blocker,
+            task_events=registered.append,
+        )
+
+    bridge = BackendBridge(bootstrap)
+    receiver = attach(bridge)
+    projections, capabilities = [], []
+    bridge.task_changed.connect(projections.append)
+    bridge.session_capability_changed.connect(capabilities.append)
+    bridge.start()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY and bool(registered))
+        assert len(registered) == 1
+        assert projections == []
+        checks = len(blockers)
+        status["value"] = TaskStatus.HALTED
+        loops[0].call_soon_threadsafe(registered[0], "task-1")
+        pump_until(app, lambda: bool(projections))
+        assert [(p.task_id, p.status) for p in projections] == [("task-1", TaskStatus.HALTED)]
+        assert len(blockers) > checks  # session capability re-read as well
+        for invalid in ("", None):
+            loops[0].call_soon_threadsafe(registered[0], invalid)
+        status["value"] = TaskStatus.WAITING_APPROVAL
+        loops[0].call_soon_threadsafe(registered[0], "task-1")
+        pump_until(app, lambda: len(projections) == 2)
+        assert projections[-1].status is TaskStatus.WAITING_APPROVAL
+        assert receiver.commands == []  # no command was invented for it
+    finally:
+        close_bridge(app, bridge)
+
+
 def _guarded_codex_bridge(app, stops, resolved):
     from guard_app.services.runner import CodexTaskRunner
 

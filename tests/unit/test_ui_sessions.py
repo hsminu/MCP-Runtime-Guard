@@ -700,3 +700,65 @@ def test_task_label_comes_from_the_projection_in_header_and_results(
     assert expected in panel.summary.text()
     if not unclassified:
         assert "미분류" not in panel.summary.text()
+
+
+@pytest.mark.parametrize("command", ["message", "run"])
+def test_model_turn_waiting_for_approval_does_not_lock_its_approval_buttons(
+    window, monkeypatch, command
+):
+    """The turn in flight is the one waiting for this approval; only a human
+    control in flight for the same Task disables review/approve/reject (I3)."""
+    shell, panel, bridge = window
+    controls = []
+    monkeypatch.setattr(bridge, "request_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bridge, "request_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        bridge,
+        "request_control",
+        lambda action, target, *, command_id, epoch: controls.append((action, target, command_id)),
+    )
+    running = snapshot(can_accept_message=True, can_advance=True, model_mode="codex")
+    bridge.task_changed.emit(running)
+    view = shell.sessions.current
+    if command == "message":
+        view.draft.setPlainText("turn that will wait")
+        view.send.click()
+        assert view.pending_command
+    else:
+        panel.run_button.click()
+    assert panel._busy
+    bridge.task_changed.emit(
+        replace(running, status=TaskStatus.WAITING_APPROVAL, approval_id="approval-one")
+    )
+    assert panel._busy  # the model turn is still in flight
+    assert panel.review_button.isEnabled()
+    assert panel.reject_button.isEnabled()
+    assert not panel.approve_button.isEnabled()  # review first
+    assert not panel.run_button.isEnabled()
+
+    panel.review_button.click()
+    assert controls[-1][1] == "approval-one"
+    assert not panel.review_button.isEnabled()
+    assert not panel.reject_button.isEnabled()
+    assert not panel.approve_button.isEnabled()
+    assert panel.cancel_button.isEnabled()
+    assert panel.halt_button.isEnabled()
+
+    review_command = controls[-1][2]
+    bridge.review_ready.emit(
+        ApprovalReview(review_command, "approval-one", "task-one", 1, "fixed", b"{}")
+    )
+    bridge.command_changed.emit(
+        CommandEvent(
+            review_command,
+            "control",
+            "review",
+            "approval-one",
+            CommandStage.BACKEND_RETURNED,
+            "REVIEW_READY",
+        )
+    )
+    assert panel._busy  # the waiting turn is still in flight
+    assert panel.review_button.isEnabled()
+    assert panel.reject_button.isEnabled()
+    assert panel.approve_button.isEnabled()

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -17,12 +18,19 @@ import pytest
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.mcp_transport import validated_stdio_stream_factory
 from guard_app.core.access_rules import AccessRules
-from guard_app.domain.contracts import Denied, RegisteredServer, Released, TrustedContext
+from guard_app.domain.contracts import (
+    Denied,
+    RegisteredServer,
+    Released,
+    ToolView,
+    TrustedContext,
+)
 from guard_app.domain.enums import Label, RegStatus, TaskStatus, ToolKind, TrustTier
 from guard_app.domain.models import Boundary, ProposedCall, ResolvedRequest, TaskState, ToolSpec
 from guard_app.domain.reasons import Reason
 from guard_app.security.digest import tool_fingerprint
 from guard_app.services.product_assembly import (
+    LiveCheckedRegistry,
     ProductAssemblyError,
     ProductInputs,
     assemble_guard,
@@ -36,6 +44,14 @@ READ_SCHEMA = {
     "additionalProperties": False,
 }
 READ_DEFINITION = {"name": "read", "description": "read a document", "inputSchema": READ_SCHEMA}
+SEND_SCHEMA = {
+    "type": "object",
+    "properties": {"to": {"type": "string"}, "body": {"type": "string"}},
+    "required": ["to", "body"],
+    "additionalProperties": False,
+}
+SEND_DEFINITION = {"name": "send", "description": "send a message", "inputSchema": SEND_SCHEMA}
+LIST_DEFINITION = {"name": "list", "description": "list documents", "inputSchema": READ_SCHEMA}
 
 
 class Peer:
@@ -68,11 +84,15 @@ class Peer:
             result = {"tools": self.definitions}
         elif method == "tools/call":
             self.calls.append(request["params"])
-            # A resource READ echoes the resolved resource_id for classification.
-            result = {
-                "content": [{"type": "text", "text": "public text"}],
-                "structuredContent": {"resource_id": request["params"]["arguments"]["path"]},
-            }
+            arguments = request["params"]["arguments"]
+            if "path" in arguments:
+                # A resource READ echoes the resolved resource_id for classification.
+                result = {
+                    "content": [{"type": "text", "text": "public text"}],
+                    "structuredContent": {"resource_id": arguments["path"]},
+                }
+            else:
+                result = {"content": [{"type": "text", "text": "sent"}]}
         else:
             return
         self.output.extend(
@@ -84,8 +104,23 @@ class Peer:
         pass
 
 
+def spec(definition: dict[str, object], kind: ToolKind = ToolKind.READ) -> ToolSpec:
+    """A registered tool whose fingerprint matches `definition` (C's Registry role)."""
+    schema = definition["inputSchema"]
+    assert isinstance(schema, dict)
+    return ToolSpec(
+        server_id="docs",
+        tool_name=str(definition["name"]),
+        kind=kind,
+        input_schema=schema,
+        resource_arg="path" if kind is ToolKind.READ else None,
+        destination_arg="to" if kind is ToolKind.SEND else None,
+        fingerprint=tool_fingerprint(definition),
+    )
+
+
 class Registry:
-    def __init__(self, fingerprint: str) -> None:
+    def __init__(self, fingerprint: str, *extra: ToolSpec) -> None:
         tool = ToolSpec(
             server_id="docs",
             tool_name="read",
@@ -101,8 +136,18 @@ class Registry:
             boundary=Boundary(
                 boundary_id="docs-boundary", tier=TrustTier.INTERNAL, max_label=Label.CONFIDENTIAL
             ),
-            tools=(tool,),
+            tools=(tool, *extra),
         )
+
+    def rewrite(self, tool_name: str, fingerprint: str) -> None:
+        """C re-registers one tool with a new fingerprint while the run is live."""
+        tools = tuple(
+            tool.model_copy(update={"fingerprint": fingerprint})
+            if tool.tool_name == tool_name
+            else tool
+            for tool in self.record.tools
+        )
+        self.record = self.record.model_copy(update={"tools": tools})
 
     def registration(self, server_id: str) -> RegisteredServer | None:
         return self.record if server_id == "docs" else None
@@ -114,15 +159,23 @@ class Registry:
         return tool.fingerprint
 
 
-def document(*, allow: bool = True) -> dict[str, object]:
-    return {
-        "profile": {
-            "id": "unit",
-            "servers": ["docs"],
-            "sources": [
-                {"server": "docs", "tool": "read", "prefix": ["public"], "label": "PUBLIC"}
-            ],
-        },
+READ_SETTINGS = {"name": "read", "kind": "read", "resource_arg": "path"}
+PUBLIC_SOURCE = {"server": "docs", "tool": "read", "prefix": ["public"], "label": "PUBLIC"}
+INTERNAL_SOURCE = {"server": "docs", "tool": "read", "prefix": ["internal"], "label": "INTERNAL"}
+# INTERNAL data to an approved external destination is ASK (5.1 matrix).
+PARTNER = {"id": "partner", "tier": "approved_external", "max_label": "INTERNAL"}
+
+
+def document(
+    *,
+    allow: bool = True,
+    tools: tuple[dict[str, object], ...] = (READ_SETTINGS,),
+    sources: tuple[dict[str, object], ...] = (PUBLIC_SOURCE,),
+    destinations: tuple[dict[str, object], ...] = (),
+) -> dict[str, object]:
+    profile: dict[str, object] = {"id": "unit", "servers": ["docs"], "sources": list(sources)}
+    doc: dict[str, object] = {
+        "profile": profile,
         "servers": [
             {
                 "id": "docs",
@@ -130,11 +183,18 @@ def document(*, allow: bool = True) -> dict[str, object]:
                 "command": "C:/validated/by-c.exe",
                 "tier": "internal",
                 "max_label": "CONFIDENTIAL",
-                "tools": [{"name": "read", "kind": "read", "resource_arg": "path"}],
+                "tools": list(tools),
             }
         ],
-        "access_rules": {"allow": [["docs", "read"]] if allow else [], "deny": []},
+        "access_rules": {
+            "allow": [["docs", tool["name"]] for tool in tools] if allow else [],
+            "deny": [],
+        },
     }
+    if destinations:
+        profile["destinations"] = [item["id"] for item in destinations]
+        doc["destinations"] = list(destinations)
+    return doc
 
 
 def inputs(peer: Peer, registry: Registry, doc: dict[str, object]) -> ProductInputs:
@@ -158,6 +218,19 @@ def inputs(peer: Peer, registry: Registry, doc: dict[str, object]) -> ProductInp
 
 
 async def submit_read(tmp_path, peer: Peer, registry: Registry, doc: dict[str, object]):
+    outcome, views, view = await submit_call(tmp_path, peer, registry, doc)
+    return outcome, views, view.mismatched
+
+
+async def submit_call(
+    tmp_path,
+    peer: Peer,
+    registry: Registry,
+    doc: dict[str, object],
+    *,
+    tool_ref: str = "docs__read",
+    before_submit: Callable[[], None] | None = None,
+) -> tuple[object, tuple[ToolView, ...], LiveCheckedRegistry]:
     store = SQLiteStore(tmp_path / "assembly.db", audit_id_factory=lambda: f"audit-{uuid4().hex}")
     assembled = await assemble_guard(store, inputs(peer, registry, doc))
     try:
@@ -170,14 +243,14 @@ async def submit_read(tmp_path, peer: Peer, registry: Registry, doc: dict[str, o
             status=TaskStatus.RUNNING,
         )
         await store.create_task(state, created_at_utc=datetime.now(UTC))
+        if before_submit is not None:
+            before_submit()
         outcome = await assembled.guard.submit(
             "task-1",
-            ProposedCall(
-                tool_ref="docs__read", arguments={"path": "public/a.txt"}, model_call_id="c1"
-            ),
+            ProposedCall(tool_ref=tool_ref, arguments={"path": "public/a.txt"}, model_call_id="c1"),
             expected_epoch=1,
         )
-        return outcome, assembled.tool_views, assembled.registry.mismatched
+        return outcome, assembled.tool_views, assembled.registry
     finally:
         await assembled.aclose()
         store.close()
@@ -219,7 +292,103 @@ def test_live_definition_mismatch_hides_the_tool_and_blocks_dispatch(tmp_path, l
     assert mismatched == frozenset({("docs", "read")})
     assert views == ()
     assert type(outcome) is Denied
-    assert Reason.TOOL_FINGERPRINT_CHANGED in outcome.reasons
+    # The whole server is PENDING for this run (I10; 9.1/10.1), checked before
+    # the per-tool fingerprint.
+    assert outcome.reasons == (Reason.REG_NOT_ACTIVE,)
+    assert peer.calls == []
+
+
+LIST_SETTINGS = {"name": "list", "kind": "read", "resource_arg": "path"}
+
+
+def test_one_mismatched_tool_blocks_every_tool_of_its_server(tmp_path) -> None:
+    """I10: a server that changed one tool is not trusted for its other tools."""
+    peer = Peer([{**READ_DEFINITION, "description": "changed by the server"}, LIST_DEFINITION])
+    registry = Registry(tool_fingerprint(READ_DEFINITION), spec(LIST_DEFINITION))
+    doc = document(tools=(READ_SETTINGS, LIST_SETTINGS))
+    outcome, views, view = asyncio.run(
+        submit_call(tmp_path, peer, registry, doc, tool_ref="docs__list")
+    )
+    # Only `read` differs, yet `list` (whose definition still matches) is
+    # neither offered to the model nor dispatched.
+    assert views == ()
+    assert type(outcome) is Denied
+    assert outcome.reasons == (Reason.REG_NOT_ACTIVE,)
+    assert peer.calls == []
+    assert view.mismatched == frozenset({("docs", "read")})
+    assert view.blocked_servers == frozenset({"docs"})
+    assert view.status("docs") is RegStatus.PENDING
+
+
+def test_incomplete_listing_blocks_the_server(tmp_path) -> None:
+    """A duplicate tool name makes tools/list incomplete; nothing is guessed (I10)."""
+    peer = Peer([READ_DEFINITION, READ_DEFINITION])
+    outcome, views, view = asyncio.run(
+        submit_call(tmp_path, peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
+    )
+    assert views == ()
+    assert type(outcome) is Denied
+    assert outcome.reasons == (Reason.REG_NOT_ACTIVE,)
+    assert peer.calls == []
+    assert view.blocked_servers == frozenset({"docs"})
+
+
+def test_registration_rewritten_mid_run_no_longer_matches_the_live_definition(tmp_path) -> None:
+    """I10: Guard compares with what this session received, not the newest record."""
+    peer = Peer([READ_DEFINITION])
+    registry = Registry(tool_fingerprint(READ_DEFINITION))
+    live: list[str | None] = []
+
+    def rewrite() -> None:
+        registry.rewrite("read", "f" * 64)
+
+    async def run():
+        outcome, views, view = await submit_call(
+            tmp_path, peer, registry, document(), before_submit=rewrite
+        )
+        live.append(view.fingerprint(registry.record.tools[0]))
+        return outcome, views, view
+
+    outcome, views, view = asyncio.run(run())
+    assert [v.tool_ref for v in views] == ["docs__read"]  # healthy at assembly
+    assert type(outcome) is Denied
+    assert outcome.reasons == (Reason.TOOL_FINGERPRINT_CHANGED,)
+    assert peer.calls == []
+    assert live == [tool_fingerprint(READ_DEFINITION)]
+    assert view.blocked_servers == frozenset()
+
+
+def test_unsupported_tool_schema_is_a_fixed_code_and_closes_the_transport(
+    tmp_path, monkeypatch
+) -> None:
+    """A schema Catalog cannot serve fails closed as PROFILE_TOOL_INVALID."""
+    from guard_app.services import product_assembly
+
+    closed: list[bool] = []
+
+    class RecordingTransport(product_assembly.McpTransport):
+        async def close(self) -> None:
+            closed.append(True)
+            await super().close()
+
+    monkeypatch.setattr(product_assembly, "McpTransport", RecordingTransport)
+    array_read = {**READ_DEFINITION, "inputSchema": {"type": "array"}}
+    peer = Peer([array_read])
+    registry = Registry(tool_fingerprint(READ_DEFINITION))
+    registry.record = registry.record.model_copy(update={"tools": (spec(array_read),)})
+
+    async def run() -> None:
+        store = SQLiteStore(tmp_path / "schema.db", audit_id_factory=lambda: "unit-audit")
+        try:
+            with pytest.raises(ProductAssemblyError, match="PROFILE_TOOL_INVALID") as raised:
+                await assemble_guard(store, inputs(peer, registry, document()))
+            assert raised.value.code == "PROFILE_TOOL_INVALID"
+            assert raised.value.__cause__ is None
+        finally:
+            store.close()
+
+    asyncio.run(run())
+    assert closed == [True]
     assert peer.calls == []
 
 

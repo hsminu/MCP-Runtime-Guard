@@ -66,7 +66,6 @@ def test_tools_are_grouped_by_server_namespace_once() -> None:
         None,
         [],
         {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x"},
-        {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x", "arguments": []},
         {"threadId": "t", "turnId": "u", "callId": "", "tool": "x", "arguments": {}},
         {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x", "arguments": {}, "label": 0},
         {
@@ -89,6 +88,17 @@ def test_tool_call_parse_keeps_only_codex_fields() -> None:
         {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x", "arguments": {"a": 1}}
     )
     assert (call.namespace, call.tool, call.arguments) == (None, "x", {"a": 1})
+
+
+@pytest.mark.parametrize("arguments", [[], [1], "x", 1, None, True])
+def test_non_object_arguments_parse_to_none_for_an_invalid_arguments_answer(
+    arguments: object,
+) -> None:
+    # A88 QA: Codex may send any JSON; the relay answers INVALID_ARGUMENTS (I7).
+    call = parse_dynamic_tool_call(
+        {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x", "arguments": arguments}
+    )
+    assert call.arguments is None
 
 
 def test_released_texts_add_structured_json_after_text() -> None:

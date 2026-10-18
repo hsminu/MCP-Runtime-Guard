@@ -43,13 +43,15 @@ class ToolAllowDialog(QDialog):
         allowed = {tool for srv, tool in view.allow if srv == server.server_id}
         denied = {tool for srv, tool in view.deny if srv == server.server_id}
         self.boxes: dict[str, QCheckBox] = {}
+        self._supported = {tool.name for tool in server.tools if tool.kind_fixed}
         for tool in server.tools:
             box = QCheckBox(f"{tool.name} · {tool.kind}")
             if tool.name in allowed or tool.name in denied:
                 box.setChecked(tool.name in allowed and tool.name not in denied)
             else:
                 box.setChecked(tool.kind_fixed)
-            box.setEnabled(view.change_available)
+            # OTHER tools are never executable through Guard; shown, not chosen.
+            box.setEnabled(view.change_available and tool.kind_fixed)
             self.boxes[tool.name] = box
             layout.addWidget(box)
         self.warning = plain_label(
@@ -67,8 +69,10 @@ class ToolAllowDialog(QDialog):
         layout.addLayout(buttons)
 
     def selection(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        allowed = tuple(name for name, box in self.boxes.items() if box.isChecked())
-        denied = tuple(name for name, box in self.boxes.items() if not box.isChecked())
+        """READ/SEND tools only: B3.10 takes exactly one choice per supported tool."""
+        boxes = {name: box for name, box in self.boxes.items() if name in self._supported}
+        allowed = tuple(name for name, box in boxes.items() if box.isChecked())
+        denied = tuple(name for name, box in boxes.items() if not box.isChecked())
         return allowed, denied
 
 

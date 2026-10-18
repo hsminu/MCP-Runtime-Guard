@@ -19,7 +19,7 @@ from guard_app.services.codex_account import AccountView, CodexAccountClient
 from guard_app.ui.model_settings import CodexLoginInfo
 
 from .fake_codex_app_server import FakeAppServer
-from .test_bridge import FakeControl, close_bridge, pump_until
+from .test_bridge import FakeControl, attach, close_bridge, pump_until
 
 
 @pytest.fixture(scope="module")
@@ -173,3 +173,70 @@ def test_bridge_routes_account_commands_and_reports_unavailable(app) -> None:
         assert unavailable[-1].state == "UNAVAILABLE"
     finally:
         close_bridge(app, other)
+
+
+def _account_bridge(fake: FakeAppServer, loops: list[asyncio.AbstractEventLoop]) -> BackendBridge:
+    async def bootstrap():
+        loops.append(asyncio.get_running_loop())
+        account = CodexAccountClient(fake, version="0.1.0")
+        await account.start()
+
+        async def close():
+            await account.aclose()
+
+        return BackendBindings(lambda task_id: None, FakeControl(), close=close, account=account)
+
+    # One control worker: the lane approvals and login cancel share (A89 QA).
+    return BackendBridge(bootstrap, control_workers=1)
+
+
+def test_device_login_wait_does_not_hold_the_only_control_worker(app) -> None:
+    fake = FakeAppServer()
+    views: list[AccountView] = []
+    loops: list[asyncio.AbstractEventLoop] = []
+    bridge = _account_bridge(fake, loops)
+    receiver = attach(bridge)
+    bridge.account_changed.connect(views.append)
+    bridge.start()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY and bool(views))
+        login = bridge.request_account("account_login_device")
+        pump_until(app, lambda: views[-1].state == "PENDING_DEVICE")
+        pump_until(
+            app,
+            lambda: any(e.stage.value == "backend_returned" for e in receiver.stages(login)),
+        )
+        # The user never finishes the device login; cancel must still run.
+        cancel = bridge.request_account("account_cancel_login", target_id="login-1")
+        pump_until(
+            app,
+            lambda: any(e.stage.value == "backend_returned" for e in receiver.stages(cancel)),
+        )
+        pump_until(app, lambda: "LOGIN_NOT_COMPLETED" in [view.state for view in views])
+        states = [view.state for view in views]
+        assert "SIGNED_OUT" in states[states.index("PENDING_DEVICE") :]
+        assert "CHATGPT" not in states
+    finally:
+        close_bridge(app, bridge)
+
+
+def test_unfinished_device_login_times_out_as_not_completed(app, monkeypatch) -> None:
+    monkeypatch.setattr("guard_app.services.bridge.DEVICE_LOGIN_TIMEOUT_S", 0.05)
+    fake = FakeAppServer()
+    views: list[AccountView] = []
+    loops: list[asyncio.AbstractEventLoop] = []
+    bridge = _account_bridge(fake, loops)
+    bridge.account_changed.connect(views.append)
+    bridge.start()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY and bool(views))
+        bridge.request_account("account_login_device")
+        pump_until(app, lambda: views[-1].state == "LOGIN_NOT_COMPLETED")
+        states = [view.state for view in views]
+        assert states[-2:] == ["PENDING_DEVICE", "LOGIN_NOT_COMPLETED"]
+        # The abandoned wait no longer holds the control lane.
+        bridge.request_account("account_read")
+        pump_until(app, lambda: len(views) > len(states))
+        assert views[-1].state == "SIGNED_OUT"
+    finally:
+        close_bridge(app, bridge)

@@ -152,7 +152,8 @@ class DynamicToolCall:
     call_id: str
     namespace: str | None
     tool: str
-    arguments: dict[str, object]
+    # None: Codex sent JSON that is not an object; answered as invalid arguments.
+    arguments: dict[str, object] | None
 
 
 def parse_dynamic_tool_call(params: object) -> DynamicToolCall:
@@ -166,9 +167,10 @@ def parse_dynamic_tool_call(params: object) -> DynamicToolCall:
     namespace = params.get("namespace")
     if namespace is not None and (type(namespace) is not str or not namespace):
         raise CodexProtocolError("CODEX_TOOL_CALL_INVALID")
-    arguments = params.get("arguments")
-    if type(arguments) is not dict:
+    if "arguments" not in params:
         raise CodexProtocolError("CODEX_TOOL_CALL_INVALID")
+    raw_arguments = params.get("arguments")
+    arguments = raw_arguments if type(raw_arguments) is dict else None
     return DynamicToolCall(
         thread_id=str(values["threadId"]),
         turn_id=str(values["turnId"]),

@@ -129,7 +129,13 @@ class BackendBindings:
     account: CodexAccountPort | None = None
     # Read-only Profile/rules for the policy screen (A91); None = no Profile.
     policy: PolicyView | None = None
+    # Registers a backend-loop callback for Task changes outside a command
+    # (approval waits, asynchronous session stops).
+    task_events: Callable[[Callable[[str], None]], None] | None = None
 
+
+# A device-code login left unfinished is abandoned after this long.
+DEVICE_LOGIN_TIMEOUT_S = 15 * 60
 
 # The only model pinned by C's config/codex/codex.lock.json (allowed_models).
 CODEX_MODEL_ID = "gpt-6.1-sol"
@@ -351,6 +357,7 @@ class BackendBridge(QObject):
         self._recent: OrderedDict[str, CommandEvent] = OrderedDict()
         self._operations: dict[str, asyncio.Task[object]] = {}
         self._pending_runs: dict[str, tuple[str, int]] = {}
+        self._account_waits: set[asyncio.Future[None]] = set()
         self._run_locks: dict[str, asyncio.Lock] = {}
         # Bound commands before they become asyncio ready callbacks. A normal
         # command flood must leave an independent ingress slot for urgent work.
@@ -894,6 +901,8 @@ class BackendBridge(QObject):
             AccountView("UNAVAILABLE" if bindings.account is None else "UNKNOWN")
         )
         self.policy_changed.emit(bindings.policy)
+        if bindings.task_events is not None:
+            bindings.task_events(self._task_event)
         self._set_state(BridgeState.READY, "READY")
         await stop
         self._set_state(BridgeState.CLOSING, "CLOSING")
@@ -905,6 +914,8 @@ class BackendBridge(QObject):
                 queue.task_done()
         for task in self._operations.values():
             task.cancel()
+        for waiter in tuple(self._account_waits):
+            waiter.cancel()
         for worker in workers:
             worker.cancel()
         active = tuple(self._operations.values()) + tuple(workers)
@@ -1023,6 +1034,15 @@ class BackendBridge(QObject):
         finally:
             if not completed:
                 self._emit_command(command, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
+
+    def _task_event(self, task_id: str) -> None:
+        """Backend loop only: republish one Task without waiting for a command."""
+        if self._stop_requested.is_set() or type(task_id) is not str or not task_id:
+            return
+        publish = asyncio.ensure_future(self._publish_after(task_id))
+        publish.add_done_callback(self._consume_task)
+        # A failed session can change what new sessions may do.
+        self._publish_session_capability()
 
     def _publish_session_capability(self) -> None:
         bindings = self._bindings
@@ -1167,10 +1187,13 @@ class BackendBridge(QObject):
                 view = await account.login_api_key(command.user_text or "")
             elif command.action == "account_login_device":
                 view = await account.start_device_login()
-                self.account_changed.emit(view)
-                if view.state != "PENDING_DEVICE" or view.login_id is None:
-                    return "ACCOUNT_LOGIN_FAILED"
-                view = await account.wait_login(view.login_id)
+                if view.state == "PENDING_DEVICE" and view.login_id is not None:
+                    # Waiting for the user must not hold a control worker:
+                    # cancel and approvals run on the same lane (A89 QA).
+                    waiter = asyncio.ensure_future(self._await_login(account, view.login_id))
+                    self._account_waits.add(waiter)
+                    waiter.add_done_callback(self._account_waits.discard)
+                    waiter.add_done_callback(self._consume_task)
             elif command.action == "account_cancel_login":
                 view = await account.cancel_login(command.target_id)
             else:
@@ -1179,6 +1202,17 @@ class BackendBridge(QObject):
             view = AccountView("FAILED")
         self.account_changed.emit(view)
         return f"ACCOUNT_{view.state}"
+
+    async def _await_login(self, account: CodexAccountPort, login_id: str) -> None:
+        try:
+            async with asyncio.timeout(DEVICE_LOGIN_TIMEOUT_S):
+                view = await account.wait_login(login_id)
+        except TimeoutError:
+            view = AccountView("LOGIN_NOT_COMPLETED")
+        except AccountError:
+            view = AccountView("FAILED")
+        if not self._stop_requested.is_set():
+            self.account_changed.emit(view)
 
     async def _stop_task(
         self, bindings: BackendBindings, control: HumanControl, command: _Command

@@ -52,7 +52,12 @@ def codex_session_factory(
         pipes = resources.handle
         if not isinstance(pipes, CodexPipes):
             raise SessionStartError("CODEX_SESSION_INVALID")
-        relay = GuardToolRelay(TrustedTask(state.task_id, state.epoch), assembled.guard, approvals)
+        relay = GuardToolRelay(
+            TrustedTask(state.task_id, state.epoch),
+            assembled.guard,
+            approvals,
+            allowed_tool_refs=plan.tool_refs,
+        )
         session = CodexAppServerSession(
             pipes,
             task=TrustedTask(state.task_id, state.epoch),

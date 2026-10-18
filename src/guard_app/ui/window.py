@@ -319,6 +319,7 @@ class GuardWindow(QMainWindow):
         bridge.session_capability_changed.connect(self.sessions.set_session_blocker)
         bridge.account_changed.connect(self.codex_login_info.set_view)
         bridge.policy_changed.connect(self.policy_page.set_view)
+        bridge.policy_changed.connect(self._policy_changed)
         login = self.codex_login_info
         login.read_requested.connect(lambda: bridge.request_account("account_read"))
         login.device_login_requested.connect(lambda: bridge.request_account("account_login_device"))
@@ -445,6 +446,11 @@ class GuardWindow(QMainWindow):
         """Show only the current server detail's confirmed public scan query."""
 
         return self.server_page.set_scan_snapshot(server_id, token, snapshot)
+
+    def _policy_changed(self, view: object) -> None:
+        ttl = getattr(view, "approval_ttl_seconds", None)
+        if type(ttl) is int and ttl > 0:
+            self.approval_page.set_approval_ttl_seconds(ttl)
 
     def set_approval_query_connected(self, connected: bool) -> None:
         """Enable approval listing only when something answers its queries."""

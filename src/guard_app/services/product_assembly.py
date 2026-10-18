@@ -62,65 +62,97 @@ class ProductInputs:
 
 
 class LiveCheckedRegistry:
-    """C's Registry as seen through this run's live tools/list comparison."""
+    """C's Registry as seen through this run's live tools/list comparison.
+
+    A server whose live listing is incomplete or differs from its registration
+    in any tool is treated as PENDING for this run, so none of its tools run
+    (I10; 9.1/10.1: a fingerprint change sends the registration back to
+    PENDING). For other servers the fingerprint reported to Catalog/Guard is
+    the live value, so a registration rewritten during the run no longer
+    matches the definitions this session actually received.
+    """
 
     def __init__(self, registry: Registry) -> None:
         self._registry = registry
+        self._live: dict[tuple[str, str], str] = {}
+        self._blocked: frozenset[str] = frozenset()
         self._mismatched: frozenset[tuple[str, str]] = frozenset()
         self._sealed = False
 
-    def seal(self, mismatched: frozenset[tuple[str, str]]) -> None:
+    def seal(self, view: LiveFingerprints) -> None:
         if self._sealed:
             raise RuntimeError("live fingerprint view already sealed")
-        self._mismatched = mismatched
+        self._live = dict(view.live)
+        self._blocked = view.blocked_servers
+        self._mismatched = view.mismatched
         self._sealed = True
 
     @property
     def mismatched(self) -> frozenset[tuple[str, str]]:
         return self._mismatched
 
+    @property
+    def blocked_servers(self) -> frozenset[str]:
+        return self._blocked
+
     def registration(self, server_id: str) -> RegisteredServer | None:
         return self._registry.registration(server_id)
 
     def status(self, server_id: str) -> RegStatus | None:
+        if self._sealed and server_id in self._blocked:
+            return RegStatus.PENDING
         return self._registry.status(server_id)
 
     def fingerprint(self, tool: ToolSpec) -> str | None:
         if not self._sealed:
             return None  # fail closed before the live comparison has finished
-        if (tool.server_id, tool.tool_name) in self._mismatched:
+        if tool.server_id in self._blocked:
             return _LIVE_MISMATCH
-        return self._registry.fingerprint(tool)
+        return self._live.get((tool.server_id, tool.tool_name))
 
 
-def live_fingerprint_mismatches(
+@dataclass(frozen=True, slots=True)
+class LiveFingerprints:
+    live: dict[tuple[str, str], str]
+    mismatched: frozenset[tuple[str, str]]
+    blocked_servers: frozenset[str]
+
+
+def live_fingerprints(
     registry: Registry, transport: McpTransport, server_ids: tuple[str, ...]
-) -> frozenset[tuple[str, str]]:
-    """Registered tools whose live definition is absent, incomplete or different."""
+) -> LiveFingerprints:
+    """Live fingerprints per registered tool, and servers that must not run."""
 
+    live: dict[tuple[str, str], str] = {}
     mismatched: set[tuple[str, str]] = set()
+    blocked: set[str] = set()
     for server_id in server_ids:
         record = registry.registration(server_id)
         if record is None:
             continue
         listing = transport.tool_listing(server_id)
-        live: dict[str, FrozenJsonObject] = {}
+        definitions: dict[str, FrozenJsonObject] = {}
         if listing is not None and listing.complete:
             for listed in listing.tools:
                 name = listed.get("name")
                 if type(name) is str:
-                    live[name] = listed
+                    definitions[name] = listed
+        else:
+            blocked.add(server_id)
         for tool in record.tools:
-            definition = live.get(tool.tool_name)
-            try:
-                matches = definition is not None and (
-                    tool_fingerprint(definition.to_dict()) == tool.fingerprint
-                )
-            except JcsCanonicalizationError:
-                matches = False
-            if not matches:
+            definition = definitions.get(tool.tool_name)
+            value: str | None = None
+            if definition is not None:
+                try:
+                    value = tool_fingerprint(definition.to_dict())
+                except JcsCanonicalizationError:
+                    value = None
+            if value is None or value != tool.fingerprint:
                 mismatched.add((server_id, tool.tool_name))
-    return frozenset(mismatched)
+                blocked.add(server_id)
+            else:
+                live[(server_id, tool.tool_name)] = value
+    return LiveFingerprints(live, frozenset(mismatched), frozenset(blocked))
 
 
 @dataclass(slots=True, repr=False)
@@ -164,7 +196,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     adopted = False
     try:
         await transport.start()
-        registry.seal(live_fingerprint_mismatches(inputs.registry, transport, server_ids))
+        registry.seal(live_fingerprints(inputs.registry, transport, server_ids))
         settings = loaded.guard_settings
         guard = GuardService(
             store,
@@ -183,12 +215,17 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             approval_ttl_seconds=settings.approval_ttl_seconds,
             taint_mode=settings.taint_mode,
         )
+        try:
+            tool_views = loaded.catalog.tool_views(server_ids)
+        except CatalogConfigError:
+            # One unsupported tool schema must not surface as a raw error.
+            raise ProductAssemblyError("PROFILE_TOOL_INVALID") from None
         assembled = AssembledGuard(
             loaded,
             guard,
             transport,
             registry,
-            loaded.catalog.tool_views(server_ids),
+            tool_views,
             inputs.operator_id,
             inputs.call_timeout_s,
         )

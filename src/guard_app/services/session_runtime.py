@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from guard_app.adapters.codex_protocol import build_dynamic_tools
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import TaskState
@@ -74,7 +75,11 @@ class SessionRuntime:
         self._guard_settings = guard_settings
         self._assembled = assembled
         self._approvals = approvals
-        self._tools_available = assembled is not None and bool(assembled.tool_views)
+        self._task_listener: Callable[[str], None] | None = None
+        # What Codex actually receives: Guard tools minus Codex name-rule exclusions.
+        self._tools_available = assembled is not None and bool(
+            build_dynamic_tools(assembled.tool_views).tool_refs
+        )
         self._session_factory = session_factory
         self._preparation = preparation
         self._startup_lock = asyncio.Lock()
@@ -281,6 +286,10 @@ class SessionRuntime:
             self._sessions[state.task_id] = session
             self._options[state.task_id] = options
             self._codes[state.task_id] = "READY_CODEX"
+            set_stop = getattr(session, "set_stop_handler", None)
+            if callable(set_stop):
+                task_id = state.task_id
+                set_stop(lambda code: self._stop_in_background(task_id, code))
             snapshot = await self.snapshot(state.task_id)
             self._check_creation_allowed()
             adopted = True
@@ -308,6 +317,7 @@ class SessionRuntime:
             task_id,
             state.epoch,
             state.status,
+            approval_id=None if self._approvals is None else self._approvals.approval_for(task_id),
             model_mode=options.mode,
             model_id=options.model,
             model_ready=self._codes[task_id] == "READY_CODEX"
@@ -344,9 +354,35 @@ class SessionRuntime:
         runner = self._runners[task_id]
         runner.close()
         try:
-            await self._halt_store_task(task_id)
+            await self._halt_task(task_id)
         finally:
             await self._close_session(task_id, interrupt=True)
+
+    async def _halt_task(self, task_id: str) -> None:
+        """Stop a Task through Guard when one is assembled.
+
+        Writing HALTED to the Store behind Guard's back makes a still running
+        (shielded) submit fail its own Store write, which Guard treats as a
+        global halt for every Task. Guard's cancel records the stop intent at
+        once, so the in-flight submit is denied as TASK_NOT_RUNNING at its next
+        check; the cancel itself waits for the Task lock in the background.
+        Until STOP-01 (PR #28) this uses the human channel, so the audit names
+        the configured operator.
+        """
+        assembled = self._assembled
+        if assembled is not None:
+            control = assembled.guard.human_control(assembled.operator_id)
+
+            # Waiting for cancel here would tie this stop to the in-flight
+            # submit holding the Task lock.
+            async def cancel() -> None:
+                await control.cancel(task_id)
+
+            stopping = asyncio.ensure_future(cancel())
+            self._cleanup_operations.add(stopping)
+            stopping.add_done_callback(self._consume_cleanup)
+            await asyncio.sleep(0)  # let cancel set the stop intent now
+        await self._halt_store_task(task_id)
 
     async def stop_session(self, task_id: str, epoch: int, action: ControlAction) -> None:
         if action not in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
@@ -357,7 +393,7 @@ class SessionRuntime:
             raise SessionRuntimeError("SESSION_STATE_MISMATCH")
         runner.close()  # Invalidate late responses without waiting for the send lock.
         try:
-            await self._halt_store_task(task_id)
+            await self._halt_task(task_id)
         finally:
             await self._close_session(task_id, interrupt=True)
 
@@ -429,7 +465,11 @@ class SessionRuntime:
                     )
                     if cleaned:
                         self._resources.pop(task_id, None)
-            complete = interrupted and closed and confirmed and cleaned
+            # interrupt is a protocol courtesy; that the process has exited is
+            # what confirm_exit proves. A lost or slow interrupt reply alone
+            # must not mark every future session as unsafe (A88 QA).
+            del interrupted
+            complete = closed and confirmed and cleaned
             if not complete:
                 raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
             self._sessions.pop(task_id, None)
@@ -496,6 +536,31 @@ class SessionRuntime:
         if close is not None:
             close()
 
+    def _stop_in_background(self, task_id: str, code: str) -> None:
+        """A session stopped outside send(): stop its Task like a failed send."""
+        if self._closed or task_id not in self._runners:
+            return
+
+        async def stop() -> None:
+            try:
+                await self._fail_session(task_id, code)
+            finally:
+                self._task_changed(task_id)
+
+        operation = asyncio.ensure_future(stop())
+        self._cleanup_operations.add(operation)
+        operation.add_done_callback(self._consume_cleanup)
+
+    def set_task_listener(self, listener: Callable[[str], None] | None) -> None:
+        """The bridge's backend-loop hook to republish a Task outside a command."""
+        self._task_listener = listener
+        if self._approvals is not None:
+            self._approvals.set_listener(listener)
+
+    def _task_changed(self, task_id: str) -> None:
+        if self._task_listener is not None:
+            self._task_listener(task_id)
+
     def bindings(self) -> BackendBindings:
         assembled = self._assembled
         return BackendBindings(
@@ -509,6 +574,7 @@ class SessionRuntime:
             session_blocker=self.creation_blocker,
             approval_resolved=None if self._approvals is None else self._approvals.resolve,
             policy=None if assembled is None else policy_view(assembled),
+            task_events=self.set_task_listener,
         )
 
 

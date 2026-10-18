@@ -39,6 +39,10 @@ class FakeAppServer:
         self._ids = count(1000)
         self._turns = count(1)
         self._waiters: dict[int, asyncio.Future[dict[str, object]]] = {}
+        # Replies to these request ids are held until the event is set.
+        self._held: dict[int, asyncio.Event] = {}
+        # Called with each client message before it is recorded.
+        self.on_write: Callable[[dict[str, object]], None] | None = None
         self._scripts: dict[str, asyncio.Task[None]] = {}
 
     # Pipes seen by CodexStreamChannel.
@@ -54,6 +58,11 @@ class FakeAppServer:
 
     async def write_bytes(self, frame: bytes) -> None:
         message = json.loads(frame)
+        held = self._held.pop(message["id"], None) if "method" not in message else None
+        if held is not None:
+            await held.wait()
+        if self.on_write is not None:
+            self.on_write(message)
         self.received.append(message)
         if "method" in message and "id" in message:
             self._request(message)
@@ -81,25 +90,32 @@ class FakeAppServer:
     def notify(self, method: str, params: dict[str, object]) -> None:
         self.emit({"method": method, "params": params, "emittedAtMs": 1})
 
-    async def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
+    async def request(
+        self, method: str, params: dict[str, object], hold_reply: asyncio.Event | None = None
+    ) -> dict[str, object]:
         request_id = next(self._ids)
         waiter: asyncio.Future[dict[str, object]] = asyncio.get_running_loop().create_future()
         self._waiters[request_id] = waiter
+        if hold_reply is not None:
+            self._held[request_id] = hold_reply
         self.emit({"id": request_id, "method": method, "params": params})
         return await waiter
 
-    async def agent(self, turn_id: str, text: str) -> None:
+    async def agent(self, turn_id: str, text: str, phase: str | None = None) -> None:
         item = {"type": "agentMessage", "id": f"msg-{turn_id}"}
         self.notify("item/started", {"item": item, "threadId": THREAD_ID, "turnId": turn_id})
+        self.delta(turn_id, text)
+        done: dict[str, object] = {**item, "text": text}
+        if phase is not None:
+            done["phase"] = phase
+        self.notify("item/completed", {"item": done, "threadId": THREAD_ID, "turnId": turn_id})
+        await asyncio.sleep(0)
+
+    def delta(self, turn_id: str, text: str) -> None:
         self.notify(
             "item/agentMessage/delta",
-            {"threadId": THREAD_ID, "turnId": turn_id, "itemId": item["id"], "delta": text},
+            {"threadId": THREAD_ID, "turnId": turn_id, "itemId": f"msg-{turn_id}", "delta": text},
         )
-        self.notify(
-            "item/completed",
-            {"item": {**item, "text": text}, "threadId": THREAD_ID, "turnId": turn_id},
-        )
-        await asyncio.sleep(0)
 
     def item(self, turn_id: str, kind: str) -> None:
         self.notify(
@@ -112,7 +128,7 @@ class FakeAppServer:
         turn_id: str,
         call_id: str,
         tool: str,
-        arguments: dict[str, object],
+        arguments: object,
         namespace: str | None = "docs",
         extra: dict[str, object] | None = None,
     ) -> dict[str, object]:

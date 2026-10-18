@@ -6,13 +6,18 @@ No actual Codex process/security-platform validation or T46 acceptance claim.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
+from guard_app.core.model_messages import ModelMessageKind
+from guard_app.domain.contracts import Denied, Pending
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
+from guard_app.domain.reasons import Reason
 from guard_app.services.bridge import ControlAction, SessionOptions
 from guard_app.services.catalog import GuardSettings
+from guard_app.services.guard_relay import ApprovalOutcomes
 from guard_app.services.runner import CodexAuthenticationError, RunnerStateError
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
@@ -75,14 +80,14 @@ def synthetic_preparation(l2=passed_l2):
     return SessionPreparation(startup, verify, prepare, confirm, cleanup)
 
 
-def make_runtime(tmp_path, *, l2=passed_l2):
+def make_runtime(tmp_path, *, l2=passed_l2, approvals=None, session_type=None):
     store = SQLiteStore(tmp_path / "sessions.db", audit_id_factory=lambda: "unit-audit")
     sessions = []
 
     async def factory(state, options, resources):
         assert state.status is TaskStatus.RUNNING
         assert options == SessionOptions()
-        session = Session()
+        session = (session_type or Session)()
         sessions.append(session)
         return session
 
@@ -92,6 +97,7 @@ def make_runtime(tmp_path, *, l2=passed_l2):
         preparation=synthetic_preparation(l2),
         close_store=store.close,
         guard_settings=GuardSettings(profile_id="unit-profile", policy_version="unit-policy-v1"),
+        approvals=approvals,
     )
     return runtime, sessions
 
@@ -302,7 +308,7 @@ def test_close_during_factory_creation_reclaims_late_session(tmp_path):
     asyncio.run(run())
 
 
-def test_blocked_interrupt_is_bounded_and_other_task_cleanup_runs(tmp_path, monkeypatch):
+def test_blocked_close_is_bounded_and_other_task_cleanup_runs(tmp_path, monkeypatch):
     async def run():
         runtime, sessions = make_runtime(tmp_path)
         first = await runtime.create_session(SessionOptions())
@@ -311,19 +317,21 @@ def test_blocked_interrupt_is_bounded_and_other_task_cleanup_runs(tmp_path, monk
         released = asyncio.Event()
 
         async def blocked():
+            sessions[0].closed += 1
             entered.set()
             try:
                 await released.wait()
             except asyncio.CancelledError:
                 await released.wait()
 
-        sessions[0].interrupt = blocked
+        # The process close (not the interrupt courtesy) is what stays unproven.
+        sessions[0].aclose = blocked
         monkeypatch.setattr("guard_app.services.session_runtime.SESSION_CLEANUP_TIMEOUT_S", 0.01)
         try:
             with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
                 await asyncio.wait_for(runtime.close(), 1)
             assert entered.is_set()
-            assert sessions[0].closed == 1
+            assert sessions[0].interrupted == sessions[0].closed == 1
             assert sessions[1].interrupted == sessions[1].closed == 1
             assert first.task_id in runtime._sessions
             assert runtime._cleanup_unconfirmed
@@ -397,32 +405,74 @@ def test_failed_creation_cleanup_is_bounded(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
-def test_task_cleanup_uncertainty_latches_without_stopping_other_task(tmp_path, monkeypatch):
+def test_task_cleanup_uncertainty_latches_without_stopping_other_task(tmp_path):
+    async def run():
+        runtime, sessions = make_runtime(tmp_path)
+        first = await runtime.create_session(SessionOptions())
+        second = await runtime.create_session(SessionOptions())
+        confirmations = []
+
+        async def confirm(resources):
+            # The first Task's exit is unproven once; every later answer is yes.
+            confirmations.append(resources.task_id)
+            return resources.task_id != first.task_id or confirmations.count(first.task_id) > 1
+
+        runtime._preparation = replace(runtime._preparation, confirm_exit=confirm)
+        with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+            await runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL)
+        assert (await runtime.snapshot(first.task_id)).status is TaskStatus.HALTED
+        assert (await runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
+        assert runtime.creation_blocker() == "CODEX_CLEANUP_UNCONFIRMED"
+        assert first.task_id in runtime._resources  # never erased without proof
+        runner = runtime.runner_for_task(second.task_id)
+        runner.add_user_message("unaffected")
+        sessions[1].release.set()
+        assert (await runner.advance()).assistant_text == "answer:unaffected"
+        # Even a later successful shutdown retry cannot claim the earlier
+        # process cleanup was confirmed. Bridge's restart gate must see this.
+        with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+            await runtime.close()
+        assert confirmations.count(first.task_id) == 1  # never retried
+        assert sessions[1].closed == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["blocked", "raises"])
+def test_lost_interrupt_alone_leaves_cleanup_confirmed(tmp_path, monkeypatch, failure):
+    """A88 QA: interrupt is a courtesy; close + confirm_exit + cleanup prove the stop (I9)."""
+
     async def run():
         runtime, sessions = make_runtime(tmp_path)
         first = await runtime.create_session(SessionOptions())
         second = await runtime.create_session(SessionOptions())
         released = asyncio.Event()
 
-        async def blocked():
+        async def interrupt():
+            sessions[0].interrupted += 1
+            if failure == "raises":
+                raise OSError("private-interrupt-error")
             await released.wait()
 
-        sessions[0].interrupt = blocked
+        sessions[0].interrupt = interrupt
         monkeypatch.setattr("guard_app.services.session_runtime.SESSION_CLEANUP_TIMEOUT_S", 0.01)
-        with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
-            await runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL)
-        assert (await runtime.snapshot(first.task_id)).status is TaskStatus.HALTED
-        assert (await runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
-        runner = runtime.runner_for_task(second.task_id)
-        runner.add_user_message("unaffected")
-        sessions[1].release.set()
-        assert (await runner.advance()).assistant_text == "answer:unaffected"
-        released.set()
-        # Even a later successful shutdown retry cannot claim the earlier
-        # process cleanup was confirmed. Bridge's restart gate must see this.
-        with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+        try:
+            await asyncio.wait_for(
+                runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL), 1
+            )
+            assert sessions[0].interrupted == sessions[0].closed == 1
+            assert (await runtime.snapshot(first.task_id)).status is TaskStatus.HALTED
+            assert first.task_id not in runtime._sessions
+            assert first.task_id not in runtime._resources
+            assert not runtime._cleanup_unconfirmed
+            assert runtime.creation_blocker() is None
+            assert (await runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
+            third = await runtime.create_session(SessionOptions())
+            assert third.status is TaskStatus.RUNNING
+        finally:
+            released.set()
             await runtime.close()
-        assert sessions[1].closed == 1
+        assert not runtime._cleanup_unconfirmed
 
     asyncio.run(run())
 
@@ -583,5 +633,120 @@ def test_missing_guard_profile_refuses_before_any_task_row(tmp_path):
             assert sessions == []
         finally:
             await runtime.close()
+
+    asyncio.run(run())
+
+
+class StoppableSession(Session):
+    def __init__(self):
+        super().__init__()
+        self.stop_handler = None
+
+    def set_stop_handler(self, handler):
+        self.stop_handler = handler
+
+
+def test_session_stop_outside_send_halts_only_its_task_and_republishes(tmp_path):
+    """L3 item after a finished turn: no send() raises, so the owner stops the Task (I9)."""
+
+    async def run():
+        runtime, sessions = make_runtime(tmp_path, session_type=StoppableSession)
+        changed = asyncio.Event()
+        events = []
+
+        def listener(task_id):
+            events.append(task_id)
+            changed.set()
+
+        try:
+            runtime.bindings().task_events(listener)
+            first = await runtime.create_session(SessionOptions())
+            second = await runtime.create_session(SessionOptions())
+            assert callable(sessions[0].stop_handler)
+            sessions[0].stop_handler("CODEX_L3_VIOLATION")
+            await asyncio.wait_for(changed.wait(), 1)
+            assert events == [first.task_id]
+            stopped = await runtime.snapshot(first.task_id)
+            assert stopped.status is TaskStatus.HALTED
+            assert stopped.connection_code == "CODEX_L3_VIOLATION"
+            assert not stopped.model_ready
+            assert not stopped.can_accept_message
+            assert sessions[0].interrupted == sessions[0].closed == 1
+            assert not runtime._cleanup_unconfirmed
+            assert (await runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
+            assert sessions[1].closed == 0
+        finally:
+            await runtime.close()
+        # After shutdown a late stop report is ignored.
+        sessions[1].stop_handler("CODEX_L3_VIOLATION")
+        await asyncio.sleep(0)
+        assert events == [first.task_id]
+
+    asyncio.run(run())
+
+
+def test_snapshot_offers_the_waiting_approval_and_the_listener_sees_wait_start_and_end(
+    tmp_path,
+):
+    """The approval offered is Guard's id for this trusted Task, not model text (I3)."""
+
+    async def run():
+        approvals = ApprovalOutcomes()
+        runtime, _ = make_runtime(tmp_path, approvals=approvals)
+        events = []
+        try:
+            runtime.bindings().task_events(events.append)
+            first = await runtime.create_session(SessionOptions())
+            second = await runtime.create_session(SessionOptions())
+            assert (await runtime.snapshot(first.task_id)).approval_id is None
+            pending = Pending(
+                request_id="request-1",
+                approval_id="approval-1",
+                reasons=(Reason.INTERNAL_TO_EXTERNAL,),
+            )
+            waiting = asyncio.ensure_future(approvals.wait(pending, first.task_id))
+            await asyncio.sleep(0)
+            assert events == [first.task_id]
+            assert approvals.approval_for(first.task_id) == "approval-1"
+            assert (await runtime.snapshot(first.task_id)).approval_id == "approval-1"
+            assert (await runtime.snapshot(second.task_id)).approval_id is None
+            approvals.resolve("approval-1", "reject", None)
+            final = await asyncio.wait_for(waiting, 1)
+            assert final.kind is ModelMessageKind.APPROVAL_REJECTED
+            assert events == [first.task_id, first.task_id]
+            assert (await runtime.snapshot(first.task_id)).approval_id is None
+        finally:
+            await runtime.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("reasons", "kind"),
+    [
+        ((Reason.APPROVAL_STALE,), ModelMessageKind.APPROVAL_INVALIDATED),
+        ((Reason.APPROVAL_RACE,), ModelMessageKind.APPROVAL_INVALIDATED),
+        ((Reason.APPROVAL_CONTEXT_LOST,), ModelMessageKind.APPROVAL_INVALIDATED),
+        ((Reason.TASK_NOT_RUNNING,), ModelMessageKind.APPROVAL_REJECTED),
+        (None, ModelMessageKind.APPROVAL_REJECTED),
+    ],
+)
+def test_reject_of_an_already_resolved_approval_is_reported_as_invalidated(reasons, kind):
+    """A reject Guard refused as stale must not tell the model a human rejected it."""
+
+    async def run():
+        approvals = ApprovalOutcomes()
+        pending = Pending(
+            request_id="request-1",
+            approval_id="approval-1",
+            reasons=(Reason.INTERNAL_TO_EXTERNAL,),
+        )
+        outcome = None if reasons is None else Denied(request_id=None, reasons=reasons)
+        waiting = asyncio.ensure_future(approvals.wait(pending, "task-1"))
+        await asyncio.sleep(0)
+        approvals.resolve("approval-1", "reject", outcome)
+        assert (await asyncio.wait_for(waiting, 1)).kind is kind
+        assert not approvals.waiting("approval-1")
+        assert approvals.approval_for("task-1") is None
 
     asyncio.run(run())

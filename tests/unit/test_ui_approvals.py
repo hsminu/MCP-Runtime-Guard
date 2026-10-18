@@ -14,6 +14,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QBoxLayout, QPushButton, QScrollArea
 
 from guard_app.domain.enums import ApprovalStatus
+from guard_app.services.bridge import BackendBindings, BackendBridge, PolicyView
 from guard_app.ui.approvals import (
     PAGE_SIZE,
     ApprovalLane,
@@ -23,6 +24,8 @@ from guard_app.ui.approvals import (
     ApprovalSummary,
 )
 from guard_app.ui.models import LoadState
+from guard_app.ui.runtime import RuntimePanel
+from guard_app.ui.window import GuardWindow
 
 NOW = datetime(2026, 10, 12, 5, 0, tzinfo=UTC)
 
@@ -493,3 +496,54 @@ def test_narrow_approved_row_does_not_imply_tool_execution(app: QApplication) ->
         assert view.table.horizontalScrollBar().maximum() == 0
     finally:
         view.close()
+
+
+def _policy(ttl: int) -> PolicyView:
+    return PolicyView(
+        profile_id="default",
+        policy_version="f" * 64,
+        approval_ttl_seconds=ttl,
+        taint_mode="accumulate",
+        allow=(),
+        deny=(),
+        servers=(),
+        change_available=False,
+    )
+
+
+def test_window_uses_the_profile_approval_ttl_for_the_waiting_hint(app: QApplication) -> None:
+    """T18: the reference hint follows the loaded Profile, not the 300 s default."""
+
+    async def unused() -> BackendBindings:
+        raise AssertionError("must not bootstrap")
+
+    bridge = BackendBridge(unused)
+    shell = GuardWindow()
+    shell.attach_runtime(RuntimePanel(bridge))
+    shell.set_approval_query_connected(True)
+    view = shell.approval_page
+    try:
+        row = summary(1, created_at=NOW - timedelta(minutes=3))
+        view.refresh()
+        assert view.set_page(result(view, (row,), 1), display_now=NOW)
+        assert "승인 유효 시간 지남" not in view.table.item(0, 4).text()  # 180 s < 300 s
+
+        bridge.policy_changed.emit(_policy(120))
+        view.refresh()
+        assert view.set_page(result(view, (row,), 1), display_now=NOW)
+        assert "승인 유효 시간 지남" in view.table.item(0, 4).text()  # 180 s >= 120 s
+
+        # No Profile, or an invalid TTL, leaves the last valid value in place.
+        bridge.policy_changed.emit(None)
+        bridge.policy_changed.emit(_policy(0))
+        view.refresh()
+        assert view.set_page(result(view, (row,), 1), display_now=NOW)
+        assert "승인 유효 시간 지남" in view.table.item(0, 4).text()
+
+        bridge.policy_changed.emit(_policy(600))
+        view.refresh()
+        assert view.set_page(result(view, (row,), 1), display_now=NOW)
+        assert "승인 유효 시간 지남" not in view.table.item(0, 4).text()
+    finally:
+        bridge.close()
+        shell.close()

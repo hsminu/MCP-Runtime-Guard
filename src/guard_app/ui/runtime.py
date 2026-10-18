@@ -176,6 +176,20 @@ class RuntimePanel(QWidget):
         )
 
     @property
+    def _control_busy(self) -> bool:
+        """A human control is in flight for this Task. A model turn that is
+        itself waiting for this approval must not lock the approval buttons."""
+        current = self.current
+        if current is None:
+            return False
+        scope = (current.task_id, current.epoch)
+        return any(
+            self._command_scopes.get(command_id) == scope
+            for command_id, action in self._commands.items()
+            if isinstance(action, ControlAction)
+        )
+
+    @property
     def buttons(self) -> tuple[KeyboardActionButton, ...]:
         return (
             self.run_button,
@@ -245,17 +259,17 @@ class RuntimePanel(QWidget):
                 and current.model_ready
             ),
             self.review_button: bool(
-                current is not None and waiting and not self._busy and current.approval_id
+                current is not None and waiting and not self._control_busy and current.approval_id
             ),
             self.approve_button: bool(
                 current is not None
                 and waiting
-                and not self._busy
+                and not self._control_busy
                 and self._reviewed == current.approval_id
                 and self._reviewed
             ),
             self.reject_button: bool(
-                current is not None and waiting and not self._busy and current.approval_id
+                current is not None and waiting and not self._control_busy and current.approval_id
             ),
             self.cancel_button: stoppable,
             self.halt_button: stoppable,

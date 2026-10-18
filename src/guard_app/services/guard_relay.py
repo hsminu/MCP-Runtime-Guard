@@ -15,6 +15,7 @@ session watchdog and a Task stop instead.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -54,24 +55,47 @@ class FinalApproval:
     outcome: object | None = None
 
 
+# HumanControl.reject on an approval that was already resolved elsewhere.
+_STALE_REASONS = frozenset(
+    {Reason.APPROVAL_STALE, Reason.APPROVAL_RACE, Reason.APPROVAL_CONTEXT_LOST}
+)
+
+
 class ApprovalOutcomes:
-    """One loop's waiting tool calls, keyed by Guard approval_id."""
+    """One loop's waiting tool calls, keyed by Guard approval_id.
+
+    It also records which trusted Task waits on which approval so the Task's
+    projection can offer review/approve/reject while the model turn waits, and
+    tells a listener (the bridge) when that changes.
+    """
 
     def __init__(self) -> None:
         self._waiting: dict[str, asyncio.Future[FinalApproval]] = {}
+        self._tasks: dict[str, str] = {}
+        self._listener: Callable[[str], None] | None = None
+
+    def set_listener(self, listener: Callable[[str], None] | None) -> None:
+        self._listener = listener
 
     def waiting(self, approval_id: str) -> bool:
         return approval_id in self._waiting
 
-    async def wait(self, pending: Pending) -> FinalApproval:
+    def approval_for(self, task_id: str) -> str | None:
+        return next((approval for approval, owner in self._tasks.items() if owner == task_id), None)
+
+    async def wait(self, pending: Pending, task_id: str) -> FinalApproval:
         future: asyncio.Future[FinalApproval] = asyncio.get_running_loop().create_future()
         if pending.approval_id in self._waiting:
             raise RuntimeError("approval already awaited")
         self._waiting[pending.approval_id] = future
+        self._tasks[pending.approval_id] = task_id
+        self._notify(task_id)
         try:
             return await future
         finally:
             self._waiting.pop(pending.approval_id, None)
+            self._tasks.pop(pending.approval_id, None)
+            self._notify(task_id)
 
     def resolve(self, approval_id: str, action: str, outcome: object) -> None:
         future = self._waiting.get(approval_id)
@@ -80,9 +104,20 @@ class ApprovalOutcomes:
         if action == "approve":
             future.set_result(FinalApproval(ModelMessageKind.RELEASED, outcome))
         elif action == "reject":
-            future.set_result(FinalApproval(ModelMessageKind.APPROVAL_REJECTED))
+            stale = type(outcome) is Denied and bool(_STALE_REASONS & set(outcome.reasons))
+            future.set_result(
+                FinalApproval(
+                    ModelMessageKind.APPROVAL_INVALIDATED
+                    if stale
+                    else ModelMessageKind.APPROVAL_REJECTED
+                )
+            )
         else:
             future.set_result(FinalApproval(ModelMessageKind.APPROVAL_CANCELLED))
+
+    def _notify(self, task_id: str) -> None:
+        if self._listener is not None:
+            self._listener(task_id)
 
 
 class GuardToolRelay:
@@ -93,6 +128,8 @@ class GuardToolRelay:
         task: TrustedTask,
         guard: object,
         approvals: ApprovalOutcomes,
+        *,
+        allowed_tool_refs: frozenset[str] | None = None,
     ) -> None:
         submit = getattr(guard, "submit", None)
         if not callable(submit):
@@ -100,16 +137,28 @@ class GuardToolRelay:
         self._task = task
         self._submit = submit
         self._approvals = approvals
+        self._allowed = allowed_tool_refs
+        self._inflight: set[asyncio.Future[object]] = set()
         self.submitted = 0
 
     async def relay(self, call: DynamicToolCall) -> RelayResult:
         if call.namespace is None:
             return self._fixed(fixed_model_message(ModelMessageKind.NAMESPACE_MISSING))
+        tool_ref = f"{call.namespace}__{call.tool}"
+        if self._allowed is not None and tool_ref not in self._allowed:
+            # Only tools actually registered with Codex are ever relayed (I11).
+            return self._fixed(
+                fixed_model_message(ModelMessageKind.DENIED, Reason.TOOL_UNSUPPORTED)
+            )
+        if call.arguments is None:
+            return self._fixed(
+                fixed_model_message(ModelMessageKind.DENIED, Reason.INVALID_ARGUMENTS)
+            )
         try:
             # Validate untrusted model input through the domain model, never by hand.
             proposed = ProposedCall.model_validate(
                 {
-                    "tool_ref": f"{call.namespace}__{call.tool}",
+                    "tool_ref": tool_ref,
                     "arguments": call.arguments,
                     "model_call_id": call.call_id,
                 }
@@ -119,9 +168,17 @@ class GuardToolRelay:
                 fixed_model_message(ModelMessageKind.DENIED, Reason.INVALID_ARGUMENTS)
             )
         self.submitted += 1
-        outcome = await self._submit(self._task.task_id, proposed, expected_epoch=self._task.epoch)
+        # Shielded: stopping this session must not cancel Guard mid-submit;
+        # a pre-reservation cancel would halt Guard for every Task (B7.2).
+        # Guard finishes the call itself and refuses it if the Task stopped.
+        submission = asyncio.ensure_future(
+            self._submit(self._task.task_id, proposed, expected_epoch=self._task.epoch)
+        )
+        self._inflight.add(submission)
+        submission.add_done_callback(self._settled)
+        outcome = await asyncio.shield(submission)
         while type(outcome) is Pending:
-            final = await self._approvals.wait(outcome)
+            final = await self._approvals.wait(outcome, self._task.task_id)
             if final.kind is not ModelMessageKind.RELEASED:
                 return self._fixed(fixed_model_message(final.kind))
             outcome = final.outcome
@@ -138,6 +195,11 @@ class GuardToolRelay:
         # Anything else is not a known final outcome: stop rather than guess.
         success, text = fixed_model_message(ModelMessageKind.STOPPED)
         return RelayResult(tool_call_response(success, (text,)), TOOL_STOP_CODE)
+
+    def _settled(self, submission: asyncio.Future[object]) -> None:
+        self._inflight.discard(submission)
+        if not submission.cancelled():
+            submission.exception()  # fixed codes only; never log raw text
 
     @staticmethod
     def _fixed(message: tuple[bool, str]) -> RelayResult:
