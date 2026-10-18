@@ -12,7 +12,7 @@
   - `services/task_tool_calls.py`의 완료 콜백
   - `adapters/jsonrpc_client.py`의 `_server_task_done`·`_reader_done`
   - `adapters/codex_stream.py`의 완료 콜백
-  - 같은 패턴이 B 소유 `services/bridge.py`·`services/guard.py`와 A 소유 `adapters/mcp_transport.py`에도 있다.
+  - 같은 패턴이 A 소유 `services/bridge.py`·`adapters/mcp_transport.py`와 B 소유 `services/guard.py`에도 있다.
 - **조건.** 꺼낸 예외의 원문·타입명·인자를 로그·화면·모델에 싣지 않는다. 취소(`CancelledError`)는 삼키지 않는다. 새 위치에 쓸 때는 리뷰에서 이 기록을 근거로 든다.
 
 ## 남은 일
