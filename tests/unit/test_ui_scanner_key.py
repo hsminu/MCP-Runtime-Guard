@@ -10,7 +10,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit
 
-from guard_app.ui.scanner_key import NOT_CONNECTED, SAVE_FAILED, ScannerKeyForm
+from guard_app.ui.scanner_key import (
+    NOT_CONNECTED,
+    SAVE_FAILED,
+    SAVE_UNCONFIRMED,
+    ScannerKeyForm,
+)
 
 KEY = "sk-proj-TEST_SECRET_MARKER_9z7Q"
 
@@ -73,6 +78,28 @@ def test_failed_or_ambiguous_save_reports_fixed_text_and_clears_input(app, resul
     assert form.key_input.text() == ""
     assert form.saved_suffix == ""
     assert not any(KEY in text for text in _visible_texts(form))
+
+
+def test_raising_saver_never_leaves_the_previous_success_on_screen(app):
+    calls = []
+
+    def saver(_key: str) -> bool:
+        calls.append(True)
+        if len(calls) > 1:
+            raise RuntimeError("MARKER saver failure")
+        return True
+
+    form = ScannerKeyForm(saver)
+    form.key_input.setText(KEY)
+    form._save()
+    assert form.saved_suffix == "9z7Q"
+    form.key_input.setText("sk-other-WXYZ")
+    with pytest.raises(RuntimeError):
+        form._save()
+    assert form.status.text() == SAVE_UNCONFIRMED
+    assert form.saved_suffix == ""
+    assert form.key_input.text() == ""
+    assert not any("9z7Q" in text or "WXYZ" in text for text in _visible_texts(form))
 
 
 def test_blank_input_cannot_be_saved(app):

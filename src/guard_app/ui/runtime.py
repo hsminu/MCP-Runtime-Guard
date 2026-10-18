@@ -29,7 +29,7 @@ from guard_app.services.bridge import (
 )
 
 from .approval_detail import visible_review_text
-from .presentation import APPROVAL_RESULTS, LIFECYCLE_MESSAGES, RUN_RESULTS
+from .presentation import APPROVAL_RESULTS, LIFECYCLE_MESSAGES, MISSING, RUN_RESULTS
 from .task_status import FINAL_STATUSES, status_detail, status_title
 from .widgets import KeyboardActionButton, plain_label
 
@@ -51,6 +51,11 @@ _NO_TASK_SUMMARY: dict[BridgeState | None, str] = {
     BridgeState.CLOSING: "백엔드 종료 중 · 실행할 수 없어",
     BridgeState.CLOSED: "백엔드 종료됨 · 실행할 수 없어",
 }
+
+
+def _count(value: int | None) -> str:
+    # Codex Tasks have no Guard counters yet; never print Python's "None".
+    return MISSING if value is None else str(value)
 
 
 class RuntimePanel(QWidget):
@@ -366,7 +371,8 @@ class RuntimePanel(QWidget):
         lines = [
             f"Task: {snapshot.task_id} · {status_title(snapshot.status)}",
             f"AGT: {snapshot.agt_mode} · 모델: {snapshot.model_mode}",
-            f"호스트 dispatch: {snapshot.host_dispatch} · 수신 부작용: {snapshot.receiver_effect}",
+            f"호스트 dispatch: {_count(snapshot.host_dispatch)} "
+            f"· 수신 부작용: {_count(snapshot.receiver_effect)}",
         ]
         if snapshot.status in FINAL_STATUSES:
             lines.append(status_detail(snapshot.status))

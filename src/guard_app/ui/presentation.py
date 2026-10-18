@@ -108,7 +108,11 @@ APPROVAL_RESULTS = {
     "CONTROL_PENDING_QUERY_REQUIRED": "승인 처리 후 다음 호출에 다시 승인이 필요해.",
     "CONTROL_DENIED_QUERY_REQUIRED": "호출은 실행되지 않았어 · 거절, "
     "만료 또는 상태 변경으로 처리가 끝났어.",
-    "CONTROL_WITHHELD_QUERY_REQUIRED": "호출은 실행됐지만 결과를 분류할 수 없어 공개하지 않았어.",
+    "CONTROL_WITHHELD_QUERY_REQUIRED": (
+        "호출은 실행됐지만 결과를 공개하지 않았어 · "
+        "공개 조건을 확인하지 못한 결과는 보여주지 않아. "
+        "Task 상태는 위에 다시 조회된 표시를 확인해."
+    ),
     "CONTROL_OUTCOME_UNKNOWN_QUERY_REQUIRED": (
         "전송 결과를 확인할 수 없어 · 수신측에서 실제 반영 여부를 확인해."
     ),
@@ -174,6 +178,17 @@ _CODEX_FAILURE_DETAILS = {
     "CODEX_PREPARATION_FAILED": "Codex 세션 준비를 완료하지 못했어.",
     "CODEX_CLEANUP_UNCONFIRMED": "Codex 종료·임시 자료 정리 완료를 확인하지 못했어.",
 }
+_CODEX_MISSING_COMPONENTS = frozenset(
+    {"CODEX_SESSION_UNAVAILABLE", "CODEX_L2_UNAVAILABLE", "CODEX_CONFIG_UNAVAILABLE"}
+)
+# Bridge refusals before any backend work: nothing was run for these commands.
+COMMAND_REFUSALS = {
+    "NOT_READY": "요청을 접수하지 않았어 · 백엔드가 아직 준비되지 않았어. 준비된 뒤 다시 보내.",
+    "CLOSING": "요청을 접수하지 않았어 · 앱이 종료 중이야.",
+    "INGRESS_FULL": "요청을 접수하지 않았어 · 처리 대기 요청이 가득 찼어. 잠시 뒤 다시 보내.",
+    "QUEUE_FULL": "요청을 접수하지 않았어 · 처리 대기 요청이 가득 찼어. 잠시 뒤 다시 보내.",
+    "COMMAND_ID_CONFLICT": "요청을 접수하지 않았어 · 같은 요청이 이미 처리 중이야.",
+}
 
 
 def codex_failure_notice(code: str, *, creating: bool = False) -> str:
@@ -185,6 +200,9 @@ def codex_failure_notice(code: str, *, creating: bool = False) -> str:
     if code == "CODEX_CLEANUP_UNCONFIRMED":
         return detail + " 자동으로 다시 실행하지 않아. 앱을 종료하고 정리 상태를 확인해."
     context = " 세션을 시작하지 않았어." if creating else " 이 Task를 실행할 수 없어."
+    if code in _CODEX_MISSING_COMPONENTS:
+        # The build lacks the component; restarting or editing settings cannot help.
+        return detail + context + " 이 앱 구성에서는 아직 이 기능을 쓸 수 없어."
     return detail + context + " 앱 설정을 확인하고 앱을 다시 시작해."
 
 

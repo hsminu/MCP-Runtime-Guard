@@ -29,6 +29,7 @@ GUIDANCE = (
 )
 NOT_CONNECTED = "아직 저장 기능이 연결되지 않아 키를 저장할 수 없어."
 SAVE_FAILED = "키를 저장하지 못했어. 다시 입력해 줘."
+SAVE_UNCONFIRMED = "저장 결과를 확인하지 못했어. 저장된 키를 확인할 수 없어."
 
 
 def _suffix(key: str) -> str:
@@ -90,6 +91,9 @@ class ScannerKeyForm(QWidget):
         if self._saver is None or not key:
             self._refresh()
             return
+        # A saver that raises leaves this, never the previous key's success.
+        self._saved_suffix = ""
+        self.status.setText(SAVE_UNCONFIRMED)
         if self._saver(key) is True:
             self._saved_suffix = _suffix(key)
             shown = f" · 끝 4자리 {self._saved_suffix}" if self._saved_suffix else ""

@@ -423,3 +423,53 @@ def test_task_cleanup_uncertainty_latches_without_stopping_other_task(tmp_path, 
         assert sessions[1].closed == 1
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("cleanup_succeeds", [True, False])
+def test_stop_during_failure_cleanup_adopts_its_result(tmp_path, monkeypatch, cleanup_succeeds):
+    async def run():
+        runtime, sessions = make_runtime(tmp_path)
+        snapshot = await runtime.create_session(SessionOptions())
+        session = sessions[0]
+        closing = asyncio.Event()
+        finish = asyncio.Event()
+
+        async def slow_close():
+            session.closed += 1
+            closing.set()
+            await finish.wait()
+
+        session.aclose = slow_close
+        if not cleanup_succeeds:
+            monkeypatch.setattr(
+                "guard_app.services.session_runtime.SESSION_CLEANUP_TIMEOUT_S", 0.05
+            )
+        runner = runtime.runner_for_task(snapshot.task_id)
+        runner.add_user_message("hi")
+        session.error = CodexAuthenticationError()
+        advancing = asyncio.create_task(runner.advance())
+        await session.entered.wait()
+        session.release.set()
+        await asyncio.wait_for(closing.wait(), 1)  # failure cleanup is now in flight
+        stopping = asyncio.create_task(
+            runtime.stop_session(snapshot.task_id, snapshot.epoch, ControlAction.CANCEL)
+        )
+        await asyncio.sleep(0)
+        assert not stopping.done()  # waits instead of reporting unconfirmed at once
+        if cleanup_succeeds:
+            finish.set()
+            await stopping
+            await advancing
+            await runtime.close()
+            assert not runtime._cleanup_unconfirmed
+        else:
+            with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+                await stopping
+            with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+                await advancing
+            finish.set()
+            with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+                await runtime.close()
+        assert session.closed == 1  # one cleanup, never a second run
+
+    asyncio.run(run())

@@ -24,7 +24,7 @@ from guard_app.services.bridge import (
     SessionCreated,
     TaskProjection,
 )
-from guard_app.ui.presentation import PAGES
+from guard_app.ui.presentation import APPROVAL_RESULTS, PAGES
 from guard_app.ui.runtime import RuntimePanel
 from guard_app.ui.task_status import status_detail, status_title
 from guard_app.ui.window import GuardWindow
@@ -493,6 +493,11 @@ def test_preparation_rejection_replaces_pending_notice_only_for_its_draft(
         assert "시작하지 않았어" not in rejected.notice.text()
         assert "자동으로 다시 실행하지 않아" in rejected.notice.text()
         assert "정리 상태를 확인해" in rejected.notice.text()
+    elif code == "CODEX_CONFIG_UNAVAILABLE":
+        # A component missing from this build is not fixed by settings or restart.
+        assert "시작하지 않았어" in rejected.notice.text()
+        assert "이 앱 구성에서는 아직" in rejected.notice.text()
+        assert "다시 시작해" not in rejected.notice.text()
     else:
         assert "시작하지 않았어" in rejected.notice.text()
         assert "앱 설정을 확인" in rejected.notice.text()
@@ -566,6 +571,67 @@ def test_unknown_creation_failure_clears_pending_notice_without_echoing_raw_text
     assert "확인 중" not in view.notice.text()
     assert raw not in view.notice.text()
     assert "secret exception" not in view.notice.text()
+
+
+@pytest.mark.parametrize(
+    ("code", "detail"),
+    [
+        ("NOT_READY", "준비되지 않았어"),
+        ("CLOSING", "종료 중"),
+        ("INGRESS_FULL", "가득 찼어"),
+        ("QUEUE_FULL", "가득 찼어"),
+        ("COMMAND_ID_CONFLICT", "이미 처리 중"),
+    ],
+)
+@pytest.mark.parametrize("existing", [False, True])
+def test_bridge_refusals_say_not_accepted_for_drafts_and_tasks(
+    window, monkeypatch, code, detail, existing
+):
+    shell, _, bridge = window
+    monkeypatch.setattr(bridge, "request_new_session", lambda *args, **kwargs: None)
+    if existing:
+        bridge.task_changed.emit(snapshot(can_accept_message=True))
+        view = shell.sessions.current
+        view.pending_command = "command-one"
+    else:
+        view = shell.sessions.current
+        view.start.click()
+    assert view.pending_command is not None
+    shell.sessions.settle_command(view.pending_command, code)
+    assert "접수하지 않았어" in view.notice.text()
+    assert detail in view.notice.text()
+    assert "확인하지 못했어" not in view.notice.text()
+
+
+@pytest.mark.parametrize(
+    ("code", "detail"),
+    [
+        ("RUNNER_UNAVAILABLE", "실행·제어하지 않았어"),
+        ("RUNNER_UNCONFIRMED", "실행 결과를 확인하지 못했어"),
+    ],
+)
+def test_runner_failures_reach_the_task_conversation(window, code, detail):
+    shell, _, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True))
+    view = shell.sessions.current
+    view.pending_command = "command-one"
+    shell.sessions.settle_command("command-one", code)
+    assert detail in view.notice.text()
+
+
+def test_results_summary_never_prints_none_counters(window):
+    _, panel, bridge = window
+    bridge.task_changed.emit(snapshot(host_dispatch=None, receiver_effect=None))
+    assert "None" not in panel.summary.text()
+    assert "호스트 dispatch: 미제공 · 수신 부작용: 미제공" in panel.summary.text()
+    bridge.task_changed.emit(snapshot(host_dispatch=2, receiver_effect=1))
+    assert "호스트 dispatch: 2 · 수신 부작용: 1" in panel.summary.text()
+
+
+def test_withheld_control_result_does_not_claim_a_single_cause():
+    text = APPROVAL_RESULTS["CONTROL_WITHHELD_QUERY_REQUIRED"]
+    assert "공개하지 않았어" in text
+    assert "분류" not in text
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-18 · main `a41f1d8` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-18 · main `a2698b2` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -104,7 +104,9 @@
 - [x] A69 개인 사용자 문구·Withheld 상태 안내·SQLite/대화 연결 현황 보정 · [기록](archive/a/A69-ui-wording-and-status.md)
 - [x] A75 구성·준비 실패와 정리 미확인 안내·Task별 화면 격리 · [기록](archive/a/A75-session-preparation-notices.md)
 - [x] A78 QA High·Medium 수정: 수집 전 예측 응답의 목록 완료 차단, JSON-RPC 취소 시 종료, 끝난 Task 상태 표시, 대화창 화자 위조 차단 · [기록](archive/a/A78-qa-runtime-ui-fixes.md)
-- [ ] A78 QA Low 7건(Scanner 키 예외 문구·Withheld 문구·결과 화면 None·거부 코드 안내·정리 겹침 미확인·넓은 예외 경계·`codex-pending` 정책값)
+- [x] A79 QA Low 5건 수정: Scanner 키 예외 문구·Withheld 문구·결과 화면 None·거부 코드 안내·정리 겹침 미확인 · [기록](archive/a/A79-qa-low-fixes.md)
+- [ ] A79 넓은 예외 경계의 `Task.exception()` 고정 코드 변환 처리 — 막힘: 사용자 규칙 해석(AGENTS·개발문서 13.5)
+- [ ] A79 `codex-pending` profile·policy_version을 B 계산값으로 교체 — 막힘: B ACCESS-01 판정 함수·Profile 로딩(#19)
 
 ## 통합·패키징
 

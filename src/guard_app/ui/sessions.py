@@ -30,7 +30,7 @@ from guard_app.services.bridge import (
     TaskProjection,
 )
 
-from .presentation import codex_failure_notice
+from .presentation import COMMAND_REFUSALS, RUN_RESULTS, codex_failure_notice
 from .task_status import FINAL_STATUSES, status_title
 from .untrusted_text import untrusted_display_text
 from .widgets import KeyboardActionButton, plain_label
@@ -446,13 +446,17 @@ class SessionWorkspace(QWidget):
                 failure_notice = codex_failure_notice(code, creating=view.snapshot is None)
                 if failure_notice:
                     view.command_notice = failure_notice
+                elif code in COMMAND_REFUSALS:
+                    view.command_notice = COMMAND_REFUSALS[code]
+                elif code in ("RUNNER_UNAVAILABLE", "RUNNER_UNCONFIRMED"):
+                    view.command_notice = RUN_RESULTS[code]
                 elif code == "MESSAGE_UNAVAILABLE":
                     view.command_notice = "메시지를 접수하지 않았어. 현재 Task 상태를 다시 확인해."
                 elif code == "SESSION_CREATION_UNAVAILABLE":
                     view.command_notice = "이 실행 구성에는 새 Task 생성 기능이 연결되지 않았어."
                 elif code == "SESSION_CREATION_UNCONFIRMED":
                     view.command_notice = "새 Task 생성 결과를 확인하지 못했어. 연결 상태를 확인해."
-                elif code in ("BACKEND_UNCONFIRMED", "NOT_READY", "STARTUP_FAILED"):
+                elif code in ("BACKEND_UNCONFIRMED", "STARTUP_FAILED"):
                     view.command_notice = "요청 처리를 확인하지 못했어. 연결 상태를 확인해."
                 elif view.snapshot is None:
                     view.command_notice = "세션 시작 결과를 확인하지 못했어. 연결 상태를 확인해."

@@ -76,6 +76,7 @@ class SessionRuntime:
         self._cleanup_unconfirmed = False
         self._resources: dict[str, TaskResources] = {}
         self._cleanup_started: set[str] = set()
+        self._cleanup_outcomes: dict[str, asyncio.Future[bool]] = {}
         self._cleanup_operations: set[asyncio.Task[None]] = set()
 
     def runner_for_task(self, task_id: str) -> CodexTaskRunner:
@@ -344,9 +345,19 @@ class SessionRuntime:
         resources = self._resources.get(task_id)
         if session is None and resources is None:
             return
+        running = self._cleanup_outcomes.get(task_id)
+        if running is not None:
+            # A concurrent stop/close adopts the in-flight cleanup's result
+            # instead of reporting it unconfirmed or running it a second time.
+            if not await asyncio.shield(running):
+                raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
+            return
         if task_id in self._cleanup_started:
+            # An earlier cleanup ended unconfirmed; it is never retried.
             raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
         self._cleanup_started.add(task_id)
+        outcome = asyncio.get_running_loop().create_future()
+        self._cleanup_outcomes[task_id] = outcome
         complete = False
         try:
             interrupted = not interrupt or session is None
@@ -383,6 +394,8 @@ class SessionRuntime:
             self._sessions.pop(task_id, None)
             self._cleanup_started.discard(task_id)
         finally:
+            self._cleanup_outcomes.pop(task_id, None)
+            outcome.set_result(complete)
             if not complete:
                 self._cleanup_unconfirmed = True
                 self._codes[task_id] = "CODEX_CLEANUP_UNCONFIRMED"
