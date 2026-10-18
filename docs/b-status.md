@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-15 · main `82563ce` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-18 · main `a2698b2` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -8,8 +8,10 @@
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| B6·SEQ·REC 계약 회신 | A·C | B1.5, B1.6, B6.8–B6.12, B6.16 |
-| AGT-01–03 결정·회신 | 사용자·A·C | B6.15, B7.3, B7.4 |
+| ACCESS-01·AGT-04의 ports/domain 3인 합의 | A·B·C | B2.9, B2.10 |
+| A 브랜치 병합(A 소유 파일의 AGT·ModelClient 사용) | A | B1.7, B2.11 |
+| SEQ·REC 계약 회신 | C | B6.8 |
+| B6-01–06 계약 회신 | A·C | B1.5, B1.6, B6.9–B6.12, B6.16 |
 | safe_path | C | B3.3 |
 | Registry 영속화 계약(B6-06) | C | B6.14 |
 | 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
@@ -22,16 +24,22 @@
 - [x] B1.4 Guard 결과 타입과 Transport·AccessChecker·Scanner·Store·ModelClient 계약 초안
 - [ ] B1.5 명령·이벤트 payload, 원시 결과 격리·공개 결과 구분, 계수 연결 확정 — 막힘: A·C 합의
 - [ ] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 기록 — 막힘: B6-02
+- [ ] B1.7 ModelClient 제거·세션 관리자 DTO(TaskIdentity 등, #20 5번) — 막힘: A 제안 v1 검토·3인 합의, A 병합
+- [ ] B1.8 SCAN-01 ScanReport 확장(#21 7번 필드: overall_risk 참고·threat_summary 300자)
 
 ## B2 · 순수 정책과 등급 누적
 
 - [x] B2.1 모든 경계에서 max_label 우선 검사·기본 행렬, 외부 max_label은 INTERNAL 이하만 · [기록](archive/b2-policy-and-taint.md)
 - [x] B2.2 READ에 서버 경계, SEND에 목적지 경계도 적용
-- [x] B2.3 서버·목적지·AGT 중 가장 엄격한 결과 합성, AGT 거절·오류는 DENY
+- [x] B2.3 서버·목적지·접근 규칙 중 가장 엄격한 결과 합성, 접근 규칙 거절·오류는 DENY
 - [x] B2.4 등록·지문·Task 상태·미분류·정책 버전·목적지 전제조건을 먼저 검사
 - [x] B2.5 `accumulate` 기본, last_read·none은 비교 모드
 - [x] B2.6 high-watermark 단조성·Unclassified 해제 금지, 보안 의미 변화에만 security_version 증가
 - [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증
+- [ ] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계)
+- [ ] B2.9 AccessChecker 동기 포트·Guard의 AGT용 대기 장치 제거(ACCESS-01) — 막힘: 3인 합의, A 연결
+- [ ] B2.10 AGT-04 reason code·AccessResult 정리 — 막힘: 3인 합의
+- [ ] B2.11 기존 AGT 코드 제거(B 범위, A 소유 파일은 A 리뷰) — 막힘: A 병합 순서
 
 ## B3 · Catalog와 요청 해석
 
@@ -41,6 +49,10 @@
 - [x] B3.4 출처 접두어 매칭·중복은 최고 등급·미매칭은 Unclassified
 - [x] B3.5 도구 단위 READ는 `prefix: []` 규칙만, 없으면 Unclassified
 - [x] B3.6 목적지는 등록 목록 정확 일치, 이름·IP·DNS·stdio를 신뢰 근거로 쓰지 않음
+- [ ] B3.7 FP-01 JCS 지문 함수
+- [ ] B3.8 DESC-01 검토된 설명 필드
+- [ ] B3.9 설정·Profile 로딩과 policy_version 계산(10-18 결정)
+- [ ] B3.10 정책 변경 명령·Task 정지 처리(10-18 결정)
 
 ## B4 · Guard와 응답 게이트
 
@@ -64,6 +76,9 @@
 - [x] B5.6 consume_and_reserve의 정확한 True ACK 후에만 실행, 중복 클릭·재전달 실행 1회
 - [x] B5.7 재평가부터 응답 커밋까지 같은 Task lock 유지
 - [x] B5.8 monotonic deadline·UTC 만료 동시 검사, 소비 후 전송 직전에도 검사
+- [ ] B5.9 NOTIFY-01 만료 타이머·최종 결과 알림
+- [ ] B5.10 STOP-01 시스템 정지 입구
+- [ ] B5.11 모델에 돌려줄 고정 문구표(A 검토)
 
 ## B6 · SQLite 저장소
 
@@ -81,17 +96,19 @@
 - [ ] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙과 예산(잠금 대기 1000ms는 미측정 제안값) — 막힘: B6-03
 - [ ] B6.13 SQLite 잠금 대기 중 이벤트 루프 정지·전역 정지(B-QA-03)
 - [ ] B6.14 Registry 등록·지문 영속화·변경 시 승인 무효화 — 막힘: B6-06·C
-- [ ] B6.15 agt_mode·규칙 버전 감사·과거 기록 migration·규칙 변경 결속 — 막힘: AGT-01–03
+- [ ] B6.15 규칙 버전 감사(AGT-02)
 - [ ] B6.16 A 시작 게이트·조회 요구와 C 인수 기준을 대조해 API 합의 기록 — 막힘: A·C 회신
+- [ ] B6.17 SEQ·REC B 결정안(A 회신의 질문 답변)
 
 ## B7 · 검증과 인수
 
 - [x] B7.1 A의 B 서비스 병합과 32경로 검증 보고 대조
 - [ ] B7.2 A의 Guard·Catalog 리뷰, C의 정책·승인·응답·예외·해시 리뷰 받기 — 막힘: A·C
-- [ ] B7.3 AGT-01 회신(운영자 차단 목록·조건 규칙·서명 정책 관리 선택) — 막힘: 사용자·팀
-- [ ] B7.4 AGT-03 검토(B 검사 상한 4개·정리 0.05초와 A 대기/실행 16개·퇴역 예산 2개)
+- [x] B7.3 10-15 AGT 제거 결정으로 대체 · [기록](archive/b/B7.3-agt-decision-superseded.md)
+- [x] B7.4 AGT-03 폐기 · [기록](archive/b/B7.4-agt-worker-retired.md)
 - [ ] B7.5 정규식 전체 스키마 검증을 종료 가능한 프로세스에서 실행(SCHEMA-01) · [연결안](archive/b-schema-validation-proposal.md)
 - [ ] B7.6 B6 저장소의 C 리뷰·독립 검증 받기 — 막힘: C
 - [ ] B7.7 C 보안 모듈·Registry·Scanner·CI·테스트 리뷰(PR #6·#8의 `adapters/cisco*.py`, `security/secrets.py`·`redact.py` 포함)
 - [ ] B7.8 C 독립 통합 인수 결과와 대상 커밋 기록 — 막힘: C
 - [ ] B7.9 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 A·C에 전달
+- [x] B7.10 공통 문서 미결 상태 갱신 제안 · [PR #18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) · [기록](archive/b/B7.10-contract-status-proposal.md)
