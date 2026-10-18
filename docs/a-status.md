@@ -13,7 +13,8 @@
 | Pending 최종 알림 형식·종료 처리(NOTIFY-01)·시스템 Task 정지(STOP-01)·검토된 설명(DESC-01) ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | B | A19–A22, A47 |
 | 접근 규칙 판정 함수·동기 포트 구현(ACCESS-01)·AGT 코드 제거·계약 합의 | B·A·C | A02·A06, A41, A44, A51, A53 |
 | Codex 0.162.1/MCP launcher·L1/L2 구현·T43/T46·수신 상한 독립 인수·경로·ScanReport·Scanner 자격증명 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
-| 설정·Profile 로딩(B)과 경로·실행 파일 검증(C) ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | B·C | A24–A27, A49 |
+| 설정·Profile 로딩(B, [PR #25](https://github.com/hsminu/MCP-Runtime-Guard/pull/25) 리뷰 중)과 경로·실행 파일 검증(C) ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | B·C | A24–A27, A49, A79, A80 |
+| 정책 변경 명령(B3.10)·Registry 활성화·허용 목록 결정 병합([PR #26](https://github.com/hsminu/MCP-Runtime-Guard/pull/26)) | B·C | A81 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | B의 AGT 제거 PR(같은 파일) | B | A44 |
 
@@ -65,6 +66,7 @@
 - [ ] A50 Codex 0.162.1 실제 프로세스·메서드 연결 — 막힘: B 세션 계약·C launcher·L1/L2 구현([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21))
 - [x] A68 Task별 도구 호출 FIFO·callId 중복 거부·취소/종료 격리의 A 내부 연결부 · [기록](archive/a/A68-task-tool-call-fifo.md)
 - [ ] A68 실제 Guard 호출·Pending/STOP·세션 관리자에 FIFO 연결 — 막힘: B·C 계약 및 A19·A20
+- [ ] A80 세션 관리자 승인 대기 감시 상한을 고정 5분 대신 Profile의 `approval_ttl_seconds`에서 계산(10.4절, [PR #25 C 의견 2](https://github.com/hsminu/MCP-Runtime-Guard/pull/25)) — 막힘: PR #25(B `GuardSettings`) 병합·A19·A20
 - [x] A72 앱 시작 준비 1회·Task별 구성 지문/L2 대조 연결부 · [기록](archive/a/A72-per-task-configuration-gate.md)
 - [x] A73 Codex stdin/stdout 바이트 프레이밍 어댑터·상한/종료 검증 · [기록](archive/a/A73-codex-stream-framing.md)
 - [x] A74 주입형 Task 자원 준비·종료 확인·정리 순서와 미확인 재시작 차단 · [기록](archive/a/A74-task-resource-lifecycle.md)
@@ -95,6 +97,7 @@
 - [ ] A49 등록·출처 규칙 연결 — 막힘: C Registry·safe_path·설정 로딩 담당(#19)
 - [ ] A52 Codex 로그인 실제 연결(ChatGPT 기기 코드·API 키, Codex가 keyring 저장) — 막힘: C launcher·T43 검증(#21); 직접 API 키 저장 화면은 A65에서 제거
 - [x] A54 등록 화면 서버 ID 즉시 안내·bridge에서 B 검사 결과 전달 · [기록](archive/a/A54-server-id-bridge-validation.md)
+- [ ] A81 서버 활성화 단계의 도구별 허용 체크박스(종류가 정해진 도구는 기본 체크)·규칙 변경 시 실행 중 Task 정지 안내([PR #26](https://github.com/hsminu/MCP-Runtime-Guard/pull/26) 10-18 결정) — 막힘: PR #26 병합·B 정책 변경 명령(B3.10)·C Registry 활성화
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
 - [x] A61 Qt 시안 컴포넌트·실행/승인/중지 카드·아이콘·작은 화면 배치 · [기록](archive/a/A61-ui-components.md)
 - [x] A63 세션 중심 대화·결과 화면·기존 기능 진입·Task/epoch 메시지 연결·원문 폐기·독립 GUI QA · [기록](archive/a/A63-session-workspace.md)
