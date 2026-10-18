@@ -1,0 +1,108 @@
+{
+ "item": "C6.13",
+ "date": "2026-10-18",
+ "codex": {
+  "version": "0.162.1",
+  "installed_files": [
+   "codex.exe"
+  ],
+  "sha256": "dd13bdb162a184fa04039488b234a8258ef9b76f84e926c505d5742b19249a6a"
+ },
+ "method": "tools/install_codex.py --tarball(npm sha512 무결성 확인) → write_codex_home → codex app-server + 가짜 모델(-c model_provider=mock, 스모크 전용), 환경변수 허용 목록, -c sqlite_home=<TASK_DIR>. initialize → configRequirements/read → config/read → thread/start(dynamicTools 1개, ephemeral, environments=[], approvalsReviewer=user) → turn/start",
+ "run1_before_skills_settings": {
+  "note": "도구는 use_responses_lite라 input의 additional_tools로 전달. 프롬프트에 skills_instructions와 CODEX_HOME 경로가 들어가 L1에 [skills] 설정을 추가함",
+  "model_requests": [
+   {
+    "kind": "responses",
+    "path": "/v1/responses",
+    "model": "gpt-6.1-sol",
+    "tools": []
+   }
+  ],
+  "codex_home_files": [
+   ".sandbox_migration",
+   "config.toml",
+   "installation_id",
+   "model_catalog.json",
+   "skills",
+   "skills\\.system 아래 72개"
+  ]
+ },
+ "run2_final_config": {
+  "configRequirements_read_requirements": null,
+  "config_read": {
+   "model": "gpt-6.1-sol",
+   "model_catalog_json": "<CODEX_HOME>\\model_catalog.json",
+   "cli_auth_credentials_store": "keyring",
+   "web_search": "disabled",
+   "check_for_update_on_startup": false,
+   "project_doc_max_bytes": 0,
+   "project_root_markers": [],
+   "sqlite_home": "<TASK_DIR>",
+   "skills": {
+    "bundled": {
+     "enabled": false
+    },
+    "include_instructions": false
+   },
+   "analytics": {
+    "enabled": false
+   },
+   "feedback": {
+    "enabled": false
+   },
+   "history": {
+    "persistence": "none",
+    "max_bytes": null
+   }
+  },
+  "features_true": [
+   "mentions_v2"
+  ],
+  "config_layers": [
+   "sessionFlags",
+   "user",
+   "system"
+  ],
+  "thread_start_error": null,
+  "turn_completed": true,
+  "model_requests": [
+   {
+    "kind": "responses",
+    "path": "/v1/responses",
+    "model": "gpt-6.1-sol",
+    "top_level_tools": [],
+    "additional_tools": [
+     "functions.request_user_input",
+     "local_docs.read_document"
+    ],
+    "skills_instructions_in_input": false,
+    "codex_home_path_in_input": false
+   }
+  ],
+  "server_requests": [],
+  "codex_home_files": [
+   ".sandbox_migration",
+   "config.toml",
+   "installation_id",
+   "model_catalog.json"
+  ],
+  "task_dir_files": [
+   "codex-stderr.txt",
+   "goals_1.sqlite",
+   "goals_1.sqlite-shm",
+   "goals_1.sqlite-wal",
+   "logs_2.sqlite",
+   "memories_1.sqlite",
+   "memories_1.sqlite-shm",
+   "memories_1.sqlite-wal",
+   "queue_1.sqlite",
+   "queue_1.sqlite-shm",
+   "queue_1.sqlite-wal",
+   "state_5.sqlite",
+   "state_5.sqlite-shm",
+   "state_5.sqlite-wal"
+  ]
+ },
+ "stderr_run2": "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir (codex_home: <CODEX_HOME>)"
+}

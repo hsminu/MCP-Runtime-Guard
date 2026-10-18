@@ -1,0 +1,2 @@
+# Codex L1 설정·모델 정보·고정값은 바이트 해시로 확인한다. 체크아웃 플랫폼과 무관하게 LF로 둔다.
+config/codex/** text eol=lf
