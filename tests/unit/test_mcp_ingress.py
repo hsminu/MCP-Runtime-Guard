@@ -144,6 +144,25 @@ def test_response_id_sdk_coercions_cannot_bypass_total(response_id: object) -> N
         gate.accept(payload.encode())
 
 
+@pytest.mark.parametrize("response_id", [1, "1", "01"])
+def test_delivery_of_still_pending_id_was_never_admitted(response_id: object) -> None:
+    gate = IngressGate()
+    gate.accept(_page(1))  # inactive: no association, no debit
+    gate.begin(1000, 1000)
+    gate.expect(1)
+    with pytest.raises(IngressError, match="TOOLS_LIST_RESPONSE_UNADMITTED"):
+        gate.check_delivery(response_id)
+    assert gate.failed.is_set()
+
+
+@pytest.mark.parametrize("response_id", [1, 2, "x", None])
+def test_delivery_after_admitted_association_or_of_unknown_id_passes(response_id: object) -> None:
+    gate = _gate(1000)
+    assert gate.accept(_page(1))
+    gate.check_delivery(response_id)
+    assert gate.reason is None
+
+
 @pytest.mark.parametrize("extra", [{"method": "x"}, {"method": None}, {"error": {}}])
 def test_ambiguous_response_envelopes_are_rejected(extra: dict[str, object]) -> None:
     gate = _gate(1000)
@@ -386,6 +405,49 @@ async def test_concurrent_ping_cannot_steal_listing_response_budget_association(
         assert not listing.complete
     assert peer.list_requests == 2
     assert peer.ping_requests == 1
+
+
+class _PredictingPeer(_Peer):
+    """Pre-sends an oversized answer to the predicted first tools/list ID.
+
+    The first drain stalls, so the SDK receive loop blocks answering the ping
+    while the predicted page is admitted with the gate still inactive.
+    """
+
+    def __init__(self, page_bytes: int) -> None:
+        super().__init__(lambda request_id, _number: _page(request_id), fragment=4096)
+        self.predicted = _page(1, extra=" " * page_bytes)
+
+    async def write(self, frame: bytes) -> None:
+        await super().write(frame)
+        if json.loads(frame).get("method") == "initialize":
+            ping = b'{"jsonrpc":"2.0","id":"p0","method":"ping"}'
+            self.output.extend(ping + b"\n" + self.predicted + b"\n")
+            self.available.set()
+
+    async def drain(self) -> None:
+        await super().drain()
+        if self.drains == 1:
+            await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_predicted_response_held_behind_backpressure_cannot_complete_listing() -> None:
+    limit = 300
+    peer = _PredictingPeer(limit)
+    transport = McpTransport(
+        {"unit": validated_stdio_stream_factory(peer.read, peer.write, peer.drain)},
+        tool_list_limits=ToolListLimits(max_page_bytes=limit, max_total_bytes=limit),
+    )
+    with pytest.raises(DispatchError) as failed:
+        await transport.start()
+    assert failed.value.exception_type == "SessionStartFailed"
+    listing = transport.tool_listing("unit")
+    assert listing is not None
+    assert not listing.complete
+    assert listing.reason == "TOOLS_LIST_RESPONSE_UNADMITTED"
+    assert peer.list_requests == 1
+    await transport.close()
 
 
 @pytest.mark.asyncio

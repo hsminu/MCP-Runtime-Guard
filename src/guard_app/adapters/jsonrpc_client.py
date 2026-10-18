@@ -237,7 +237,9 @@ class JsonRpcClient:
         """Send one frame by ``deadline``; close or a stuck peer never blocks forever.
 
         A frame that may be partly written leaves the stream unusable, so a
-        send that times out or fails closes the whole client.
+        send that times out, fails or loses its caller to cancellation closes
+        the whole client. A cancelled frame is never finished later, and no
+        other send starts while the channel may still hold part of it.
         """
         frame = self._codec.encode(message)
         if len(frame) > self._max_frame_bytes:
@@ -260,6 +262,10 @@ class JsonRpcClient:
                     timeout=max(0.0, deadline - loop.time()),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
+            except asyncio.CancelledError:
+                send.cancel()
+                self._shutdown("SEND_CANCELLED")
+                raise
             finally:
                 closing.cancel()
             if send not in done:

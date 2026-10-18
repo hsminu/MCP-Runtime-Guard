@@ -500,6 +500,45 @@ async def test_close_releases_a_request_stuck_in_send() -> None:
     assert failed.value.reason == "CLOSED"
 
 
+class CountingStuckChannel(StuckChannel):
+    """Blocks every send and records overlap and frames that finished writing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active = 0
+        self.max_active = 0
+        self.written: list[bytes] = []
+
+    async def send(self, frame: bytes) -> None:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await self.release.wait()
+            self.written.append(frame)
+        finally:
+            self.active -= 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_caller_during_send_closes_and_its_frame_is_never_finished() -> None:
+    channel = CountingStuckChannel()
+    client = _client(channel, request_timeout_s=10.0)
+    first = asyncio.create_task(client.request("turn/start", {"n": 1}))
+    await asyncio.sleep(0.05)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert client.closed_reason == "SEND_CANCELLED"
+    with pytest.raises(JsonRpcError) as refused:
+        await client.request("turn/start", {"n": 2})
+    assert refused.value.reason == "SEND_CANCELLED"
+    channel.release.set()
+    await asyncio.sleep(0.05)
+    assert channel.written == []
+    assert channel.max_active == 1
+    await client.close()
+
+
 @pytest.mark.asyncio
 async def test_handler_may_close_the_client_without_deadlock() -> None:
     channel = FakeChannel()

@@ -31,9 +31,11 @@ from guard_app.services.bridge import (
 )
 
 from .presentation import codex_failure_notice
-from .task_status import status_title
+from .task_status import FINAL_STATUSES, status_title
 from .untrusted_text import untrusted_display_text
 from .widgets import KeyboardActionButton, plain_label
+
+TRANSCRIPT_BODY_MARK = "│ "
 
 
 @dataclass(slots=True)
@@ -420,10 +422,13 @@ class SessionWorkspace(QWidget):
         self._seen_events.add(marker)
         text, _ = untrusted_display_text(event.text)
         label = "나" if event.role == "user" else "Guard · 모델 답변 (검증되지 않은 내용)"
+        # Speaker labels alone start at column 0. Every body line is marked, so
+        # a model line such as "나" or "Guard · ..." cannot pose as a label.
+        body = "\n".join(f"{TRANSCRIPT_BODY_MARK}{line}" for line in text.split("\n"))
         bar = view.transcript.verticalScrollBar()
         at_bottom = bar.value() >= bar.maximum() - 3
         previous = bar.value()
-        view.transcript.appendPlainText(f"{label}\n{text}\n")
+        view.transcript.appendPlainText(f"{label}\n{body}\n")
         if not at_bottom:
             bar.setValue(previous)
         if event.role == "user" and event.command_id == view.pending_command:
@@ -463,7 +468,7 @@ class SessionWorkspace(QWidget):
                 status = "정리 완료 미확인"
             elif view.snapshot.status is TaskStatus.WAITING_APPROVAL:
                 status = "승인 필요 · 대기 중"
-            elif not view.snapshot.model_ready:
+            elif view.snapshot.status not in FINAL_STATUSES and not view.snapshot.model_ready:
                 status = "연결 필요"
             else:
                 status = status_title(view.snapshot.status)

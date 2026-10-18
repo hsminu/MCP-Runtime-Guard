@@ -30,7 +30,7 @@ from guard_app.services.bridge import (
 
 from .approval_detail import visible_review_text
 from .presentation import APPROVAL_RESULTS, LIFECYCLE_MESSAGES, RUN_RESULTS
-from .task_status import status_title
+from .task_status import FINAL_STATUSES, status_detail, status_title
 from .widgets import KeyboardActionButton, plain_label
 
 _STOP_NAMES = {ControlAction.CANCEL: "작업 취소", ControlAction.EMERGENCY_HALT: "긴급 차단"}
@@ -368,7 +368,9 @@ class RuntimePanel(QWidget):
             f"AGT: {snapshot.agt_mode} · 모델: {snapshot.model_mode}",
             f"호스트 dispatch: {snapshot.host_dispatch} · 수신 부작용: {snapshot.receiver_effect}",
         ]
-        if not snapshot.model_ready:
+        if snapshot.status in FINAL_STATUSES:
+            lines.append(status_detail(snapshot.status))
+        elif not snapshot.model_ready:
             lines.append("모델 연결 미완료 · 현재 세션에서는 메시지를 보낼 수 없어.")
         elif snapshot.runner_state in ("model_error", "guard_error", "stopped"):
             lines.append("Runner가 멈췄어 · 자동 재전송하지 않아. 새 세션에서 다시 시작해.")

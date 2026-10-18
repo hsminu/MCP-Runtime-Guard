@@ -41,9 +41,19 @@ _UNKNOWN_TEXT = (
 )
 
 
+# Ended Tasks: a reconnect or resend never continues them, so their own status
+# text must win over connection hints such as model_ready.
+FINAL_STATUSES = frozenset({TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME, TaskStatus.CLOSED})
+
+
 def status_title(status: TaskStatus | None) -> str:
     text = _STATUS_TEXT.get(status) if status is not None else None
     return (text or _UNKNOWN_TEXT)[0]
+
+
+def status_detail(status: TaskStatus | None) -> str:
+    text = _STATUS_TEXT.get(status) if status is not None else None
+    return (text or _UNKNOWN_TEXT)[1]
 
 
 class TaskStatusCard(QFrame):

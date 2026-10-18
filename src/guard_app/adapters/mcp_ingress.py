@@ -7,7 +7,9 @@ before UTF-8/JSON parsing. This conservative candidate rule includes concurrent
 notifications: their response association cannot be trusted before parsing.
 Only exact responses to registered tools/list integer IDs debit the total.
 Request IDs increase across collections, so late old pages cannot charge a new
-collection. Outside collection these limits do not change ordinary tool results.
+collection. Admission and SDK delivery are separated by backpressure, so the
+SDK-facing stream re-checks each response at delivery (check_delivery).
+Outside collection these limits do not change ordinary tool results.
 All failures are sticky and contain fixed codes, never source/payload text.
 """
 
@@ -113,6 +115,23 @@ class IngressGate:
         if type(alias) in (int, bool, float) and alias in self._pending:
             self.fail("TOOLS_LIST_RESPONSE_ID_INVALID")
         return False
+
+    def check_delivery(self, response_id: object) -> None:
+        """Run as the SDK takes a response, with no await before its ID lookup.
+
+        A frame admitted before its tools/list ID was expected (pre-sent by a
+        peer that predicted the ID, then held behind backpressure) was never
+        debited. If its ID is still pending at delivery, it must not complete
+        the listing. Uses the SDK's own str->int normalization.
+        """
+        alias = response_id
+        if type(alias) is str:
+            try:
+                alias = int(alias)
+            except ValueError:
+                return
+        if type(alias) is int and alias in self._pending:
+            self.fail("TOOLS_LIST_RESPONSE_UNADMITTED")
 
 
 class PipeFrameReader:

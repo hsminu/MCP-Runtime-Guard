@@ -22,6 +22,7 @@ from typing import Any, Protocol, TextIO, cast
 
 import anyio
 import httpx
+from anyio.abc import ObjectReceiveStream
 
 # A46: httpx imports httpcore lazily inside AsyncHTTPTransport(), which stalled
 # the backend loop on the first HTTP connection. Import it with this module
@@ -38,7 +39,9 @@ from mcp.types import (
     CallToolRequestParams,
     CallToolResult,
     ClientRequest,
+    JSONRPCError,
     JSONRPCMessage,
+    JSONRPCResponse,
     ListToolsResult,
     PaginatedRequestParams,
     RequestParams,
@@ -740,6 +743,33 @@ async def _discard_message(message: object) -> None:
     """Server notifications stay out of UI/model/logs until A14's sink exists."""
 
 
+class _DeliveryCheckedStream(ObjectReceiveStream[Any]):
+    """SDK read stream that re-checks each response as the SDK takes it.
+
+    mcp 1.29 ``_receive_loop`` reaches ``_response_streams.pop`` without an
+    await after this returns, so no tools/list ID can be registered between
+    the check and the SDK's association.
+    """
+
+    def __init__(self, inner: ObjectReceiveStream[Any], gate: IngressGate) -> None:
+        self._inner = inner
+        self._gate = gate
+
+    async def receive(self) -> Any:
+        item = await self._inner.receive()
+        if isinstance(item, SessionMessage):
+            root = item.message.root
+            if isinstance(root, JSONRPCResponse | JSONRPCError):
+                try:
+                    self._gate.check_delivery(root.id)
+                except IngressError:
+                    raise anyio.EndOfStream from None
+        return item
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
 def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
     """Wrap only streams supplied by a verified composition root.
 
@@ -756,16 +786,19 @@ def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
             async with stream_factory() as streams:
                 if len(streams) < 2:
                     raise ValueError("MCP stream pair required")
+                gate = next((item for item in streams[2:] if isinstance(item, IngressGate)), None)
+                # The SDK only iterates, enters and closes its read stream.
+                read_stream: Any = streams[0]
+                if gate is not None:
+                    read_stream = _DeliveryCheckedStream(read_stream, gate)
                 async with _UnvalidatedClientSession(
-                    streams[0],
+                    read_stream,
                     streams[1],
                     logging_callback=_discard_logging,
                     message_handler=_discard_message,
                 ) as session:
                     if isinstance(session, ClientSession):
-                        session.listing_ingress = next(
-                            (item for item in streams[2:] if isinstance(item, IngressGate)), None
-                        )
+                        session.listing_ingress = gate
                     yield session
         finally:
             _SDK_LOG_SCOPE.reset(token)
