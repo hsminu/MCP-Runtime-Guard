@@ -197,9 +197,41 @@ COMMAND_REFUSALS = {
 }
 
 
+# A session stopped while running (A88). Each text is complete on its own.
+_CODEX_STOP_NOTICES = {
+    "CODEX_L3_VIOLATION": (
+        "Codex가 허용되지 않은 기능이나 승인을 요청해 이 Task를 정지했어. 새 세션에서 다시 시작해."
+    ),
+    "CODEX_USAGE_LIMIT": (
+        "Codex 사용량 한도에 도달해 이 Task를 정지했어. 한도가 풀린 뒤 새 세션을 시작해."
+    ),
+    "CODEX_TOOL_STOPPED": (
+        "도구 결과를 공개할 수 없거나 전송 결과를 확인할 수 없어 이 Task를 정지했어. "
+        "결과 · 실행 활동에서 상태를 확인해."
+    ),
+    "CODEX_WATCHDOG_TIMEOUT": (
+        "도구 호출이 제한 시간 안에 끝나지 않아 이 Task를 정지했어. "
+        "전송이었다면 수신측에서 반영 여부를 확인해."
+    ),
+    "CODEX_TOOL_CALL_INVALID": "Codex가 형식이 맞지 않는 도구 호출을 보내 이 Task를 정지했어.",
+    "CODEX_TURN_FAILED": "Codex 응답이 실패해 이 Task를 정지했어. 새 세션에서 다시 시작해.",
+    "CODEX_TURN_INTERRUPTED": "Codex 응답이 중단돼 이 Task를 정지했어. 새 세션에서 다시 시작해.",
+    "CODEX_START_FAILED": "Codex 세션을 시작하지 못했어. 새 세션에서 다시 시작해.",
+    "CODEX_ANSWER_TOO_LARGE": "Codex 답변이 표시 상한을 넘어 이 Task를 정지했어.",
+    "CODEX_INPUT_INVALID": "보낼 수 없는 메시지라 이 Task를 정지했어. 새 세션에서 다시 시작해.",
+    "CODEX_INTERRUPT_UNCONFIRMED": (
+        "Codex 중단을 확인하지 못했어. 앱을 종료하고 정리 상태를 확인해."
+    ),
+    "CODEX_SESSION_FAILED": "Codex 세션이 실패해 이 Task를 정지했어. 새 세션에서 다시 시작해.",
+}
+
+
 def codex_failure_notice(code: str, *, creating: bool = False) -> str:
     """Describe only known failures; cleanup uncertainty never implies no launch."""
 
+    stopped = _CODEX_STOP_NOTICES.get(code)
+    if stopped is not None and not creating:
+        return stopped
     detail = _CODEX_FAILURE_DETAILS.get(code)
     if detail is None:
         return ""

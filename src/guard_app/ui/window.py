@@ -313,6 +313,14 @@ class GuardWindow(QMainWindow):
         bridge.task_changed.connect(self.sessions.set_snapshot)
         bridge.session_created.connect(self.sessions.session_created)
         bridge.session_capability_changed.connect(self.sessions.set_session_blocker)
+        bridge.account_changed.connect(self.codex_login_info.set_view)
+        login = self.codex_login_info
+        login.read_requested.connect(lambda: bridge.request_account("account_read"))
+        login.device_login_requested.connect(lambda: bridge.request_account("account_login_device"))
+        login.cancel_requested.connect(
+            lambda login_id: bridge.request_account("account_cancel_login", target_id=login_id)
+        )
+        login.logout_requested.connect(lambda: bridge.request_account("account_logout"))
         self.sessions.new_session_requested.connect(
             lambda key, options, command: bridge.request_new_session(
                 key, options, command_id=command

@@ -26,6 +26,8 @@ from guard_app.services.bridge import (
     TaskProjection,
 )
 from guard_app.services.catalog import GuardSettings
+from guard_app.services.codex_composition import codex_session_factory
+from guard_app.services.guard_relay import ApprovalOutcomes
 from guard_app.services.product_assembly import AssembledGuard, ProductInputs, assemble_guard
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.services.session_preparation import (
@@ -61,6 +63,7 @@ class SessionRuntime:
         close_store: Callable[[], None] | None = None,
         guard_settings: GuardSettings | None = None,
         assembled: AssembledGuard | None = None,
+        approvals: ApprovalOutcomes | None = None,
     ) -> None:
         if assembled is not None:
             guard_settings = assembled.settings
@@ -69,6 +72,8 @@ class SessionRuntime:
         # Profile no Task is created; there is no placeholder policy (A79).
         self._guard_settings = guard_settings
         self._assembled = assembled
+        self._approvals = approvals
+        self._tools_available = assembled is not None and bool(assembled.tool_views)
         self._session_factory = session_factory
         self._preparation = preparation
         self._startup_lock = asyncio.Lock()
@@ -307,7 +312,7 @@ class SessionRuntime:
             model_ready=self._codes[task_id] == "READY_CODEX"
             and state.status is TaskStatus.RUNNING,
             connection_code=self._codes[task_id],
-            tools_available=False,
+            tools_available=self._tools_available,
             can_advance=runner.can_advance,
             can_accept_message=runner.can_accept_message and state.status is TaskStatus.RUNNING,
             runner_state=runner.runtime_status,
@@ -501,6 +506,7 @@ class SessionRuntime:
             create_session=self.create_session,
             stop_session=self.stop_session,
             session_blocker=self.creation_blocker,
+            approval_resolved=None if self._approvals is None else self._approvals.resolve,
         )
 
 
@@ -515,18 +521,23 @@ async def bootstrap_product(
 
     store = SQLiteStore(db_path, audit_id_factory=lambda: f"audit-{uuid4().hex}")
     assembled: AssembledGuard | None = None
+    approvals: ApprovalOutcomes | None = None
     if product is not None:
         try:
             assembled = await assemble_guard(store, product)
         finally:
             if assembled is None:
                 store.close()
+        approvals = ApprovalOutcomes()
+        if session_factory is None:
+            session_factory = codex_session_factory(assembled, approvals)
     runtime = SessionRuntime(
         store,
         session_factory=session_factory,
         preparation=preparation,
         close_store=store.close,
         assembled=assembled,
+        approvals=approvals,
     )
     adopted = False
     try:

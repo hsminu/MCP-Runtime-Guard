@@ -170,3 +170,76 @@ def test_bridge_publishes_session_capability_before_ready(app, blocker, create, 
         assert seen == [expected]
     finally:
         close_bridge(app, bridge)
+
+
+def _guarded_codex_bridge(app, stops, resolved):
+    from guard_app.services.runner import CodexTaskRunner
+
+    control = FakeControl()
+
+    class Session:
+        async def send(self, text):
+            return "unused"
+
+        async def interrupt(self):
+            pass
+
+        async def aclose(self):
+            pass
+
+    async def failure(_code):
+        pass
+
+    runner = CodexTaskRunner("task-1", 1, Session(), failure)
+
+    async def snapshot(task_id):
+        return TaskProjection(task_id, 1, TaskStatus.RUNNING)
+
+    async def stop_session(task_id, epoch, action):
+        stops.append((task_id, epoch, str(action)))
+
+    async def bootstrap():
+        return BackendBindings(
+            lambda task_id: runner,
+            control,
+            snapshot=snapshot,
+            initial_task_id="task-1",
+            stop_session=stop_session,
+            approval_resolved=lambda *event: resolved.append(event),
+        )
+
+    bridge = BackendBridge(bootstrap)
+    receiver = attach(bridge)
+    bridge.start()
+    pump_until(app, lambda: bridge.state is BridgeState.READY)
+    return bridge, receiver, control
+
+
+@pytest.mark.parametrize("action", ["approve", "reject"])
+def test_human_approval_result_reaches_the_waiting_model_call(app, action):
+    from guard_app.services.bridge import ControlAction
+
+    stops, resolved = [], []
+    bridge, receiver, control = _guarded_codex_bridge(app, stops, resolved)
+    try:
+        command = bridge.request_control(ControlAction(action), "approval-7")
+        pump_until(app, lambda: finished(receiver, command))
+        assert [(event[0], event[1]) for event in resolved] == [("approval-7", action)]
+        assert stops == []
+    finally:
+        close_bridge(app, bridge)
+
+
+@pytest.mark.parametrize("action", ["cancel", "emergency_halt"])
+def test_task_stop_with_guard_also_stops_the_model_session(app, action):
+    from guard_app.services.bridge import ControlAction
+
+    stops, resolved = [], []
+    bridge, receiver, control = _guarded_codex_bridge(app, stops, resolved)
+    try:
+        command = bridge.request_control(ControlAction(action), "task-1", epoch=1)
+        pump_until(app, lambda: finished(receiver, command))
+        assert [call[0] for call in control.calls] == [action]
+        assert stops == [("task-1", 1, action)]
+    finally:
+        close_bridge(app, bridge)

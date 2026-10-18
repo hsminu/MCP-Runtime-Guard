@@ -35,6 +35,7 @@ from guard_app.domain.enums import Label, TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.services import catalog_sources
 from guard_app.services.approvals import HumanControl
+from guard_app.services.codex_account import AccountError, AccountView, CodexAccountPort
 from guard_app.services.runner import RunUpdate, TaskExecution
 
 
@@ -117,6 +118,11 @@ class BackendBindings:
     # Fixed code of what is known to prevent new sessions now, or None. Probed
     # on the backend thread at READY and after each creation attempt.
     session_blocker: Callable[[], str | None] | None = None
+    # A-local stand-in for NOTIFY-01: called on the backend loop with the
+    # approval ID, the human action and HumanControl's returned outcome.
+    approval_resolved: Callable[[str, str, object], None] | None = None
+    # Codex account methods on a C-launched app-server (A52); None = unavailable.
+    account: CodexAccountPort | None = None
 
 
 # The only model pinned by C's config/codex/codex.lock.json (allowed_models).
@@ -271,6 +277,7 @@ class BackendBridge(QObject):
     session_created = Signal(object)
     # str: fixed blocker code, or "" when new sessions may be requested.
     session_capability_changed = Signal(str)
+    account_changed = Signal(object)
 
     def __init__(
         self,
@@ -428,6 +435,24 @@ class BackendBridge(QObject):
             raise ValueError("Message text is invalid")
         command = _Command(
             self._id(command_id, generate=True), "run", "message", self._id(task_id), epoch, text
+        )
+        self._submit(command)
+        return command.command_id
+
+    def request_account(
+        self, action: str, *, target_id: str = "account", secret: str | None = None
+    ) -> str:
+        """Codex login commands. `secret` is an API key, never kept or shown."""
+
+        self._require_qt_thread()
+        if action not in _ACCOUNT_ACTIONS:
+            raise ValueError("Account action is invalid")
+        command = _Command(
+            self._id(None, generate=True),
+            "control",
+            action,
+            self._id(target_id),
+            user_text=secret if action == "account_login_api_key" else None,
         )
         self._submit(command)
         return command.command_id
@@ -858,6 +883,9 @@ class BackendBridge(QObject):
         )
         workers.extend(asyncio.create_task(self._worker("urgent")) for _ in range(2))
         self._publish_session_capability()
+        self.account_changed.emit(
+            AccountView("UNAVAILABLE" if bindings.account is None else "UNKNOWN")
+        )
         self._set_state(BridgeState.READY, "READY")
         await stop
         self._set_state(BridgeState.CLOSING, "CLOSING")
@@ -1071,6 +1099,8 @@ class BackendBridge(QObject):
                 # Even a failed or unclassified run must not leave the UI on
                 # an older projection; Store decides what is displayed.
                 await self._publish_after(command.target_id)
+        if command.action in _ACCOUNT_ACTIONS:
+            return await self._account(bindings, command)
         control = bindings.human_control
         if control is None:
             if command.action not in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
@@ -1117,6 +1147,31 @@ class BackendBridge(QObject):
             if routed is not None:
                 await self._publish_after(routed[0])
 
+    async def _account(self, bindings: BackendBindings, command: _Command) -> str:
+        account = bindings.account
+        if account is None:
+            self.account_changed.emit(AccountView("UNAVAILABLE"))
+            return "ACCOUNT_UNAVAILABLE"
+        try:
+            if command.action == "account_read":
+                view = await account.read()
+            elif command.action == "account_login_api_key":
+                view = await account.login_api_key(command.user_text or "")
+            elif command.action == "account_login_device":
+                view = await account.start_device_login()
+                self.account_changed.emit(view)
+                if view.state != "PENDING_DEVICE" or view.login_id is None:
+                    return "ACCOUNT_LOGIN_FAILED"
+                view = await account.wait_login(view.login_id)
+            elif command.action == "account_cancel_login":
+                view = await account.cancel_login(command.target_id)
+            else:
+                view = await account.logout()
+        except AccountError:
+            view = AccountView("FAILED")
+        self.account_changed.emit(view)
+        return f"ACCOUNT_{view.state}"
+
     async def _stop_task(
         self, bindings: BackendBindings, control: HumanControl, command: _Command
     ) -> str:
@@ -1133,6 +1188,12 @@ class BackendBridge(QObject):
                 result = await control.cancel(command.target_id)
             else:
                 result = await control.emergency_halt(command.target_id)
+        # A model session (Codex) outlives Guard's Task stop unless it is
+        # interrupted and closed too; its cleanup result decides confirmation.
+        if bindings.stop_session is not None and command.epoch is not None:
+            await bindings.stop_session(
+                command.target_id, command.epoch, ControlAction(command.action)
+            )
         if isinstance(result, (Denied, Pending, Released, Withheld, OutcomeUnknown)):
             return f"CONTROL_{result.kind.upper()}_QUERY_REQUIRED"
         return "CONTROL_UNCONFIRMED"
@@ -1144,6 +1205,8 @@ class BackendBridge(QObject):
             result = await control.approve(command.target_id)
         else:
             result = await control.reject(command.target_id)
+        if bindings.approval_resolved is not None:
+            bindings.approval_resolved(command.target_id, str(command.action), result)
         pending = self._pending_runs.get(command.target_id)
         if pending is not None:
             task_id, epoch = pending
@@ -1194,6 +1257,17 @@ class BackendBridge(QObject):
     def _consume_task(task: asyncio.Future[Any]) -> None:
         if not task.cancelled():
             task.exception()  # Suppress default raw exception logging; events use fixed codes.
+
+
+_ACCOUNT_ACTIONS = frozenset(
+    {
+        "account_read",
+        "account_login_api_key",
+        "account_login_device",
+        "account_cancel_login",
+        "account_logout",
+    }
+)
 
 
 def _review_header(snapshot: ApprovalSnapshot) -> str:

@@ -134,6 +134,7 @@ class JsonRpcClient:
         on_server_request: ServerRequestHandler | None = None,
         codec: MessageCodec | None = None,
         version_field: bool = True,
+        on_reply_sent: Callable[[str], None] | None = None,
     ) -> None:
         if type(version_field) is not bool:
             raise ValueError("boolean version_field required")
@@ -154,6 +155,7 @@ class JsonRpcClient:
         self._max_pending = max_pending
         self._on_notification = on_notification
         self._on_server_request = on_server_request
+        self._on_reply_sent = on_reply_sent
         self._ids = count(1)
         self._pending: dict[int, asyncio.Future[object]] = {}
         self._server_tasks: set[asyncio.Task[None]] = set()
@@ -167,6 +169,10 @@ class JsonRpcClient:
     @property
     def closed_reason(self) -> str | None:
         return self._closed_reason
+
+    async def wait_closed(self) -> None:
+        """Return once the client has closed for any reason."""
+        await self._closed.wait()
 
     def start(self) -> None:
         if self._reader is not None or self._closed_reason is not None:
@@ -363,6 +369,10 @@ class JsonRpcClient:
             reply = self._message(id=request_id)
             reply["result"] = result
         await self._send(reply, deadline=asyncio.get_running_loop().time() + self._timeout)
+        if self._on_reply_sent is not None:
+            # The whole reply frame was handed to the channel; the method lets
+            # the owner act only after its answer has gone out.
+            self._on_reply_sent(method)
 
     def _server_task_done(self, task: asyncio.Task[None], *, request_id: JsonId) -> None:
         self._server_tasks.discard(task)

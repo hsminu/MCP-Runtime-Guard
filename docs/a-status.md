@@ -62,7 +62,8 @@
 - [x] A51 자체 접근 규칙을 `AccessChecker`로 Guard에 연결·규칙 설정 로딩(A86, 현재 async 포트) · [기록](archive/a/A86-profile-guard-assembly.md)
 - [ ] A51 동기 포트 전환 — 막힘: B2.9(ACCESS-01)
 - [ ] A53 B의 AGT 코드 제거 중 A 소유 파일 리뷰 — 막힘: B PR
-- [ ] A19·A20 Codex 세션 관리자 A 계층(A87·A88: 프로토콜·가짜 app-server·L3·Guard 중계·FIFO·감시 상한)
+- [x] A87 Codex 0.162.1 프로토콜 순수 함수·대본형 가짜 app-server · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)
+- [x] A88 Codex 세션 관리자 A 계층(L3·Guard 중계·FIFO·감시 상한·제품 연결·취소 시 세션 정지) · [기록](archive/a/A88-codex-session-manager.md)
 - [ ] A19·A20 실제 codex.exe 연결 — 막힘: C launcher(C2.12)·L2(C6.14), NOTIFY-01·STOP-01(#20), 세션 관리자 계약 합의
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
@@ -70,17 +71,21 @@
 - [x] A67 JSON-RPC 진행 중 ID 중복 차단·Codex 0.162.1 공식 envelope/메서드 schema 대조 · [기록](archive/a/A67-jsonrpc-duplicate-and-codex-schema.md)
 - [ ] A50 Codex 0.162.1 실제 프로세스·메서드 연결 — 막힘: B 세션 계약·C launcher·L1/L2 구현([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21))
 - [x] A68 Task별 도구 호출 FIFO·callId 중복 거부·취소/종료 격리의 A 내부 연결부 · [기록](archive/a/A68-task-tool-call-fifo.md)
-- [ ] A68 실제 Guard 호출·Pending/STOP·세션 관리자에 FIFO 연결 — 막힘: B·C 계약 및 A19·A20
-- [ ] A80 세션 관리자 승인 대기 감시 상한을 Profile의 `approval_ttl_seconds`에서 계산(10.4절, [PR #25 C 의견 2](https://github.com/hsminu/MCP-Runtime-Guard/pull/25)) — A88에서 구현
-- [ ] A88 L3 감시(허용 밖 item·승인 요청 거절 후 interrupt·정지)·`request_user_input` 빈 응답·고정 문구표 연결·인증/한도 오류 정지·토큰 갱신 충돌 시 그 Task만 정지
-- [ ] A88 `dynamicTools` 이름 규칙(Codex 0.162.1 `^[a-zA-Z0-9_-]+$`, 길이·예약어) 위반 도구 제외·안내 — contracts 10-17 "도구 이름 제한 없음"과 충돌, B·C에 알림(A92)
-- [ ] A90 `baseInstructions` 프롬프트 문구·답변 스트리밍·C1.9 관측 지점 노출
+- [x] A68 Guard 호출·FIFO 세션 연결(A 내부 Pending 대기) · [기록](archive/a/A88-codex-session-manager.md)
+- [ ] A68 NOTIFY-01·STOP-01로 교체 — 막힘: B5.9·B5.10
+- [x] A80 세션 관리자 승인 대기 감시 상한을 Profile의 `approval_ttl_seconds`에서 계산 · [기록](archive/a/A88-codex-session-manager.md)
+- [x] A88 L3 감시·`request_user_input` 빈 응답·고정 문구표 연결·인증/한도 오류 정지(토큰 갱신 충돌은 `unauthorized` 경로로 그 Task만 정지) · [기록](archive/a/A88-codex-session-manager.md)
+- [x] A87 `dynamicTools` 이름 규칙 위반 도구 제외·보고 · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)
+- [ ] A92 contracts 10-17 "도구 이름 제한 없음"과 Codex 이름 규칙 충돌 알림
+- [x] A90 `baseInstructions` 프롬프트 문구·C1.9 관측 지점(`SessionObservations`) · [기록](archive/a/A88-codex-session-manager.md)
+- [ ] A90 답변 스트리밍의 대화 화면 연결 — 부분 메시지 교체 UI 이벤트 필요
 - [ ] A74 Task 폴더 정리 실제 연결 — 막힘: C2.13 삭제 연산
 - [x] A72 앱 시작 준비 1회·Task별 구성 지문/L2 대조 연결부 · [기록](archive/a/A72-per-task-configuration-gate.md)
 - [x] A73 Codex stdin/stdout 바이트 프레이밍 어댑터·상한/종료 검증 · [기록](archive/a/A73-codex-stream-framing.md)
 - [x] A74 주입형 Task 자원 준비·종료 확인·정리 순서와 미확인 재시작 차단 · [기록](archive/a/A74-task-resource-lifecycle.md)
 - [x] A21·A22 Runner expected_epoch·승인 resume 연결
-- [ ] A21·A22 실제 모델 세션 격리(T21) — 막힘: A19·A20
+- [x] A21·A22 Task별 새 세션·thread 격리(가짜 app-server) · [기록](archive/a/A88-codex-session-manager.md)
+- [ ] A21·A22 실제 codex.exe로 T21 — 막힘: C launcher
 - [x] A23 B 리뷰: AGT 지연 중 긴급 차단 수정·회귀 · [기록](archive/tasks/a-b-review.md)
 - [ ] A23 독립 wire 검증 — 막힘: C
 
@@ -105,7 +110,8 @@
 - [x] A49 로컬 파일 서버 루트·하위 폴더 등급 입력 폼 · [기록](archive/a/A49-local-folder-labels-form.md)
 - [x] A59 폴더 규칙 중복을 대소문자 무시로 검사 · [기록](archive/a/A59-folder-rule-case.md)
 - [ ] A49 등록·출처 규칙 연결 — 막힘: C Registry·safe_path·설정 로딩 담당(#19)
-- [ ] A52 Codex 로그인 화면·`account/read`·로그인/취소/로그아웃(A89, 주입형 클라이언트)
+- [x] A89 Codex 로그인 화면·`account/read`·기기 코드 로그인/취소/로그아웃 · [기록](archive/a/A89-codex-login-panel.md)
+- [ ] A89 API 키 로그인 입력란 — 사용자 결정 필요(A65 비밀값 미수집 결정과 충돌)
 - [ ] A52 실제 app-server로 로그인 — 막힘: C launcher·T43 검증(#21)
 - [x] A54 등록 화면 서버 ID 즉시 안내·bridge에서 B 검사 결과 전달 · [기록](archive/a/A54-server-id-bridge-validation.md)
 - [ ] A81 서버 활성화 단계의 도구별 허용 체크박스(종류가 정해진 도구는 기본 체크)·규칙 변경 시 실행 중 Task 정지 안내(A91, 주입형 저장 포트) — 실제 저장은 막힘: B3.10·C Registry 활성화

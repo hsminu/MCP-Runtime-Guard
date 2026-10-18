@@ -131,6 +131,7 @@ class AssembledGuard:
     registry: LiveCheckedRegistry
     tool_views: tuple[ToolView, ...]
     operator_id: str
+    call_timeout_s: float = 30.0
 
     @property
     def settings(self) -> GuardSettings:
@@ -189,6 +190,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             registry,
             loaded.catalog.tool_views(server_ids),
             inputs.operator_id,
+            inputs.call_timeout_s,
         )
         adopted = True
         return assembled

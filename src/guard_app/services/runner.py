@@ -44,13 +44,18 @@ class RunnerStateError(ValueError):
 
 
 class CodexSessionError(RuntimeError):
-    def __init__(self) -> None:
-        super().__init__("CODEX_SESSION_FAILED")
+    """A fixed stop code; never model, tool or exception text."""
+
+    def __init__(self, code: str = "CODEX_SESSION_FAILED") -> None:
+        self.code = (
+            code if type(code) is str and code.startswith("CODEX_") else "CODEX_SESSION_FAILED"
+        )
+        super().__init__(self.code)
 
 
 class CodexAuthenticationError(CodexSessionError):
     def __init__(self) -> None:
-        RuntimeError.__init__(self, "CODEX_AUTH_FAILED")
+        super().__init__("CODEX_AUTH_FAILED")
 
 
 class CodexSession(Protocol):
@@ -140,11 +145,11 @@ class CodexTaskRunner:
                     failure_handled = True
                     await self._failure("CODEX_AUTH_FAILED")
                     return self._update("halted")
-                except CodexSessionError:
+                except CodexSessionError as error:
                     if self._closed:
                         return self._update("closed")
                     failure_handled = True
-                    await self._failure("CODEX_SESSION_FAILED")
+                    await self._failure(error.code)
                     return self._update("halted")
                 if self._closed:
                     return self._update("closed")
