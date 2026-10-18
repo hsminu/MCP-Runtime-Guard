@@ -1146,7 +1146,7 @@ class ServerWorker:
             params = StdioServerParameters(
                 command=self._reg.command, args=list(self._reg.args),
                 env=self._reg.minimal_env())                        # 부모 환경 전체 상속 금지
-            return stdio_client(params, errlog=self._quarantine.stderr_file())
+            return stdio_client(params, errlog=self._quarantine.stderr_file())   # 2026-10-18: C launcher 파이프 + 바이트 상한 층으로 교체(아래)
         return streamablehttp_client(
             self._reg.url, timeout=self._reg.timeout_s,
             httpx_client_factory=no_redirect_client_factory)        # redirect 비활성
@@ -1155,7 +1155,8 @@ class ServerWorker:
 - `errlog`는 stdio 서버의 stderr를 받는다. 서버가 오류 출력에 문서 내용을 흘릴 수 있으므로 일반 로그가 아닌 격리 파일로 보낸다(실제 파일 객체 필요).
 - `logging_callback`, `message_handler`로 들어오는 서버 로그·진행 알림도 격리 대상이다. 출처 확인 전에는 모델·UI·로그에 나가지 않는다.
 - HTTP 클라이언트 팩토리 인자 이름과 존재 여부는 SDK 버전마다 다를 수 있다. 제공되지 않으면 redirect 비활성 여부를 wire 계수(9.4절)로 실측해 확인한다.
-- stdio 실행은 SDK 내부에서 프로세스를 띄우지만, 실행 파일·인자·환경은 `servers.yaml`의 등록 값만 쓴다. 등록 값 자체는 `security.launcher`의 검증 규칙(절대 경로, 화이트리스트, 인자 리스트)을 통과해야 로드된다.
+- stdio MCP 서버는 SDK의 `stdio_client`가 띄우지 않고 C의 `security.launcher`가 띄워 파이프를 넘긴다(codex.exe와 같은 API). 실행 파일·인자·환경은 `servers.yaml`의 등록 값만 쓰고, 등록 값은 launcher의 검증 규칙(절대 경로, 화이트리스트, 인자 리스트)을 통과해야 로드된다.
+- transport(A)는 그 파이프에서 JSON-RPC 메시지를 한 단위씩 읽으며 바이트를 세고, `tools/list` 수신 상한(페이지 1MiB, 조회 누적 8MiB, contracts 측정 기준 2)을 넘지 않은 메시지만 파싱해 SDK 세션에 넘긴다. HTTP는 응답 본문을 받는 단계에서 같은 기준으로 센다. 초과하면 자르지 않고 미완료 경고로 끝낸다(2026-10-18).
 
 ### 9.2 호출 실행과 시간초과
 
