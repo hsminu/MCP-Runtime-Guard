@@ -1,0 +1,20 @@
+{
+  "codex_version": "0.162.1",
+  "package": {
+    "name": "@openai/codex",
+    "version": "0.162.1-win32-x64",
+    "tarball": "https://registry.npmjs.org/@openai/codex/-/codex-0.162.1-win32-x64.tgz",
+    "integrity": "sha512-dfl4MhHuEi0ARKyNmrTxk+RQmsWNCQAoVLUtrYq+yrW1C8P2sg5ziwgHUUACHjYLKuACV7ARH5Nq5pnCz3GlaQ=="
+  },
+  "executable": {
+    "member": "package/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "file": "codex.exe",
+    "size": 333479728,
+    "sha256": "dd13bdb162a184fa04039488b234a8258ef9b76f84e926c505d5742b19249a6a"
+  },
+  "codex_home": {
+    "config.toml": "246c91050d87e7695e9c767f5d1bd9ff3d9049463c93f83455f07d15ecc5bbdf",
+    "model_catalog.json": "ab36eb06b1fa3c5e675fec92c74af126ba04d5017b1423b287ad926b33c3aded"
+  },
+  "allowed_models": ["gpt-6.1-sol"]
+}

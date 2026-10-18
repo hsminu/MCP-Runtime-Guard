@@ -1,0 +1,72 @@
+# MCP Runtime Guard L1 설정 · Codex 0.162.1 (contracts.md 2026-10-15 하네스 결정, 개발문서 10.4절)
+# 앱 시작 때 앱 전용 CODEX_HOME에 그대로 쓰고 Task 시작마다 해시로 확인한다. 바꾸면 L2 통과 뒤 PR로 올린다.
+# Task별 값(sqlite_home)은 넣지 않는다. launcher가 -c 인자로 넘긴다.
+# 0.162.1은 모르는 feature 키를 경고만 하고 무시한다. 키는 features/src/lib.rs의 표와 대조했다.
+
+model = "gpt-6.1-sol"
+# 상대 경로는 이 파일이 있는 CODEX_HOME 기준으로 푼다. 서버가 내려주는 모델 정보를 쓰지 않는다(C-CODEX-03).
+model_catalog_json = "model_catalog.json"
+# 자격증명은 Codex가 Windows 자격증명 관리자에 직접 둔다. keyring을 못 쓰면 파일로 바꾸지 않고 실패한다.
+cli_auth_credentials_store = "keyring"
+web_search = "disabled"
+check_for_update_on_startup = false
+project_doc_max_bytes = 0
+project_root_markers = []
+
+[features]
+# 셸·명령 실행
+shell_tool = false
+unified_exec = false
+unified_exec_tty = false
+shell_snapshot = false
+sleep_tool = false
+# 파일·이미지 읽기(C-CODEX-02)
+view_image = false
+# 하위 agent·code mode(C-CODEX-03)
+multi_agent = false
+multi_agent_v2 = false
+code_mode = false
+code_mode_host = false
+# apps·plugins·skills
+apps = false
+plugins = false
+remote_plugin = false
+plugin_sharing = false
+tool_suggest = false
+skill_search = false
+skill_mcp_dependency_install = false
+# 이미지 생성·브라우저·computer use·음성
+image_generation = false
+browser_use = false
+browser_use_external = false
+browser_use_full_cdp_access = false
+in_app_browser = false
+computer_use = false
+realtime_conversation = false
+# 기타 실행·확장 경로
+goals = false
+hooks = false
+memories = false
+workspace_dependencies = false
+worktrees = false
+daemon_auto_start = false
+guardian_approval = false
+api_key_model_discovery = false
+auth_elicitation = false
+tool_call_mcp_elicitation = false
+
+# 내장 skill 목록과 사용 안내를 모델 프롬프트에 넣지 않는다(로컬 경로 포함).
+[skills]
+include_instructions = false
+
+[skills.bundled]
+enabled = false
+
+[analytics]
+enabled = false
+
+[feedback]
+enabled = false
+
+[history]
+persistence = "none"
