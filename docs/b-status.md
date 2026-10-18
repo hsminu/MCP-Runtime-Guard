@@ -49,7 +49,7 @@
 - [x] B3.4 출처 접두어 매칭·중복은 최고 등급·미매칭은 Unclassified
 - [x] B3.5 도구 단위 READ는 `prefix: []` 규칙만, 없으면 Unclassified
 - [x] B3.6 목적지는 등록 목록 정확 일치, 이름·IP·DNS·stdio를 신뢰 근거로 쓰지 않음
-- [ ] B3.7 FP-01 JCS 지문 함수
+- [x] B3.7 FP-01 JCS 지문 함수 · [기록](archive/b/B3.7-jcs-fingerprint.md)
 - [ ] B3.8 DESC-01 검토된 설명 필드
 - [ ] B3.9 설정·Profile 로딩과 policy_version 계산(10-18 결정)
 - [ ] B3.10 정책 변경 명령·Task 정지 처리(10-18 결정)
