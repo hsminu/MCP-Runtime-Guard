@@ -21,12 +21,14 @@ from typing import Literal
 
 from guard_app.core.approval_time import approval_event_time
 from guard_app.core.taint import merge
-from guard_app.domain.contracts import ApprovalRecord
+from guard_app.domain.contracts import ApprovalRecord, TaskIdentity
 from guard_app.domain.enums import (
     ApprovalStatus,
     Decision,
     Label,
     RequestStatus,
+    SessionEvent,
+    SystemStopReason,
     TaskStatus,
     ToolKind,
 )
@@ -557,6 +559,52 @@ class SQLiteStore:
         단일 읽기 트랜잭션에서 현재 Task를 복원하며 상태를 변경하지 않는다.
         """
         return _store_result(self._list_tasks)
+
+    async def record_session_event(
+        self,
+        identity: TaskIdentity,
+        event: SessionEvent,
+        *,
+        at_utc: datetime,
+        reason: SystemStopReason | None = None,
+    ) -> None:
+        """STOP-01 합의 전 제안: 사실 감사 ACK. 기존 스키마·Store 포트는 유지한다."""
+        return _store_result(lambda: self._record_session_event(identity, event, at_utc, reason))
+
+    def _record_session_event(
+        self,
+        identity: TaskIdentity,
+        event: SessionEvent,
+        at_utc: datetime,
+        reason: SystemStopReason | None,
+    ) -> None:
+        if type(identity) is not TaskIdentity or type(event) is not SessionEvent:
+            raise StoreError(Reason.INVALID_ARGUMENTS)
+        identity = TaskIdentity.model_validate(identity)
+        if (event is SessionEvent.STOPPED and type(reason) is not SystemStopReason) or (
+            event is SessionEvent.REQUEST_USER_INPUT and reason is not None
+        ):
+            raise StoreError(Reason.INVALID_ARGUMENTS)
+        timestamp = _utc_text(at_utc)
+        with self._transaction(write=True) as connection:
+            state = self._load_task_locked(connection, identity.task_id)
+            if state.epoch != identity.epoch:
+                raise StoreError(Reason.STATE_MISSING)
+            if event is SessionEvent.STOPPED and state.status not in (
+                TaskStatus.HALTED,
+                TaskStatus.UNKNOWN_OUTCOME,
+                TaskStatus.CLOSED,
+            ):
+                raise StoreError(Reason.STATE_COMMIT_FAILED)
+            self._insert_audit(
+                connection,
+                event.value,
+                task_id=identity.task_id,
+                request_id=None,
+                reason=Reason.OK if reason is None else Reason(reason.value),
+                timestamp=timestamp,
+                session_epoch=identity.epoch,
+            )
 
     def _list_tasks(self) -> tuple[TaskState, ...]:
         with self._transaction(write=False) as connection:
@@ -1455,6 +1503,7 @@ class SQLiteStore:
         label: Label | None = None,
         exception_type: str | None = None,
         system_expiry: bool = False,
+        session_epoch: int | None = None,
     ) -> None:
         if self._audit_id_factory is None:
             raise StoreError()
@@ -1469,7 +1518,9 @@ class SQLiteStore:
                 event_type,
                 reason.value,
                 None if label is None else int(label),
-                json.dumps({"source": "guard_expiry"}, separators=(",", ":"))
+                json.dumps({"epoch": session_epoch}, separators=(",", ":"))
+                if session_epoch is not None
+                else json.dumps({"source": "guard_expiry"}, separators=(",", ":"))
                 if system_expiry
                 else None
                 if exception_type is None

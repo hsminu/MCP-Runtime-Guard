@@ -25,6 +25,13 @@ def _require_utc(value: datetime) -> datetime:
     return value
 
 
+class TaskIdentity(Frozen):
+    """STOP-01 합의 전 제안. 신뢰된 세션과 결속한 Task 생애 식별자."""
+
+    task_id: Identifier
+    epoch: int = Field(ge=0)
+
+
 class RawResult(Frozen):
     """A→응답 게이트 전용 격리 자료. repr 제외는 공개 권한을 뜻하지 않는다.
 

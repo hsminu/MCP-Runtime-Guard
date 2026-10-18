@@ -27,7 +27,7 @@ from guard_app.domain.contracts import (
     Released,
     Withheld,
 )
-from guard_app.domain.enums import ApprovalStatus, Decision, Label, TaskStatus
+from guard_app.domain.enums import ApprovalStatus, Decision, Label, SystemStopReason, TaskStatus
 from guard_app.domain.errors import ResolutionError, StoreError
 from guard_app.domain.models import PolicyDecision, ProposedCall, ResolvedRequest, TaskState
 from guard_app.domain.reasons import Reason
@@ -282,6 +282,23 @@ class ApprovalService:
         if type(operator_id) is not str or operator_id != self._approver_id:
             raise ApprovalConfigError("사전 등록 운영자만 승인 제어 채널을 받을 수 있다")
         return HumanControl(self, operator_id, self._channel_key)
+
+    def _fail_system_stop(self, task_id: str, epoch: int) -> None:
+        """실패한 제어를 성공 무효화로 알리지 않는다. 예약 실행은 자체 경계가 확정한다."""
+        for approval_id, owner in tuple(self._pending.items()):
+            if (
+                owner.task_id == task_id
+                and owner.epoch == epoch
+                and not owner.handle._completed
+                and approval_id not in self._inflight_tasks
+                and not self._host.task_lock(task_id).locked()
+            ):
+                self._discard_snapshot(approval_id)
+                self._complete(
+                    approval_id,
+                    Denied(request_id=owner.request_id, reasons=(Reason.INTERNAL_ERROR,)),
+                    "failed",
+                )
 
     async def open(
         self, req: ResolvedRequest, state: TaskState, decision: PolicyDecision
@@ -1138,16 +1155,15 @@ class ApprovalService:
         async def on_error(exc: BaseException) -> Denied:
             if (
                 isinstance(exc, ResolutionError)
-                and exc.reason is Reason.POLICY_CHANGED
+                and exc.reason
+                in {Reason.POLICY_CHANGED, *(Reason(item.value) for item in SystemStopReason)}
                 and task_id is not None
                 and snapshot is not None
             ):
-                await self.invalidate_task(
-                    task_id, Reason.POLICY_CHANGED, cause="invalidated", notify=False
-                )
-                await self._halt_snapshot_task(snapshot, Reason.POLICY_CHANGED)
-                self._publish_task_invalidations(task_id, Reason.POLICY_CHANGED)
-                return Denied(request_id=None, reasons=(Reason.POLICY_CHANGED,))
+                await self.invalidate_task(task_id, exc.reason, cause="invalidated", notify=False)
+                await self._halt_snapshot_task(snapshot, exc.reason)
+                self._publish_task_invalidations(task_id, exc.reason)
+                return Denied(request_id=None, reasons=(exc.reason,))
             if approval_id is not None:
                 self._causes[approval_id] = "failed"
             for known_id, owner in self._pending.items():

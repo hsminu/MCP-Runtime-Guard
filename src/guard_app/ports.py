@@ -15,10 +15,19 @@ from guard_app.domain.contracts import (
     RawResult,
     RegisteredServer,
     ScanReport,
+    TaskIdentity,
     ToolView,
     TrustedContext,
 )
-from guard_app.domain.enums import ApprovalStatus, Label, RegStatus, RequestStatus, TaskStatus
+from guard_app.domain.enums import (
+    ApprovalStatus,
+    Label,
+    RegStatus,
+    RequestStatus,
+    SessionEvent,
+    SystemStopReason,
+    TaskStatus,
+)
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
     AccessResult,
@@ -57,6 +66,24 @@ class PendingFinals(Protocol):
     async def cancel_pending(self, task_id: str, *, expected_epoch: int) -> int: ...
 
     async def aclose(self) -> None: ...
+
+
+class SessionAudit(Protocol):
+    """STOP-01 합의 전 제안. 구성 경로가 연결하는 내구성 사실 감사.
+
+    Task·epoch·UTC·고정 사실/사유만 받고 원문·질문·예외는 받지 않는다.
+    STOPPED에는 reason이 필요하고 REQUEST_USER_INPUT에는 reason이 없다.
+    실패는 StoreError이며 ACK 전에 내구성 커밋해야 한다. 기존 Store는 유지한다.
+    """
+
+    async def record_session_event(
+        self,
+        identity: TaskIdentity,
+        event: SessionEvent,
+        *,
+        at_utc: datetime,
+        reason: SystemStopReason | None = None,
+    ) -> None: ...
 
 
 class Transport(Protocol):
