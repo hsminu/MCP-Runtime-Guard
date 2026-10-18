@@ -4,16 +4,19 @@
 Store의 날짜와 ID는 호출자가 공급하며 포트에서 생성하지 않는다.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Literal, Protocol
 
 from guard_app.domain.contracts import (
     ApprovalRecord,
     Conversation,
+    FingerprintChange,
     ModelTurn,
     PendingFinal,
     RawResult,
     RegisteredServer,
+    RegistryEntry,
     ScanReport,
     TaskIdentity,
     ToolView,
@@ -141,6 +144,92 @@ class Registry(Protocol):
     def status(self, server_id: str) -> RegStatus | None: ...
 
     def fingerprint(self, tool: ToolSpec) -> str | None: ...
+
+
+class RegistryStore(Protocol):
+    """B6-06 합의 전 제안. 신뢰된 A/C 제어 경로만 호출하는 단일 writer 저장.
+
+    모든 쓰기는 등록 revision +1·정의/검사·원문 없는 감사를 같은 트랜잭션에
+    커밋하고 전체 사본을 반환한다. 실패는 StoreError이며 원문을 담지 않는다.
+    지문은 C가 tools/list 원본으로 계산한다. 저장소는 형식만 검사한다.
+
+    C: 연결 직후 실제 정의 대조 → record_fingerprint_change 커밋 → 반환 사본으로
+    동기 Registry 캐시 즉시 교체(반환과 교체 사이 await 금지) → changed_tools마다
+    await GuardService.invalidate_tool. 커밋 실패 시 그 서버를 사용하지 않는다.
+    이 순서만으로 이미 진행 중인 예약/전송 경쟁(S03)이 해결되지는 않는다.
+
+    A: 화면 확인 → prepare_server_access_change → 설정 문서 저장 →
+    apply_policy_change 성공 → activate_server → 캐시 즉시 교체. 앞 단계 실패는
+    PENDING 유지다. 활성화 실패 시 캐시는 PENDING/실행 차단을 유지한다. COMMIT ACK
+    불명이면 DB는 ACTIVE일 수도 있어 자동 실행/재시도하지 않는다. 저장 후 정책 적용
+    실패 시 Guard의 global halt를 유지한다. 역순 활성화는 이전 규칙과 겹쳐 금지한다.
+    A는 정책 저장/적용·활성화·Task 생성을 직렬화하고 충돌 시 다시 확인받는다.
+
+    재시작 list_registrations는 캐시 복원용이다. DB ACTIVE만으로 실행하지 않고
+    연결마다 실제 tools/list와 다시 대조한다. C는 별도 SQL 경로를 만들지 않는다.
+    """
+
+    async def list_registrations(self) -> tuple[RegistryEntry, ...]: ...
+
+    async def load_registration(self, server_id: str) -> RegistryEntry | None: ...
+
+    async def register_server(
+        self, registration: RegisteredServer, *, at_utc: datetime
+    ) -> RegistryEntry:
+        """PENDING·revision 0·빈 검토 설명 입력만 허용. 중복은 APPROVAL_RACE."""
+        ...
+
+    async def record_scan_report(
+        self, scan_id: str, report: ScanReport, *, at_utc: datetime
+    ) -> RegistryEntry:
+        """검사는 상태를 바꾸지 않는다. SDK 원문 Finding.description은 받지 않는다."""
+        ...
+
+    async def activate_server(
+        self,
+        server_id: str,
+        *,
+        expected_row_revision: int,
+        tool_fingerprints: Mapping[str, str],
+        reviewed_by: str,
+        at_utc: datetime,
+        reviewed_scan_id: str | None = None,
+    ) -> RegistryEntry:
+        """PENDING만 활성화. 본 지문 전체 일치와 선택한 검사의 서버/지문 집합 검사.
+
+        검사 경고·실패·미완료를 자동 차단/안전으로 번역하지 않는다. reviewed_by는
+        모델·SDK 출력에서 가져오지 않는 신뢰된 단일 운영자 ID다.
+        """
+        ...
+
+    async def record_fingerprint_change(
+        self, server_id: str, tools: tuple[ToolSpec, ...], *, at_utc: datetime
+    ) -> FingerprintChange:
+        """revision 조건 없이 관측 적용. ACTIVE 변경은 PENDING, BLOCKED는 유지.
+
+        새/변경 도구의 검토 설명은 비우고 관측 입력 설명으로 대체하지 않는다.
+        변경이 없어도 성공한 관측 쓰기는 revision과 감사를 남긴다.
+        """
+        ...
+
+    async def block_server(
+        self, server_id: str, *, expected_row_revision: int, at_utc: datetime
+    ) -> RegistryEntry: ...
+
+    async def request_review(
+        self, server_id: str, *, expected_row_revision: int, at_utc: datetime
+    ) -> RegistryEntry: ...
+
+    async def save_reviewed_descriptions(
+        self,
+        server_id: str,
+        descriptions: Mapping[str, str],
+        *,
+        expected_row_revision: int,
+        at_utc: datetime,
+    ) -> RegistryEntry:
+        """PENDING에서만 A의 검토 입력을 부분 갱신. 원본 자동 대체/활성화 없음."""
+        ...
 
 
 class Store(Protocol):

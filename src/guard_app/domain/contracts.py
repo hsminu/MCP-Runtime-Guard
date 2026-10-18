@@ -292,6 +292,64 @@ class RegisteredServer(Frozen):
         return self
 
 
+class StoredScanReport(Frozen):
+    """B6-06 합의 전 제안. 원문은 report_json에만 보관하는 저장 검사 사본."""
+
+    scan_id: Identifier
+    report: ScanReport = Field(repr=False)
+    stored_at_utc: datetime
+
+    @field_validator("stored_at_utc")
+    @classmethod
+    def check_utc(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
+
+class RegistryEntry(Frozen):
+    """B6-06 합의 전 제안. 기존 등록 DTO를 바꾸지 않는 저장 메타데이터.
+
+    last_scan은 가장 최근 저장 검사다. reviewed_scan_id는 사용자가 활성화 때
+    확인한 검사이며 서로 다를 수 있다. 이 사본만으로 연결 실행을 허가하지 않는다.
+    """
+
+    registration: RegisteredServer = Field(repr=False)
+    last_scan: StoredScanReport | None = Field(default=None, repr=False)
+    reviewed_scan_id: Identifier | None = None
+    reviewed_by: Identifier | None = Field(default=None, repr=False)
+    updated_at_utc: datetime
+
+    @property
+    def last_scan_id(self) -> str | None:
+        return None if self.last_scan is None else self.last_scan.scan_id
+
+    @field_validator("updated_at_utc")
+    @classmethod
+    def check_utc(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
+    @model_validator(mode="after")
+    def check_scan_ownership(self) -> Self:
+        if self.last_scan is not None and (
+            self.last_scan.report.server_id != self.registration.server_id
+        ):
+            raise ValueError("stored scan must belong to the registered server")
+        return self
+
+
+class FingerprintChange(Frozen):
+    """B6-06 합의 전 제안. 추가·삭제를 포함한 변경 이름과 커밋된 전체 사본."""
+
+    entry: RegistryEntry = Field(repr=False)
+    changed_tools: tuple[Identifier, ...] = Field(repr=False)
+
+    @field_validator("changed_tools")
+    @classmethod
+    def check_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))):
+            raise ValueError("changed tool names must be sorted and unique")
+        return value
+
+
 class ToolView(Frozen):
     """ACTIVE 등록 도구만으로 구성하는 모델용 view. 제어 명령은 포함하지 않는다."""
 
