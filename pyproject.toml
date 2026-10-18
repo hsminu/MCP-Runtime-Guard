@@ -55,13 +55,13 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "RET", "BLE", "S", "ASYNC",
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
 # Qt가 정한 camelCase 재정의 이름(closeEvent·keyPressEvent 등)은 영구 예외다.
-"src/guard_app/__main__.py" = ["N802", "E501"]
-"src/guard_app/ui/**" = ["N802", "N815"]
+"src/guard_app/__main__.py" = ["N802"]
+"src/guard_app/ui/**" = ["N802"]
 # ---- A+B 통합 기준선(2026-10-14) ----
 # 통합 시점에 이미 있던 위반만 파일별로 면제한다. 새 파일과 B 파일에는 적용하지 않는다.
 # 담당자가 해당 파일을 고치면 항목을 지운다. 범위는 docs/archive/integration-a-b.md 참고.
-"src/guard_app/adapters/mcp_transport.py" = ["N818", "S101"]
-"src/guard_app/services/bridge.py" = ["ASYNC109", "S101", "SIM105"]
+# ResultTooLarge는 DispatchError.exception_type(감사 메타데이터) 값이라 이름을 유지한다.
+"src/guard_app/adapters/mcp_transport.py" = ["N818"]
 "examples/**" = ["E501", "I001", "PT018", "S101"]
 "tests/unit/test_agt.py" = ["PT018"]
 "tests/unit/test_agt_real.py" = ["ASYNC110", "B007", "I001", "PT006", "PT012", "PT018"]
@@ -81,22 +81,6 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "RET", "BLE", "S", "ASYNC",
 
 [tool.ruff.format]
 quote-style = "double"
-# A+B 통합 기준선(2026-10-14): 아직 포맷하지 않은 A 파일. 작업 중 충돌을 피하려고
-# 통합 브랜치에서 일괄 포맷하지 않았다. A가 원하는 시점에 포맷하고 목록을 지운다.
-exclude = [
-  "src/guard_app/adapters/model_client.py",
-  "tests/unit/test_approval_detail.py",
-  "tests/unit/test_bridge.py",
-  "tests/unit/test_call_logs.py",
-  "tests/unit/test_model_client.py",
-  "tests/unit/test_runner.py",
-  "tests/unit/test_task_status.py",
-  "tests/unit/test_ui_approvals.py",
-  "tests/unit/test_ui_keyboard.py",
-  "tests/unit/test_ui_overview.py",
-  "tests/unit/test_ui_read_only_pages.py",
-  "tests/unit/test_ui_responsive_detail.py",
-]
 
 [tool.mypy]
 python_version = "3.12"
@@ -111,32 +95,23 @@ module = ["examples.*", "tests.*"]
 follow_imports = "skip"
 
 [[tool.mypy.overrides]]
-# A+B 통합 기준선(2026-10-14): A 모듈은 미타입 함수를 허용하되 본문의 타입 오류는 검사한다.
+# A+B 통합 기준선(2026-10-14): 미타입 함수를 허용하되 본문의 타입 오류는 검사한다.
+# A 모듈은 2026-10-18(A43)에 strict로 옮겼다. 남은 것은 AGT 제거 대상(B2.11)과
+# Scanner 어댑터(C)다.
 module = [
-  "guard_app.__main__",
-  "guard_app.adapters.*",
-  "guard_app.services.bridge",
-  "guard_app.services.runner",
-  "guard_app.ui.*",
+  "guard_app.adapters.agt",
+  "guard_app.adapters.agt_real",
+  "guard_app.adapters.cisco",
+  "guard_app.adapters.cisco_aggregation",
+  "guard_app.adapters.cisco_llm",
 ]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 disallow_untyped_calls = false
 check_untyped_defs = true
 
-[[tool.mypy.overrides]]
-# 기준선: PySide6 스텁의 QApplication.instance() 반환형이 QCoreApplication이다.
-module = "guard_app.__main__"
-disable_error_code = ["attr-defined"]
-
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
 
-[[tool.mypy.overrides]]
-# RuntimePanel now narrows TaskProjection explicitly and has complete annotations.
-module = "guard_app.ui.runtime"
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-disallow_untyped_calls = true

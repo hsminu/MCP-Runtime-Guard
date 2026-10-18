@@ -11,7 +11,7 @@ import asyncio
 import logging
 import math
 import sys
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -186,7 +186,7 @@ def _install_sdk_log_containment() -> None:
     if getattr(previous, "_guard_sdk_containment", False):
         return
 
-    def record_factory(*args, **kwargs):
+    def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
         record = previous(*args, **kwargs)
         if _SDK_LOG_SCOPE.get():
             record.msg = "MCP_LOG_WITHHELD"
@@ -217,7 +217,7 @@ def stdio_stream_factory(server: StdioServerParameters, *, errlog: TextIO) -> St
     _install_sdk_log_containment()
 
     @asynccontextmanager
-    async def connect():
+    async def connect() -> AsyncIterator[tuple[Any, ...]]:
         token = _SDK_LOG_SCOPE.set(True)
         try:
             async with stdio_client(parameters, errlog=errlog) as streams:
@@ -245,7 +245,7 @@ def validated_stdio_stream_factory(
     _install_sdk_log_containment()
 
     @asynccontextmanager
-    async def connect():
+    async def connect() -> AsyncIterator[tuple[Any, ...]]:
         gate = IngressGate()
         reader = PipeFrameReader(read_bytes, gate)
         read_send, read_receive = anyio.create_memory_object_stream[SessionMessage](0)
@@ -348,7 +348,7 @@ def http_stream_factory(
     _install_sdk_log_containment()
 
     @asynccontextmanager
-    async def connect():
+    async def connect() -> AsyncIterator[tuple[Any, ...]]:
         token = _SDK_LOG_SCOPE.set(True)
         get_started = False
         gate = IngressGate()
@@ -780,7 +780,7 @@ def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
     _install_sdk_log_containment()
 
     @asynccontextmanager
-    async def open_session():
+    async def open_session() -> AsyncIterator[_ToolSession]:
         token = _SDK_LOG_SCOPE.set(True)
         try:
             async with stream_factory() as streams:
@@ -1032,8 +1032,7 @@ class ServerWorker:
                         item = await self._queue.get()
                         if item is _STOP:
                             break
-                        assert isinstance(item, _Command)
-                        if item.future.done():
+                        if not isinstance(item, _Command) or item.future.done():
                             continue
                         self._active = item
                         try:
@@ -1078,7 +1077,8 @@ class ServerWorker:
 
     async def _watch_ingress(self) -> None:
         gate = self._ingress_gate
-        assert gate is not None
+        if gate is None:
+            return
         await gate.failed.wait()
         self._quiesce_failed_ingress()
 

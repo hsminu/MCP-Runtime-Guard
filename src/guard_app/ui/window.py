@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from guard_app.domain.enums import TaskStatus
-from guard_app.services.bridge import BridgeState, CommandStage, LifecycleEvent
+from guard_app.services.bridge import BridgeState, CommandStage, LifecycleEvent, TaskProjection
 
 from .approvals import ApprovalListPage, ApprovalPage, ApprovalQuery
 from .call_logs import CallLogPage, DetailRequest, PublicCallDetail, PublicCallSummary
@@ -345,7 +345,7 @@ class GuardWindow(QMainWindow):
             None if self._runtime_panel is None else self._runtime_panel.current
         )
 
-    def _sync_selected_task(self, snapshot) -> None:
+    def _sync_selected_task(self, snapshot: TaskProjection | None) -> None:
         """One source for the selected Task's status, mode badge and title."""
         self.set_task_status(None if snapshot is None else snapshot.status)
         if snapshot is None:

@@ -10,6 +10,7 @@ cross into Qt signals. Raw tool results never cross this boundary.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import threading
 from collections import OrderedDict, deque
@@ -470,10 +471,9 @@ class BackendBridge(QObject):
         self.lifecycle_changed.emit(LifecycleEvent(BridgeState.CLOSING, "CLOSING"))
         self._reject_ingress("SHUTTING_DOWN")
         if loop is not None and stop_async is not None:
-            try:
+            # The backend loop may already have completed.
+            with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(stop_async.set)
-            except RuntimeError:
-                pass  # Backend loop has already completed.
 
     @staticmethod
     def _id(value: str | None, *, generate: bool = False) -> str:
@@ -653,7 +653,8 @@ class BackendBridge(QObject):
             queue = self._urgent_queue
         else:
             queue = self._control_queue
-        assert queue is not None
+        if queue is None:
+            raise RuntimeError("BRIDGE_QUEUE_UNAVAILABLE")
         accepted: CommandEvent | None = None
         rejection = "CLOSING"
         with self._state_lock:
@@ -912,9 +913,9 @@ class BackendBridge(QObject):
             return not isinstance(boot.exception(), BackendCleanupError)
         if not self._adopt_bootstrap_result(boot):
             return False
-        return await self._cleanup_bindings(timeout=max(0.0, deadline - loop.time()))
+        return await self._cleanup_bindings(limit_s=max(0.0, deadline - loop.time()))
 
-    async def _cleanup_bindings(self, *, timeout: float | None = None) -> bool:
+    async def _cleanup_bindings(self, *, limit_s: float | None = None) -> bool:
         bindings = self._bindings
         self._bindings = None
         if bindings is None or bindings.close is None:
@@ -922,14 +923,15 @@ class BackendBridge(QObject):
         if not callable(bindings.close):
             return False
 
+        close = bindings.close
+
         async def invoke_close() -> None:
-            assert bindings.close is not None
-            await bindings.close()
+            await close()
 
         cleanup = asyncio.create_task(invoke_close())
         cleanup.add_done_callback(self._consume_task)
         done, _ = await asyncio.wait(
-            {cleanup}, timeout=self._shutdown_timeout if timeout is None else timeout
+            {cleanup}, timeout=self._shutdown_timeout if limit_s is None else limit_s
         )
         if cleanup not in done:
             cleanup.cancel()
@@ -943,7 +945,8 @@ class BackendBridge(QObject):
             queue = self._urgent_queue
         else:
             queue = self._control_queue
-        assert queue is not None
+        if queue is None:
+            raise RuntimeError("BRIDGE_QUEUE_UNAVAILABLE")
         while True:
             command = await queue.get()
             operation = asyncio.create_task(self._operate(command, queue))
@@ -996,7 +999,8 @@ class BackendBridge(QObject):
 
     async def _execute(self, command: _Command) -> str:
         bindings = self._bindings
-        assert bindings is not None
+        if bindings is None:
+            raise RuntimeError("BRIDGE_BINDINGS_UNAVAILABLE")
         if command.action == "new_session":
             if bindings.create_session is None or command.options is None:
                 return "SESSION_CREATION_UNAVAILABLE"
@@ -1032,7 +1036,8 @@ class BackendBridge(QObject):
                         or not runner.can_accept_message
                     ):
                         return "MESSAGE_UNAVAILABLE"
-                    assert command.user_text is not None
+                    if command.user_text is None:
+                        return "MESSAGE_UNAVAILABLE"
                     runner.add_user_message(command.user_text)
                     self.conversation_ready.emit(
                         ConversationEvent(

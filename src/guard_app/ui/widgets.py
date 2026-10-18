@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import ClassVar
 
 import shiboken6
@@ -145,7 +146,7 @@ class StateMessage(QFrame):
         layout.addWidget(self.message)
         self.set_state(LoadState.UNAVAILABLE)
 
-    def set_state(self, state: LoadState, *, as_of=None) -> None:
+    def set_state(self, state: LoadState, *, as_of: datetime | None = None) -> None:
         message = self._MESSAGES.get(state, "상태 확인 필요")
         if state == LoadState.STALE and as_of is not None:
             message += f" · 마지막 확인 {format_kst(as_of)}"

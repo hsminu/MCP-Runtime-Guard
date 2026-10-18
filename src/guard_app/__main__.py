@@ -7,6 +7,7 @@ import importlib.util
 import sys
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication
 
 from guard_app.services.bridge import BackendBridge
@@ -53,7 +54,8 @@ def main() -> int:
         parser.error("제품 실행에는 기존 부모 폴더 안의 --db-path SQLite 경로를 지정해야 한다")
     store_title = "SQLite Store" if not args.demo or args.store == "sqlite" else "메모리 Store"
 
-    app = QApplication.instance() or QApplication(sys.argv[:1])
+    existing = QApplication.instance()
+    app = existing if isinstance(existing, QApplication) else QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     if args.demo:
         from examples.synthetic_app import bootstrap
@@ -74,7 +76,7 @@ def main() -> int:
         bridge = BackendBridge(lambda: bootstrap_product(args.db_path))
 
     class ApplicationWindow(GuardWindow):
-        def closeEvent(self, event):
+        def closeEvent(self, event: QCloseEvent) -> None:
             self.clear_session_content()
             bridge.close()
             self.hide()

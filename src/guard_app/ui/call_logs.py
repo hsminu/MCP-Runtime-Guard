@@ -485,7 +485,7 @@ class CallLogPage(QWidget):
         )
         self.detail_button.setEnabled(enabled and self._selected_call_id() is not None)
 
-    def _apply_filter(self, *_args) -> None:
+    def _apply_filter(self, *_args: object) -> None:
         selected = self._selected_call_id()
         term = self.search.text().strip().casefold()
         self._visible_rows = [
@@ -532,7 +532,7 @@ class CallLogPage(QWidget):
         self.detail_button.setEnabled(self._selected_call_id() is not None)
         self.csv_button.setEnabled(self._state == LoadState.READY and bool(self._visible_rows))
 
-    def _open_selected(self, *_args) -> None:
+    def _open_selected(self, *_args: object) -> None:
         call_id = self._selected_call_id()
         if call_id is None:
             return

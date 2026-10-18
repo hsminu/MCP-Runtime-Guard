@@ -302,7 +302,7 @@ class ServerListPage(QWidget):
         self.transport_filter.setEnabled(enabled)
         self.status_filter.setEnabled(enabled)
 
-    def _apply_filters(self, *_args) -> None:
+    def _apply_filters(self, *_args: object) -> None:
         previous_id = self._selected_id()
         term = self.search.text().strip().casefold()
         transport = self.transport_filter.currentData()
@@ -394,7 +394,7 @@ class ServerListPage(QWidget):
                 self._target_id = None
                 return
 
-    def _open_selected(self, *_args) -> None:
+    def _open_selected(self, *_args: object) -> None:
         selected_rows = self.table.selectionModel().selectedRows()
         if len(selected_rows) != 1:
             return

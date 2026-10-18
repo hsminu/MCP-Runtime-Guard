@@ -151,7 +151,7 @@ class LocalDraftPreview:
 class ServerAddForm(QWidget):
     """Prepare one local draft without calling Registry or changing status."""
 
-    localDraftPrepared = Signal(object)
+    local_draft_prepared = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -530,7 +530,7 @@ class ServerAddForm(QWidget):
         self._validated_draft = draft
         self._prepared = True
         self._refresh()
-        self.localDraftPrepared.emit(self._preview_for(draft))
+        self.local_draft_prepared.emit(self._preview_for(draft))
 
 
 # ---- 로컬 파일 MCP 서버의 폴더 등급 초안 (contracts 2026-10-15 로컬 파일 접근 결정) ----
@@ -585,7 +585,7 @@ class LocalFolderDraft:
 
 class _FolderRuleRow(QWidget):
     changed = Signal()
-    removeRequested = Signal(object)
+    remove_requested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -616,7 +616,7 @@ class _FolderRuleRow(QWidget):
         layout.addWidget(self.error)
         self.prefix.textChanged.connect(lambda _text: self.changed.emit())
         self.label.currentIndexChanged.connect(lambda _index: self.changed.emit())
-        self.remove_button.clicked.connect(lambda: self.removeRequested.emit(self))
+        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -636,7 +636,7 @@ class LocalFolderRulesForm(QWidget):
     file matching no rule is Unclassified (B Catalog, design 4.2).
     """
 
-    folderDraftPrepared = Signal(object)
+    folder_draft_prepared = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -694,7 +694,7 @@ class LocalFolderRulesForm(QWidget):
     def add_rule(self) -> _FolderRuleRow:
         row = _FolderRuleRow()
         row.changed.connect(self._input_changed)
-        row.removeRequested.connect(self._remove_rule)
+        row.remove_requested.connect(self._remove_rule)
         self.rows.append(row)
         self._rows_layout.addWidget(row)
         self._input_changed()
@@ -776,4 +776,4 @@ class LocalFolderRulesForm(QWidget):
         text = json.dumps(
             {"root": "입력됨 · 값 미표시", "rules": shown}, ensure_ascii=False, indent=2
         )
-        self.folderDraftPrepared.emit(LocalDraftPreview(transport="stdio", text=text))
+        self.folder_draft_prepared.emit(LocalDraftPreview(transport="stdio", text=text))

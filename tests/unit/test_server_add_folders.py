@@ -63,7 +63,7 @@ def test_prepared_draft_keeps_segments_and_preview_hides_the_root(
     _set_rule(form, 2, "private", "CONFIDENTIAL")
     _set_rule(form, 3, "private/public", "PUBLIC")  # 겹침 허용: 판정은 B가 최댓값으로 한다.
     previews: list[object] = []
-    form.folderDraftPrepared.connect(previews.append)
+    form.folder_draft_prepared.connect(previews.append)
     form.prepare_button.click()
 
     assert form.validated_draft == LocalFolderDraft(

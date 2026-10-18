@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -623,7 +624,7 @@ class OverviewPage(QWidget):
         self.flow_state.setVisible(not ready or not buckets or surface.state == LoadState.STALE)
         self.flow_state.set_state(surface.state, as_of=surface.as_of)
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._reflow()
 

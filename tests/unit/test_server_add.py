@@ -212,7 +212,7 @@ def test_duplicate_local_click_emits_once_without_claiming_registration(
 ) -> None:
     _valid_stdio(form)
     previews: list[LocalDraftPreview] = []
-    form.localDraftPrepared.connect(previews.append)
+    form.local_draft_prepared.connect(previews.append)
     form.prepare_button.click()
     first_draft = form.validated_draft
     form.prepare_button.click()
@@ -379,7 +379,7 @@ def test_namespace_server_id_error_is_immediate_and_never_prepares_a_draft(
     form.transport.setCurrentIndex(form.transport.findData(transport))
     form.url.setText("https://mcp.example.test/mcp")
     previews: list[LocalDraftPreview] = []
-    form.localDraftPrepared.connect(previews.append)
+    form.local_draft_prepared.connect(previews.append)
     assert form.prepare_button.isEnabled()
 
     form.server_id.setText(server_id)
