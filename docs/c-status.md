@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-15 · main `d315d71` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-18 · main `a2698b2` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -11,7 +11,8 @@
 | AGT 제거(구현) | A·B | C2.9, C6.3, C6.4, C6.9 |
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
-| Codex 세션 관리자(하네스 연결) | A | C6.14, C6.15 |
+| Codex 세션 관리자(하네스 연결) | A | C6.14 앱 연결, C6.15 |
+| 설치판 리소스 위치(패키징) | A | C6.20 |
 
 ## C1 · 계약과 관측 기반
 
@@ -40,6 +41,7 @@
 - [ ] C2.12 codex.exe 실행 launcher: 실행마다 SHA-256 대조, 허용 목록 환경(`SYSTEMROOT`·`WINDIR`·`TEMP`·`TMP`·`LOCALAPPDATA`·`APPDATA`·`USERPROFILE`·`CODEX_HOME`, 최종 목록은 실제 실행으로 확정), `-c sqlite_home=<Task 폴더>`, stdin/stdout 반환, stderr는 Task 폴더 격리 파일(#21 2번). stdio MCP 서버 실행에도 같은 API를 쓴다(#21 5번)
 - [ ] C2.13 앱 폴더 경로·권한: codex 설치·CODEX_HOME·Task 폴더를 `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 사용자 전용 권한으로, Task 폴더는 Task 종료·앱 시작 때 삭제(#21 6번)
 - [ ] C2.11 제품용 읽기 전용 파일 MCP 서버(stdio): 폴더 목록·파일 읽기만, `safe_path`(C2.3) 사용, `structuredContent.resource_id` 보고, UTF-8 텍스트만 · [결정](contracts.md#사용자-결정)
+- [ ] C2.14 설정 파일·Profile 로딩의 경로·실행 파일 검증(B가 읽어 Catalog에 넣고 A가 앱 시작에 연결, #19 1번) · [결정](contracts.md#사용자-결정)
 
 ## C3 · B SQLite 리뷰와 독립 검증
 
@@ -73,6 +75,7 @@
 - [ ] C4.15 LLM 자체 평가(`overall_risk`)를 참고 필드로 보존. 판정·정렬에 쓰지 않음 · [결정](contracts.md#사용자-결정) — 필드 형식은 C4.9
 - [ ] C4.16 LLM 경고의 반복 실행 변동 측정(144개 × 여러 회)
 - [ ] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록
+- [ ] C4.18 등록 때 서버 ID의 `__`·끝 `_` 거부: B `valid_server_id`를 그대로 쓰고 등록 화면은 bridge가 넘기는 같은 검사 결과를 씀 · [결정](contracts.md#사용자-결정)
 
 ## C5 · fixture와 계수
 
@@ -94,16 +97,19 @@
 - [ ] C6.5 실험 스크립트 Windows 수정(socket 차단·`PYTHONPATH`·인코딩)과 MCP 정의 수집기 저장소 반영
 - [ ] C6.6 Windows Cisco 실험(2026-10-14~15) 완료 기록 작성
 - [ ] C6.7 Fake·실제 Transport·Store·AccessChecker·Scanner에 같은 계약 테스트
-- [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·S01·S02·S04·S05
-- [ ] C6.9 자체 접근 규칙의 거절·오류에서 host_dispatch 0 — 막힘: AGT 제거(B 판정·A 연결)
+- [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05
+- [ ] C6.9 자체 접근 규칙의 거절·오류·누락(활성화 때 사용자가 끈 도구)에서 host_dispatch 0 · [결정](contracts.md#사용자-결정) — 막힘: AGT 제거(B 판정·A 연결)
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록
-- [ ] C6.13 Codex L1 설정 파일·모델 정보 파일(`model_catalog_json`)·고정 버전과 SHA-256 관리, 설치 스크립트 해시 확인. 저장소 `config/codex/`, 앱 시작 때 CODEX_HOME에 쓰고 해시를 돌려주는 함수(#21 4번) · [결정](contracts.md#사용자-결정)
-- [ ] C6.14 L2 시작 시험(T22): `configRequirements/read`·`config/read` 대조, 가짜 모델 서버로 도구 목록 정확 대조·금지 도구 7종 거부·호출 순차·요청 프롬프트 확인, `config/read` 대조에서 Task별 `-c sqlite_home` 하나만 허용, 실패 시 시작 거부, 앱 시작·버전 변경·CI 실행. 스크래치 실험 스크립트를 저장소로 · [결정](contracts.md#사용자-결정) — 막힘: A 세션 관리자
+- [x] C6.13 Codex 0.162.1 L1 설정·모델 정보 파일·고정값(`config/codex/`)·설치 스크립트, CODEX_HOME에 쓰고 해시를 돌려주는 함수(#21 4번) · [기록](archive/c/C6.13-codex-l1.md)
+- [ ] C6.14 L2 시작 시험(T22): `configRequirements/read`·`config/read` 대조, 가짜 모델 서버로 도구 목록 정확 대조·금지 도구 7종 거부·호출 순차·요청 프롬프트 확인, `config/read` 대조에서 Task별 `-c sqlite_home` 하나만 허용, 실패 시 시작 거부, 앱 시작·버전 변경·CI 실행. 스크래치 실험 스크립트를 저장소로. C 구현은 A가 여는 주입형 L2 결과 포트에 채움(#21 3번) · [결정](contracts.md#사용자-결정) — 막힘: A 세션 관리자(앱 연결)
 - [ ] C6.15 L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답 검증 · [결정](contracts.md#사용자-결정) — 막힘: A 세션 관리자
-- [ ] C6.16 Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.tmp`·`skills`)과 동시 실행 때 경합(T46) 확인 · [대장](weakness_register.md#발견-항목과-조치)
+- [ ] C6.16 Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.sandbox_migration`·`tmp\arg0` 보조 파일·인증 파일 여부, T43·#21 8번)과 동시 실행 때 경합(T46) 확인 · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C6.17 (후속·선택) codex.exe AppContainer 실행 실험(C-CODEX-04)
+- [ ] C6.18 최종 제출 전 C-CODEX-05 약관 재확인(#19 8번) · [결정](contracts.md#사용자-결정)
+- [x] C6.19 CODEX_HOME 최상위 허용 항목 확인: 지시문 파일(AGENTS.md 등)·허용 밖 항목이 있으면 쓰기·Task 시작 거부(C-CODEX-06) · [기록](archive/c/C6.19-codex-home-allowlist.md)
+- [ ] C6.20 설치판에서 `config/codex/` 위치: 지금 기본값은 소스 checkout 기준. A 패키징과 맞춰 설치 패키지에서도 찾게 함 — 막힘: A 패키징
 
 ## 인수 기준
 
