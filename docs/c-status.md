@@ -12,6 +12,7 @@
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
 | Codex 세션 관리자(하네스 연결) | A | C6.14 앱 연결, C6.15 |
+| 설치판 리소스 위치(패키징) | A | C6.20 |
 
 ## C1 · 계약과 관측 기반
 
@@ -107,6 +108,8 @@
 - [ ] C6.16 Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.sandbox_migration`·`tmp\arg0` 보조 파일·인증 파일 여부, T43·#21 8번)과 동시 실행 때 경합(T46) 확인 · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C6.17 (후속·선택) codex.exe AppContainer 실행 실험(C-CODEX-04)
 - [ ] C6.18 최종 제출 전 C-CODEX-05 약관 재확인(#19 8번) · [결정](contracts.md#사용자-결정)
+- [x] C6.19 CODEX_HOME 최상위 허용 항목 확인: 지시문 파일(AGENTS.md 등)·허용 밖 항목이 있으면 쓰기·Task 시작 거부(C-CODEX-06) · [기록](archive/c/C6.19-codex-home-allowlist.md)
+- [ ] C6.20 설치판에서 `config/codex/` 위치: 지금 기본값은 소스 checkout 기준. A 패키징과 맞춰 설치 패키지에서도 찾게 함 — 막힘: A 패키징
 
 ## 인수 기준
 
