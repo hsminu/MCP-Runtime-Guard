@@ -18,6 +18,7 @@ from pydantic import (
 from guard_app.domain.enums import Decision, Label, RegStatus, TaskStatus, ToolKind, TrustTier
 from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.reasons import Reason
+from guard_app.domain.text import ReviewedDescription
 
 __all__ = [
     "AccessResult",
@@ -97,6 +98,8 @@ class ToolSpec(Frozen):
     destination_arg: NonEmptyString | None
     resource_arg: NonEmptyString | None
     fingerprint: Sha256Digest
+    # DESC-01 합의 전 제안. 신뢰된 사용자 검토 입력만, 원본 자동 대체 없음.
+    reviewed_description: ReviewedDescription = Field(default="", repr=False)
 
 
 class Boundary(Frozen):

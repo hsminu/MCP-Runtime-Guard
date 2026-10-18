@@ -18,6 +18,8 @@
 | 모델 고정 문구표 검토·세션 관리자 연결 | A | B5.12 |
 | NOTIFY-01 DTO·포트·종료 의미 합의와 A/C 연결·독립 검증 | A·B·C | B5.13 |
 | STOP-01 TaskIdentity·사유·감사 포트 합의와 A 세션 관리자 연결·T41/T42 독립 검증 | A·B·C | B5.14 |
+| SCAN-01 필드·고정 오류 코드 합의와 C Scanner 번역·A 경고 표시 | A·B·C | B1.9 |
+| DESC-01 검토 입력·원본 분리·Registry 저장·설명 변경 적용 의미 | A·B·C | B3.13 |
 | 설정 파일 형식 결정·경로/실행 파일 검증·시작 연결 | 사용자·C·A | B3.11 |
 | 정책 변경 화면·저장/Task 생성 직렬화 연결과 거부·누락 전송 0 검증 | A·C | B3.12 |
 
@@ -30,7 +32,8 @@
 - [ ] B1.5 명령·이벤트 payload, 원시 결과 격리·공개 결과 구분, 계수 연결 확정 — 막힘: A·C 합의
 - [ ] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 기록 — 막힘: B6-02
 - [ ] B1.7 ModelClient 제거·세션 관리자 DTO(TaskIdentity 등, #20 5번) — 막힘: A 제안 v1 검토·3인 합의, A 병합
-- [ ] B1.8 SCAN-01 ScanReport 확장(#21 7번 필드: overall_risk 참고·threat_summary 300자)
+- [x] B1.8 SCAN-01 ScanReport·Finding 확장안·합의 전 제안 · [기록](archive/b/B1.8-scan-report.md)
+- [ ] B1.9 SCAN-01 필드·고정 오류 코드 합의·C Scanner 번역·A 경고 표시 — 막힘: 3인 합의·A/C 연결
 
 ## B2 · 순수 정책과 등급 누적
 
@@ -55,11 +58,12 @@
 - [x] B3.5 도구 단위 READ는 `prefix: []` 규칙만, 없으면 Unclassified
 - [x] B3.6 목적지는 등록 목록 정확 일치, 이름·IP·DNS·stdio를 신뢰 근거로 쓰지 않음
 - [x] B3.7 FP-01 JCS 지문 함수 · [기록](archive/b/B3.7-jcs-fingerprint.md)
-- [ ] B3.8 DESC-01 검토된 설명 필드
+- [x] B3.8 DESC-01 검토된 설명 필드·Catalog 연결·합의 전 제안 · [기록](archive/b/B3.8-reviewed-description.md)
 - [x] B3.9 파싱된 설정·Profile 로딩 1단계와 policy_version 계산(10-18 결정) · [기록](archive/b/B3.9-profile-loading.md)
 - [x] B3.10 정책 변경 준비·적용·Task 정지·승인 무효화(10-18 결정) · [기록](archive/b/B3.10-policy-change.md)
 - [ ] B3.11 설정 파일 형식 결정·C 경로/실행 파일 검증·A 시작 연결 — 막힘: 형식 결정 필요(C 경로 검증, A 시작 연결)
 - [ ] B3.12 A81 허용 체크·정책 저장/적용·Task 생성 직렬화 연결·C 거부/누락 전송 0 검증 — 막힘: A·C 연결
+- [ ] B3.13 DESC-01 A 검토 입력·C Registry 원본 분리/저장·설명 변경 적용 의미 합의 — 막힘: 3인 합의·A/C 연결
 
 ## B4 · Guard와 응답 게이트
 
