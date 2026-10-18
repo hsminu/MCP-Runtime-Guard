@@ -325,3 +325,29 @@ def test_product_bootstrap_with_invalid_profile_closes_the_store(tmp_path):
     asyncio.run(run())
     with SQLiteStore(path, audit_id_factory=lambda: "probe"):
         pass  # the failed start released the database
+
+
+def test_policy_view_is_built_from_the_profile_and_registry(tmp_path) -> None:
+    from guard_app.services.policy_view import policy_view
+
+    peer = Peer([READ_DEFINITION])
+
+    async def run():
+        store = SQLiteStore(tmp_path / "policy.db", audit_id_factory=lambda: f"a-{uuid4().hex}")
+        assembled = await assemble_guard(
+            store, inputs(peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
+        )
+        try:
+            return policy_view(assembled), assembled.settings
+        finally:
+            await assembled.aclose()
+            store.close()
+
+    view, settings = asyncio.run(run())
+    assert (view.profile_id, view.policy_version) == (settings.profile_id, settings.policy_version)
+    assert view.allow == (("docs", "read"),)
+    assert view.deny == ()
+    assert [
+        (s.server_id, [(t.name, t.kind, t.kind_fixed) for t in s.tools]) for s in view.servers
+    ] == [("docs", [("read", "read", True)])]
+    assert view.change_available is False

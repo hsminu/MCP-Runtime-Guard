@@ -114,8 +114,9 @@
 - [ ] A89 API 키 로그인 입력란 — 사용자 결정 필요(A65 비밀값 미수집 결정과 충돌)
 - [ ] A52 실제 app-server로 로그인 — 막힘: C launcher·T43 검증(#21)
 - [x] A54 등록 화면 서버 ID 즉시 안내·bridge에서 B 검사 결과 전달 · [기록](archive/a/A54-server-id-bridge-validation.md)
-- [ ] A81 서버 활성화 단계의 도구별 허용 체크박스(종류가 정해진 도구는 기본 체크)·규칙 변경 시 실행 중 Task 정지 안내(A91, 주입형 저장 포트) — 실제 저장은 막힘: B3.10·C Registry 활성화
-- [ ] A91 정책 화면(Profile·policy_version·TTL·taint·접근 규칙 읽기 전용, 변경 화면) — 실제 변경은 막힘: B3.10
+- [x] A81 서버 활성화 단계의 도구별 허용 체크박스·Task 정지 안내(정책 화면) · [기록](archive/a/A91-policy-screen.md)
+- [x] A91 정책 화면(Profile·정책 버전·TTL·taint·접근 규칙 읽기 전용) · [기록](archive/a/A91-policy-screen.md)
+- [ ] A81·A91 규칙 저장·서버 목록 활성화 흐름 — 막힘: B3.10·C Registry 활성화
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)

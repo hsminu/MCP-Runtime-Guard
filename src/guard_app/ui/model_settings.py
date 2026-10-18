@@ -10,8 +10,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from guard_app.services.bridge import CODEX_MODEL_ID
-from guard_app.services.codex_account import AccountView
+from guard_app.services.bridge import CODEX_MODEL_ID, AccountView
 
 from .widgets import KeyboardActionButton, plain_label
 

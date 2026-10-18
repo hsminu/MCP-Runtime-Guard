@@ -35,7 +35,11 @@ from guard_app.domain.enums import Label, TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.services import catalog_sources
 from guard_app.services.approvals import HumanControl
-from guard_app.services.codex_account import AccountError, AccountView, CodexAccountPort
+from guard_app.services.codex_account import AccountError, CodexAccountPort
+from guard_app.services.codex_account import AccountView as AccountView  # UI re-export
+from guard_app.services.policy_view import PolicyServer as PolicyServer  # UI re-export
+from guard_app.services.policy_view import PolicyTool as PolicyTool  # UI re-export
+from guard_app.services.policy_view import PolicyView as PolicyView  # UI re-export
 from guard_app.services.runner import RunUpdate, TaskExecution
 
 
@@ -123,6 +127,8 @@ class BackendBindings:
     approval_resolved: Callable[[str, str, object], None] | None = None
     # Codex account methods on a C-launched app-server (A52); None = unavailable.
     account: CodexAccountPort | None = None
+    # Read-only Profile/rules for the policy screen (A91); None = no Profile.
+    policy: PolicyView | None = None
 
 
 # The only model pinned by C's config/codex/codex.lock.json (allowed_models).
@@ -278,6 +284,7 @@ class BackendBridge(QObject):
     # str: fixed blocker code, or "" when new sessions may be requested.
     session_capability_changed = Signal(str)
     account_changed = Signal(object)
+    policy_changed = Signal(object)
 
     def __init__(
         self,
@@ -886,6 +893,7 @@ class BackendBridge(QObject):
         self.account_changed.emit(
             AccountView("UNAVAILABLE" if bindings.account is None else "UNKNOWN")
         )
+        self.policy_changed.emit(bindings.policy)
         self._set_state(BridgeState.READY, "READY")
         await stop
         self._set_state(BridgeState.CLOSING, "CLOSING")

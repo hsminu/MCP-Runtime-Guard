@@ -28,6 +28,7 @@ from guard_app.services.bridge import (
 from guard_app.services.catalog import GuardSettings
 from guard_app.services.codex_composition import codex_session_factory
 from guard_app.services.guard_relay import ApprovalOutcomes
+from guard_app.services.policy_view import policy_view
 from guard_app.services.product_assembly import AssembledGuard, ProductInputs, assemble_guard
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.services.session_preparation import (
@@ -507,6 +508,7 @@ class SessionRuntime:
             stop_session=self.stop_session,
             session_blocker=self.creation_blocker,
             approval_resolved=None if self._approvals is None else self._approvals.resolve,
+            policy=None if assembled is None else policy_view(assembled),
         )
 
 

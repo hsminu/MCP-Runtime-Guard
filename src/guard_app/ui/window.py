@@ -34,6 +34,7 @@ from .models import (
     Surface,
 )
 from .overview import OverviewPage
+from .policy import PolicyPage
 from .presentation import PAGES
 from .runtime import RuntimePanel
 from .scan_status import ScanStatusProjection
@@ -260,8 +261,11 @@ class GuardWindow(QMainWindow):
         settings_layout.addWidget(self.scanner_key_form)
         settings_layout.addStretch(1)
         self._page_indices["settings"] = self.stack.addWidget(_scroll_page(settings))
+        self.policy_page = PolicyPage()
+        self._page_indices["policy"] = self.stack.addWidget(_scroll_page(self.policy_page))
         for page in PAGES:
             if page not in (
+                "policy",
                 "overview",
                 "servers",
                 "logs",
@@ -314,6 +318,7 @@ class GuardWindow(QMainWindow):
         bridge.session_created.connect(self.sessions.session_created)
         bridge.session_capability_changed.connect(self.sessions.set_session_blocker)
         bridge.account_changed.connect(self.codex_login_info.set_view)
+        bridge.policy_changed.connect(self.policy_page.set_view)
         login = self.codex_login_info
         login.read_requested.connect(lambda: bridge.request_account("account_read"))
         login.device_login_requested.connect(lambda: bridge.request_account("account_login_device"))
