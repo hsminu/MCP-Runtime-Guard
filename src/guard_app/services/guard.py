@@ -36,7 +36,7 @@ from guard_app.domain.models import (
     TaskState,
 )
 from guard_app.domain.reasons import Reason
-from guard_app.ports import AccessChecker, Registry, Store, Transport
+from guard_app.ports import AccessChecker, PendingResult, Registry, Store, Transport
 from guard_app.security.digest import json_digest
 from guard_app.security.failclosed import after_dispatch, fail_closed
 from guard_app.services.approvals import ApprovalService, HumanControl, _ApprovalTaskMismatchError
@@ -110,6 +110,7 @@ class GuardService:
         access_timeout_seconds: float = 30.0,
         max_access_checks: int = 4,
         access_cleanup_timeout_seconds: float = 0.05,
+        approval_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         for value in (profile_id, policy_version, operator_id):
             if (
@@ -183,11 +184,29 @@ class GuardService:
             utc_now=utc_now,
             monotonic=monotonic,
             ttl_seconds=approval_ttl_seconds,
+            sleep=approval_sleep,
         )
 
     def human_control(self, operator_id: str) -> HumanControl:
         """A의 인증된 제어 채널에만 전달한다. 모델 ToolView에 포함하지 않는다."""
         return self._approvals.human_channel(operator_id)
+
+    def pending_result(self, request_id: str) -> PendingResult:
+        """합의 전 제안: A는 Pending의 최종 모델 응답에 이 단일 소비 경로만 쓴다."""
+        return self._approvals.pending_result(request_id)
+
+    async def invalidate_tool(self, server_id: str, tool_name: str) -> int:
+        """합의 전 제안: C Registry 지문 변경의 승인 무효화 입구."""
+        return await self._approvals.invalidate_tool(server_id, tool_name)
+
+    async def cancel_pending(self, task_id: str, *, expected_epoch: int) -> int:
+        """합의 전 제안: A 세션 종료의 대기 취소. 사람 채널을 사용하지 않는다."""
+        return await self._approvals.cancel_pending(task_id, expected_epoch=expected_epoch)
+
+    async def aclose(self) -> None:
+        """앱 종료 시 A가 transport 종결과 함께 await한다. 새 submit은 즉시 거부한다."""
+        self._halt_globally()
+        await self._approvals.aclose()
 
     async def submit(
         self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None

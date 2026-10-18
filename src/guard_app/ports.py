@@ -11,6 +11,7 @@ from guard_app.domain.contracts import (
     ApprovalRecord,
     Conversation,
     ModelTurn,
+    PendingFinal,
     RawResult,
     RegisteredServer,
     ScanReport,
@@ -27,6 +28,35 @@ from guard_app.domain.models import (
     ToolSpec,
 )
 from guard_app.domain.reasons import Reason
+
+
+class PendingResult(Protocol):
+    """NOTIFY-01 합의 전 제안: 완료가 먼저여도 유실 없는 단일 소비 대기 핸들.
+
+    wait 취소는 대기만 취소하고 승인·타이머·완료 결과를 취소하지 않는다.
+    같은 핸들로 다시 대기할 수 있다. 동시/반복 소비는 고정 ValueError다.
+    프로세스 재시작을 넘는 전달 보장은 없으며 원문을 저장하지 않는다.
+    """
+
+    async def wait(self) -> PendingFinal: ...
+
+
+class PendingFinals(Protocol):
+    """NOTIFY-01 합의 전 제안: 신뢰된 A 대기·C 지문 변경·앱 종료 입구.
+
+    pending_result는 submit의 Pending 반환 직후 또는 완료 후 조회한다.
+    사람 approve/reject 반환값을 모델에 중계하지 않고 이 경로만 사용한다.
+    aclose는 신규 승인을 거부하고 미소비 공개 원문을 폐기한다. A는 종료 시
+    transport 실행을 먼저 종결시켜 예약 후 결과가 확정되도록 해야 한다.
+    """
+
+    def pending_result(self, request_id: str) -> PendingResult: ...
+
+    async def invalidate_tool(self, server_id: str, tool_name: str) -> int: ...
+
+    async def cancel_pending(self, task_id: str, *, expected_epoch: int) -> int: ...
+
+    async def aclose(self) -> None: ...
 
 
 class Transport(Protocol):

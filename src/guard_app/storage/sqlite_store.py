@@ -944,6 +944,9 @@ class SQLiteStore:
                 request_id=record.request_id,
                 reason=reason,
                 timestamp=_utc_text(event_time),
+                system_expiry=(
+                    status is ApprovalStatus.EXPIRED and reason is Reason.APPROVAL_STALE
+                ),
             )
             if status is ApprovalStatus.APPROVED:
                 final_now = max(now_utc, self._fresh_utc())
@@ -1438,6 +1441,7 @@ class SQLiteStore:
         timestamp: str,
         label: Label | None = None,
         exception_type: str | None = None,
+        system_expiry: bool = False,
     ) -> None:
         if self._audit_id_factory is None:
             raise StoreError()
@@ -1452,7 +1456,9 @@ class SQLiteStore:
                 event_type,
                 reason.value,
                 None if label is None else int(label),
-                None
+                json.dumps({"source": "guard_expiry"}, separators=(",", ":"))
+                if system_expiry
+                else None
                 if exception_type is None
                 else json.dumps({"exception_type": exception_type}, separators=(",", ":")),
                 timestamp,

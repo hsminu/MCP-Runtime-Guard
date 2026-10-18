@@ -98,6 +98,39 @@ type Outcome = Annotated[
 ]
 
 
+type FinalOutcome = Annotated[
+    Denied | Released | Withheld | OutcomeUnknown,
+    Field(discriminator="kind"),
+]
+
+type PendingFinalCause = Literal[
+    "executed", "rejected", "expired", "cancelled", "invalidated", "failed", "shutdown"
+]
+
+
+class PendingFinal(Frozen):
+    """NOTIFY-01 합의 전 제안: 한 Pending 요청의 확정 결과. 사람 명령 응답과 별개다.
+
+    task_id·epoch는 Guard 사본에서 오며 model_call_id는 A가 별도로 결속한다.
+    outcome은 gate가 확정한 기존 결과만 재사용하고 Pending은 허용하지 않는다.
+    """
+
+    task_id: Identifier
+    epoch: int = Field(ge=0)
+    request_id: Identifier
+    approval_id: Identifier
+    cause: PendingFinalCause
+    outcome: FinalOutcome = Field(repr=False)
+
+    @model_validator(mode="after")
+    def check_request(self) -> Self:
+        if self.outcome.request_id != self.request_id:
+            raise ValueError("final outcome request does not match")
+        if self.cause != "executed" and not isinstance(self.outcome, Denied):
+            raise ValueError("non-execution final requires denial")
+        return self
+
+
 class TrustedContext(Frozen):
     """Guard가 Store와 사전 등록 운영자에서 구성한다. 모델 입력으로 만들지 않는다."""
 
