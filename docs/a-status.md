@@ -48,7 +48,8 @@
 - [x] A14 errlog 필수·SDK·합성 HTTP 서버 로그 격리
 - [ ] A14 공개 handler 인수 — 막힘: C 로그 정책(A39와 함께)
 - [x] A15·A16 등록 요구·단위 구현
-- [ ] A15·A16 연결 직후 지문 대조(A86, 주입형 Registry) — 실제 Registry·launcher 연결은 막힘: C Registry. 지문 계산 기준(SDK 재구성 dict) C 확인 필요
+- [x] A86 연결 직후 지문 대조·불일치 도구 차단(A15·A16, 주입형 Registry) · [기록](archive/a/A86-profile-guard-assembly.md)
+- [ ] A15·A16 실제 Registry·launcher 연결 — 막힘: C Registry. 지문 계산 기준(SDK 재구성 dict) C 확인 필요
 
 ## 접근 규칙·모델·Runner
 
@@ -58,7 +59,8 @@
 - [ ] A18 AGT 역할·규칙 관리 — 폐기: AGT 제거(2026-10-15 결정, A51로 대체)
 - [ ] A18 영속 agt_mode 감사 — 폐기: AGT 제거(mode 감사 불필요)
 - [ ] A18 dispatch 0 독립 인수 — 폐기: AGT 제거(자체 규칙은 C6.9로 검증)
-- [ ] A51 자체 접근 규칙을 `AccessChecker`로 Guard에 연결·규칙 설정 로딩(A86, 현재 async 포트) — 동기 포트 전환은 막힘: B2.9(ACCESS-01)
+- [x] A51 자체 접근 규칙을 `AccessChecker`로 Guard에 연결·규칙 설정 로딩(A86, 현재 async 포트) · [기록](archive/a/A86-profile-guard-assembly.md)
+- [ ] A51 동기 포트 전환 — 막힘: B2.9(ACCESS-01)
 - [ ] A53 B의 AGT 코드 제거 중 A 소유 파일 리뷰 — 막힘: B PR
 - [ ] A19·A20 Codex 세션 관리자 A 계층(A87·A88: 프로토콜·가짜 app-server·L3·Guard 중계·FIFO·감시 상한)
 - [ ] A19·A20 실제 codex.exe 연결 — 막힘: C launcher(C2.12)·L2(C6.14), NOTIFY-01·STOP-01(#20), 세션 관리자 계약 합의
@@ -86,7 +88,7 @@
 
 - [x] A24–A27 프로세스 시작 게이트(W1)·옛 Task 실행/제어 거부(W2)·`--store sqlite` 연결·시작 실패 처리
 - [x] A24–A27 제품 SQLite 기본 시작·새 Task 연결부 · [기록](archive/a/A65-codex-only-concurrent-tasks.md)
-- [ ] A24–A27 Profile 로딩·Guard 조립을 제품 시작에 연결(A86, 주입형 설정 문서·Registry)
+- [x] A24–A27 Profile 로딩·Guard 조립을 제품 시작에 연결(A86, 주입형 설정 문서·Registry) · [기록](archive/a/A86-profile-guard-assembly.md)
 - [ ] A24–A27 설정 파일 읽기·실제 Registry·시작 복구 — 막힘: B3.11·C 경로 검증·C Registry·B6.8
 - [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
@@ -121,7 +123,7 @@
 - [x] A78 QA High·Medium 수정: 수집 전 예측 응답의 목록 완료 차단, JSON-RPC 취소 시 종료, 끝난 Task 상태 표시, 대화창 화자 위조 차단 · [기록](archive/a/A78-qa-runtime-ui-fixes.md)
 - [x] A79 QA Low 5건 수정: Scanner 키 예외 문구·Withheld 문구·결과 화면 None·거부 코드 안내·정리 겹침 미확인 · [기록](archive/a/A79-qa-low-fixes.md)
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
-- [ ] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체(A86)
+- [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 
 ## 통합·패키징
 

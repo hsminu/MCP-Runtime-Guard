@@ -12,6 +12,7 @@ import pytest
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.services.bridge import ControlAction, SessionOptions
+from guard_app.services.catalog import GuardSettings
 from guard_app.services.runner import CodexAuthenticationError, RunnerStateError
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
@@ -90,6 +91,7 @@ def make_runtime(tmp_path, *, l2=passed_l2):
         session_factory=factory,
         preparation=synthetic_preparation(l2),
         close_store=store.close,
+        guard_settings=GuardSettings(profile_id="unit-profile", policy_version="unit-policy-v1"),
     )
     return runtime, sessions
 
@@ -540,6 +542,45 @@ def test_snapshot_carries_the_store_watermark_and_unclassified_flag(tmp_path):
             created = await runtime.create_session(SessionOptions())
             assert created.label is Label.PUBLIC
             assert created.unclassified is False
+        finally:
+            await runtime.close()
+
+    asyncio.run(run())
+
+
+def test_new_task_row_uses_the_loaded_profile_not_a_placeholder(tmp_path):
+    async def run():
+        runtime, _ = make_runtime(tmp_path)
+        try:
+            created = await runtime.create_session(SessionOptions())
+            state = await runtime.store.load_task(created.task_id)
+            assert (state.profile_id, state.policy_version) == ("unit-profile", "unit-policy-v1")
+        finally:
+            await runtime.close()
+
+    asyncio.run(run())
+
+
+def test_missing_guard_profile_refuses_before_any_task_row(tmp_path):
+    async def run():
+        store = SQLiteStore(tmp_path / "noprofile.db", audit_id_factory=lambda: "unit-audit")
+        sessions = []
+
+        async def factory(state, options, resources):
+            sessions.append(state)
+            raise AssertionError("must not start")
+
+        runtime = SessionRuntime(
+            store,
+            session_factory=factory,
+            preparation=synthetic_preparation(),
+            close_store=store.close,
+        )
+        try:
+            assert runtime.creation_blocker() == "GUARD_PROFILE_UNAVAILABLE"
+            with pytest.raises(SessionRuntimeError, match="GUARD_PROFILE_UNAVAILABLE"):
+                await runtime.create_session(SessionOptions())
+            assert sessions == []
         finally:
             await runtime.close()
 

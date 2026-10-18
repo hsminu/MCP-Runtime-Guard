@@ -253,7 +253,13 @@ def test_bridge_open_failure_is_fixed_startup_failure(tmp_path, observed):
     bridge.command_changed.connect(commands.append)
     try:
         bridge.start()
-        pump_until(app, lambda: bridge.thread_done, timeout=8)
+        # The last lifecycle event is delivered through the Qt queue after the
+        # backend thread ends; wait for the delivered event, not only the thread.
+        pump_until(
+            app,
+            lambda: bridge.thread_done and bool(events) and events[-1].state is BridgeState.FAILED,
+            timeout=8,
+        )
         assert bridge.state is BridgeState.FAILED
         assert events[-1].code == "STARTUP_FAILED"
         bridge.request_run("unavailable")

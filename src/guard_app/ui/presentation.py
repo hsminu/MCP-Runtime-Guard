@@ -177,9 +177,15 @@ _CODEX_FAILURE_DETAILS = {
     "CODEX_CONFIG_MISMATCH": "Codex 설정이 시작 검사에서 확인한 설정과 달라.",
     "CODEX_PREPARATION_FAILED": "Codex 세션 준비를 완료하지 못했어.",
     "CODEX_CLEANUP_UNCONFIRMED": "Codex 종료·임시 자료 정리 완료를 확인하지 못했어.",
+    "GUARD_PROFILE_UNAVAILABLE": "Guard 정책(Profile) 설정이 아직 연결되지 않았어.",
 }
 _CODEX_MISSING_COMPONENTS = frozenset(
-    {"CODEX_SESSION_UNAVAILABLE", "CODEX_L2_UNAVAILABLE", "CODEX_CONFIG_UNAVAILABLE"}
+    {
+        "CODEX_SESSION_UNAVAILABLE",
+        "CODEX_L2_UNAVAILABLE",
+        "CODEX_CONFIG_UNAVAILABLE",
+        "GUARD_PROFILE_UNAVAILABLE",
+    }
 )
 # Bridge refusals before any backend work: nothing was run for these commands.
 COMMAND_REFUSALS = {

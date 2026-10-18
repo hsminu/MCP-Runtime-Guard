@@ -14,6 +14,7 @@ import pytest
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.services.bridge import ControlAction, SessionOptions
+from guard_app.services.catalog import GuardSettings
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
     SessionPreparation,
@@ -86,7 +87,10 @@ class Harness:
             self.startup, self.verify, self.prepare, self.confirm, self.cleanup
         )
         self.runtime = SessionRuntime(
-            self.store, session_factory=self.factory, preparation=self.preparation
+            self.store,
+            session_factory=self.factory,
+            preparation=self.preparation,
+            guard_settings=GuardSettings(profile_id="unit-profile", policy_version="unit-v1"),
         )
 
     async def startup(self):

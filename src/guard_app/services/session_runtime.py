@@ -25,6 +25,8 @@ from guard_app.services.bridge import (
     SessionStartError,
     TaskProjection,
 )
+from guard_app.services.catalog import GuardSettings
+from guard_app.services.product_assembly import AssembledGuard, ProductInputs, assemble_guard
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
@@ -57,8 +59,16 @@ class SessionRuntime:
         session_factory: CodexSessionFactory | None = None,
         preparation: SessionPreparation | None = None,
         close_store: Callable[[], None] | None = None,
+        guard_settings: GuardSettings | None = None,
+        assembled: AssembledGuard | None = None,
     ) -> None:
+        if assembled is not None:
+            guard_settings = assembled.settings
         self.store = store
+        # Profile identity and policy_version for new Task rows. Without a loaded
+        # Profile no Task is created; there is no placeholder policy (A79).
+        self._guard_settings = guard_settings
+        self._assembled = assembled
         self._session_factory = session_factory
         self._preparation = preparation
         self._startup_lock = asyncio.Lock()
@@ -107,6 +117,8 @@ class SessionRuntime:
             return "CODEX_PREPARATION_FAILED"
         if self._session_factory is None:
             return "CODEX_SESSION_UNAVAILABLE"
+        if type(self._guard_settings) is not GuardSettings:
+            return "GUARD_PROFILE_UNAVAILABLE"
         return None
 
     @staticmethod
@@ -191,11 +203,14 @@ class SessionRuntime:
         factory = self._session_factory
         if factory is None:
             raise SessionRuntimeError("CODEX_SESSION_UNAVAILABLE")
+        settings = self._guard_settings
+        if type(settings) is not GuardSettings:
+            raise SessionRuntimeError("GUARD_PROFILE_UNAVAILABLE")
         state = TaskState(
             task_id=f"session-{uuid4().hex}",
             epoch=1,
-            profile_id="codex-pending-profile",
-            policy_version="codex-pending-v1",
+            profile_id=settings.profile_id,
+            policy_version=settings.policy_version,
             status=TaskStatus.RUNNING,
         )
         current = asyncio.current_task()
@@ -463,8 +478,12 @@ class SessionRuntime:
             self._runners.clear()
             self._options.clear()
             self._codes.clear()
-            if not self._defer_store_close or not self._creating:
-                self._close_store_once()
+            try:
+                if self._assembled is not None:
+                    await self._assembled.aclose()
+            finally:
+                if not self._defer_store_close or not self._creating:
+                    self._close_store_once()
 
     def _close_store_once(self) -> None:
         close, self._close_store = self._close_store, None
@@ -472,11 +491,13 @@ class SessionRuntime:
             close()
 
     def bindings(self) -> BackendBindings:
+        assembled = self._assembled
         return BackendBindings(
             self.runner_for_task,
-            None,
+            None if assembled is None else assembled.guard.human_control(assembled.operator_id),
             close=self.close,
             snapshot=self.snapshot,
+            discard_queued=None if assembled is None else assembled.transport.discard_queued,
             create_session=self.create_session,
             stop_session=self.stop_session,
             session_blocker=self.creation_blocker,
@@ -488,13 +509,24 @@ async def bootstrap_product(
     *,
     session_factory: CodexSessionFactory | None = None,
     preparation: SessionPreparation | None = None,
+    product: ProductInputs | None = None,
 ) -> BackendBindings:
+    """Product start. `product` comes from B3.11 file loading and C's launcher/Registry."""
+
     store = SQLiteStore(db_path, audit_id_factory=lambda: f"audit-{uuid4().hex}")
+    assembled: AssembledGuard | None = None
+    if product is not None:
+        try:
+            assembled = await assemble_guard(store, product)
+        finally:
+            if assembled is None:
+                store.close()
     runtime = SessionRuntime(
         store,
         session_factory=session_factory,
         preparation=preparation,
         close_store=store.close,
+        assembled=assembled,
     )
     adopted = False
     try:
