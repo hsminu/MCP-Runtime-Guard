@@ -244,6 +244,8 @@ async def bootstrap(
                 agt_mode=access.mode,
                 model_mode="mock",
                 can_advance=runner.can_advance,
+                label=current.high_watermark,
+                unclassified=current.unclassified,
             )
 
         async def close():

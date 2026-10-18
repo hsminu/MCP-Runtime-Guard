@@ -206,6 +206,15 @@ def codex_failure_notice(code: str, *, creating: bool = False) -> str:
     return detail + context + " 앱 설정을 확인하고 앱을 다시 시작해."
 
 
+def task_label_text(label: object, unclassified: bool) -> str:
+    """Store-confirmed Task watermark; never inferred from model or tool text."""
+
+    name = getattr(label, "name", None)
+    text = LABELS.get(name) if type(name) is str else None
+    shown = "미제공" if text is None else f"{text[0]} · {text[1]}"
+    return f"Task 등급: {shown}" + (" · 미분류 자료 표시됨" if unclassified is True else "")
+
+
 def session_blocker_notice(code: str) -> str:
     """Before any click: why new sessions are already known to be refused."""
 

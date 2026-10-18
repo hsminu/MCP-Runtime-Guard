@@ -36,6 +36,7 @@ from .presentation import (
     RUN_RESULTS,
     codex_failure_notice,
     session_blocker_notice,
+    task_label_text,
 )
 from .task_status import FINAL_STATUSES, status_title
 from .untrusted_text import untrusted_display_text
@@ -341,7 +342,8 @@ class SessionWorkspace(QWidget):
         else:
             text = (
                 f"{status_title(snapshot.status)} · Task {snapshot.task_id} "
-                f"· epoch {snapshot.epoch}"
+                f"· epoch {snapshot.epoch} · "
+                f"{task_label_text(snapshot.label, snapshot.unclassified)}"
             )
             if failure_notice:
                 note = failure_notice

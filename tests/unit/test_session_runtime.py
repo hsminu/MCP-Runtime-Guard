@@ -529,3 +529,18 @@ def test_product_bootstrap_closes_the_store_when_startup_preparation_fails(tmp_p
             )
 
     asyncio.run(run())
+
+
+def test_snapshot_carries_the_store_watermark_and_unclassified_flag(tmp_path):
+    from guard_app.domain.enums import Label
+
+    async def run():
+        runtime, _ = make_runtime(tmp_path)
+        try:
+            created = await runtime.create_session(SessionOptions())
+            assert created.label is Label.PUBLIC
+            assert created.unclassified is False
+        finally:
+            await runtime.close()
+
+    asyncio.run(run())

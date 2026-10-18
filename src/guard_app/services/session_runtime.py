@@ -296,6 +296,8 @@ class SessionRuntime:
             can_advance=runner.can_advance,
             can_accept_message=runner.can_accept_message and state.status is TaskStatus.RUNNING,
             runner_state=runner.runtime_status,
+            label=state.high_watermark,
+            unclassified=state.unclassified,
         )
 
     async def _halt_store_task(self, task_id: str) -> None:

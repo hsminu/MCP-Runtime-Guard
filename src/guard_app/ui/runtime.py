@@ -29,7 +29,13 @@ from guard_app.services.bridge import (
 )
 
 from .approval_detail import visible_review_text
-from .presentation import APPROVAL_RESULTS, LIFECYCLE_MESSAGES, MISSING, RUN_RESULTS
+from .presentation import (
+    APPROVAL_RESULTS,
+    LIFECYCLE_MESSAGES,
+    MISSING,
+    RUN_RESULTS,
+    task_label_text,
+)
 from .task_status import FINAL_STATUSES, status_detail, status_title
 from .widgets import KeyboardActionButton, plain_label
 
@@ -370,6 +376,7 @@ class RuntimePanel(QWidget):
     def _render_snapshot(self, snapshot: TaskProjection) -> None:
         lines = [
             f"Task: {snapshot.task_id} · {status_title(snapshot.status)}",
+            task_label_text(snapshot.label, snapshot.unclassified),
             f"AGT: {snapshot.agt_mode} · 모델: {snapshot.model_mode}",
             f"호스트 dispatch: {_count(snapshot.host_dispatch)} "
             f"· 수신 부작용: {_count(snapshot.receiver_effect)}",

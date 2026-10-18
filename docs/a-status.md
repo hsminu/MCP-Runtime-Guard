@@ -109,7 +109,7 @@
 - [ ] A81 서버 활성화 단계의 도구별 허용 체크박스(종류가 정해진 도구는 기본 체크)·규칙 변경 시 실행 중 Task 정지 안내(A91, 주입형 저장 포트) — 실제 저장은 막힘: B3.10·C Registry 활성화
 - [ ] A91 정책 화면(Profile·policy_version·TTL·taint·접근 규칙 읽기 전용, 변경 화면) — 실제 변경은 막힘: B3.10
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
-- [ ] A85 Task 등급·미분류 표시
+- [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
 - [x] A61 Qt 시안 컴포넌트·실행/승인/중지 카드·아이콘·작은 화면 배치 · [기록](archive/a/A61-ui-components.md)
 - [x] A63 세션 중심 대화·결과 화면·기존 기능 진입·Task/epoch 메시지 연결·원문 폐기·독립 GUI QA · [기록](archive/a/A63-session-workspace.md)

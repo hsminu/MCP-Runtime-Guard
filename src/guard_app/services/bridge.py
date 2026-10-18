@@ -31,7 +31,7 @@ from guard_app.domain.contracts import (
     Released,
     Withheld,
 )
-from guard_app.domain.enums import TaskStatus
+from guard_app.domain.enums import Label, TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.services import catalog_sources
 from guard_app.services.approvals import HumanControl
@@ -165,6 +165,9 @@ class TaskProjection:
     connection_code: str = ""
     runner_state: str = ""
     tools_available: bool = True
+    # Store TaskState.high_watermark / unclassified; None when not supplied.
+    label: Label | None = None
+    unclassified: bool = False
 
 
 @dataclass(frozen=True, slots=True, repr=False)

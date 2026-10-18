@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QApplication
 
-from guard_app.domain.enums import TaskStatus
+from guard_app.domain.enums import Label, TaskStatus
 from guard_app.services.bridge import (
     ApprovalReview,
     BackendBridge,
@@ -681,3 +681,22 @@ def test_window_title_names_no_model_for_a_new_draft(window):
     shell, _, _ = window
     assert "모델 새 세션" not in shell.windowTitle()
     assert shell.windowTitle().startswith("MCP Runtime Guard")
+
+
+@pytest.mark.parametrize(
+    ("label", "unclassified", "expected"),
+    [
+        (None, False, "Task 등급: 미제공"),
+        (Label.INTERNAL, False, "Task 등급: 내부 · INTERNAL"),
+        (Label.CONFIDENTIAL, True, "Task 등급: 기밀 · CONFIDENTIAL · 미분류 자료 표시됨"),
+    ],
+)
+def test_task_label_comes_from_the_projection_in_header_and_results(
+    window, label, unclassified, expected
+):
+    shell, panel, bridge = window
+    bridge.task_changed.emit(snapshot(label=label, unclassified=unclassified))
+    assert expected in shell.sessions.current.status.text()
+    assert expected in panel.summary.text()
+    if not unclassified:
+        assert "미분류" not in panel.summary.text()
