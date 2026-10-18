@@ -203,7 +203,12 @@ class Finding(Frozen):
 
 
 class AnalyzerDiagnostic(Frozen):
-    """SCAN-01 합의 전 제안. 실패/생략 사유이며 예외·SDK 원문 필드는 없다."""
+    """SCAN-01 합의 전 제안. 실패/생략 사유이며 예외·SDK 원문 필드는 없다.
+
+    검사 전체가 시작되지 못하면 필수 분석기 전부를 analyzers_failed에 두고,
+    분석기마다 같은 고정 코드 진단을 붙인다. 도구 정보·지문은 미확정이면 생략한다.
+    이 경우 빈 findings·지문 집합은 검사 완료나 안전을 뜻하지 않는다.
+    """
 
     analyzer: Identifier
     code: ScanErrorCode

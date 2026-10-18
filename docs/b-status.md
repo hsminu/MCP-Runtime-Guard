@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-18 · main `139e5a0` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-19 · main `139e5a0` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -32,8 +32,8 @@
 - [ ] B1.5 명령·이벤트 payload, 원시 결과 격리·공개 결과 구분, 계수 연결 확정 — 막힘: A·C 합의
 - [ ] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 기록 — 막힘: B6-02
 - [ ] B1.7 ModelClient 제거·세션 관리자 DTO(TaskIdentity 등, #20 5번) — 막힘: A 제안 v1 검토·3인 합의, A 병합
-- [x] B1.8 SCAN-01 ScanReport·Finding 확장안·합의 전 제안 · [기록](archive/b/B1.8-scan-report.md)
-- [ ] B1.9 SCAN-01 필드·고정 오류 코드 합의·C Scanner 번역·A 경고 표시 — 막힘: 3인 합의·A/C 연결
+- [x] B1.8 SCAN-01 DTO 확장·표시 검사 오탐/명시적 무해화 보완·합의 전 제안 · [기록](archive/b/B1.8-scan-report.md)
+- [ ] B1.9 SCAN-01 필드·고정 코드/무해화 합의·C Scanner 번역·A 경고 표시 — 막힘: 3인 합의·A/C 연결
 
 ## B2 · 순수 정책과 등급 누적
 
