@@ -98,7 +98,7 @@
 - [ ] C6.6 Windows Cisco 실험(2026-10-14~15) 완료 기록 작성
 - [ ] C6.7 Fake·실제 Transport·Store·AccessChecker·Scanner에 같은 계약 테스트
 - [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05
-- [ ] C6.9 자체 접근 규칙의 거절·오류에서 host_dispatch 0 — 막힘: AGT 제거(B 판정·A 연결)
+- [ ] C6.9 자체 접근 규칙의 거절·오류·누락(활성화 때 사용자가 끈 도구)에서 host_dispatch 0 · [결정](contracts.md#사용자-결정) — 막힘: AGT 제거(B 판정·A 연결)
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록
