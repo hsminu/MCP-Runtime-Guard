@@ -24,13 +24,19 @@ from PySide6.QtWidgets import (
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.services.bridge import (
+    CODEX_MODEL_ID,
     ConversationEvent,
     SessionCreated,
     SessionOptions,
     TaskProjection,
 )
 
-from .presentation import COMMAND_REFUSALS, RUN_RESULTS, codex_failure_notice
+from .presentation import (
+    COMMAND_REFUSALS,
+    RUN_RESULTS,
+    codex_failure_notice,
+    session_blocker_notice,
+)
 from .task_status import FINAL_STATUSES, status_title
 from .untrusted_text import untrusted_display_text
 from .widgets import KeyboardActionButton, plain_label
@@ -83,6 +89,7 @@ class SessionWorkspace(QWidget):
         self._next_session_number = 0
         self._active_key: str | None = None
         self._ready = False
+        self._session_blocker = ""
         self._busy_scopes: frozenset[tuple[str, int]] = frozenset()
         self._seen_events: set[tuple[str, int, str, str]] = set()
         self._terminal_keys: set[str] = set()
@@ -144,10 +151,7 @@ class SessionWorkspace(QWidget):
             "도구 실행과 승인은 결과 · 실행 활동에서 확인할 수 있어."
         )
         column.addWidget(transcript, 1)
-        notice = plain_label(
-            "새 Task 생성은 아직 연결되지 않았어. 초안을 작성하거나 연결된 세션을 선택해.",
-            name="runtimeMessage",
-        )
+        notice = plain_label("", name="runtimeMessage")
         column.addWidget(notice)
         compose = QFrame()
         compose.setObjectName("composer")
@@ -162,8 +166,8 @@ class SessionWorkspace(QWidget):
         draft.setMaximumHeight(130)
         composer.addWidget(draft)
         controls = QHBoxLayout()
-        model = plain_label("Codex · gpt-6.1-sol", name="secondary")
-        model.setAccessibleName("세션 모델 · Codex gpt-6.1-sol")
+        model = plain_label(f"Codex · {CODEX_MODEL_ID}", name="secondary")
+        model.setAccessibleName(f"세션 모델 · Codex {CODEX_MODEL_ID}")
         controls.addWidget(model)
         controls.addStretch(1)
         start = KeyboardActionButton("세션 시작")
@@ -245,6 +249,13 @@ class SessionWorkspace(QWidget):
         for view in self.sessions.values():
             self._refresh_view(view)
 
+    def set_session_blocker(self, code: str) -> None:
+        """Fixed backend code that already refuses new sessions, or ""."""
+
+        self._session_blocker = code if type(code) is str else "SESSION_UNAVAILABLE"
+        for view in self.sessions.values():
+            self._refresh_view(view)
+
     def set_busy_scopes(self, scopes: frozenset[tuple[str, int]]) -> None:
         self._busy_scopes = scopes
         for view in self.sessions.values():
@@ -301,11 +312,13 @@ class SessionWorkspace(QWidget):
         view.send.setEnabled(writable and bool(view.draft.toPlainText().strip()))
         view.send.setVisible(snapshot is not None)
         view.start.setVisible(snapshot is None)
-        view.start.setEnabled(self._ready and view.pending_command is None)
+        view.start.setEnabled(
+            self._ready and not self._session_blocker and view.pending_command is None
+        )
         view.results.setEnabled(active)
         if snapshot is not None:
             view.model.setText(
-                "Codex · gpt-6.1-sol"
+                f"Codex · {CODEX_MODEL_ID}"
                 if snapshot.model_mode == "codex"
                 else f"모델: {snapshot.model_mode}"
             )
@@ -316,10 +329,14 @@ class SessionWorkspace(QWidget):
             )
         )
         if snapshot is None:
-            text = "새 세션 · Codex gpt-6.1-sol"
-            note = view.command_notice or (
-                "Codex 연결과 시작 검사가 확인되면 세션을 시작할 수 있어. "
-                "로그인은 설정에서 안내를 확인해."
+            text = f"새 세션 · Codex {CODEX_MODEL_ID}"
+            note = (
+                view.command_notice
+                or session_blocker_notice(self._session_blocker)
+                or (
+                    "Codex 연결과 시작 검사가 확인되면 세션을 시작할 수 있어. "
+                    "로그인은 설정에서 안내를 확인해."
+                )
             )
         else:
             text = (

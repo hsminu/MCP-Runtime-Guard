@@ -129,7 +129,7 @@ class StateMessage(QFrame):
     """Show loading, failure, stale, and empty as different states."""
 
     _MESSAGES: ClassVar[dict[LoadState, str]] = {
-        LoadState.UNAVAILABLE: "조회 연결 대기",
+        LoadState.UNAVAILABLE: "조회 기능 미연결",
         LoadState.LOADING: "불러오는 중…",
         LoadState.ERROR: "불러오지 못함 · 새로고침 필요",
         LoadState.STALE: "이전 조회 결과 · 다시 확인 필요",

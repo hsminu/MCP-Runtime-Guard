@@ -24,7 +24,7 @@ def app():
 
 def test_missing_and_error_surfaces_clear_previous_scan_evidence(app) -> None:
     card = ScanStatusCard()
-    assert "조회 연결 대기" in card.state_message.message.text()
+    assert "조회 기능 미연결" in card.state_message.message.text()
     assert card.scan_state.text() == "미제공"
 
     card.set_snapshot(

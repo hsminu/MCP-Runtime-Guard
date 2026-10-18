@@ -37,3 +37,13 @@ def test_new_session_has_fixed_codex_model_and_settings_keep_only_scanner_key():
     assert not hasattr(window, "model_credential_form")
     app.processEvents()
     window.close()
+
+
+def test_session_model_matches_the_pinned_codex_allowlist():
+    import json
+    from pathlib import Path
+
+    from guard_app.services.bridge import CODEX_MODEL_ID
+
+    lock = Path(__file__).resolve().parents[2] / "config" / "codex" / "codex.lock.json"
+    assert json.loads(lock.read_text(encoding="utf-8"))["allowed_models"] == [CODEX_MODEL_ID]

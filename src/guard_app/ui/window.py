@@ -212,6 +212,9 @@ class GuardWindow(QMainWindow):
         self._page_indices["logs"] = self.stack.addWidget(_scroll_page(self.log_page))
         self.approval_page = ApprovalListPage()
         self.approval_page.query_requested.connect(self.approval_query_requested.emit)
+        # No product bridge serves approval listings yet (B6-02); a composition
+        # root that does calls set_approval_query_connected(True).
+        self.approval_page.set_source_connected(False)
         self._page_indices["approvals"] = self.stack.addWidget(_scroll_page(self.approval_page))
         self.server_add_form = ServerAddForm()
         server_add_page = QWidget()
@@ -309,6 +312,7 @@ class GuardWindow(QMainWindow):
         bridge = panel.bridge
         bridge.task_changed.connect(self.sessions.set_snapshot)
         bridge.session_created.connect(self.sessions.session_created)
+        bridge.session_capability_changed.connect(self.sessions.set_session_blocker)
         self.sessions.new_session_requested.connect(
             lambda key, options, command: bridge.request_new_session(
                 key, options, command_id=command
@@ -346,7 +350,7 @@ class GuardWindow(QMainWindow):
         self.set_task_status(None if snapshot is None else snapshot.status)
         if snapshot is None:
             identity = RuntimeIdentity()
-            mode = "새 세션"
+            mode = None
         else:
             try:
                 identity = RuntimeIdentity(
@@ -357,7 +361,8 @@ class GuardWindow(QMainWindow):
             mode = snapshot.model_mode
         self.set_runtime_identity(identity)
         context = f" · {self._runtime_context}" if self._runtime_context else ""
-        self.setWindowTitle(f"MCP Runtime Guard{context} / 모델 {mode}")
+        model = "" if mode is None else f" · 모델 {mode}"
+        self.setWindowTitle(f"MCP Runtime Guard{context}{model}")
 
     def clear_session_content(self) -> None:
         self.sessions.clear_content()
@@ -427,6 +432,11 @@ class GuardWindow(QMainWindow):
         """Show only the current server detail's confirmed public scan query."""
 
         return self.server_page.set_scan_snapshot(server_id, token, snapshot)
+
+    def set_approval_query_connected(self, connected: bool) -> None:
+        """Enable approval listing only when something answers its queries."""
+
+        self.approval_page.set_source_connected(connected)
 
     def set_approval_page(self, page: ApprovalPage) -> bool:
         """Accept only the current approval query response."""

@@ -91,6 +91,24 @@ class SessionRuntime:
         if self._cleanup_unconfirmed:
             raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
 
+    def creation_blocker(self) -> str | None:
+        """What is already known to refuse a new session, in creation order.
+
+        None does not promise success: L2 and per-Task checks run on create.
+        """
+        if self._closed:
+            return "SESSION_UNAVAILABLE"
+        if self._cleanup_unconfirmed:
+            return "CODEX_CLEANUP_UNCONFIRMED"
+        preparation = self._preparation
+        if type(preparation) is not SessionPreparation:
+            return "CODEX_CONFIG_UNAVAILABLE"
+        if self._startup_attempted and self._configuration is None:
+            return "CODEX_PREPARATION_FAILED"
+        if self._session_factory is None:
+            return "CODEX_SESSION_UNAVAILABLE"
+        return None
+
     @staticmethod
     async def _prepared[Result](action: Callable[[], Awaitable[Result]]) -> Result:
         """Translate callback faults without swallowing cancellation or raw text."""
@@ -459,6 +477,7 @@ class SessionRuntime:
             snapshot=self.snapshot,
             create_session=self.create_session,
             stop_session=self.stop_session,
+            session_blocker=self.creation_blocker,
         )
 
 

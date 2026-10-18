@@ -654,3 +654,30 @@ def test_creation_unavailable_and_unconfirmed_have_distinct_notices(
     assert "확인 중" not in view.notice.text()
     if code == "SESSION_CREATION_UNCONFIRMED":
         assert "기능이 연결되지" not in view.notice.text()
+
+
+@pytest.mark.parametrize(
+    ("code", "detail"),
+    [
+        ("CODEX_CONFIG_UNAVAILABLE", "아직 새 세션을 시작할 수 없어"),
+        ("CODEX_CLEANUP_UNCONFIRMED", "정리 상태를 확인해"),
+        ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않았어"),
+        ("SOMETHING_NEW", "지금은 새 세션을 시작할 수 없어"),
+    ],
+)
+def test_known_session_blocker_disables_start_before_any_click(window, code, detail):
+    shell, _, bridge = window
+    view = shell.sessions.current
+    assert view.start.isEnabled()
+    bridge.session_capability_changed.emit(code)
+    assert not view.start.isEnabled()
+    assert detail in view.notice.text()
+    assert "시작하지 않았어" not in view.notice.text()
+    bridge.session_capability_changed.emit("")
+    assert view.start.isEnabled()
+
+
+def test_window_title_names_no_model_for_a_new_draft(window):
+    shell, _, _ = window
+    assert "모델 새 세션" not in shell.windowTitle()
+    assert shell.windowTitle().startswith("MCP Runtime Guard")

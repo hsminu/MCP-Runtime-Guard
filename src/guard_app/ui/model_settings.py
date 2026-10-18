@@ -2,6 +2,8 @@
 
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from guard_app.services.bridge import CODEX_MODEL_ID
+
 from .widgets import plain_label
 
 
@@ -11,7 +13,7 @@ class CodexLoginInfo(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(plain_label("Codex 로그인", name="cardTitle"))
-        layout.addWidget(plain_label("사용 모델: gpt-6.1-sol", name="secondary"))
+        layout.addWidget(plain_label(f"사용 모델: {CODEX_MODEL_ID}", name="secondary"))
         layout.addWidget(
             plain_label(
                 "ChatGPT 기기 코드와 API 키는 모두 Codex 안에서 로그인하는 방식이야. "

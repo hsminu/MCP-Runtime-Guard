@@ -40,7 +40,7 @@ def test_missing_counts_and_failed_query_never_look_like_zero(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
     assert window.overview.metric_cards[0].value.text() == "미제공"
-    assert "조회 연결 대기" in window.overview.metrics_state.text()
+    assert "조회 기능 미연결" in window.overview.metrics_state.text()
 
     window.set_overview_snapshot(OverviewSnapshot(totals=Surface(state=LoadState.ERROR)))
     assert window.overview.metric_cards[0].value.text() == "미제공"
@@ -453,7 +453,7 @@ def test_registry_list_uses_its_own_public_snapshot_and_filters(app) -> None:
         OverviewSnapshot(servers=Surface(LoadState.READY, (public, pending)))
     )
     assert window.server_page.table.rowCount() == 0
-    assert "조회 연결 대기" in window.server_page.state_message.message.text()
+    assert "조회 기능 미연결" in window.server_page.state_message.message.text()
 
     window.set_server_snapshot(Surface(LoadState.READY, (public, pending)))
     assert window.server_page.table.rowCount() == 2

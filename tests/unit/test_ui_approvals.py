@@ -397,7 +397,7 @@ def test_waiting_hint_does_not_expire_or_interpret_markup(app: QApplication) -> 
         destination='<img src="https://bad.invalid/pixel">',
     )
     assert view.set_page(result(view, (long_wait,), 1), display_now=NOW)
-    assert "30분 이상 대기(참고)" in view.table.item(0, 4).text()
+    assert "승인 유효 시간 지남" in view.table.item(0, 4).text()
     assert "승인 대기" in view.table.item(0, 4).text()
     assert view.table.item(0, 3).text() == long_wait.destination_summary
     assert view.selected_summary is None
@@ -446,7 +446,7 @@ def test_320_by_400_approval_row_shows_bounded_age_with_identity_and_status(
         app.processEvents()
         QTest.qWait(20)
         app.processEvents()
-        assert "30분 이상 대기(참고)" in status.text()
+        assert "승인 유효 시간 지남" in status.text()
         assert "31분 대기" not in status.text()
         assert view.table.horizontalScrollBar().maximum() == 0
     finally:

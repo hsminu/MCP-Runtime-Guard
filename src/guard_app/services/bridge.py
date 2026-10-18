@@ -113,15 +113,22 @@ class BackendBindings:
     discard_queued: Callable[[str], int] | None = None
     create_session: Callable[[SessionOptions], Awaitable[TaskProjection]] | None = None
     stop_session: Callable[[str, int, ControlAction], Awaitable[None]] | None = None
+    # Fixed code of what is known to prevent new sessions now, or None. Probed
+    # on the backend thread at READY and after each creation attempt.
+    session_blocker: Callable[[], str | None] | None = None
+
+
+# The only model pinned by C's config/codex/codex.lock.json (allowed_models).
+CODEX_MODEL_ID = "gpt-6.1-sol"
 
 
 @dataclass(frozen=True, slots=True)
 class SessionOptions:
     mode: str = "codex"
-    model: str = "gpt-6.1-sol"
+    model: str = CODEX_MODEL_ID
 
     def __post_init__(self) -> None:
-        if self.mode != "codex" or self.model != "gpt-6.1-sol":
+        if self.mode != "codex" or self.model != CODEX_MODEL_ID:
             raise ValueError("Invalid Codex selection")
 
 
@@ -258,6 +265,8 @@ class BackendBridge(QObject):
     review_ready = Signal(object)
     conversation_ready = Signal(object)
     session_created = Signal(object)
+    # str: fixed blocker code, or "" when new sessions may be requested.
+    session_capability_changed = Signal(str)
 
     def __init__(
         self,
@@ -844,6 +853,7 @@ class BackendBridge(QObject):
             asyncio.create_task(self._worker("control")) for _ in range(self._control_workers)
         )
         workers.extend(asyncio.create_task(self._worker("urgent")) for _ in range(2))
+        self._publish_session_capability()
         self._set_state(BridgeState.READY, "READY")
         await stop
         self._set_state(BridgeState.CLOSING, "CLOSING")
@@ -972,6 +982,18 @@ class BackendBridge(QObject):
             if not completed:
                 self._emit_command(command, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
 
+    def _publish_session_capability(self) -> None:
+        bindings = self._bindings
+        if bindings is None or bindings.create_session is None:
+            code: str | None = "SESSION_CREATION_UNAVAILABLE"
+        elif bindings.session_blocker is None:
+            code = None
+        else:
+            code = bindings.session_blocker()
+        self.session_capability_changed.emit(
+            code if type(code) is str and code else "" if code is None else "SESSION_UNAVAILABLE"
+        )
+
     async def _execute(self, command: _Command) -> str:
         bindings = self._bindings
         assert bindings is not None
@@ -982,6 +1004,8 @@ class BackendBridge(QObject):
                 created_snapshot = await bindings.create_session(command.options)
             except SessionStartError as error:
                 return error.code
+            finally:
+                self._publish_session_capability()
             if type(created_snapshot) is not TaskProjection:
                 return "SESSION_CREATION_UNCONFIRMED"
             self.session_created.emit(

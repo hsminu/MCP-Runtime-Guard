@@ -206,6 +206,23 @@ def codex_failure_notice(code: str, *, creating: bool = False) -> str:
     return detail + context + " 앱 설정을 확인하고 앱을 다시 시작해."
 
 
+def session_blocker_notice(code: str) -> str:
+    """Before any click: why new sessions are already known to be refused."""
+
+    if not code:
+        return ""
+    if code == "SESSION_CREATION_UNAVAILABLE":
+        return "이 실행 구성에는 새 Task 생성 기능이 연결되지 않았어."
+    detail = _CODEX_FAILURE_DETAILS.get(code)
+    if detail is None:
+        return "지금은 새 세션을 시작할 수 없어."
+    if code == "CODEX_CLEANUP_UNCONFIRMED":
+        return detail + " 새 세션을 시작하지 않아. 앱을 종료하고 정리 상태를 확인해."
+    if code in _CODEX_MISSING_COMPONENTS:
+        return detail + " 이 앱 구성에서는 아직 새 세션을 시작할 수 없어."
+    return detail + " 지금은 새 세션을 시작할 수 없어. 앱 설정을 확인하고 앱을 다시 시작해."
+
+
 def fixed(mapping: dict[str, str], value: str | None, *, default: str = "미확인") -> str:
     """Avoid echoing an unknown backend status or reason as arbitrary text."""
 

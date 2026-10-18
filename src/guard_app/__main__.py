@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import sys
 
 from PySide6.QtCore import QTimer
@@ -20,18 +21,30 @@ def main() -> int:
         action="store_true",
         help="소스 checkout에서 선택한 Store + 실제 MCP 합성 서버 사용",
     )
-    parser.add_argument("--scenario", choices=("ask", "allow", "deny"), default="ask")
-    parser.add_argument("--mcp-transport", choices=("stdio", "http"), default="stdio")
-    parser.add_argument("--store", choices=("memory", "sqlite"), default="memory")
+    # Demo-only options default to None so product mode can refuse them.
+    parser.add_argument("--scenario", choices=("ask", "allow", "deny"))
+    parser.add_argument("--mcp-transport", choices=("stdio", "http"))
+    parser.add_argument("--store", choices=("memory", "sqlite"))
     parser.add_argument("--db-path", metavar="PATH", help="기존 부모 디렉터리의 SQLite 파일")
     parser.add_argument("--agt-mode", choices=("real", "mock"))
     parser.add_argument(
         "--agt-policy",
         choices=("allow-tools", "deny-send", "deny-all"),
-        default="allow-tools",
         help="합성 도구의 AGT 허용·차단 시연 정책",
     )
     args = parser.parse_args()
+    demo_only = (args.scenario, args.mcp_transport, args.store, args.agt_mode, args.agt_policy)
+    if not args.demo and any(value is not None for value in demo_only):
+        parser.error("시연 전용 옵션은 --demo와 함께만 쓸 수 있다")
+    if args.demo:
+        args.scenario = args.scenario or "ask"
+        args.mcp_transport = args.mcp_transport or "stdio"
+        args.store = args.store or "memory"
+        args.agt_policy = args.agt_policy or "allow-tools"
+        if importlib.util.find_spec("examples") is None:
+            parser.error(
+                "합성 시연(--demo)은 소스 checkout에서 python -m guard_app으로만 실행할 수 있다"
+            )
     if args.demo and args.agt_mode is None:
         parser.error("합성 시연에는 --agt-mode real 또는 mock을 지정해야 한다")
     if args.demo and (args.store == "sqlite") != (args.db_path is not None):

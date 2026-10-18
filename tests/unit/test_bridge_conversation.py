@@ -137,3 +137,36 @@ def test_new_snapshot_epoch_cannot_accept_input_into_an_old_runner(app):
         assert len(holder["runner"]._conversation) == 1  # system message only
     finally:
         close_bridge(app, bridge)
+
+
+@pytest.mark.parametrize(
+    ("blocker", "create", "expected"),
+    [
+        (None, False, "SESSION_CREATION_UNAVAILABLE"),
+        (lambda: "CODEX_CONFIG_UNAVAILABLE", True, "CODEX_CONFIG_UNAVAILABLE"),
+        (lambda: None, True, ""),
+    ],
+)
+def test_bridge_publishes_session_capability_before_ready(app, blocker, create, expected):
+    async def create_session(_options):
+        raise AssertionError("not requested")
+
+    async def bootstrap():
+        return BackendBindings(
+            lambda task_id: None,
+            FakeControl(),
+            create_session=create_session if create else None,
+            session_blocker=blocker,
+        )
+
+    bridge = BackendBridge(bootstrap)
+    seen: list[str] = []
+    states: list[BridgeState] = []
+    bridge.session_capability_changed.connect(lambda code: seen.append(code))
+    bridge.lifecycle_changed.connect(lambda event: states.append(event.state))
+    bridge.start()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY and bool(seen))
+        assert seen == [expected]
+    finally:
+        close_bridge(app, bridge)

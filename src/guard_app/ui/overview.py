@@ -101,7 +101,7 @@ class MetricCard(QFrame):
         layout.addLayout(heading)
         self.value = plain_label("—", name="metricValue")
         layout.addWidget(self.value)
-        self.caption = plain_label("조회 연결 대기", name="secondary")
+        self.caption = plain_label("조회 기능 미연결", name="secondary")
         layout.addWidget(self.caption)
         link = KeyboardActionButton(f"{page_label(page)} 보기 →")
         link.setObjectName("linkButton")
@@ -115,7 +115,7 @@ class MetricCard(QFrame):
         *,
         ready: bool,
         detail: str | None = None,
-        unavailable: str = "조회 연결 대기",
+        unavailable: str = "조회 기능 미연결",
     ) -> None:
         valid = ready and isinstance(value, int) and not isinstance(value, bool) and value >= 0
         self.value.setText(f"{value:,}건" if valid else "미제공")
@@ -295,7 +295,7 @@ class OverviewPage(QWidget):
         for card in self.metric_cards:
             card.navigate_requested.connect(self.navigate_requested)
         outer.addLayout(self.metrics_grid)
-        self.metrics_state = plain_label("조회 연결 대기", name="secondary")
+        self.metrics_state = plain_label("조회 기능 미연결", name="secondary")
         outer.addWidget(self.metrics_state)
 
         outer.addWidget(

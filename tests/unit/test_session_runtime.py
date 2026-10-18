@@ -473,3 +473,27 @@ def test_stop_during_failure_cleanup_adopts_its_result(tmp_path, monkeypatch, cl
         assert session.closed == 1  # one cleanup, never a second run
 
     asyncio.run(run())
+
+
+def test_creation_blocker_reports_known_refusals_in_creation_order(tmp_path):
+    async def run():
+        store = SQLiteStore(tmp_path / "blocker.db", audit_id_factory=lambda: "unit-audit")
+        bare = SessionRuntime(store, close_store=store.close)
+        assert bare.creation_blocker() == "CODEX_CONFIG_UNAVAILABLE"
+        await bare.close()
+        assert bare.creation_blocker() == "SESSION_UNAVAILABLE"
+        runtime, _ = make_runtime(tmp_path)
+        assert runtime.creation_blocker() is None
+        runtime._session_factory = None
+        assert runtime.creation_blocker() == "CODEX_SESSION_UNAVAILABLE"
+        runtime._cleanup_unconfirmed = True
+        assert runtime.creation_blocker() == "CODEX_CLEANUP_UNCONFIRMED"
+        runtime._cleanup_unconfirmed = False
+        failed, _ = make_runtime(tmp_path, l2=None)
+        with pytest.raises(SessionRuntimeError, match="CODEX_L2_UNAVAILABLE"):
+            await failed.create_session(SessionOptions())
+        assert failed.creation_blocker() == "CODEX_PREPARATION_FAILED"
+        await failed.close()
+        await runtime.close()
+
+    asyncio.run(run())

@@ -35,7 +35,7 @@ def app():
 
 def test_list_distinguishes_unavailable_loading_error_and_empty(app) -> None:
     page = CallLogPage()
-    assert "조회 연결 대기" in page.state_message.message.text()
+    assert "조회 기능 미연결" in page.state_message.message.text()
     assert not page.csv_button.isEnabled()
 
     page.set_calls(Surface(LoadState.LOADING))

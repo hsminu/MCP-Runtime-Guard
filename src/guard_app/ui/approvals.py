@@ -120,6 +120,10 @@ class ApprovalPage:
     as_of: datetime | None = None
 
 
+DEFAULT_APPROVAL_TTL_SECONDS = 300
+SOURCE_NOT_CONNECTED = "승인 목록 조회가 아직 연결되지 않았어 · 승인 요청은 대화 화면에서 처리해."
+
+
 class ApprovalListPage(QWidget):
     """Searches six-row backend pages without approval/denial controls.
 
@@ -144,6 +148,10 @@ class ApprovalListPage(QWidget):
         self._selected_id: str | None = None
         self._column_mode: str | None = None
         self._display_now: datetime | None = None
+        self._source_connected = True
+        # Profile approval TTL (GuardSettings); a PENDING row older than this
+        # should already be expiring, so it is flagged for a fresh read.
+        self._approval_ttl_seconds = DEFAULT_APPROVAL_TTL_SECONDS
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 28, 26, 42)
@@ -323,9 +331,9 @@ class ApprovalListPage(QWidget):
                 and now is not None
                 and now.tzinfo is not None
                 and now.utcoffset() is not None
-                and now - row.created_at >= timedelta(minutes=30)
+                and now - row.created_at >= timedelta(seconds=self._approval_ttl_seconds)
             ):
-                status += " · 30분 이상 대기(참고)"
+                status += " · 승인 유효 시간 지남 · 상태 다시 확인(참고)"
             if self._column_mode == "narrow":
                 age = _bounded_request_age(row.created_at, now) if now else None
                 if row.status in (ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED):
@@ -363,6 +371,31 @@ class ApprovalListPage(QWidget):
             None,
         )
 
+    def set_approval_ttl_seconds(self, seconds: int) -> None:
+        if type(seconds) is not int or seconds < 1:
+            raise ValueError("positive approval TTL required")
+        self._approval_ttl_seconds = seconds
+
+    @property
+    def source_connected(self) -> bool:
+        return self._source_connected
+
+    def set_source_connected(self, connected: bool) -> None:
+        """Without a backend query source, never enter LOADING and wait forever."""
+
+        self._source_connected = connected is True
+        for control in (self.lane_tabs, self.search, self.server_filter, self.sort):
+            control.setEnabled(self._source_connected)
+        self.refresh_button.setEnabled(self._source_connected)
+        if not self._source_connected:
+            self._sequence += 1
+            self._query = None
+            self._clear_rows()
+            self._state = LoadState.UNAVAILABLE
+            self.state_message.set_message(SOURCE_NOT_CONNECTED)
+            self.state_message.setVisible(True)
+            self._update_pager()
+
     def refresh(self) -> None:
         """Read again; never resend an approval/denial command."""
 
@@ -396,6 +429,8 @@ class ApprovalListPage(QWidget):
         self._request_page(1)
 
     def _request_page(self, page: int) -> None:
+        if not self._source_connected:
+            return
         self._sequence += 1
         self._query = ApprovalQuery(
             token=self._sequence,
