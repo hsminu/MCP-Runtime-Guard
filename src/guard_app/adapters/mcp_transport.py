@@ -11,8 +11,8 @@ import asyncio
 import logging
 import math
 import sys
-from collections.abc import Callable, Mapping
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -31,17 +31,22 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import McpError
+from mcp.shared.message import MessageMetadata, SessionMessage
 from mcp.shared.session import ProgressFnT
 from mcp.types import (
     CallToolRequest,
     CallToolRequestParams,
     CallToolResult,
     ClientRequest,
+    JSONRPCMessage,
     ListToolsResult,
+    PaginatedRequestParams,
     RequestParams,
 )
 from pydantic import AnyUrl, BaseModel
 
+from guard_app.adapters.mcp_http_ingress import BoundedHttpTransport
+from guard_app.adapters.mcp_ingress import IngressError, IngressGate, PipeFrameReader
 from guard_app.domain.contracts import RawResult
 from guard_app.domain.errors import DispatchError
 from guard_app.domain.json_types import FrozenJsonObject
@@ -67,6 +72,61 @@ class _UnvalidatedClientSession(ClientSession):
     untrusted and reaches B's ResponseGate unchanged; A never validates
     structured content with a server-supplied schema.
     """
+
+    listing_ingress: IngressGate | None = None
+
+    async def send_request[T: BaseModel](
+        self,
+        request: ClientRequest,
+        result_type: type[T],
+        request_read_timeout_seconds: timedelta | None = None,
+        metadata: MessageMetadata = None,
+        progress_callback: ProgressFnT | None = None,
+    ) -> T:
+        gate = self.listing_ingress
+        if gate is not None and gate.reason is not None:
+            raise IngressError(gate.reason)
+        if request.root.method == "tools/list":
+            if gate is None or not gate.active:
+                raise IngressError("TOOLS_LIST_INGRESS_REQUIRED")
+            # Pinned SDK 1.29 assigns/increments this integer before its first
+            # await. Enter super in this same task, with no scheduling point
+            # between registration and assignment, including concurrent pings.
+            gate.expect(self._request_id)
+        return await super().send_request(
+            request,
+            result_type,
+            request_read_timeout_seconds,
+            metadata,
+            progress_callback,
+        )
+
+    async def list_tools(
+        self,
+        cursor: str | None = None,
+        *,
+        params: PaginatedRequestParams | None = None,
+    ) -> ListToolsResult:
+        gate = self.listing_ingress
+        if gate is None or not gate.active:
+            raise IngressError("TOOLS_LIST_INGRESS_REQUIRED")
+        if cursor is not None and params is not None:
+            raise ValueError("Cannot specify both cursor and params")
+        operation = (
+            super().list_tools(params=params) if params is not None else super().list_tools(cursor)
+        )
+        pending = asyncio.create_task(operation)
+        failed = asyncio.create_task(gate.failed.wait())
+        try:
+            await asyncio.wait((pending, failed), return_when=asyncio.FIRST_COMPLETED)
+            if gate.reason is not None:
+                raise IngressError(gate.reason)
+            return await pending
+        finally:
+            failed.cancel()
+            if not pending.done():
+                pending.cancel()
+            await asyncio.gather(pending, failed, return_exceptions=True)
 
     async def call_tool(
         self,
@@ -142,6 +202,9 @@ def stdio_stream_factory(server: StdioServerParameters, *, errlog: TextIO) -> St
 
     The caller owns the sink until transport shutdown. SDK default environment
     merging still applies; this wrapper is not launcher or environment validation.
+    This legacy SDK-spawned path has no raw ingress gate. Ordinary demo calls
+    remain supported; tools/list collection explicitly refuses it. Product
+    collection uses validated_stdio_stream_factory with C-owned pipes.
     """
     if errlog is sys.stderr or errlog is sys.stdout or errlog.closed:
         raise ValueError("An isolated server stderr sink is required")
@@ -158,6 +221,73 @@ def stdio_stream_factory(server: StdioServerParameters, *, errlog: TextIO) -> St
                 yield streams
         finally:
             _SDK_LOG_SCOPE.reset(token)
+
+    return connect
+
+
+def validated_stdio_stream_factory(
+    read_bytes: Callable[[int], Awaitable[bytes]],
+    write_bytes: Callable[[bytes], Awaitable[None]],
+    drain: Callable[[], Awaitable[None]],
+) -> StreamFactory:
+    """Adapt C-validated, externally owned UTF-8 MCP stdin/stdout operations.
+
+    The launcher and isolated stderr sink remain C/composition-root concerns.
+    read(n) returns at most n bytes; write_bytes writes all supplied bytes or
+    fails; drain confirms backpressure. Context exit cancels local operations,
+    but does not close pipes, terminate a process, or prove launcher cleanup.
+    """
+    if not all(callable(operation) for operation in (read_bytes, write_bytes, drain)):
+        raise TypeError("validated pipe byte operations required")
+    _install_sdk_log_containment()
+
+    @asynccontextmanager
+    async def connect():
+        gate = IngressGate()
+        reader = PipeFrameReader(read_bytes, gate)
+        read_send, read_receive = anyio.create_memory_object_stream[SessionMessage](0)
+        write_send, write_receive = anyio.create_memory_object_stream[SessionMessage](0)
+
+        async def receive() -> None:
+            async with read_send:
+                try:
+                    while (frame := await reader.receive()) is not None:
+                        try:
+                            message = JSONRPCMessage.model_validate_json(frame)
+                        except ValueError:
+                            gate.fail("TOOLS_LIST_MALFORMED")
+                        await read_send.send(SessionMessage(message))
+                except (IngressError, anyio.BrokenResourceError, anyio.ClosedResourceError):
+                    return
+
+        async def send() -> None:
+            async with write_receive:
+                try:
+                    async for message in write_receive:
+                        payload = message.message.model_dump_json(by_alias=True, exclude_none=True)
+                        await write_bytes(payload.encode("utf-8") + b"\n")
+                        await drain()
+                except (OSError, EOFError, RuntimeError, anyio.BrokenResourceError):
+                    try:
+                        gate.fail("TOOLS_LIST_INGRESS_IO_FAILED")
+                    except IngressError:
+                        return
+                except anyio.ClosedResourceError:
+                    return
+
+        token = _SDK_LOG_SCOPE.set(True)
+        try:
+            async with anyio.create_task_group() as group:
+                group.start_soon(receive)
+                group.start_soon(send)
+                try:
+                    yield read_receive, write_send, gate
+                finally:
+                    group.cancel_scope.cancel()
+        finally:
+            _SDK_LOG_SCOPE.reset(token)
+            read_receive.close()
+            write_send.close()
 
     return connect
 
@@ -218,9 +348,12 @@ def http_stream_factory(
     async def connect():
         token = _SDK_LOG_SCOPE.set(True)
         get_started = False
+        gate = IngressGate()
 
         async def constrain_request(request: httpx.Request) -> None:
             nonlocal get_started
+            if gate.reason is not None and request.method != "DELETE":
+                raise httpx.RequestError("MCP_INGRESS_CLOSED")
             if request.url != url or request.method not in {"POST", "GET", "DELETE"}:
                 raise httpx.RequestError("MCP_ENDPOINT_MISMATCH")
             if "authorization" in request.headers or "proxy-authorization" in request.headers:
@@ -241,11 +374,14 @@ def http_stream_factory(
             ssl_context = await asyncio.to_thread(httpx.create_ssl_context, trust_env=False)
             async with (
                 httpx.AsyncClient(
-                    transport=httpx.AsyncHTTPTransport(
-                        retries=0,
-                        trust_env=False,
-                        verify=ssl_context,
-                        limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+                    transport=BoundedHttpTransport(
+                        httpx.AsyncHTTPTransport(
+                            retries=0,
+                            trust_env=False,
+                            verify=ssl_context,
+                            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+                        ),
+                        gate,
                     ),
                     timeout=httpx.Timeout(float(io_timeout_s), read=float(read_timeout_s)),
                     follow_redirects=False,
@@ -257,7 +393,7 @@ def http_stream_factory(
                     str(url), http_client=client, terminate_on_close=True
                 ) as streams,
             ):
-                yield streams
+                yield (*streams, gate)
         finally:
             _SDK_LOG_SCOPE.reset(token)
 
@@ -424,9 +560,10 @@ class ToolListLimits:
     depth 1; the 10 s initialization bound covers connecting and ``initialize``
     from the start of the wait; the 30 s collection bound runs from the start
     of initialization to the last page. The 1 MiB page and 8 MiB per-listing
-    byte limits (contracts 2026-10-13) are measured on the JSON-RPC bytes
-    before parsing; the MCP SDK parses inside its stream reader, so they wait
-    for C's stream ingress (GitHub #21 item 5) and are not here.
+    byte limits (contracts 2026-10-13) are measured before parsing, after
+    framing/decompression. An actual SDK session requires an A ingress gate;
+    legacy SDK-spawned stdio cannot collect. Session test doubles can exercise
+    semantic collection independently and cannot prove raw ingress enforcement.
     """
 
     max_tools: int = 256
@@ -434,9 +571,17 @@ class ToolListLimits:
     max_json_depth: int = 64
     page_timeout_s: float = 10.0
     collection_timeout_s: float = 30.0
+    max_page_bytes: int = 1024 * 1024
+    max_total_bytes: int = 8 * 1024 * 1024
 
     def __post_init__(self) -> None:
-        for count in (self.max_tools, self.max_pages, self.max_json_depth):
+        for count in (
+            self.max_tools,
+            self.max_pages,
+            self.max_json_depth,
+            self.max_page_bytes,
+            self.max_total_bytes,
+        ):
             if type(count) is not int or count < 1:
                 raise ValueError("positive tools/list count limits required")
         if self.max_json_depth > _MAX_TOOL_JSON_DEPTH:
@@ -490,6 +635,42 @@ def _json_depth_exceeds(value: object, limit: int) -> bool:
 
 
 async def collect_tool_definitions(
+    session: _ToolSession, limits: ToolListLimits, *, deadline: float | None = None
+) -> ToolListing:
+    """Collect one listing; actual SDK sessions require pre-parse ingress.
+
+    Pure session doubles can test the semantic limits without claiming a wire
+    guarantee. One gate scope spans every page and is reset only after the
+    collection finishes. A failed/abandoned real listing invalidates its
+    connection so a late unbounded page cannot be parsed after scope exit.
+    """
+    gate = getattr(session, "listing_ingress", None)
+    if isinstance(session, ClientSession) and not isinstance(gate, IngressGate):
+        return _incomplete_listing("TOOLS_LIST_INGRESS_REQUIRED")
+    if not isinstance(gate, IngressGate):
+        return await _collect_tool_definitions(session, limits, deadline=deadline)
+    try:
+        gate.begin(limits.max_page_bytes, limits.max_total_bytes)
+    except IngressError as error:
+        return _incomplete_listing(error.reason)
+    try:
+        listing = await _collect_tool_definitions(session, limits, deadline=deadline)
+        if gate.reason is not None:
+            return _incomplete_listing(gate.reason)
+        if listing.reason in {"TOOLS_LIST_TIMEOUT", "TOOLS_LIST_FAILED", "TOOLS_LIST_MALFORMED"}:
+            gate.fail(listing.reason)
+        return listing
+    except IngressError as error:
+        return _incomplete_listing(error.reason)
+    except asyncio.CancelledError:
+        with suppress(IngressError):
+            gate.fail("TOOLS_LIST_CANCELLED")
+        raise
+    finally:
+        gate.end()
+
+
+async def _collect_tool_definitions(
     session: _ToolSession, limits: ToolListLimits, *, deadline: float | None = None
 ) -> ToolListing:
     """Page through tools/list within ``limits`` and keep each Tool object whole.
@@ -581,6 +762,10 @@ def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
                     logging_callback=_discard_logging,
                     message_handler=_discard_message,
                 ) as session:
+                    if isinstance(session, ClientSession):
+                        session.listing_ingress = next(
+                            (item for item in streams[2:] if isinstance(item, IngressGate)), None
+                        )
                     yield session
         finally:
             _SDK_LOG_SCOPE.reset(token)
@@ -649,6 +834,7 @@ class ServerWorker:
         self._session_exited = False
         self._owner_cancel_expected = False
         self._close_failed = False
+        self._ingress_gate: IngressGate | None = None
 
     async def start(self) -> None:
         if self._state is not _State.NEW:
@@ -679,6 +865,8 @@ class ServerWorker:
         return self._tool_listing
 
     async def call(self, req: ResolvedRequest) -> RawResult:
+        if self._ingress_gate is not None and self._ingress_gate.reason is not None:
+            self._quiesce_failed_ingress()
         if self._state is not _State.READY:
             name = (
                 "WorkerNotReady" if self._state in (_State.NEW, _State.STARTING) else "WorkerClosed"
@@ -755,7 +943,12 @@ class ServerWorker:
         if self._close_failed:
             self._state = _State.FAILED
             name = (
-                "SessionCloseFailed" if teardown_failed or teardown_missing else "WorkerOwnerFailed"
+                "SessionCloseFailed"
+                if teardown_failed
+                or teardown_missing
+                or self._ingress_gate is not None
+                and self._ingress_gate.reason == "TOOLS_LIST_INGRESS_CLOSE_FAILED"
+                else "WorkerOwnerFailed"
             )
             raise DispatchError(name) from None
         if self._state is _State.CLOSING:
@@ -763,6 +956,7 @@ class ServerWorker:
 
     async def _run(self) -> None:
         tracker: _SessionExitTracker | None = None
+        ingress_watch: asyncio.Task[None] | None = None
         limits = self._tool_list_limits
         started = asyncio.get_running_loop().time()
         # With tools/list collection on, the initialization bound covers
@@ -773,6 +967,9 @@ class ServerWorker:
             tracker = _SessionExitTracker(self._session_factory())
             async with asyncio.timeout(init_bound) as init_window:
                 async with tracker as session:
+                    candidate_gate = getattr(session, "listing_ingress", None)
+                    if isinstance(candidate_gate, IngressGate):
+                        self._ingress_gate = candidate_gate
                     await session.initialize()
                     init_window.reschedule(None)
                     self._initialized = True
@@ -783,8 +980,20 @@ class ServerWorker:
                         self._tool_listing = await collect_tool_definitions(
                             session, limits, deadline=started + limits.collection_timeout_s
                         )
+                        gate = getattr(session, "listing_ingress", None)
+                        if (
+                            self._tool_listing.reason == "TOOLS_LIST_INGRESS_REQUIRED"
+                            or isinstance(gate, IngressGate)
+                            and gate.reason is not None
+                        ):
+                            # Preserve the fixed incomplete reason for Registry,
+                            # but never advertise a dead/gateless session READY.
+                            self._state = _State.FAILED
+                            return
                     if self._state is _State.STARTING:
                         self._state = _State.READY
+                    if self._ingress_gate is not None:
+                        ingress_watch = asyncio.create_task(self._watch_ingress())
                     self._ready.set()
                     while True:
                         item = await self._queue.get()
@@ -801,6 +1010,14 @@ class ServerWorker:
                                 item.future.set_exception(DispatchError("WorkerInterrupted"))
                             self._active = None
         finally:
+            if ingress_watch is not None:
+                ingress_watch.cancel()
+                await asyncio.gather(ingress_watch, return_exceptions=True)
+            if (
+                self._ingress_gate is not None
+                and self._ingress_gate.reason == "TOOLS_LIST_INGRESS_CLOSE_FAILED"
+            ):
+                self._close_failed = True
             if tracker is not None:
                 self._session_entered = tracker.entered
                 self._session_exit_attempted = tracker.exit_attempted
@@ -813,6 +1030,24 @@ class ServerWorker:
             self._ready.set()
             self._reject_queued("WorkerClosed")
             self._stopped.set()
+
+    def _quiesce_failed_ingress(self) -> None:
+        gate = self._ingress_gate
+        if gate is None or gate.reason is None:
+            return
+        if gate.reason == "TOOLS_LIST_INGRESS_CLOSE_FAILED":
+            self._close_failed = True
+        if self._state is _State.READY:
+            self._unhealthy = True
+            self._state = _State.CLOSING
+            self._reject_queued("WorkerClosed")
+            self._queue.put_nowait(_STOP)
+
+    async def _watch_ingress(self) -> None:
+        gate = self._ingress_gate
+        assert gate is not None
+        await gate.failed.wait()
+        self._quiesce_failed_ingress()
 
     async def _execute(self, session: _ToolSession, cmd: _Command) -> None:
         """The one broad exception boundary for per-command SDK failures."""

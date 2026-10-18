@@ -12,7 +12,7 @@
 | `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22 |
 | Pending 최종 알림 형식·종료 처리(NOTIFY-01)·시스템 Task 정지(STOP-01)·검토된 설명(DESC-01) ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | B | A19–A22, A47 |
 | 접근 규칙 판정 함수·동기 포트 구현(ACCESS-01)·AGT 코드 제거·계약 합의 | B·A·C | A02·A06, A41, A44, A51, A53 |
-| Codex 0.162.1 launcher·L1/L2 구현·T43/T46·stream ingress·경로·ScanReport·Scanner 자격증명 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
+| Codex 0.162.1/MCP launcher·L1/L2 구현·T43/T46·수신 상한 독립 인수·경로·ScanReport·Scanner 자격증명 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
 | 설정·Profile 로딩(B)과 경로·실행 파일 검증(C) ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | B·C | A24–A27, A49 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | B의 AGT 제거 PR(같은 파일) | B | A44 |
@@ -37,8 +37,9 @@
 - [x] A09·A10 worker 구현·회귀 검증
 - [x] A09·A10 `tools/list` 수집과 도구 수·페이지·깊이·시간 상한 · [기록](archive/a/A09-A10-tools-list-collection.md)
 - [x] A57 수집 시간 기준(연결 포함·초기화 시작부터)·반복 cursor·중복 이름·수집 중 종료 보정 · [기록](archive/a/A57-tools-list-timing-and-loop-rules.md)
-- [ ] A09·A10 수신 직전 wire-size 상한 — 막힘: C stream ingress
-- [ ] A09·A10 `tools/list` 수신 상한 페이지 1MiB·조회 누적 8MiB · [결정](contracts.md#사용자-결정) — 막힘: C stream ingress([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21) 5번)
+- [x] A76 `tools/list` 파싱 전 페이지 1MiB·조회 누적 8MiB와 주입형 MCP 파이프 연결 · [기록](archive/a/A76-mcp-listing-byte-ingress.md)
+- [x] A77 HTTP JSON·SSE 압축 해제 후 바이트 제한·종료 확인과 실패 격리 · [기록](archive/a/A77-http-listing-byte-ingress.md)
+- [ ] A09·A10 C launcher 파이프 실제 연결·수신 상한 독립 인수 — 막힘: C2.12·C5.8([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6247463861))
 - [x] A13 미종결 거부·정리 미확인 재시작 차단, SQLite 같은 스레드 종료 순서(W1)
 - [ ] A13 이전 Task 종결·시작 복구 — 막힘: B-SQL-02·C 인수
 - [x] A14 errlog 필수·SDK·합성 HTTP 서버 로그 격리
