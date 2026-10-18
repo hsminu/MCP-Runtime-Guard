@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from guard_app.services.bridge import valid_server_id
+
 from .presentation import is_hidden_char
 from .widgets import KeyboardActionButton, SelectionBox, plain_label
 
@@ -399,6 +401,10 @@ class ServerAddForm(QWidget):
         elif any(_id_key(server_id) == _id_key(known) for known in self._known_ids):
             errors["server_id"] = (
                 "현재 목록에 대소문자·전각 여부만 다른 같은 ID가 있어. 다른 ID를 입력해."
+            )
+        elif not valid_server_id(server_id):
+            errors["server_id"] = (
+                "서버 ID 형식이 맞지 않아. 연속 밑줄(__)과 끝의 밑줄(_)은 쓸 수 없어."
             )
         if not display_name:
             errors["display_name"] = "표시 이름을 입력해."

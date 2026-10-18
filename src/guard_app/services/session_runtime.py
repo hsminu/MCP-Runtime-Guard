@@ -1,8 +1,9 @@
 """A-local injectable Codex composition pending B/C agreement.
 
-C supplies the startup L2 evidence and verified fresh session factory. Missing
-capabilities reject before Store Task creation. No launcher, login persistence,
-model API, Guard protocol or replacement B port is implemented here.
+C supplies startup L2 evidence and secure process/path/cleanup capabilities;
+A composes those with its JSON-RPC and Guard relay into the session factory.
+Missing capabilities reject before Store Task creation. No launcher, login
+persistence, model API, Guard protocol or replacement B port is implemented here.
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ from guard_app.services.bridge import (
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.storage.sqlite_store import SQLiteStore
 
-# A-local proposal only: C's factory must verify the executable/config/model
-# hashes, account/read, and create a separate app-server for this Task. The L2
-# callback runs once per app lifetime and must return exactly True to allow it.
+# A-local proposal only: A's factory must use C's executable/config/model hash
+# verification and separate app-server, then perform account/read and relay setup.
+# The L2 callback runs once per app lifetime and must return exactly True.
 type CodexSessionFactory = Callable[[TaskState, SessionOptions], Awaitable[CodexSession]]
 type StartupL2Check = Callable[[], Awaitable[bool]]
 

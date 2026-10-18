@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-18 · main `818b118` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-18 · main `a41f1d8` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -9,12 +9,11 @@
 | launcher·Registry·endpoint 검증·fixture·독립 인수 | C | A04, A07–A12, A14–A16, A23, A36–A40 |
 | 시작 복구·영속 call_seq·조회/감사 API (B-SQL-01–06) | B | A13, A24–A27, A33–A35 |
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
-| `ModelClient` 포트 제거·A 로컬 세션 관리자 입구의 공통 계약 합의 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20) 5번) | A·B·C | A19–A22 |
-| Pending 최종 결과 알림·만료 주체(NOTIFY-01, [#18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) 제안)·세션 관리자용 Task 정지 입구·검토된 설명 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20) 1–3번) | B | A19–A22, A47 |
-| 접근 규칙 판정 함수·연결 형태(ACCESS-01, [#18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) 제안)·AGT 코드 제거 | B | A02·A06, A41, A44, A51, A53 |
+| `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22 |
+| Pending 최종 알림 형식·종료 처리(NOTIFY-01)·시스템 Task 정지(STOP-01)·검토된 설명(DESC-01) ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | B | A19–A22, A47 |
+| 접근 규칙 판정 함수·동기 포트 구현(ACCESS-01)·AGT 코드 제거·계약 합의 | B·A·C | A02·A06, A41, A44, A51, A53 |
 | Codex 0.162.1 launcher·L1/L2 구현·T43/T46·stream ingress·경로·ScanReport·Scanner 자격증명 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
 | 설정·Profile 로딩(B)과 경로·실행 파일 검증(C) ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | B·C | A24–A27, A45, A49 |
-| A가 정한 입력·동작 규칙 확인 | 사용자 | A56 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | B의 AGT 제거 PR(같은 파일) | B | A44 |
 
@@ -86,12 +85,13 @@
 - [x] A59 폴더 규칙 중복을 대소문자 무시로 검사 · [기록](archive/a/A59-folder-rule-case.md)
 - [ ] A49 등록·출처 규칙 연결 — 막힘: C Registry·safe_path·설정 로딩 담당(#19)
 - [ ] A52 Codex 로그인 실제 연결(ChatGPT 기기 코드·API 키, Codex가 keyring 저장) — 막힘: C launcher·T43 검증(#21); 직접 API 키 저장 화면은 A65에서 제거
-- [ ] A54 등록 화면 서버 ID 즉시 안내(`valid_server_id`) — bridge가 같은 검사 결과를 전달하는 방식으로 확정, 연결 구현 남음
-- [ ] A56 A가 정한 규칙 확인(키 앞뒤 공백 제거·4자 이하 키 끝자리 숨김·폴더 규칙 최소 1개·tools/list 반복 cursor·중복 이름 중단) — 막힘: 사용자 확인(contracts에 없음, 이슈 등록 필요)
+- [x] A54 등록 화면 서버 ID 즉시 안내·bridge에서 B 검사 결과 전달 · [기록](archive/a/A54-server-id-bridge-validation.md)
+- [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
 - [x] A61 Qt 시안 컴포넌트·실행/승인/중지 카드·아이콘·작은 화면 배치 · [기록](archive/a/A61-ui-components.md)
 - [x] A63 세션 중심 대화·결과 화면·기존 기능 진입·Task/epoch 메시지 연결·원문 폐기·독립 GUI QA · [기록](archive/a/A63-session-workspace.md)
 - [x] A64 SQLite 새 Task·모델 API 어댑터·키 설정 주입·세션 격리 연결부 — 실제 키 저장·API 사용·CLI 실행은 사용자 선택에 따라 C 구현 대기 · [기록](archive/a/A64-api-session-connections.md)
 - [x] A65 직접 모델 API 제거·Codex 전용 주입부·L2 시작 게이트·Task별 동시 실행과 정지 격리 · [기록](archive/a/A65-codex-only-concurrent-tasks.md)
+- [x] A66 세션 관리자 인터페이스 제안 v1·담당 경계 명확화 · [기록](archive/a/A66-session-interface-proposal.md)
 
 ## 통합·패키징
 

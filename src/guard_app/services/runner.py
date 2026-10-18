@@ -56,9 +56,10 @@ class CodexAuthenticationError(CodexSessionError):
 class CodexSession(Protocol):
     """Trusted injected session, not a wire protocol or agreed B/C port.
 
-    The implementation must own a fresh, hash-checked app-server per Task,
-    account/read, Guard-only tool relay, L3 monitoring and Task log cleanup.
-    None of these process/security capabilities is implemented here.
+    A composes this session from C's verified launcher, L1/L2 and cleanup
+    capabilities. A owns account/read, Guard-only tool relay and L3 monitoring;
+    C owns the process, path and log-cleanup primitives. The composed session
+    must own a fresh app-server per Task. None of this live wiring exists here.
     """
 
     async def send(self, text: str) -> str: ...

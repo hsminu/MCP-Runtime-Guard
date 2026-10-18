@@ -32,8 +32,19 @@ from guard_app.domain.contracts import (
 )
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
+from guard_app.services import catalog_sources
 from guard_app.services.approvals import HumanControl
 from guard_app.services.runner import RunUpdate, TaskExecution
+
+
+def valid_server_id(server_id: object) -> bool:
+    """Forward B's pure syntax result, including before backend startup/after close.
+
+    This local hint neither normalizes input nor grants Registry acceptance.
+    Registry remains responsible for validating every submitted registration.
+    """
+
+    return catalog_sources.valid_server_id(server_id)
 
 
 class BackendCleanupError(StoreError):
