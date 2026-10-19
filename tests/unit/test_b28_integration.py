@@ -300,3 +300,46 @@ def test_closing_the_assembly_ends_transport_then_closes_guard(tmp_path) -> None
 
     asyncio.run(run())
     assert order == ["transport", "guard"]
+
+
+def test_human_stop_with_guard_leaves_the_store_to_guard(tmp_path) -> None:
+    """PR #29 B review 5: after the bridge's human cancel, A writes no HALTED itself."""
+    from guard_app.services.bridge import ControlAction
+
+    db_path = tmp_path / "human.db"
+
+    async def run():
+        bindings = await bootstrap_product(
+            str(db_path),
+            preparation=preparation([], read_then_answer),
+            product=inputs(
+                Peer([READ_DEFINITION]), Registry(tool_fingerprint(READ_DEFINITION)), document()
+            ),
+        )
+        try:
+            assert bindings.create_session is not None
+            assert bindings.stop_session is not None
+            assert bindings.human_control is not None
+            assert bindings.snapshot is not None
+            runtime = bindings.stop_session.__self__  # type: ignore[attr-defined]
+            writes: list[str] = []
+
+            async def no_direct_write(task_id):
+                writes.append(task_id)
+
+            runtime._halt_store_task = no_direct_write
+            created = await bindings.create_session(SessionOptions())
+            # The bridge's order: Guard's human channel first, then the session.
+            await bindings.human_control.cancel(created.task_id)
+            await bindings.stop_session(created.task_id, created.epoch, ControlAction.CANCEL)
+            after = await bindings.snapshot(created.task_id)
+            return created.task_id, after, writes
+        finally:
+            assert bindings.close is not None
+            await bindings.close()
+
+    task_id, after, writes = asyncio.run(run())
+    assert writes == []
+    assert after.status is TaskStatus.HALTED
+    assert not after.can_accept_message
+    assert all(event != "SESSION_STOPPED" for event, _ in audit_rows(db_path, task_id))

@@ -525,32 +525,16 @@ class SessionRuntime:
                     self._task_changed(task_id)
             return policy_view(assembled, change_available=True)
 
-    async def _halt_task(self, task_id: str) -> None:
-        """A human stop through Guard's human channel when one is assembled.
-
-        Writing HALTED to the Store behind Guard's back makes a still running
-        (shielded) submit fail its own Store write, which Guard treats as a
-        global halt for every Task. Guard's cancel records the stop intent at
-        once, so the in-flight submit is denied as TASK_NOT_RUNNING at its next
-        check; the cancel itself waits for the Task lock in the background.
-        Session failures use STOP-01 instead (`_system_stop`).
-        """
-        assembled = self._assembled
-        if assembled is not None:
-            control = assembled.guard.human_control(assembled.operator_id)
-
-            # Waiting for cancel here would tie this stop to the in-flight
-            # submit holding the Task lock.
-            async def cancel() -> None:
-                await control.cancel(task_id)
-
-            stopping = asyncio.ensure_future(cancel())
-            self._cleanup_operations.add(stopping)
-            stopping.add_done_callback(self._consume_cleanup)
-            await asyncio.sleep(0)  # let cancel set the stop intent now
-        await self._halt_store_task(task_id)
-
     async def stop_session(self, task_id: str, epoch: int, action: ControlAction) -> None:
+        """Close the Codex session of a Task a human stopped.
+
+        With Guard assembled, the bridge has already stopped the Task through
+        Guard's human channel (cancel/emergency halt), which records the stop
+        under the Task lock with the operator in the audit. A writes nothing to
+        the Store then: a second, unlocked HALTED write could collide with an
+        in-flight submit's commit and halt every Task (PR #29 B review 5).
+        Without Guard nothing else stops the Store Task, so it is written here.
+        """
         if action not in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
             raise SessionRuntimeError("CONTROL_UNAVAILABLE")
         runner = self.runner_for_task(task_id)
@@ -559,7 +543,8 @@ class SessionRuntime:
             raise SessionRuntimeError("SESSION_STATE_MISMATCH")
         runner.close()  # Invalidate late responses without waiting for the send lock.
         try:
-            await self._halt_task(task_id)
+            if self._assembled is None:
+                await self._halt_store_task(task_id)
         finally:
             await self._close_session(task_id, interrupt=True)
 

@@ -121,7 +121,13 @@ class LiveFingerprints:
 def live_fingerprints(
     registry: Registry, transport: McpTransport, server_ids: tuple[str, ...]
 ) -> LiveFingerprints:
-    """Live fingerprints per registered tool, and servers that must not run."""
+    """Live fingerprints per registered tool, and servers that must not run.
+
+    A server is blocked for this run when its listing is incomplete, a
+    registered tool is missing or differs, or it lists a tool its registration
+    does not have. Added and removed tools both count as a definition change,
+    like B's `RegistryStore.record_fingerprint_change` (PR #29 B review 3).
+    """
 
     live: dict[tuple[str, str], str] = {}
     mismatched: set[tuple[str, str]] = set()
@@ -135,9 +141,16 @@ def live_fingerprints(
         if listing is not None and listing.complete:
             for listed in listing.tools:
                 name = listed.get("name")
-                if type(name) is str:
-                    definitions[name] = listed
+                if type(name) is not str or name in definitions:
+                    # A nameless or repeated tool cannot be matched to one
+                    # registration, so the listing is not trusted at all.
+                    blocked.add(server_id)
+                    continue
+                definitions[name] = listed
         else:
+            blocked.add(server_id)
+        registered = {tool.tool_name for tool in record.tools}
+        if any(name not in registered for name in definitions):
             blocked.add(server_id)
         for tool in record.tools:
             definition = definitions.get(tool.tool_name)

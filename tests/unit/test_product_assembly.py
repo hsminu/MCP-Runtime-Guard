@@ -320,6 +320,22 @@ def test_one_mismatched_tool_blocks_every_tool_of_its_server(tmp_path) -> None:
     assert view.status("docs") is RegStatus.PENDING
 
 
+def test_a_listed_tool_missing_from_the_registration_blocks_the_server(tmp_path) -> None:
+    """PR #29 B review 3: an added tool is a definition change, like a removed one."""
+    peer = Peer([READ_DEFINITION, LIST_DEFINITION])
+    outcome, views, view = asyncio.run(
+        submit_call(tmp_path, peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
+    )
+    # `read` itself still matches, yet the server is not trusted for this run.
+    assert view.mismatched == frozenset()
+    assert view.blocked_servers == frozenset({"docs"})
+    assert view.status("docs") is RegStatus.PENDING
+    assert views == ()
+    assert type(outcome) is Denied
+    assert outcome.reasons == (Reason.REG_NOT_ACTIVE,)
+    assert peer.calls == []
+
+
 def test_incomplete_listing_blocks_the_server(tmp_path) -> None:
     """A duplicate tool name makes tools/list incomplete; nothing is guessed (I10)."""
     peer = Peer([READ_DEFINITION, READ_DEFINITION])
