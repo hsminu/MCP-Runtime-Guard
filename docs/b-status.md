@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-18 · main `a2698b2` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-18 · main `139e5a0` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -16,7 +16,10 @@
 | Registry 영속화 계약(B6-06) | C | B6.14 |
 | 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
 | 모델 고정 문구표 검토·세션 관리자 연결 | A | B5.12 |
+| NOTIFY-01 DTO·포트·종료 의미 합의와 A/C 연결·독립 검증 | A·B·C | B5.13 |
+| STOP-01 TaskIdentity·사유·감사 포트 합의와 A 세션 관리자 연결·T41/T42 독립 검증 | A·B·C | B5.14 |
 | 설정 파일 형식 결정·경로/실행 파일 검증·시작 연결 | 사용자·C·A | B3.11 |
+| 정책 변경 화면·저장/Task 생성 직렬화 연결과 거부·누락 전송 0 검증 | A·C | B3.12 |
 
 ## B1 · 공통 모델과 계약
 
@@ -54,8 +57,9 @@
 - [x] B3.7 FP-01 JCS 지문 함수 · [기록](archive/b/B3.7-jcs-fingerprint.md)
 - [ ] B3.8 DESC-01 검토된 설명 필드
 - [x] B3.9 파싱된 설정·Profile 로딩 1단계와 policy_version 계산(10-18 결정) · [기록](archive/b/B3.9-profile-loading.md)
-- [ ] B3.10 정책 변경 명령·Task 정지 처리(10-18 결정)
+- [x] B3.10 정책 변경 준비·적용·Task 정지·승인 무효화(10-18 결정) · [기록](archive/b/B3.10-policy-change.md)
 - [ ] B3.11 설정 파일 형식 결정·C 경로/실행 파일 검증·A 시작 연결 — 막힘: 형식 결정 필요(C 경로 검증, A 시작 연결)
+- [ ] B3.12 A81 허용 체크·정책 저장/적용·Task 생성 직렬화 연결·C 거부/누락 전송 0 검증 — 막힘: A·C 연결
 
 ## B4 · Guard와 응답 게이트
 
@@ -79,10 +83,12 @@
 - [x] B5.6 consume_and_reserve의 정확한 True ACK 후에만 실행, 중복 클릭·재전달 실행 1회
 - [x] B5.7 재평가부터 응답 커밋까지 같은 Task lock 유지
 - [x] B5.8 monotonic deadline·UTC 만료 동시 검사, 소비 후 전송 직전에도 검사
-- [ ] B5.9 NOTIFY-01 만료 타이머·최종 결과 알림
-- [ ] B5.10 STOP-01 시스템 정지 입구
+- [x] B5.9 NOTIFY-01 만료 타이머·최종 결과 알림 B 구현·합의 전 제안 · [기록](archive/b/B5.9-pending-notifications.md)
+- [x] B5.10 STOP-01 시스템 정지·사실 감사 B 구현·합의 전 제안 · [기록](archive/b/B5.10-system-stop.md)
 - [x] B5.11 모델에 돌려줄 고정 문구표 · [기록](archive/b/B5.11-model-messages.md)
 - [ ] B5.12 모델 고정 문구표 A 검토·세션 관리자 연결 — 막힘: A 검토
+- [ ] B5.13 NOTIFY-01 DTO·포트·종료 의미 합의·A 대기/종료·C 지문 변경 연결·T45 독립 검증 — 막힘: 3인 합의·A/C 연결
+- [ ] B5.14 STOP-01 TaskIdentity·정지 사유·SessionAudit 합의·A 세션 관리자 연결·C T41/T42 계수 검증 — 막힘: 3인 합의·A/C 연결
 
 ## B6 · SQLite 저장소
 

@@ -10,7 +10,7 @@ import asyncio
 import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from weakref import WeakValueDictionary, finalize
 
@@ -22,10 +22,21 @@ from guard_app.domain.contracts import (
     Outcome,
     OutcomeUnknown,
     Pending,
+    Released,
+    TaskIdentity,
     TrustedContext,
     Withheld,
 )
-from guard_app.domain.enums import Decision, Label, RegStatus, RequestStatus, TaskStatus, ToolKind
+from guard_app.domain.enums import (
+    Decision,
+    Label,
+    RegStatus,
+    RequestStatus,
+    SessionEvent,
+    SystemStopReason,
+    TaskStatus,
+    ToolKind,
+)
 from guard_app.domain.errors import DispatchError, ResolutionError, StoreError
 from guard_app.domain.models import (
     AccessResult,
@@ -36,11 +47,11 @@ from guard_app.domain.models import (
     TaskState,
 )
 from guard_app.domain.reasons import Reason
-from guard_app.ports import AccessChecker, Registry, Store, Transport
+from guard_app.ports import AccessChecker, PendingResult, Registry, SessionAudit, Store, Transport
 from guard_app.security.digest import json_digest
 from guard_app.security.failclosed import after_dispatch, fail_closed
 from guard_app.services.approvals import ApprovalService, HumanControl, _ApprovalTaskMismatchError
-from guard_app.services.catalog import Catalog
+from guard_app.services.catalog import Catalog, LoadedProfile, PreparedPolicyChange
 from guard_app.services.response_gate import ResponseGate
 from guard_app.services.state_checks import (
     checked_status_change,
@@ -70,12 +81,45 @@ class GuardConfigError(ValueError):
     """고정 문구의 서비스 구성 오류."""
 
 
+class PolicyChangeError(ValueError):
+    """정책 적용의 고정 오류. 저장소·설정·예외 원문을 포함하지 않는다."""
+
+
+class SystemControlError(ValueError):
+    """시스템 정지·사실 감사 실패. 원문 없는 고정 오류만 반환한다."""
+
+
+class _SessionIdentityMismatchError(SystemControlError):
+    """없는/옛 세션의 제어는 현재 Task를 변경하지 않고 거부한다."""
+
+
+type PolicyTaskSource = Callable[[], Awaitable[tuple[TaskState, ...]]]
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyChanged:
+    """UI 표시용 적용 ACK. 설정 원문·파일 경로·명령은 포함하지 않는다."""
+
+    previous_policy_version: str
+    policy_version: str
+    profile_id: str
+    changed: bool
+    stopped_task_ids: tuple[str, ...]
+    invalidated_approval_count: int
+    applied_at_utc: datetime
+
+    @property
+    def stopped_task_count(self) -> int:
+        return len(self.stopped_task_ids)
+
+
 class _TaskStopSignal(asyncio.Event):
     """종결 ACK를 받은 정지 의도만 수명 종료 후 제거한다."""
 
     def __init__(self) -> None:
         super().__init__()
         self.terminal_epoch: int | None = None
+        self.reason = Reason.TASK_NOT_RUNNING
 
 
 class GuardService:
@@ -110,6 +154,7 @@ class GuardService:
         access_timeout_seconds: float = 30.0,
         max_access_checks: int = 4,
         access_cleanup_timeout_seconds: float = 0.05,
+        approval_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         for value in (profile_id, policy_version, operator_id):
             if (
@@ -158,6 +203,7 @@ class GuardService:
         self._utc_now = utc_now
         self._monotonic = monotonic
         self._mode = taint_mode
+        self._max_result_bytes = max_result_bytes
         self._access_timeout = float(access_timeout_seconds)
         self._max_access_checks = max_access_checks
         self._access_cleanup_timeout = float(access_cleanup_timeout_seconds)
@@ -167,6 +213,11 @@ class GuardService:
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._global_halt = False
         self._stop_requests: dict[str, _TaskStopSignal] = {}
+        self._system_stop_requests: dict[tuple[str, int], _TaskStopSignal] = {}
+        self._system_channel_key = object()
+        self._policy_apply_lock = asyncio.Lock()
+        self._policy_ready = asyncio.Event()
+        self._policy_ready.set()
         self._gate = ResponseGate(
             store,
             catalog,
@@ -183,11 +234,275 @@ class GuardService:
             utc_now=utc_now,
             monotonic=monotonic,
             ttl_seconds=approval_ttl_seconds,
+            sleep=approval_sleep,
         )
 
     def human_control(self, operator_id: str) -> HumanControl:
         """A의 인증된 제어 채널에만 전달한다. 모델 ToolView에 포함하지 않는다."""
         return self._approvals.human_channel(operator_id)
+
+    def system_control(self, audit: SessionAudit) -> SystemControl:
+        """STOP-01 합의 전 제안. 신뢰 구성 코드만 세션 관리자에 전달한다.
+
+        audit는 내구성 SessionAudit이며 SQLiteStore를 그대로 연결할 수 있다.
+        HumanControl·모델 도구에는 이 capability나 Guard 객체를 전달하지 않는다.
+        Python 객체 분리이며 같은 프로세스의 임의 코드 실행을 격리하지는 않는다.
+        """
+        if not callable(getattr(audit, "record_session_event", None)):
+            raise GuardConfigError("내구성 세션 감사가 필요하다")
+        return SystemControl(self, audit, self._system_channel_key)
+
+    async def _session_command(
+        self,
+        identity: TaskIdentity,
+        audit: SessionAudit,
+        event: SessionEvent,
+        reason: SystemStopReason | None = None,
+    ) -> TaskState:
+        identity = _system_identity(identity)
+        if event is SessionEvent.STOPPED:
+            if type(reason) is not SystemStopReason:
+                raise SystemControlError("시스템 정지 사유가 유효하지 않다")
+            # epoch별 신호는 옛 세션의 늦은 정지가 새 Task 생애를 막지 않게 한다.
+            signal = self._system_stop_requests.setdefault(
+                (identity.task_id, identity.epoch), _TaskStopSignal()
+            )
+            if not signal.is_set():
+                signal.reason = Reason(reason.value)
+            signal.set()
+
+        async def operation() -> TaskState:
+            async with self._task_lock(identity.task_id):
+                # 예약 후 격리 커밋이 실패했다면 Store가 아직 RUNNING일 수 있다.
+                # 이 상태를 HALTED 성공 ACK로 덮어 SEND 불명을 숨기지 않는다.
+                if self._global_halt:
+                    raise StoreError(Reason.STATE_COMMIT_FAILED)
+                try:
+                    loaded = await self._store.load_task(identity.task_id)
+                except StoreError as error:
+                    if (
+                        type(error) is StoreError
+                        and error.reason is Reason.STATE_MISSING
+                        and not self._approvals._has_task_context(identity.task_id)
+                    ):
+                        raise _SessionIdentityMismatchError("세션 Task를 확인할 수 없다") from None
+                    raise
+                state = TaskState.model_validate(loaded)
+                if state.task_id != identity.task_id:
+                    raise StoreError(Reason.STATE_MISSING)
+                if state.epoch != identity.epoch:
+                    raise _SessionIdentityMismatchError("세션 Task 생애가 일치하지 않는다")
+                if event is SessionEvent.STOPPED:
+                    code = Reason(reason.value) if reason is not None else Reason.INTERNAL_ERROR
+                    await self._approvals.invalidate_task(
+                        identity.task_id, code, cause="invalidated", notify=False
+                    )
+                    state = await self._halt_task(
+                        identity.task_id, code, expected_epoch=identity.epoch
+                    )
+                await audit.record_session_event(
+                    identity, event, at_utc=self._policy_time(), reason=reason
+                )
+                if self._global_halt:
+                    raise StoreError(Reason.STATE_COMMIT_FAILED)
+                if event is SessionEvent.STOPPED:
+                    self._approvals._publish_task_invalidations(identity.task_id, code)
+                    self._confirm_terminal_stop(state)
+                return state
+
+        async def on_error(exc: BaseException) -> None:
+            if isinstance(exc, _SessionIdentityMismatchError):
+                self._system_stop_requests.pop((identity.task_id, identity.epoch), None)
+                return
+            self._halt_globally()
+            self._approvals._fail_system_stop(identity.task_id, identity.epoch)
+
+        def fallback(exc: BaseException) -> None:
+            self._halt_globally()
+            self._approvals._fail_system_stop(identity.task_id, identity.epoch)
+
+        result = await fail_closed(operation, on_error=on_error, on_containment_error=fallback)
+        if result is None:
+            raise SystemControlError("세션 제어를 확정하지 못했다") from None
+        return result
+
+    def pending_result(self, request_id: str) -> PendingResult:
+        """합의 전 제안: A는 Pending의 최종 모델 응답에 이 단일 소비 경로만 쓴다."""
+        return self._approvals.pending_result(request_id)
+
+    async def invalidate_tool(self, server_id: str, tool_name: str) -> int:
+        """합의 전 제안: C Registry 지문 변경의 승인 무효화 입구."""
+        return await self._approvals.invalidate_tool(server_id, tool_name)
+
+    async def cancel_pending(self, task_id: str, *, expected_epoch: int) -> int:
+        """합의 전 제안: A 세션 종료의 대기 취소. 사람 채널을 사용하지 않는다."""
+        return await self._approvals.cancel_pending(task_id, expected_epoch=expected_epoch)
+
+    async def aclose(self) -> None:
+        """앱 종료 시 A가 transport 종결과 함께 await한다. 새 submit은 즉시 거부한다."""
+        self._halt_globally()
+        await self._approvals.aclose()
+
+    async def apply_policy_change(
+        self,
+        change: PreparedPolicyChange,
+        access_checker: AccessChecker,
+        *,
+        task_source: PolicyTaskSource,
+    ) -> PolicyChanged:
+        """신뢰 구성 코드 전용. 준비 → A/C의 문서 저장 → 저장 성공 후 적용 순서다.
+
+        저장 실패면 호출하지 않는다. task_source는 이 Guard가 관할하는 전체 Task의
+        최신 사본을 반환해야 한다(SQLiteStore.list_tasks 연결 가능). 기존 Store 포트는
+        바꾸지 않는다. 적용 중 submit은 대기하고 기존 호출은 같은 Task lock으로 정리한다.
+        성공 뒤 새 Task는 반환한 profile_id·policy_version으로 생성해야 한다.
+        기록 실패는 global halt와 PolicyChangeError이며 성공 ACK를 반환하지 않는다.
+        """
+        if (
+            type(change) is not PreparedPolicyChange
+            or type(change.loaded_profile) is not LoadedProfile
+            or not callable(getattr(access_checker, "check_access", None))
+            or not callable(task_source)
+        ):
+            raise PolicyChangeError("정책 적용 입력이 유효하지 않다")
+        async with self._policy_apply_lock:
+            if change.previous_policy_version != self._policy_version:
+                raise PolicyChangeError("준비한 정책 기준 버전이 현재와 다르다")
+            if not change.changed:
+                return PolicyChanged(
+                    self._policy_version,
+                    self._policy_version,
+                    self._profile_id,
+                    False,
+                    (),
+                    0,
+                    self._policy_time(),
+                )
+            if self._global_halt:
+                raise PolicyChangeError("정지된 Guard에는 정책을 적용할 수 없다")
+            self._policy_ready.clear()
+
+            async def on_error(exc: BaseException) -> None:
+                self._halt_globally()
+                self._approvals._fail_policy_change()
+
+            def fallback(exc: BaseException) -> None:
+                self._halt_globally()
+                self._approvals._fail_policy_change()
+
+            try:
+                result: PolicyChanged | None = await fail_closed(
+                    lambda: self._apply_policy_change(change, access_checker, task_source),
+                    on_error=on_error,
+                    on_containment_error=fallback,
+                )
+            finally:
+                self._policy_ready.set()
+            if result is None:
+                raise PolicyChangeError("정책 적용을 확정하지 못해 Guard가 정지되었다") from None
+            return result
+
+    def _policy_time(self) -> datetime:
+        now = self._utc_now()
+        if type(now) is not datetime or now.tzinfo is None or now.utcoffset() != timedelta(0):
+            raise PolicyChangeError("정책 적용 시각이 유효하지 않다")
+        return now
+
+    async def _apply_policy_change(
+        self,
+        change: PreparedPolicyChange,
+        access_checker: AccessChecker,
+        task_source: PolicyTaskSource,
+    ) -> PolicyChanged:
+        loaded = change.loaded_profile
+        stopped: set[str] = set()
+        invalidations_before = self._approvals._policy_invalidations
+        observed: set[tuple[str, int, int, TaskStatus]] = set()
+        while True:
+            states = self._checked_policy_tasks(await task_source())
+            pending_ids = self._approvals._policy_pending_task_ids()
+            if not pending_ids <= {state.task_id for state in states}:
+                raise StoreError(Reason.STATE_MISSING)
+            candidates = tuple(
+                state
+                for state in states
+                if (state.profile_id, state.policy_version)
+                != (loaded.profile.profile_id, loaded.policy_version)
+                and (
+                    state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+                    or state.task_id in pending_ids
+                )
+            )
+            if not candidates:
+                break
+            keys = {
+                (state.task_id, state.epoch, state.row_revision, state.status)
+                for state in candidates
+            }
+            if observed & keys:
+                raise StoreError(Reason.STATE_COMMIT_FAILED)
+            observed.update(keys)
+            for state in candidates:
+                if state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+                    self._request_stop(state.task_id, reason=Reason.POLICY_CHANGED)
+            for state in candidates:
+                async with self._task_lock(state.task_id):
+                    current = checked_task(
+                        await self._store.load_task(state.task_id),
+                        task_id=state.task_id,
+                        epoch=state.epoch,
+                    )
+                    await self._approvals._invalidate_policy_task(state.task_id)
+                    if current.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+                        await self._halt_task(
+                            state.task_id, Reason.POLICY_CHANGED, expected_epoch=state.epoch
+                        )
+                    self._approvals._publish_task_invalidations(
+                        state.task_id, Reason.POLICY_CHANGED
+                    )
+                    if state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+                        stopped.add(state.task_id)
+            # lock 대기 중 생성된 옛 버전 Task도 새 조회에서 정리한다.
+        if self._global_halt:
+            raise StoreError(Reason.STATE_COMMIT_FAILED)
+        applied_at = self._policy_time()
+        settings = loaded.guard_settings
+        gate = ResponseGate(
+            self._store,
+            loaded.catalog,
+            utc_now=self._utc_now,
+            global_halt=self._halt_globally,
+            max_result_bytes=self._max_result_bytes,
+        )
+        # await 없는 발행 구간. Task lock을 가진 기존 판정·응답은 위에서 모두 끝났다.
+        self._approvals._replace_policy(loaded.catalog, settings.approval_ttl_seconds)
+        self._catalog = loaded.catalog
+        self._profile_id = settings.profile_id
+        self._policy_version = settings.policy_version
+        self._access_checker = access_checker
+        self._mode = settings.taint_mode
+        self._gate = gate
+        return PolicyChanged(
+            change.previous_policy_version,
+            settings.policy_version,
+            settings.profile_id,
+            True,
+            tuple(sorted(stopped)),
+            self._approvals._policy_invalidations - invalidations_before,
+            applied_at,
+        )
+
+    @staticmethod
+    def _checked_policy_tasks(value: object) -> tuple[TaskState, ...]:
+        if type(value) is not tuple:
+            raise StoreError(Reason.STATE_MISSING)
+        try:
+            states = tuple(TaskState.model_validate(state) for state in value)
+        except ValidationError:
+            raise StoreError(Reason.STATE_MISSING) from None
+        if len({state.task_id for state in states}) != len(states):
+            raise StoreError(Reason.STATE_MISSING)
+        return states
 
     async def submit(
         self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
@@ -208,15 +523,19 @@ class GuardService:
             raise ResolutionError(Reason.STATE_MISSING)
         if self._global_halt:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
-        async with self._task_lock(task_id):
-            decided = await fail_closed(
-                lambda: self._decide(task_id, call, expected_epoch=expected_epoch),
-                lambda exc: self._pre_dispatch_failure(task_id, exc),
-                on_containment_error=self._pre_failure_fallback,
-            )
-            if not isinstance(decided, _Allowed):
-                return decided
-            return await self._dispatch_reserved(decided.request, decided.state)
+        while True:
+            await self._policy_ready.wait()
+            async with self._task_lock(task_id):
+                if not self._policy_ready.is_set():
+                    continue
+                decided = await fail_closed(
+                    lambda: self._decide(task_id, call, expected_epoch=expected_epoch),
+                    lambda exc: self._pre_dispatch_failure(task_id, exc),
+                    on_containment_error=self._pre_failure_fallback,
+                )
+                if not isinstance(decided, _Allowed):
+                    return decided
+                return await self._dispatch_reserved(decided.request, decided.state)
 
     def _task_lock(self, task_id: str) -> asyncio.Lock:
         lock = self._locks.get(task_id)
@@ -239,31 +558,48 @@ class GuardService:
         signal = self._stop_requests.get(task_id)
         if signal is not None and (not signal.is_set() or signal.terminal_epoch is not None):
             self._stop_requests.pop(task_id, None)
+        for key, system_signal in tuple(self._system_stop_requests.items()):
+            if key[0] == task_id and system_signal.terminal_epoch is not None:
+                self._system_stop_requests.pop(key, None)
 
     def _confirm_terminal_stop(self, state: TaskState) -> None:
         """검증한 Store 반환만 종결 근거로 삼는다. 캐시 정리로 재개하지 않는다."""
-        signal = self._stop_requests.get(state.task_id)
-        if signal is not None and state.status in (
+        if state.status not in (
             TaskStatus.HALTED,
             TaskStatus.UNKNOWN_OUTCOME,
             TaskStatus.CLOSED,
         ):
+            return
+        signal = self._stop_requests.get(state.task_id)
+        if signal is not None:
             signal.terminal_epoch = state.epoch
-            self._cleanup_task_resources(state.task_id)
+        system_signal = self._system_stop_requests.get((state.task_id, state.epoch))
+        if system_signal is not None:
+            system_signal.terminal_epoch = state.epoch
+        self._cleanup_task_resources(state.task_id)
 
-    def _request_stop(self, task_id: str) -> None:
-        """인증된 사람 제어만 호출한다. lock을 기다리기 전에 정지 의도를 고정한다."""
+    def _request_stop(self, task_id: str, *, reason: Reason = Reason.TASK_NOT_RUNNING) -> None:
+        """신뢰된 사람·구성 제어가 lock 대기 전에 정지 의도를 고정한다."""
         if type(task_id) is not str or not task_id:
             raise ResolutionError(Reason.STATE_MISSING)
         signal = self._stop_requests.setdefault(task_id, _TaskStopSignal())
+        signal.reason = reason
         # 새 제어의 확인을 이전 제어의 종결 ACK로 대신하지 않는다.
         signal.terminal_epoch = None
         signal.set()
 
-    def _check_stop(self, task_id: str) -> None:
+    def _system_stop_reason(self, task_id: str, epoch: int) -> Reason | None:
+        signal = self._system_stop_requests.get((task_id, epoch))
+        return signal.reason if signal is not None and signal.is_set() else None
+
+    def _check_stop(self, task_id: str, *, epoch: int | None = None) -> None:
+        if epoch is not None:
+            reason = self._system_stop_reason(task_id, epoch)
+            if reason is not None:
+                raise ResolutionError(reason)
         event = self._stop_requests.get(task_id)
         if event is not None and event.is_set():
-            raise ResolutionError(Reason.TASK_NOT_RUNNING)
+            raise ResolutionError(event.reason)
 
     def _policy_matches(self, state: TaskState) -> bool:
         return (
@@ -297,7 +633,7 @@ class GuardService:
             raise StoreError(Reason.STATE_MISSING)
         if expected_epoch is not None and state.epoch != expected_epoch:
             return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
-        self._check_stop(task_id)
+        self._check_stop(task_id, epoch=state.epoch)
         if not self._policy_matches(state):
             await self._halt_task(task_id, Reason.POLICY_CHANGED)
             await self._approvals.invalidate_task(task_id, Reason.POLICY_CHANGED)
@@ -320,7 +656,7 @@ class GuardService:
             arguments_digest=json_digest(req.arguments.to_dict()),
             at_utc=self._utc_now(),
         )
-        self._check_stop(task_id)
+        self._check_stop(task_id, epoch=state.epoch)
         if decision.decision is Decision.DENY:
             return Denied(request_id=req.request_id, reasons=decision.reasons)
         if decision.decision is Decision.ASK:
@@ -340,7 +676,7 @@ class GuardService:
         *,
         phase: Literal["submit", "approval_recheck"],
     ) -> PolicyDecision:
-        self._check_stop(req.task_id)
+        self._check_stop(req.task_id, epoch=req.epoch)
         if self._global_halt:
             raise ResolutionError(Reason.INTERNAL_ERROR)
         if not self._policy_matches(state):
@@ -365,7 +701,7 @@ class GuardService:
         if preliminary.decision is Decision.DENY:
             return preliminary
         access = await self._wait_for_access(req, state)
-        self._check_stop(req.task_id)
+        self._check_stop(req.task_id, epoch=req.epoch)
         # await 중 등록 상태나 지문이 바뀌어도 현재 값을 다시 검사한다.
         fingerprint = self._registry.fingerprint(req.tool)
         if fingerprint is None:
@@ -401,13 +737,17 @@ class GuardService:
         self._access_task_ids[work] = req.task_id
         work.add_done_callback(self._discard_access_result)
         interrupted = asyncio.create_task(stop.wait())
+        system_stop = self._system_stop_requests.setdefault(
+            (req.task_id, req.epoch), _TaskStopSignal()
+        )
+        system_interrupted = asyncio.create_task(system_stop.wait())
         try:
             done, _ = await asyncio.wait(
-                {work, interrupted},
+                {work, interrupted, system_interrupted},
                 timeout=self._access_timeout,
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            self._check_stop(req.task_id)
+            self._check_stop(req.task_id, epoch=req.epoch)
             if work not in done:
                 return AccessResult(allowed=False, reason="", error=True)
             try:
@@ -416,6 +756,9 @@ class GuardService:
                 return AccessResult(allowed=False, reason="", error=True)
         finally:
             interrupted.cancel()
+            system_interrupted.cancel()
+            if not system_stop.is_set():
+                self._system_stop_requests.pop((req.task_id, req.epoch), None)
             if not work.done():
                 # 정리 대기도 다시 취소될 수 있다. 실제 완료 전에는 추적/슬롯을 해제하지 않는다.
                 self._unfinished_access_checks.add(work)
@@ -499,9 +842,25 @@ class GuardService:
                 or self._utc_now() >= expires_at_utc
             ):
                 raise ResolutionError(Reason.APPROVAL_STALE)
-        self._check_stop(req.task_id)
+        self._check_stop(req.task_id, epoch=req.epoch)
         raw = await self._transport.call(req)
-        return await self._gate.handle(req, raw, expected_state=state)
+        system_reason = self._system_stop_reason(req.task_id, req.epoch)
+        if system_reason is not None:
+            raise ResolutionError(system_reason)
+        stop = self._stop_requests.get(req.task_id)
+        if stop is not None and stop.is_set() and stop.reason is Reason.POLICY_CHANGED:
+            # 정책 전환 중 전송이 끝난 raw는 gate에 넘기지 않는다. after_dispatch가
+            # READ 미공개·HALTED / SEND UNKNOWN_OUTCOME을 기존 연산으로 확정한다.
+            raise ResolutionError(Reason.POLICY_CHANGED)
+        outcome = await self._gate.handle(req, raw, expected_state=state)
+        system_reason = self._system_stop_reason(req.task_id, req.epoch)
+        if system_reason is not None:
+            # 이미 결과 커밋 ACK를 받은 SEND는 성공 여부가 알려져 있다. 재예약·불명
+            # 덮어쓰기 없이 정지하며, READ를 포함한 본문은 여기서도 공개하지 않는다.
+            await self._halt_task(req.task_id, system_reason, expected_epoch=req.epoch)
+            if isinstance(outcome, (Released, Withheld)):
+                return Withheld(request_id=req.request_id, reasons=(system_reason,))
+        return outcome
 
     async def _halt_task(
         self, task_id: str, reason: Reason, *, expected_epoch: int | None = None
@@ -552,13 +911,19 @@ class GuardService:
         self, req: ResolvedRequest, exc: BaseException, *, expected_state: TaskState
     ) -> Outcome:
         is_send = req.tool.kind is ToolKind.SEND
+        reason = (
+            exc.reason
+            if isinstance(exc, ResolutionError)
+            and exc.reason in {Reason(item.value) for item in SystemStopReason}
+            else Reason.POST_DISPATCH_ERROR
+        )
         # Task·요청·내구성 감사부터 커밋한다. 추가 감사 대기/실패가 정지를 늦추면 안 된다.
         contained = checked_task(
             await self._store.commit_request_failure(
                 req,
                 request_status=RequestStatus.UNKNOWN_OUTCOME if is_send else RequestStatus.WITHHELD,
                 task_status=TaskStatus.UNKNOWN_OUTCOME if is_send else TaskStatus.HALTED,
-                reason=Reason.POST_DISPATCH_ERROR,
+                reason=reason,
                 at_utc=self._utc_now(),
                 exception_type=_exception_type(exc),
             ),
@@ -580,13 +945,13 @@ class GuardService:
                 req.task_id,
                 req.request_id,
                 "after_dispatch",
-                Reason.POST_DISPATCH_ERROR,
+                reason,
                 _exception_type(exc),
             )
         )
         if is_send:
-            return OutcomeUnknown(request_id=req.request_id, reasons=(Reason.POST_DISPATCH_ERROR,))
-        return Withheld(request_id=req.request_id, reasons=(Reason.POST_DISPATCH_ERROR,))
+            return OutcomeUnknown(request_id=req.request_id, reasons=(reason,))
+        return Withheld(request_id=req.request_id, reasons=(reason,))
 
     def _post_failure_fallback(self, req: ResolvedRequest, exc: BaseException) -> Outcome:
         self._halt_globally()
@@ -608,6 +973,10 @@ class _ApprovalHost:
         self._guard._request_stop(task_id)
 
     def check_stop(self, task_id: str) -> None:
+        # 기존 내부 host 계약은 유지한다. Guard가 보관한 승인 생애로만 결속한다.
+        for snapshot in self._guard._approvals._memory_snapshots.values():
+            if snapshot.task_id == task_id:
+                self._guard._check_stop(task_id, epoch=snapshot.request.epoch)
         self._guard._check_stop(task_id)
 
     def policy_matches(self, state: TaskState) -> bool:
@@ -654,3 +1023,39 @@ def _exception_type(exc: BaseException) -> str:
     if name.isascii() and name.isidentifier() and len(name) <= 64:
         return name
     return "Exception"
+
+
+def _system_identity(identity: TaskIdentity) -> TaskIdentity:
+    if type(identity) is not TaskIdentity:
+        raise SystemControlError("시스템 Task 식별자가 유효하지 않다")
+    try:
+        return TaskIdentity.model_validate(identity)
+    except ValidationError:
+        raise SystemControlError("시스템 Task 식별자가 유효하지 않다") from None
+
+
+class SystemControl:
+    """STOP-01 합의 전 제안. 신뢰 세션 관리자 전용이며 사람 채널과 별개다."""
+
+    __slots__ = ("_guard", "_audit")
+
+    def __init__(self, guard: GuardService, audit: SessionAudit, key: object) -> None:
+        if key is not guard._system_channel_key:
+            raise GuardConfigError("시스템 제어 채널은 신뢰 구성 경로에서만 만든다")
+        self._guard = guard
+        self._audit = audit
+
+    async def stop_task(self, identity: TaskIdentity, reason: SystemStopReason) -> TaskState:
+        """lock 대기 전 dispatch 차단. 감사 ACK까지 성공해야 커밋된 상태를 반환한다.
+
+        A는 별도 제어 경로에서 실행하고 transport의 완료/중단도 보장해야 한다.
+        예약 후 실행의 Task lock은 결과 확정을 기다리며 SEND 불명은 보존한다.
+        반복 호출은 상태를 재전이하지 않고 정지 사실 감사만 추가한다.
+        """
+        return await self._guard._session_command(
+            identity, self._audit, SessionEvent.STOPPED, reason
+        )
+
+    async def record_request_user_input(self, identity: TaskIdentity) -> None:
+        """Task·epoch·UTC·발생 사실만 기록한다. 질문/응답 원문 입력은 없다."""
+        await self._guard._session_command(identity, self._audit, SessionEvent.REQUEST_USER_INPUT)
