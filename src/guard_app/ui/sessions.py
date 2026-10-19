@@ -7,7 +7,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QResizeEvent
+from PySide6.QtGui import QResizeEvent, QTextCursor
 from PySide6.QtWidgets import (
     QBoxLayout,
     QFrame,
@@ -43,6 +43,18 @@ from .untrusted_text import untrusted_display_text
 from .widgets import KeyboardActionButton, plain_label
 
 TRANSCRIPT_BODY_MARK = "│ "
+ANSWER_LABEL = "Guard · 모델 답변 (검증되지 않은 내용)"
+PARTIAL_ANSWER_LABEL = "Guard · 모델 답변 작성 중 (검증되지 않은 내용)"
+STOPPED_ANSWER_LABEL = "Guard · 모델 답변 중단됨 (완료되지 않은 내용)"
+
+
+@dataclass(slots=True)
+class _PartialAnswer:
+    """The streamed answer block at the end of a transcript (A90)."""
+
+    command_id: str
+    start: int
+    text: str
 
 
 @dataclass(slots=True)
@@ -66,6 +78,7 @@ class SessionView:
     content_present: bool = False
     focus_draft: bool = False
     command_notice: str = ""
+    partial: _PartialAnswer | None = None
 
 
 class _SessionStack(QStackedWidget):
@@ -425,39 +438,88 @@ class SessionWorkspace(QWidget):
         if was_selected:
             self.select(key)
 
-    def conversation(self, event: ConversationEvent) -> None:
-        key = f"task:{event.task_id}:{event.epoch}"
-        view = self.sessions.get(key)
-        marker = (event.task_id, event.epoch, event.command_id, event.role)
+    def _conversation_view(self, event: ConversationEvent) -> SessionView | None:
+        view = self.sessions.get(f"task:{event.task_id}:{event.epoch}")
         if (
             not self._ready
             or view is None
             or view.snapshot is None
             or view.snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
-            or marker in self._seen_events
-            or event.role not in ("user", "assistant")
         ):
+            return None
+        return view
+
+    def conversation(self, event: ConversationEvent) -> None:
+        view = self._conversation_view(event)
+        marker = (event.task_id, event.epoch, event.command_id, event.role)
+        if view is None or marker in self._seen_events or event.role not in ("user", "assistant"):
             return
         self._seen_events.add(marker)
-        text, _ = untrusted_display_text(event.text)
-        label = "나" if event.role == "user" else "Guard · 모델 답변 (검증되지 않은 내용)"
-        # Speaker labels alone start at column 0. Every body line is marked, so
-        # a model line such as "나" or "Guard · ..." cannot pose as a label.
-        body = "\n".join(f"{TRANSCRIPT_BODY_MARK}{line}" for line in text.split("\n"))
-        bar = view.transcript.verticalScrollBar()
-        at_bottom = bar.value() >= bar.maximum() - 3
-        previous = bar.value()
-        view.transcript.appendPlainText(f"{label}\n{body}\n")
-        if not at_bottom:
-            bar.setValue(previous)
+        partial = view.partial
+        if partial is not None and (event.role == "user" or partial.command_id != event.command_id):
+            self._stop_partial(view)
+            partial = None
+        label = "나" if event.role == "user" else ANSWER_LABEL
+        # The final answer replaces its streamed block in place.
+        self._write_block(view, label, event.text, None if partial is None else partial.start)
+        view.partial = None
         if event.role == "user" and event.command_id == view.pending_command:
             view.draft.clear()
         view.content_present = True
         view.updated = datetime.now()
         self._refresh_list()
 
+    def conversation_partial(self, event: ConversationEvent) -> None:
+        """Replace the streamed answer of one run command with its text so far (A90)."""
+        view = self._conversation_view(event)
+        marker = (event.task_id, event.epoch, event.command_id, "assistant")
+        if view is None or event.role != "assistant" or marker in self._seen_events:
+            return
+        partial = view.partial
+        if partial is not None and partial.command_id != event.command_id:
+            self._stop_partial(view)
+            partial = None
+        start = self._write_block(
+            view, PARTIAL_ANSWER_LABEL, event.text, None if partial is None else partial.start
+        )
+        view.partial = _PartialAnswer(event.command_id, start, event.text)
+        view.content_present = True
+        view.updated = datetime.now()
+
+    def _stop_partial(self, view: SessionView) -> None:
+        """Keep an unfinished streamed answer, labelled as not completed."""
+        partial = view.partial
+        if partial is not None:
+            self._write_block(view, STOPPED_ANSWER_LABEL, partial.text, partial.start)
+            view.partial = None
+
+    @staticmethod
+    def _write_block(view: SessionView, label: str, value: str, start: int | None) -> int:
+        """Append a speaker block, or replace the one from ``start`` to the end."""
+        text, _ = untrusted_display_text(value)
+        # Speaker labels alone start at column 0. Every body line is marked, so
+        # a model line such as "나" or "Guard · ..." cannot pose as a label.
+        body = "\n".join(f"{TRANSCRIPT_BODY_MARK}{line}" for line in text.split("\n"))
+        content = f"{label}\n{body}\n"
+        bar = view.transcript.verticalScrollBar()
+        at_bottom = bar.value() >= bar.maximum() - 3
+        previous = bar.value()
+        document = view.transcript.document()
+        if start is None:
+            start = 0 if document.isEmpty() else document.characterCount()
+            view.transcript.appendPlainText(content)
+        else:
+            cursor = QTextCursor(document)
+            cursor.setPosition(start)
+            cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
+            cursor.insertText(content)
+        bar.setValue(bar.maximum() if at_bottom else previous)
+        return start
+
     def settle_command(self, command_id: str, code: str) -> None:
         for view in self.sessions.values():
+            if view.partial is not None and view.partial.command_id == command_id:
+                self._stop_partial(view)
             if view.pending_command == command_id:
                 view.pending_command = None
                 # Always replace the pending notice, including unknown failures.
@@ -512,6 +574,7 @@ class SessionWorkspace(QWidget):
         view.draft.clear()
         view.draft.document().clearUndoRedoStacks()
         view.pending_command = None
+        view.partial = None
         view.content_present = False
 
     def clear_content(self) -> None:

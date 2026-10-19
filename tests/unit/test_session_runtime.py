@@ -750,3 +750,33 @@ def test_reject_of_an_already_resolved_approval_is_reported_as_invalidated(reaso
         assert approvals.approval_for("task-1") is None
 
     asyncio.run(run())
+
+
+class StreamingSession(Session):
+    def __init__(self):
+        super().__init__()
+        self.partial_handler = None
+
+    def set_partial_handler(self, handler):
+        self.partial_handler = handler
+
+
+def test_streamed_pieces_carry_their_own_task_and_epoch_until_shutdown(tmp_path):
+    """A90: the runtime, not the session or model, names the Task of a piece (I9)."""
+
+    async def run():
+        runtime, sessions = make_runtime(tmp_path, session_type=StreamingSession)
+        pieces = []
+        try:
+            runtime.bindings().answer_partials(lambda *piece: pieces.append(piece))
+            first = await runtime.create_session(SessionOptions())
+            second = await runtime.create_session(SessionOptions())
+            sessions[1].partial_handler("beta")
+            sessions[0].partial_handler("alpha")
+            assert pieces == [(second.task_id, 1, "beta"), (first.task_id, 1, "alpha")]
+        finally:
+            await runtime.close()
+        sessions[0].partial_handler("after-close")
+        assert len(pieces) == 2
+
+    asyncio.run(run())

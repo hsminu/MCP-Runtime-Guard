@@ -76,6 +76,7 @@ class SessionRuntime:
         self._assembled = assembled
         self._approvals = approvals
         self._task_listener: Callable[[str], None] | None = None
+        self._partial_listener: Callable[[str, int, str], None] | None = None
         # What Codex actually receives: Guard tools minus Codex name-rule exclusions.
         self._tools_available = assembled is not None and bool(
             build_dynamic_tools(assembled.tool_views).tool_refs
@@ -290,6 +291,10 @@ class SessionRuntime:
             if callable(set_stop):
                 task_id = state.task_id
                 set_stop(lambda code: self._stop_in_background(task_id, code))
+            set_partial = getattr(session, "set_partial_handler", None)
+            if callable(set_partial):
+                task_id, epoch = state.task_id, state.epoch
+                set_partial(lambda piece: self._answer_partial(task_id, epoch, piece))
             snapshot = await self.snapshot(state.task_id)
             self._check_creation_allowed()
             adopted = True
@@ -561,6 +566,14 @@ class SessionRuntime:
         if self._task_listener is not None:
             self._task_listener(task_id)
 
+    def set_partial_listener(self, listener: Callable[[str, int, str], None] | None) -> None:
+        """The bridge's backend-loop hook for streamed answer pieces (A90)."""
+        self._partial_listener = listener
+
+    def _answer_partial(self, task_id: str, epoch: int, piece: str) -> None:
+        if not self._closed and self._partial_listener is not None:
+            self._partial_listener(task_id, epoch, piece)
+
     def bindings(self) -> BackendBindings:
         assembled = self._assembled
         return BackendBindings(
@@ -575,6 +588,7 @@ class SessionRuntime:
             approval_resolved=None if self._approvals is None else self._approvals.resolve,
             policy=None if assembled is None else policy_view(assembled),
             task_events=self.set_task_listener,
+            answer_partials=self.set_partial_listener,
         )
 
 

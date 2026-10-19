@@ -837,3 +837,27 @@ def test_non_object_arguments_are_answered_invalid_without_stopping(arguments) -
             await session.aclose()
 
     asyncio.run(run())
+
+
+def test_streamed_pieces_break_between_answer_items_and_the_handler_can_be_set_later() -> None:
+    async def run() -> None:
+        async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+            server.delta(turn_id, "first ")
+            server.delta(turn_id, "part")
+            server.notify(
+                "item/agentMessage/delta",
+                {"threadId": THREAD_ID, "turnId": turn_id, "itemId": "msg-2", "delta": "second"},
+            )
+            server.complete(turn_id)
+
+        session = await started(FakeAppServer(script), FakeGuard())
+        partial: list[str] = []
+        session.set_partial_handler(partial.append)
+        try:
+            # The answer itself keeps the raw deltas; only the shown pieces get breaks.
+            assert await asyncio.wait_for(session.send("go"), 2) == "first partsecond"
+            assert partial == ["first ", "part", "\n\nsecond"]
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())

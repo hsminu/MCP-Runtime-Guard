@@ -131,6 +131,9 @@ class CodexAppServerSession:
         self._turns: dict[str, dict[str, object]] = {}
         self._texts: dict[str, list[str]] = {}
         self._deltas: dict[str, list[str]] = {}
+        # Shown pieces: deltas, with a paragraph break where a new agentMessage begins.
+        self._pieces: dict[str, list[str]] = {}
+        self._piece_items: dict[str, str] = {}
         self._streamed: dict[str, int] = {}
         self._finals: dict[str, list[str]] = {}
         self._answer_chars: dict[str, int] = {}
@@ -141,6 +144,10 @@ class CodexAppServerSession:
         self._stop_handler: Callable[[str], None] | None = None
         self._stop_reported = False
         self._closed = False
+
+    def set_partial_handler(self, handler: Callable[[str], None] | None) -> None:
+        """Receives the current turn's answer text piece by piece (A90)."""
+        self._on_partial = handler
 
     def set_stop_handler(self, handler: Callable[[str], None] | None) -> None:
         """Called once when the session stops while no send() is waiting."""
@@ -261,6 +268,13 @@ class CodexAppServerSession:
                     self._stop("CODEX_ANSWER_TOO_LARGE")
                     return
                 self._deltas.setdefault(turn_id, []).append(delta)
+                piece, item_id = delta, body.get("itemId")
+                if type(item_id) is str:
+                    previous = self._piece_items.get(turn_id)
+                    if previous is not None and previous != item_id:
+                        piece = "\n\n" + delta
+                    self._piece_items[turn_id] = item_id
+                self._pieces.setdefault(turn_id, []).append(piece)
                 if turn_id == self._turn_id:
                     self._stream(turn_id)
         elif method == "turn/completed":
@@ -326,10 +340,10 @@ class CodexAppServerSession:
     def _stream(self, turn_id: str) -> None:
         if self._on_partial is None:
             return
-        deltas = self._deltas.get(turn_id, [])
-        for delta in deltas[self._streamed.get(turn_id, 0) :]:
-            self._on_partial(delta)
-        self._streamed[turn_id] = len(deltas)
+        pieces = self._pieces.get(turn_id, [])
+        for piece in pieces[self._streamed.get(turn_id, 0) :]:
+            self._on_partial(piece)
+        self._streamed[turn_id] = len(pieces)
 
     def _defer_stop(self, method: str, code: str) -> None:
         self._deferred_stops.setdefault(method, code)

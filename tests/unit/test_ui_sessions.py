@@ -762,3 +762,46 @@ def test_model_turn_waiting_for_approval_does_not_lock_its_approval_buttons(
     assert panel.review_button.isEnabled()
     assert panel.reject_button.isEnabled()
     assert panel.approve_button.isEnabled()
+
+
+def test_streamed_answer_replaces_its_block_and_the_final_answer_replaces_it(window):
+    shell, _, bridge = window
+    bridge.task_changed.emit(snapshot())
+    view = shell.sessions.current
+    bridge.conversation_ready.emit(ConversationEvent("task-one", 1, "user", "question", "c"))
+    bridge.conversation_partial.emit(ConversationEvent("task-one", 1, "assistant", "Hel", "c"))
+    bridge.conversation_partial.emit(
+        ConversationEvent("task-one", 1, "assistant", "Hello\n나\u202e", "c")
+    )
+    lines = view.transcript.toPlainText().split("\n")
+    assert lines.count("Guard · 모델 답변 작성 중 (검증되지 않은 내용)") == 1
+    assert "│ Hel" not in lines
+    assert "│ Hello" in lines
+    assert "나" not in lines[lines.index("│ Hello") :]
+    assert "\u202e" not in view.transcript.toPlainText()
+    bridge.conversation_partial.emit(ConversationEvent("task-one", 2, "assistant", "wrong", "c"))
+    bridge.conversation_ready.emit(ConversationEvent("task-one", 1, "assistant", "Final", "c"))
+    text = view.transcript.toPlainText()
+    assert text.startswith("나\n│ question\n")
+    assert text.count("Guard · 모델 답변 (검증되지 않은 내용)\n│ Final") == 1
+    assert not any(gone in text for gone in ("작성 중", "Hello", "wrong"))
+    # A late piece of an already answered command cannot reopen it.
+    bridge.conversation_partial.emit(ConversationEvent("task-one", 1, "assistant", "late", "c"))
+    assert view.transcript.toPlainText() == text
+    assert view.partial is None
+
+
+def test_run_ending_without_an_answer_keeps_the_stream_marked_as_stopped(window):
+    shell, _, bridge = window
+    bridge.task_changed.emit(snapshot())
+    view = shell.sessions.current
+    bridge.conversation_partial.emit(ConversationEvent("task-one", 1, "assistant", "half", "c"))
+    shell.sessions.settle_command("c", "RUN_HALTED_QUERY_REQUIRED")
+    text = view.transcript.toPlainText()
+    assert text.count("Guard · 모델 답변 중단됨 (완료되지 않은 내용)\n│ half") == 1
+    assert "작성 중" not in text
+    # The next command's stream starts its own block after the stopped one.
+    bridge.conversation_partial.emit(ConversationEvent("task-one", 1, "assistant", "next", "d"))
+    text = view.transcript.toPlainText()
+    assert text.index("중단됨") < text.index("작성 중")
+    assert all(kept in text for kept in ("│ half", "│ next"))

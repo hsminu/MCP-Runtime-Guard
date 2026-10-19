@@ -333,6 +333,7 @@ class GuardWindow(QMainWindow):
             )
         )
         bridge.conversation_ready.connect(self.sessions.conversation)
+        bridge.conversation_partial.connect(self.sessions.conversation_partial)
         self.sessions.message_requested.connect(panel.send_message)
         panel.message_rejected.connect(
             lambda command: self.sessions.settle_command(command, "MESSAGE_UNAVAILABLE")

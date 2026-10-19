@@ -132,7 +132,15 @@ class BackendBindings:
     # Registers a backend-loop callback for Task changes outside a command
     # (approval waits, asynchronous session stops).
     task_events: Callable[[Callable[[str], None]], None] | None = None
+    # Registers a backend-loop callback (task_id, epoch, piece) for the model
+    # answer while a run is in progress (A90). Pieces outside a run are dropped.
+    answer_partials: Callable[[Callable[[str, int, str], None]], None] | None = None
 
+
+# Streamed answer text is republished at most this often (A90).
+PARTIAL_FLUSH_S = 0.1
+# Above Codex's answer limit plus item breaks; a longer stream stops updating.
+MAX_PARTIAL_CHARS = 70_000
 
 # A device-code login left unfinished is abandoned after this long.
 DEVICE_LOGIN_TIMEOUT_S = 15 * 60
@@ -197,6 +205,18 @@ class ConversationEvent:
     role: str
     text: str
     command_id: str
+
+
+@dataclass(slots=True, repr=False)
+class _AnswerStream:
+    """Backend loop only: the in-progress answer of one run command (A90)."""
+
+    epoch: int
+    command_id: str
+    pieces: list[str] = field(default_factory=list)
+    chars: int = 0
+    dirty: bool = False
+    flush: asyncio.TimerHandle | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -286,6 +306,8 @@ class BackendBridge(QObject):
     task_changed = Signal(object)
     review_ready = Signal(object)
     conversation_ready = Signal(object)
+    # The whole answer so far for one run command; replaces the previous one.
+    conversation_partial = Signal(object)
     session_created = Signal(object)
     # str: fixed blocker code, or "" when new sessions may be requested.
     session_capability_changed = Signal(str)
@@ -359,6 +381,7 @@ class BackendBridge(QObject):
         self._pending_runs: dict[str, tuple[str, int]] = {}
         self._account_waits: set[asyncio.Future[None]] = set()
         self._run_locks: dict[str, asyncio.Lock] = {}
+        self._streams: dict[str, _AnswerStream] = {}
         # Bound commands before they become asyncio ready callbacks. A normal
         # command flood must leave an independent ingress slot for urgent work.
         self._ingress_lock = threading.Lock()
@@ -903,6 +926,8 @@ class BackendBridge(QObject):
         self.policy_changed.emit(bindings.policy)
         if bindings.task_events is not None:
             bindings.task_events(self._task_event)
+        if bindings.answer_partials is not None:
+            bindings.answer_partials(self._answer_partial)
         self._set_state(BridgeState.READY, "READY")
         await stop
         self._set_state(BridgeState.CLOSING, "CLOSING")
@@ -1044,6 +1069,48 @@ class BackendBridge(QObject):
         # A failed session can change what new sessions may do.
         self._publish_session_capability()
 
+    def _answer_partial(self, task_id: str, epoch: int, piece: str) -> None:
+        """Backend loop only: collect a streamed piece of the running answer."""
+        stream = self._streams.get(task_id)
+        if (
+            stream is None
+            or stream.epoch != epoch
+            or type(piece) is not str
+            or not piece
+            or self._stop_requested.is_set()
+        ):
+            return
+        if stream.chars + len(piece) > MAX_PARTIAL_CHARS:
+            return
+        stream.pieces.append(piece)
+        stream.chars += len(piece)
+        stream.dirty = True
+        if stream.flush is None:
+            stream.flush = asyncio.get_running_loop().call_later(
+                PARTIAL_FLUSH_S, self._flush_stream, task_id, stream
+            )
+
+    def _flush_stream(self, task_id: str, stream: _AnswerStream) -> None:
+        stream.flush = None
+        if not stream.dirty or self._streams.get(task_id) is not stream:
+            return
+        stream.dirty = False
+        if self._stop_requested.is_set():
+            return
+        self.conversation_partial.emit(
+            ConversationEvent(
+                task_id, stream.epoch, "assistant", "".join(stream.pieces), stream.command_id
+            )
+        )
+
+    def _end_stream(self, task_id: str, stream: _AnswerStream) -> None:
+        """Publish what is left; the final answer, if any, is emitted after this."""
+        if stream.flush is not None:
+            stream.flush.cancel()
+        self._flush_stream(task_id, stream)
+        if self._streams.get(task_id) is stream:
+            del self._streams[task_id]
+
     def _publish_session_capability(self) -> None:
         bindings = self._bindings
         if bindings is None or bindings.create_session is None:
@@ -1107,7 +1174,12 @@ class BackendBridge(QObject):
                             command.command_id,
                         )
                     )
-                update = await runner.advance()
+                stream = _AnswerStream(runner.epoch, command.command_id)
+                self._streams[command.target_id] = stream
+                try:
+                    update = await runner.advance()
+                finally:
+                    self._end_stream(command.target_id, stream)
                 if type(update) is not RunUpdate or update.task_id != command.target_id:
                     return "RUNNER_UNCONFIRMED"
                 if update.approval_id is not None:
