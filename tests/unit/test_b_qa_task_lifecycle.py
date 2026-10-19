@@ -360,19 +360,28 @@ def test_cancelled_control_waiter_does_not_drop_a_lock_or_an_unconfirmed_stop(co
         waiting = asyncio.create_task(getattr(control, command)("task"))
         await asyncio.sleep(0)
         waiting.cancel()
-        assert isinstance(await waiting, Denied)
         await _settle()
+        # 예약 전 취소는 전역 정지 대신 소유자의 lock 해제 뒤 Task를 정리한다.
+        # lock을 쥔 채 기다리면 테스트 자체가 정리 경로와 서로 기다리게 된다.
+        assert not waiting.done()
         assert h.guard._task_lock("task") is owner
         assert owner.locked()
         assert h.guard._stop_requests["task"].is_set()
+        assert h.guard._stop_requests["task"].terminal_epoch is None
         assert h.store.states["task"].status is TaskStatus.RUNNING
+        assert not h.guard._global_halt
+        h.store.states["healthy"] = h.store.states["task"].model_copy(update={"task_id": "healthy"})
+        assert isinstance(await h.guard.submit("healthy", _call()), Released)
         owner.release()
+        assert isinstance(await asyncio.wait_for(waiting, 1), Denied)
+        assert h.store.states["task"].status is TaskStatus.HALTED
+        assert h.guard._stop_requests["task"].terminal_epoch == 1
         del owner
         await _settle()
         assert not h.guard._locks
-        assert h.guard._stop_requests["task"].is_set()
-        assert h.guard._global_halt
-        assert not h.transport.calls
+        assert not h.guard._stop_requests
+        assert not h.guard._global_halt
+        assert [req.task_id for req in h.transport.calls] == ["healthy"]
 
     asyncio.run(scenario())
 

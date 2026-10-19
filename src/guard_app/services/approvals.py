@@ -920,14 +920,19 @@ class ApprovalService:
             )
             return self._denied(record, Reason.APPROVAL_STALE)
         self._host.check_stop(state.task_id)
-        consumed = await self._store.consume_and_reserve(
-            approval_id=record.approval_id,
-            snapshot_hash=current.hash,
-            request_id=req.request_id,
-            task_id=state.task_id,
-            expected_security_version=state.security_version,
-            now_utc=approval_event_time(record, now),
-        )
+        try:
+            consumed = await self._store.consume_and_reserve(
+                approval_id=record.approval_id,
+                snapshot_hash=current.hash,
+                request_id=req.request_id,
+                task_id=state.task_id,
+                expected_security_version=state.security_version,
+                now_utc=approval_event_time(record, now),
+            )
+        except asyncio.CancelledError:
+            # 소비/예약 커밋 ACK 불명은 Task 단위 취소로 축소하지 않는다.
+            self._host.global_halt()
+            raise
         if type(consumed) is not bool:
             raise StoreError(Reason.APPROVAL_RACE)
         if not consumed:
@@ -1239,7 +1244,11 @@ class ApprovalService:
             return lock
 
         async def on_error(exc: BaseException) -> asyncio.Lock | Denied:
-            # 아직 lock을 갖지 않았으므로 진행 중 dispatch의 Task 행은 건드리지 않는다.
+            if isinstance(exc, asyncio.CancelledError):
+                # 예약 전 제어 취소도 기존 소유자의 예약 후 처리가 끝난 뒤 정리한다.
+                async with self._host.task_lock(task_id):
+                    return await self._host.pre_dispatch_failure(task_id, exc)
+            # 저장/기타 lock 오류는 기존 전역 정지 경계를 유지한다.
             self._host.global_halt()
             return await self._host.pre_dispatch_failure(task_id, exc)
 

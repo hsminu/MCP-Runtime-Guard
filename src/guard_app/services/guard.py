@@ -510,7 +510,9 @@ class GuardService:
         """I1·I4·I5·I7: 신뢰 호출자의 epoch를 lock 안에서 확인한다."""
         return await fail_closed(
             lambda: self._submit_locked(task_id, call, expected_epoch=expected_epoch),
-            lambda exc: self._pre_dispatch_failure(task_id, exc),
+            lambda exc: self._pre_dispatch_unlocked_failure(
+                task_id, exc, expected_epoch=expected_epoch
+            ),
             on_containment_error=self._pre_failure_fallback,
         )
 
@@ -530,7 +532,9 @@ class GuardService:
                     continue
                 decided = await fail_closed(
                     lambda: self._decide(task_id, call, expected_epoch=expected_epoch),
-                    lambda exc: self._pre_dispatch_failure(task_id, exc),
+                    lambda exc: self._pre_dispatch_failure(
+                        task_id, exc, expected_epoch=expected_epoch
+                    ),
                     on_containment_error=self._pre_failure_fallback,
                 )
                 if not isinstance(decided, _Allowed):
@@ -666,7 +670,12 @@ class GuardService:
                 approval_id=appr.approval_id,
                 reasons=decision.reasons,
             )
-        await self._store.reserve_dispatch(req.request_id, now_utc=self._utc_now())
+        try:
+            await self._store.reserve_dispatch(req.request_id, now_utc=self._utc_now())
+        except asyncio.CancelledError:
+            # 예약 ACK 대기 중 취소는 커밋 전/후를 구별할 수 없어 기존 전역 정지 유지.
+            self._halt_globally()
+            raise
         return _Allowed(req, state)
 
     async def _evaluate_request(
@@ -892,12 +901,31 @@ class GuardService:
     def _halt_globally(self) -> None:
         self._global_halt = True
 
-    async def _pre_dispatch_failure(self, task_id: str, exc: BaseException) -> Denied:
-        if isinstance(exc, (StoreError, asyncio.CancelledError)):
+    async def _pre_dispatch_unlocked_failure(
+        self, task_id: str, exc: BaseException, *, expected_epoch: int | None
+    ) -> Denied:
+        # policy/Task lock 대기에서 취소되면 아직 lock이 없다. 진행 중인 예약 후
+        # 호출의 상태를 lock 밖에서 덮지 않고, 종결 후 같은 Task만 정리한다.
+        if isinstance(exc, asyncio.CancelledError) and not self._global_halt:
+            async with self._task_lock(task_id):
+                return await self._pre_dispatch_failure(task_id, exc, expected_epoch=expected_epoch)
+        return await self._pre_dispatch_failure(task_id, exc, expected_epoch=expected_epoch)
+
+    async def _pre_dispatch_failure(
+        self, task_id: str, exc: BaseException, *, expected_epoch: int | None = None
+    ) -> Denied:
+        if isinstance(exc, StoreError):
             self._halt_globally()
         reason = (
             exc.reason if isinstance(exc, (ResolutionError, StoreError)) else Reason.INTERNAL_ERROR
         )
+        if isinstance(exc, asyncio.CancelledError) and not self._global_halt:
+            state = TaskState.model_validate(await self._store.load_task(task_id))
+            if state.task_id != task_id:
+                raise StoreError(Reason.STATE_MISSING)
+            # 옛 호출이 lock을 기다리던 동안 교체된 Task 생애를 정지시키지 않는다.
+            if expected_epoch is None or state.epoch == expected_epoch:
+                await self._halt_task(task_id, reason, expected_epoch=state.epoch)
         await self._failure_audit(
             FailureEvent(task_id, None, "before_dispatch", reason, _exception_type(exc))
         )
