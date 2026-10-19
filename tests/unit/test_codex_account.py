@@ -98,9 +98,10 @@ def test_api_key_login_is_passed_to_codex_trimmed_and_reads_the_kind() -> None:
     asyncio.run(run())
 
 
-def test_login_panel_never_has_a_secret_field_and_follows_the_state(app) -> None:
+def test_login_panel_has_only_the_masked_key_field_and_follows_the_state(app) -> None:
     panel = CodexLoginInfo()
-    assert not panel.findChildren(QLineEdit)
+    assert panel.findChildren(QLineEdit) == [panel.api_key_input]
+    assert panel.api_key_input.echoMode() == QLineEdit.EchoMode.Password
     assert not panel.login_button.isEnabled()
     assert "준비 중" in panel.status.text()
     panel.set_view(AccountView("SIGNED_OUT"))

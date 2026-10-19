@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from guard_app.services.bridge import PolicyServer, PolicyView
 
+from .untrusted_text import untrusted_display_text
 from .widgets import KeyboardActionButton, plain_label
 
 NO_PROFILE = "Guard 정책(Profile) 설정이 아직 연결되지 않았어. 규칙을 표시할 수 없어."
@@ -39,6 +40,23 @@ CHANGE_RESULTS = {
     "POLICY_CHANGE_UNAVAILABLE": SAVE_UNAVAILABLE,
 }
 CHANGE_UNCONFIRMED = "규칙 변경 결과를 확인하지 못했어. 정책 화면을 다시 확인해."
+EXCLUDED_TITLE = "Codex에서 쓸 수 없는 도구"
+EXCLUDED_NOTE = (
+    "Codex는 서버 ID와 도구 이름에 영문·숫자·_·-만 받아. "
+    "아래 도구는 모델에게 보이지 않고 실행할 수도 없어."
+)
+# Fixed text per reason code from the Codex tool plan (contracts 2026-10-18).
+EXCLUDED_REASONS = {
+    "NAMESPACE_NAME": (
+        "서버 ID가 Codex 이름 규칙(영문·숫자·_·-, 64자 이하, mcp 접두 불가)에 맞지 않아"
+    ),
+    "NAMESPACE_RESERVED": "서버 ID가 Codex가 예약한 이름이야",
+    "TOOL_NAME": (
+        "도구 이름이 Codex 이름 규칙(영문·숫자·_·-, 128자 이하, mcp 접두 불가)에 맞지 않아"
+    ),
+    "DUPLICATE": "같은 이름의 도구가 이미 있어",
+}
+EXCLUDED_UNKNOWN = "Codex 이름 규칙에 맞지 않아"
 
 
 class ToolAllowDialog(QDialog):
@@ -113,6 +131,16 @@ class PolicyPage(QWidget):
         layout.addWidget(self.rules)
         self.server_area = QVBoxLayout()
         layout.addLayout(self.server_area)
+        self.excluded_title = plain_label(EXCLUDED_TITLE, name="sectionTitle")
+        self.excluded_note = plain_label(EXCLUDED_NOTE, name="secondary")
+        self.excluded = QTableWidget(0, 2)
+        self.excluded.setAccessibleName("Codex에서 쓸 수 없는 도구 목록")
+        self.excluded.setHorizontalHeaderLabels(["도구", "이유"])
+        self.excluded.verticalHeader().setVisible(False)
+        self.excluded.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        for widget in (self.excluded_title, self.excluded_note, self.excluded):
+            widget.setVisible(False)
+            layout.addWidget(widget)
         layout.addStretch(1)
         self.server_buttons: dict[str, KeyboardActionButton] = {}
         self.set_view(None)
@@ -124,6 +152,9 @@ class PolicyPage(QWidget):
     def set_view(self, view: object) -> None:
         self._view = view if type(view) is PolicyView else None
         self.rules.setRowCount(0)
+        self.excluded.setRowCount(0)
+        for widget in (self.excluded_title, self.excluded_note, self.excluded):
+            widget.setVisible(False)
         for button in self.server_buttons.values():
             button.setParent(None)
         self.server_buttons.clear()
@@ -142,6 +173,17 @@ class PolicyPage(QWidget):
             self.rules.insertRow(index)
             for column, value in enumerate((server_id, tool, verdict)):
                 self.rules.setItem(index, column, QTableWidgetItem(value))
+        for index, (tool_ref, reason) in enumerate(current.codex_excluded):
+            # The name broke Codex's rules, so it may hold controls or lookalikes.
+            shown, _ = untrusted_display_text(tool_ref, max_chars=200)
+            self.excluded.insertRow(index)
+            self.excluded.setItem(index, 0, QTableWidgetItem(shown))
+            self.excluded.setItem(
+                index, 1, QTableWidgetItem(EXCLUDED_REASONS.get(reason, EXCLUDED_UNKNOWN))
+            )
+        has_excluded = bool(current.codex_excluded)
+        for widget in (self.excluded_title, self.excluded_note, self.excluded):
+            widget.setVisible(has_excluded)
         for server in current.servers:
             button = KeyboardActionButton(f"{server.server_id} 도구 허용 설정")
             button.clicked.connect(lambda _=False, s=server: self.open_allow_dialog(s))

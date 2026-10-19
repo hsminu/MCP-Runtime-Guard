@@ -118,3 +118,34 @@ def test_activation_dialog_other_tool_is_shown_disabled_and_never_reported(app) 
     assert dialog.selection() == (("read", "send"), ())
     dialog.close()
     page.close()
+
+
+def test_tools_left_out_of_codex_are_listed_with_a_fixed_reason(app) -> None:
+    """Contracts 2026-10-18: excluded tools are shown with why; names are visualized."""
+    from dataclasses import replace
+
+    from guard_app.ui.policy import EXCLUDED_REASONS, EXCLUDED_UNKNOWN
+
+    page = PolicyPage()
+    page.set_view(view())
+    assert not page.excluded.isVisibleTo(page)
+    excluded = (
+        ("docs__read.v2", "TOOL_NAME"),
+        ("web__search", "NAMESPACE_RESERVED"),
+        ("docs__x\u202eevil", "TOOL_NAME"),
+        ("docs__odd", "SOMETHING_NEW"),
+    )
+    page.set_view(replace(view(), codex_excluded=excluded))
+    assert page.excluded.isVisibleTo(page)
+    rows = [
+        (page.excluded.item(row, 0).text(), page.excluded.item(row, 1).text())
+        for row in range(page.excluded.rowCount())
+    ]
+    assert rows[0] == ("docs__read.v2", EXCLUDED_REASONS["TOOL_NAME"])
+    assert rows[1] == ("web__search", EXCLUDED_REASONS["NAMESPACE_RESERVED"])
+    assert "\u202e" not in rows[2][0]
+    assert rows[3][1] == EXCLUDED_UNKNOWN
+    page.set_view(view())
+    assert page.excluded.rowCount() == 0
+    assert not page.excluded.isVisibleTo(page)
+    page.close()

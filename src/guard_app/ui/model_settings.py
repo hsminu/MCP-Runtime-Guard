@@ -1,14 +1,21 @@
 """Codex owns model authentication and credential storage (A52, A89).
 
-The panel only asks Codex to start or cancel its own ChatGPT device-code login,
-reads the account kind/plan, and logs out. It never collects a model secret:
-there is no key field here (A65), and nothing is stored by the Guard.
+The panel asks Codex to start or cancel its own ChatGPT device-code login,
+reads the account kind/plan, and logs out. An API key may also be entered
+(contracts 2026-10-18, A89; replaces A65 here) under the Scanner key rules:
+a masked field, only the last four characters shown, the field cleared right
+after sending, and the key never logged, emitted as a signal or kept. It goes
+only to an injected sender that hands it to Codex `account/login/start`;
+Codex stores it in the Windows Credential Manager, the Guard stores nothing.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtGui import QHideEvent
+from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 from guard_app.services.bridge import CODEX_MODEL_ID, AccountView
 
@@ -26,6 +33,15 @@ _STATES = {
     "FAILED": "Codex 계정 요청을 처리하지 못했어. 잠시 뒤 다시 확인해.",
     "UNAVAILABLE": UNAVAILABLE,
 }
+API_KEY_SENT = "API 키로 로그인을 요청했어. 결과를 기다리는 중이야."
+
+# Hands one key to the bridge's Codex login command; never stores it.
+type ApiKeySender = Callable[[str], object]
+
+
+def _suffix(key: str) -> str:
+    # A key of four characters or fewer would be shown whole; show nothing then.
+    return key[-4:] if len(key) > 4 else ""
 
 
 class CodexLoginInfo(QWidget):
@@ -37,6 +53,8 @@ class CodexLoginInfo(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._view = AccountView("UNAVAILABLE")
+        self._api_key_sender: ApiKeySender | None = None
+        self._sent_suffix = ""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(plain_label("Codex 로그인", name="cardTitle"))
@@ -67,12 +85,31 @@ class CodexLoginInfo(QWidget):
             buttons.addWidget(button)
         buttons.addStretch(1)
         layout.addLayout(buttons)
+        key_row = QHBoxLayout()
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setAccessibleName("Codex API 키 입력")
+        self.api_key_input.setPlaceholderText("OpenAI API 키")
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_input.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.api_key_input.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, False)
+        self.api_key_input.setClearButtonEnabled(True)
+        self.api_key_input.textChanged.connect(self._refresh_key)
+        self.api_key_input.returnPressed.connect(self._send_api_key)
+        self.api_key_button = KeyboardActionButton("API 키로 로그인")
+        self.api_key_button.clicked.connect(self._send_api_key)
+        key_row.addWidget(self.api_key_input, 1)
+        key_row.addWidget(self.api_key_button)
+        layout.addLayout(key_row)
         layout.addWidget(plain_label("Scanner는 아래에서 별도 API 키를 설정해.", name="secondary"))
         self.set_view(self._view)
 
     @property
     def view(self) -> AccountView:
         return self._view
+
+    def set_api_key_sender(self, sender: ApiKeySender | None) -> None:
+        self._api_key_sender = sender
+        self._refresh_key()
 
     def set_view(self, view: object) -> None:
         if type(view) is not AccountView:
@@ -81,6 +118,10 @@ class CodexLoginInfo(QWidget):
         text = _STATES.get(view.state, _STATES["FAILED"])
         if view.state == "CHATGPT" and view.plan:
             text = f"ChatGPT 계정으로 로그인되어 있어 · 요금제 {view.plan}"
+        if view.state == "API_KEY" and self._sent_suffix:
+            text = f"API 키로 로그인되어 있어 · 끝 4자리 {self._sent_suffix}"
+        elif view.state != "API_KEY":
+            self._sent_suffix = ""
         self.status.setText(text)
         pending = view.state == "PENDING_DEVICE"
         self.device.setVisible(pending)
@@ -93,6 +134,42 @@ class CodexLoginInfo(QWidget):
         self.login_button.setEnabled(available and not pending and not signed_in)
         self.cancel_button.setEnabled(pending)
         self.logout_button.setEnabled(available and signed_in)
+        self._refresh_key()
+
+    def _key_allowed(self) -> bool:
+        state = self._view.state
+        return self._api_key_sender is not None and state not in (
+            "UNAVAILABLE",
+            "PENDING_DEVICE",
+            "API_KEY",
+            "CHATGPT",
+            "OTHER",
+        )
+
+    def _refresh_key(self, *_args: object) -> None:
+        allowed = self._key_allowed()
+        self.api_key_input.setEnabled(allowed)
+        self.api_key_button.setEnabled(allowed and bool(self.api_key_input.text().strip()))
+        if not allowed:
+            self.api_key_input.clear()
+
+    def _send_api_key(self) -> None:
+        key = self.api_key_input.text().strip()
+        # Clear first so no branch below leaves the key in the widget.
+        self.api_key_input.clear()
+        sender = self._api_key_sender
+        if sender is None or not key or not self._key_allowed():
+            self._refresh_key()
+            return
+        self._sent_suffix = _suffix(key)
+        self.status.setText(API_KEY_SENT)
+        self.login_button.setEnabled(False)
+        self.api_key_button.setEnabled(False)
+        sender(key)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        self.api_key_input.clear()
+        super().hideEvent(event)
 
     def _login(self) -> None:
         self.login_button.setEnabled(False)

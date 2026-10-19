@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from guard_app.adapters.codex_protocol import build_dynamic_tools
 from guard_app.core.access_rules import normalize_access_rules
 from guard_app.domain.enums import ToolKind
 from guard_app.services.product_assembly import AssembledGuard
@@ -41,6 +42,8 @@ class PolicyView:
     deny: tuple[tuple[str, str], ...]
     servers: tuple[PolicyServer, ...]
     change_available: bool = False
+    # (server__tool, fixed reason code) left out of Codex by its name rules.
+    codex_excluded: tuple[tuple[str, str], ...] = ()
 
 
 def policy_view(assembled: AssembledGuard, *, change_available: bool = False) -> PolicyView:
@@ -73,4 +76,8 @@ def policy_view(assembled: AssembledGuard, *, change_available: bool = False) ->
         deny=tuple((pair[0], pair[1]) for pair in rules["deny"]),
         servers=tuple(servers),
         change_available=change_available,
+        codex_excluded=tuple(
+            (item.tool_ref, item.reason)
+            for item in build_dynamic_tools(assembled.tool_views).exclusions
+        ),
     )

@@ -118,3 +118,29 @@ def test_turn_text_limit_matches_codex() -> None:
     for text in ("", "x" * (MAX_TURN_TEXT_CHARS + 1)):
         with pytest.raises(CodexProtocolError):
             turn_start_params("thread", text)
+
+
+@pytest.mark.parametrize(
+    ("ref", "reason"),
+    [
+        ("docs__read.v2", "TOOL_NAME"),
+        ("docs__" + "t" * 129, "TOOL_NAME"),
+        ("docs__mcp", "TOOL_NAME"),
+        ("s" * 65 + "__read", "NAMESPACE_NAME"),
+        ("mcp__read", "NAMESPACE_NAME"),
+        ("docsread", "NAMESPACE_NAME"),
+        ("web__search", "NAMESPACE_RESERVED"),
+    ],
+    ids=lambda value: str(value)[:24],
+)
+def test_each_left_out_tool_carries_a_fixed_reason(ref: str, reason: str) -> None:
+    plan = build_dynamic_tools((view(ref),))
+    assert [(item.tool_ref, item.reason) for item in plan.exclusions] == [(ref, reason)]
+    assert plan.excluded == (ref,)
+
+
+def test_a_repeated_tool_is_left_out_as_a_duplicate() -> None:
+    plan = build_dynamic_tools((view("docs__read"), view("docs__read")))
+    assert [(item.tool_ref, item.reason) for item in plan.exclusions] == [
+        ("docs__read", "DUPLICATE")
+    ]

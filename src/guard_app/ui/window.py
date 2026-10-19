@@ -332,6 +332,9 @@ class GuardWindow(QMainWindow):
             lambda login_id: bridge.request_account("account_cancel_login", target_id=login_id)
         )
         login.logout_requested.connect(lambda: bridge.request_account("account_logout"))
+        login.set_api_key_sender(
+            lambda key: bridge.request_account("account_login_api_key", secret=key)
+        )
         self.sessions.new_session_requested.connect(
             lambda key, options, command: bridge.request_new_session(
                 key, options, command_id=command

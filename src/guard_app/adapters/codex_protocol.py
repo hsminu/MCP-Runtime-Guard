@@ -7,9 +7,9 @@ Facts are from the pinned upstream commit 092d3acd6bec3e3a14bdc7e7a2810ab628ab75
   experimental `thread/start` fields `dynamicTools`/`environments` are refused.
 - Dynamic tool and namespace names must match `^[a-zA-Z0-9_-]+$` (tool <= 128,
   namespace <= 64 characters), must not be `mcp` or start with `mcp__`, and the
-  namespace must not be one of Codex's reserved namespaces. Contracts 2026-10-17
-  allow any MCP tool name, so a tool outside these rules is left out of the
-  model's list and reported instead of failing `thread/start` (A88/A92).
+  namespace must not be one of Codex's reserved namespaces. A tool outside
+  these rules is left out of the model's list with a fixed reason code instead
+  of failing `thread/start`, and the GUI shows it (contracts 2026-10-18).
 - `item/tool/call` params are `{threadId, turnId, callId, namespace?, tool,
   arguments}`; the answer is `{contentItems: [{type: "inputText", text}], success}`.
 """
@@ -50,6 +50,12 @@ RESERVED_NAMESPACES = frozenset(
 )
 _CALL_FIELDS = frozenset({"threadId", "turnId", "callId", "namespace", "tool", "arguments"})
 
+# Why a Guard tool was left out of Codex's dynamicTools (fixed codes only).
+EXCLUDED_NAMESPACE_NAME = "NAMESPACE_NAME"
+EXCLUDED_NAMESPACE_RESERVED = "NAMESPACE_RESERVED"
+EXCLUDED_TOOL_NAME = "TOOL_NAME"
+EXCLUDED_DUPLICATE = "DUPLICATE"
+
 
 class CodexProtocolError(ValueError):
     """Fixed code only; never echoes model or server content."""
@@ -76,30 +82,44 @@ def initialize_params(version: str) -> dict[str, object]:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolExclusion:
+    tool_ref: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class DynamicToolsPlan:
     """Namespaced tools Codex accepts, plus Guard tool_refs left out by name rules."""
 
     tools: tuple[dict[str, object], ...]
     excluded: tuple[str, ...]
     tool_refs: frozenset[str]
+    exclusions: tuple[ToolExclusion, ...] = ()
+
+
+def _exclusion_reason(server_id: str, separator: str, tool_name: str) -> str | None:
+    if not separator or not _codex_name(server_id, NAMESPACE_MAX):
+        return EXCLUDED_NAMESPACE_NAME
+    if server_id in RESERVED_NAMESPACES:
+        return EXCLUDED_NAMESPACE_RESERVED
+    if not _codex_name(tool_name, TOOL_NAME_MAX):
+        return EXCLUDED_TOOL_NAME
+    return None
 
 
 def build_dynamic_tools(views: tuple[ToolView, ...]) -> DynamicToolsPlan:
     """Group ToolView `server__tool` refs under one namespace per server."""
 
     grouped: dict[str, list[dict[str, object]]] = {}
-    excluded: list[str] = []
+    exclusions: list[ToolExclusion] = []
     accepted: set[str] = set()
     for view in views:
         server_id, separator, tool_name = view.tool_ref.partition("__")
-        if (
-            not separator
-            or not _codex_name(server_id, NAMESPACE_MAX)
-            or server_id in RESERVED_NAMESPACES
-            or not _codex_name(tool_name, TOOL_NAME_MAX)
-            or view.tool_ref in accepted
-        ):
-            excluded.append(view.tool_ref)
+        reason = _exclusion_reason(server_id, separator, tool_name)
+        if reason is None and view.tool_ref in accepted:
+            reason = EXCLUDED_DUPLICATE
+        if reason is not None:
+            exclusions.append(ToolExclusion(view.tool_ref, reason))
             continue
         accepted.add(view.tool_ref)
         grouped.setdefault(server_id, []).append(
@@ -119,7 +139,12 @@ def build_dynamic_tools(views: tuple[ToolView, ...]) -> DynamicToolsPlan:
         }
         for server_id, entries in grouped.items()
     )
-    return DynamicToolsPlan(tools, tuple(excluded), frozenset(accepted))
+    return DynamicToolsPlan(
+        tools,
+        tuple(item.tool_ref for item in exclusions),
+        frozenset(accepted),
+        tuple(exclusions),
+    )
 
 
 def thread_start_params(
