@@ -54,6 +54,25 @@ class TaskStatus(StrEnum):
     CLOSED = "closed"
 
 
+class SystemStopReason(StrEnum):
+    """STOP-01 합의 전 제안. 신뢰 세션 관리자가 고르는 정지 사유."""
+
+    L3_VIOLATION = "SESSION_L3_VIOLATION"
+    WATCHDOG_EXCEEDED = "SESSION_WATCHDOG_EXCEEDED"
+    AUTH_FAILED = "SESSION_AUTH_FAILED"
+    AUTH_REFRESH_CONFLICT = "SESSION_AUTH_REFRESH_CONFLICT"
+    USAGE_LIMIT = "SESSION_USAGE_LIMIT"
+    PROCESS_FAILED = "SESSION_PROCESS_FAILED"
+    PROTOCOL_FAILED = "SESSION_PROTOCOL_FAILED"
+
+
+class SessionEvent(StrEnum):
+    """STOP-01 합의 전 제안. 원문 없는 세션 감사의 사실 종류."""
+
+    STOPPED = "SESSION_STOPPED"
+    REQUEST_USER_INPUT = "SESSION_REQUEST_USER_INPUT"
+
+
 class ApprovalStatus(StrEnum):
     """승인 저장소의 단방향 상태 값."""
 

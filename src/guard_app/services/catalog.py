@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Self
+from typing import Literal, Self, cast
 
 from pydantic import Field, ValidationError, field_validator, model_validator
 
@@ -14,6 +14,7 @@ from guard_app.core.access_rules import AccessRules, normalize_access_rules
 from guard_app.domain.contracts import RegisteredServer, ToolView
 from guard_app.domain.enums import Label, RegStatus, ToolKind, TrustTier
 from guard_app.domain.errors import ResolutionError
+from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
     Boundary,
     Frozen,
@@ -41,10 +42,13 @@ __all__ = [
     "GuardSettings",
     "LoadedProfile",
     "Profile",
+    "PreparedPolicyChange",
     "ResourceResolver",
     "ServerSettings",
     "ToolSettings",
     "load_profile_settings",
+    "prepare_policy_change",
+    "prepare_server_access_change",
 ]
 
 type ResourceResolver = Callable[[ToolSpec, str], str]
@@ -394,7 +398,10 @@ class GuardSettings(_PolicySettings):
 
 @dataclass(frozen=True, slots=True, repr=False)
 class LoadedProfile:
-    """검증된 독립 사본. C 검증과 A 시작 연결은 별도로 필요하다."""
+    """검증된 독립 사본. servers는 해시에 포함된 전체 설정이며 선택 범위가 아니다.
+
+    실행 시작에는 selected_servers를 사용하고 C 경로·실행 파일 검증을 연결한다.
+    """
 
     profile: Profile
     catalog: Catalog
@@ -406,8 +413,105 @@ class LoadedProfile:
     def policy_version(self) -> str:
         return self.guard_settings.policy_version
 
+    @property
+    def selected_servers(self) -> tuple[ServerSettings, ...]:
+        """전체 설정 순서를 유지하면서 이 Profile이 선택한 서버만 반환한다."""
+        return tuple(server for server in self.servers if server.id in self.profile.server_ids)
+
     def __repr__(self) -> str:
         return "LoadedProfile(<redacted>)"
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class PreparedPolicyChange:
+    """부수 효과 없는 준비 결과. document.to_dict()로 저장할 독립 JSON 사본을 얻는다.
+
+    준비 → 호출자(A·C)가 document 저장 → 저장 성공 후 Guard 적용 순서다.
+    파일 형식·경로·저장 실패 처리는 호출자 책임이며 이 타입은 파일을 쓰지 않는다.
+    """
+
+    document: FrozenJsonObject
+    loaded_profile: LoadedProfile
+    previous_policy_version: str
+
+    @property
+    def policy_version(self) -> str:
+        return self.loaded_profile.policy_version
+
+    @property
+    def changed(self) -> bool:
+        return self.previous_policy_version != self.policy_version
+
+    def __repr__(self) -> str:
+        return "PreparedPolicyChange(<redacted>)"
+
+
+def prepare_policy_change(
+    current_document: Mapping[str, object],
+    new_document: Mapping[str, object],
+    registry: Registry,
+    *,
+    resource_resolver: ResourceResolver | None = None,
+) -> PreparedPolicyChange:
+    """전체 변경을 검증·준비한다. 두 문서·Registry·파일·Task를 수정하지 않는다.
+
+    호출자가 반환 document를 저장한 뒤에만 Guard.apply_policy_change를 호출한다.
+    저장 실패면 적용하지 않는다. 적용 뒤 새 Task는 새 Profile·버전으로 생성한다.
+    """
+    current = load_profile_settings(_settings_copy(current_document), registry)
+    document = _settings_copy(new_document)
+    loaded = load_profile_settings(document, registry, resource_resolver=resource_resolver)
+    return PreparedPolicyChange(FrozenJsonObject(document), loaded, current.policy_version)
+
+
+def prepare_server_access_change(
+    current_document: Mapping[str, object],
+    registry: Registry,
+    *,
+    server_id: str,
+    tool_permissions: Mapping[str, bool],
+    resource_resolver: ResourceResolver | None = None,
+) -> PreparedPolicyChange:
+    """활성화 확인의 전체 READ/SEND 체크 목록으로 해당 서버 규칙만 대체한다.
+
+    지원 도구마다 정확한 bool 하나를 요구한다. 누락·OTHER·미설정 이름은 거부한다.
+    준비 → 호출자 저장 → 저장 성공 후 적용 순서이며 기본 체크 표시는 A 책임이다.
+    """
+    document = _settings_copy(current_document)
+    current = load_profile_settings(document, registry)
+    if not valid_server_id(server_id) or not isinstance(tool_permissions, Mapping):
+        raise CatalogConfigError("서버 활성화 접근 요청이 유효하지 않다")
+    server = next((server for server in current.servers if server.id == server_id), None)
+    if server is None:
+        raise CatalogConfigError("서버 활성화 대상이 설정에 없다")
+    supported = {tool.name for tool in server.tools if tool.kind in (ToolKind.READ, ToolKind.SEND)}
+    choices = dict(tool_permissions)
+    if (
+        any(type(name) is not str for name in choices)
+        or set(choices) != supported
+        or any(type(allowed) is not bool for allowed in choices.values())
+    ):
+        raise CatalogConfigError("지원 도구의 전체 허용 체크 목록이 필요하다")
+    rules = cast(dict[str, list[list[str]]], document.get("access_rules", {}))
+    document["access_rules"] = {
+        field: [pair for pair in rules.get(field, []) if pair[0] != server_id]
+        + [[server_id, name] for name in sorted(choices) if choices[name] is allowed]
+        for field, allowed in (("allow", True), ("deny", False))
+    }
+    return prepare_policy_change(
+        current_document, document, registry, resource_resolver=resource_resolver
+    )
+
+
+def _settings_copy(document: Mapping[str, object]) -> dict[str, object]:
+    if not isinstance(document, Mapping):
+        raise CatalogConfigError("정책 설정은 JSON Mapping이어야 한다")
+    value = document.to_dict() if isinstance(document, FrozenJsonObject) else dict(document)
+    # JSON 사본을 먼저 분리하고 상세 검증은 load_profile_settings에 맡긴다.
+    try:
+        return FrozenJsonObject(value).to_dict()
+    except ValueError:
+        raise CatalogConfigError("정책 설정이 유효하지 않다") from None
 
 
 class _ProfileRegistry:
