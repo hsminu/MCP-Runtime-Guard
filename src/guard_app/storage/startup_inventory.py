@@ -1,4 +1,4 @@
-"""B 내부의 읽기 전용 v1 점검 자료. 복구 ACK·실행 권한·공유 DTO가 아니다.
+"""B 내부의 읽기 전용 v2 점검 자료. 복구 ACK·실행 권한·공유 DTO가 아니다.
 
 SQL과 저장 상태의 검증은 sqlite_store가 수행한다. 빈 이력에 초기 순번을
 부여하거나 next/seed를 계산하지 않으며, 미기록 kind/epoch를 추정하지 않는다.
@@ -37,7 +37,7 @@ class _StoredRequest:
     status: RequestStatus
     decision: Decision | None
     dispatch_reserved_at_utc: datetime | None
-    # v1 테이블에 없는 열이다. 현재 Task/메모리 맥락으로 대신 채우지 않는다.
+    # v1부터 v2까지 요청 테이블에 없는 열이다. Task/메모리로 대신 채우지 않는다.
     stored_epoch: None = None
     stored_kind: None = None
     stored_row_revision: None = None

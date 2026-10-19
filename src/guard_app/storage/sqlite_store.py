@@ -1,4 +1,4 @@
-"""B6: 파일 SQLite와 현행 Store 12개 메서드의 B 단위 구현.
+"""B6: 파일 SQLite, 현행 Store 12개 연산과 RegistryStore 제안 구현.
 
 SQL 실행은 이 제품 모듈에만 둔다. 공유 B6 계약 확정·앱 연결·시작 복구는 별도다.
 v1의 요청 결속 필드 한계 때문에 실행 권한은 같은 인스턴스에서만 확인한다.
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -21,21 +21,40 @@ from typing import Literal
 
 from guard_app.core.approval_time import approval_event_time
 from guard_app.core.taint import merge
-from guard_app.domain.contracts import ApprovalRecord, TaskIdentity
+from guard_app.domain.contracts import (
+    ApprovalRecord,
+    FingerprintChange,
+    RegisteredServer,
+    RegistryEntry,
+    ScanReport,
+    StoredScanReport,
+    TaskIdentity,
+)
 from guard_app.domain.enums import (
     ApprovalStatus,
     Decision,
     Label,
+    RegStatus,
     RequestStatus,
     SessionEvent,
     SystemStopReason,
     TaskStatus,
     ToolKind,
+    TrustTier,
 )
 from guard_app.domain.errors import StoreError
-from guard_app.domain.models import Boundary, Escalation, PolicyDecision, ResolvedRequest, TaskState
+from guard_app.domain.json_types import FrozenJsonObject
+from guard_app.domain.models import (
+    Boundary,
+    Escalation,
+    PolicyDecision,
+    ResolvedRequest,
+    TaskState,
+    ToolSpec,
+)
 from guard_app.domain.reasons import Reason
-from guard_app.security.digest import json_digest
+from guard_app.security.digest import jcs_canonicalize, json_digest
+from guard_app.services.catalog_sources import valid_server_id
 from guard_app.storage.startup_inventory import (
     _StartupInventory,
     _StoredApproval,
@@ -43,9 +62,13 @@ from guard_app.storage.startup_inventory import (
     _StoredTask,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 APPLICATION_ID = 0x4D435047  # MCPG. 기존 다른 앱의 DB를 자동 채택하지 않는다.
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
+# B6-06 제안 한계: UTF-8 정규화 후 크기. 등록 UI/검사 결과의 메모리·DB 폭주 제한.
+_MAX_SCHEMA_BYTES = 256 * 1024
+_MAX_TOOLS_BYTES = 8 * 1024 * 1024
+_MAX_REPORT_BYTES = 1024 * 1024
 _TASK_TRANSITIONS = {
     TaskStatus.READY: frozenset((TaskStatus.RUNNING, TaskStatus.HALTED)),
     TaskStatus.RUNNING: frozenset(
@@ -80,9 +103,9 @@ _APPROVAL_TRANSITIONS = {
     ApprovalStatus.APPROVED: frozenset((ApprovalStatus.EXPIRED, ApprovalStatus.INVALIDATED)),
 }
 
-# 11.2절의 일곱 테이블. 새 B6 DTO/epoch/AGT 감사 필드는 합의 전 추가하지 않는다.
+# 정확한 기존 v1 문장을 이관 검증용으로 보존한다. Task/요청 열은 v2에서도 같다.
 # STRICT·CHECK는 저장 형식을 제한하며 정책/상태 전이의 새 의미를 정의하지 않는다.
-_SCHEMA: tuple[tuple[str, str], ...] = (
+_SCHEMA_V1: tuple[tuple[str, str], ...] = (
     (
         "tasks",
         """CREATE TABLE tasks (
@@ -186,6 +209,53 @@ _SCHEMA: tuple[tuple[str, str], ...] = (
 )
 
 
+_SCHEMA = _SCHEMA_V1[:5] + (
+    (
+        "registrations",
+        """CREATE TABLE registrations (
+            server_id TEXT PRIMARY KEY CHECK (length(server_id) > 0),
+            status TEXT NOT NULL CHECK (status IN ('pending','active','blocked')),
+            boundary_id TEXT NOT NULL CHECK (length(boundary_id) > 0),
+            tier TEXT NOT NULL CHECK (tier IN
+                ('internal','approved_external','general_external')),
+            max_label INTEGER NOT NULL CHECK (max_label IN (0,1,2)),
+            last_scan_id TEXT REFERENCES scan_reports(scan_id),
+            reviewed_scan_id TEXT REFERENCES scan_reports(scan_id),
+            reviewed_by TEXT,
+            row_revision INTEGER NOT NULL CHECK (row_revision >= 1),
+            updated_at_utc TEXT NOT NULL
+        ) STRICT""",
+    ),
+    (
+        "registration_tools",
+        """CREATE TABLE registration_tools (
+            server_id TEXT NOT NULL REFERENCES registrations(server_id),
+            tool_name TEXT NOT NULL CHECK (length(tool_name) > 0),
+            tool_position INTEGER NOT NULL CHECK (tool_position >= 0),
+            kind TEXT NOT NULL CHECK (kind IN ('read','send','other')),
+            destination_arg TEXT,
+            resource_arg TEXT,
+            input_schema_json TEXT NOT NULL,
+            fingerprint TEXT NOT NULL CHECK
+                (length(fingerprint) = 64 AND fingerprint NOT GLOB '*[^0-9a-f]*'),
+            reviewed_description TEXT NOT NULL,
+            PRIMARY KEY (server_id, tool_name),
+            UNIQUE (server_id, tool_position)
+        ) STRICT""",
+    ),
+    (
+        "scan_reports",
+        """CREATE TABLE scan_reports (
+            scan_id TEXT PRIMARY KEY CHECK (length(scan_id) > 0),
+            server_id TEXT NOT NULL REFERENCES registrations(server_id),
+            report_json TEXT NOT NULL,
+            scanned_at_utc TEXT NOT NULL,
+            stored_at_utc TEXT NOT NULL
+        ) STRICT""",
+    ),
+)
+
+
 @dataclass(frozen=True, slots=True)
 class _DecisionContext:
     """같은 인스턴스의 판정 결속. 인자·도구 정의·승인 원문은 보관하지 않는다."""
@@ -226,7 +296,8 @@ class _ConsumeConflictError(Exception):
 class SQLiteStore:
     """동기 단일 writer. 현행 Store의 Task·판정·승인·응답 저장을 구현한다.
 
-    파일 DB만 지원하고 생성 시 빈 DB의 v0→v1 마이그레이션을 원자 수행한다.
+    파일 DB만 지원한다. 새 DB는 v2, 정확한 v1은 Registry 두 테이블이 비었을 때만
+    v2로 원자 이관한다. RegistryStore도 같은 연결과 트랜잭션 경계를 사용한다.
     같은 앱/버전의 정확한 스키마만 다시 열며 다른/미래 버전은 거부한다.
     busy_timeout_ms=1000은 조정 가능한 잠금 대기 후보이며 전체 I/O 상한이 아니다.
     SQL/검증 오류는 원문·경로 없는 StoreError다. 신뢰 audit_id_factory는 ID 또는
@@ -302,6 +373,481 @@ class SQLiteStore:
             raise StoreError()
         if not self._discard_connection():
             raise StoreError()
+
+    async def list_registrations(self) -> tuple[RegistryEntry, ...]:
+        """하나의 읽기 TX 사본. DB ACTIVE는 연결 후 지문 대조를 대체하지 않는다."""
+
+        def read() -> tuple[RegistryEntry, ...]:
+            with self._transaction(write=False) as connection:
+                rows = connection.execute(
+                    "SELECT server_id FROM registrations ORDER BY server_id"
+                ).fetchall()
+                return tuple(self._require_registration_locked(connection, row[0]) for row in rows)
+
+        return _store_result(read)
+
+    async def load_registration(self, server_id: str) -> RegistryEntry | None:
+        def read() -> RegistryEntry | None:
+            _registry_input(lambda: _registry_server_id(server_id))
+            with self._transaction(write=False) as connection:
+                return self._load_registration_locked(connection, server_id)
+
+        return _store_result(read)
+
+    async def register_server(
+        self, registration: RegisteredServer, *, at_utc: datetime
+    ) -> RegistryEntry:
+        def write() -> RegistryEntry:
+            valid, timestamp = _registry_input(
+                lambda: (_new_registration(registration), _utc_text(at_utc))
+            )
+            with self._transaction(write=True) as connection:
+                if self._load_registration_locked(connection, valid.server_id) is not None:
+                    raise StoreError(Reason.APPROVAL_RACE)
+                return self._write_registry_locked(
+                    connection, valid, previous=None, timestamp=timestamp, event="REGISTERED"
+                )
+
+        return _store_result(write)
+
+    async def record_scan_report(
+        self, scan_id: str, report: ScanReport, *, at_utc: datetime
+    ) -> RegistryEntry:
+        def write() -> RegistryEntry:
+            valid_id, valid, document, timestamp = _registry_input(
+                lambda: (
+                    _identifier(scan_id),
+                    ScanReport.model_validate(report),
+                    _scan_json(report),
+                    _utc_text(at_utc),
+                )
+            )
+            _registry_input(lambda: _registry_server_id(valid.server_id))
+            with self._transaction(write=True) as connection:
+                current = self._require_registration_locked(connection, valid.server_id)
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM scan_reports WHERE scan_id=?", (valid_id,)
+                    ).fetchone()
+                    is not None
+                ):
+                    raise StoreError(Reason.APPROVAL_RACE)
+                connection.execute(
+                    """INSERT INTO scan_reports
+                    (scan_id,server_id,report_json,scanned_at_utc,stored_at_utc)
+                    VALUES (?,?,?,?,?)""",
+                    (
+                        valid_id,
+                        valid.server_id,
+                        document,
+                        _utc_text(valid.scanned_at_utc),
+                        timestamp,
+                    ),
+                )
+                return self._write_registry_locked(
+                    connection,
+                    current.registration,
+                    previous=current,
+                    timestamp=timestamp,
+                    event="SCAN_RECORDED",
+                    last_scan_id=valid_id,
+                    reviewed_scan_id=current.reviewed_scan_id,
+                    reviewed_by=current.reviewed_by,
+                )
+
+        return _store_result(write)
+
+    async def activate_server(
+        self,
+        server_id: str,
+        *,
+        expected_row_revision: int,
+        tool_fingerprints: Mapping[str, str],
+        reviewed_by: str,
+        at_utc: datetime,
+        reviewed_scan_id: str | None = None,
+    ) -> RegistryEntry:
+        def write() -> RegistryEntry:
+            timestamp, fingerprints = _registry_input(
+                lambda: (
+                    _registry_write_input(
+                        server_id, at_utc, expected_row_revision=expected_row_revision
+                    ),
+                    _fingerprint_map(tool_fingerprints),
+                )
+            )
+            _registry_input(lambda: _identifier(reviewed_by))
+            if reviewed_scan_id is not None:
+                _registry_input(lambda: _identifier(reviewed_scan_id))
+            with self._transaction(write=True) as connection:
+                current = self._require_registration_locked(connection, server_id)
+                _registry_cas(current, expected_row_revision)
+                if current.registration.status is not RegStatus.PENDING:
+                    raise StoreError(Reason.REG_NOT_ACTIVE)
+                stored = {tool.tool_name: tool.fingerprint for tool in current.registration.tools}
+                if fingerprints != stored:
+                    raise StoreError(Reason.TOOL_FINGERPRINT_CHANGED)
+                if reviewed_scan_id is not None:
+                    scan = self._load_scan_locked(connection, reviewed_scan_id)
+                    if scan.report.server_id != server_id or set(
+                        scan.report.fingerprint_set
+                    ) != set(stored.values()):
+                        raise StoreError(Reason.TOOL_FINGERPRINT_CHANGED)
+                return self._write_registry_locked(
+                    connection,
+                    current.registration.model_copy(update={"status": RegStatus.ACTIVE}),
+                    previous=current,
+                    timestamp=timestamp,
+                    event="ACTIVATED",
+                    last_scan_id=current.last_scan_id,
+                    reviewed_scan_id=reviewed_scan_id,
+                    reviewed_by=reviewed_by,
+                )
+
+        return _store_result(write)
+
+    async def record_fingerprint_change(
+        self, server_id: str, tools: tuple[ToolSpec, ...], *, at_utc: datetime
+    ) -> FingerprintChange:
+        """C는 반환 즉시 동기 사본 교체 후 도구별 invalidate_tool을 호출한다.
+
+        이 메서드에는 내부 await가 없고 내구성 COMMIT 후에만 반환한다. C의 연결
+        직렬화/실패 게이트는 별도이며 기존 예약/소비의 S03 경쟁은 수정하지 않는다.
+        """
+
+        def write() -> FingerprintChange:
+            timestamp, observed = _registry_input(
+                lambda: (
+                    _registry_write_input(server_id, at_utc),
+                    _observed_tools(server_id, tools),
+                )
+            )
+            with self._transaction(write=True) as connection:
+                current = self._require_registration_locked(connection, server_id)
+                old = {tool.tool_name: tool for tool in current.registration.tools}
+                new = {tool.tool_name: tool for tool in observed}
+                changed = tuple(
+                    sorted(
+                        name
+                        for name in old.keys() | new.keys()
+                        if name not in old
+                        or name not in new
+                        or _tool_definition(old[name]) != _tool_definition(new[name])
+                    )
+                )
+                updated = tuple(
+                    tool.model_copy(
+                        update={
+                            "reviewed_description": ""
+                            if tool.tool_name in changed
+                            else old[tool.tool_name].reviewed_description
+                        }
+                    )
+                    for tool in observed
+                )
+                status = current.registration.status
+                if changed and status is RegStatus.ACTIVE:
+                    status = RegStatus.PENDING
+                registration = current.registration.model_copy(
+                    update={"status": status, "tools": updated}
+                )
+                result = self._write_registry_locked(
+                    connection,
+                    registration,
+                    previous=current,
+                    timestamp=timestamp,
+                    event="FINGERPRINT_CHANGED" if changed else "FINGERPRINT_OBSERVED",
+                    reason=Reason.TOOL_FINGERPRINT_CHANGED if changed else None,
+                    last_scan_id=None if changed else current.last_scan_id,
+                    reviewed_scan_id=None if changed else current.reviewed_scan_id,
+                    reviewed_by=None if changed else current.reviewed_by,
+                    changed_count=len(changed),
+                )
+                return FingerprintChange(entry=result, changed_tools=changed)
+
+        return _store_result(write)
+
+    async def block_server(
+        self, server_id: str, *, expected_row_revision: int, at_utc: datetime
+    ) -> RegistryEntry:
+        return _store_result(
+            lambda: self._registry_transition(
+                server_id, expected_row_revision, at_utc, RegStatus.BLOCKED
+            )
+        )
+
+    async def request_review(
+        self, server_id: str, *, expected_row_revision: int, at_utc: datetime
+    ) -> RegistryEntry:
+        return _store_result(
+            lambda: self._registry_transition(
+                server_id, expected_row_revision, at_utc, RegStatus.PENDING
+            )
+        )
+
+    def _registry_transition(
+        self, server_id: str, revision: int, at_utc: datetime, status: RegStatus
+    ) -> RegistryEntry:
+        timestamp = _registry_input(
+            lambda: _registry_write_input(server_id, at_utc, expected_row_revision=revision)
+        )
+        with self._transaction(write=True) as connection:
+            current = self._require_registration_locked(connection, server_id)
+            _registry_cas(current, revision)
+            allowed = (
+                (RegStatus.ACTIVE, RegStatus.PENDING)
+                if status is RegStatus.BLOCKED
+                else (RegStatus.ACTIVE, RegStatus.BLOCKED)
+            )
+            if current.registration.status not in allowed:
+                raise StoreError(Reason.REG_NOT_ACTIVE)
+            return self._write_registry_locked(
+                connection,
+                current.registration.model_copy(update={"status": status}),
+                previous=current,
+                timestamp=timestamp,
+                event="BLOCKED" if status is RegStatus.BLOCKED else "REVIEW_REQUESTED",
+                reason=Reason.REG_NOT_ACTIVE,
+                last_scan_id=current.last_scan_id,
+                # 재검토/차단 후에는 이전 활성화 확인을 현재 확인으로 표시하지 않는다.
+            )
+
+    async def save_reviewed_descriptions(
+        self,
+        server_id: str,
+        descriptions: Mapping[str, str],
+        *,
+        expected_row_revision: int,
+        at_utc: datetime,
+    ) -> RegistryEntry:
+        def write() -> RegistryEntry:
+            timestamp, inputs = _registry_input(
+                lambda: (
+                    _registry_write_input(
+                        server_id, at_utc, expected_row_revision=expected_row_revision
+                    ),
+                    _description_map(descriptions),
+                )
+            )
+            with self._transaction(write=True) as connection:
+                current = self._require_registration_locked(connection, server_id)
+                _registry_cas(current, expected_row_revision)
+                if current.registration.status is not RegStatus.PENDING:
+                    raise StoreError(Reason.REG_NOT_ACTIVE)
+                if inputs.keys() - {tool.tool_name for tool in current.registration.tools}:
+                    raise StoreError(Reason.INVALID_ARGUMENTS)
+                tools = _registry_input(
+                    lambda: tuple(
+                        tool.model_copy(update={"reviewed_description": inputs[tool.tool_name]})
+                        if tool.tool_name in inputs
+                        else tool
+                        for tool in current.registration.tools
+                    )
+                )
+                _registry_input(lambda: _tool_rows(tools))
+                return self._write_registry_locked(
+                    connection,
+                    current.registration.model_copy(update={"tools": tools}),
+                    previous=current,
+                    timestamp=timestamp,
+                    event="DESCRIPTIONS_REVIEWED",
+                    last_scan_id=current.last_scan_id,
+                )
+
+        return _store_result(write)
+
+    def _load_scan_locked(self, connection: sqlite3.Connection, scan_id: str) -> StoredScanReport:
+        row = connection.execute(
+            "SELECT * FROM scan_reports WHERE scan_id=?", (scan_id,)
+        ).fetchone()
+        if row is None:
+            raise StoreError(Reason.STATE_MISSING)
+        document = _text(row["report_json"])
+        _read_registry_json(document, _MAX_REPORT_BYTES)
+        report = ScanReport.model_validate_json(document)
+        if (
+            _scan_json(report) != document
+            or report.server_id != _registry_server_id(row["server_id"])
+            or report.scanned_at_utc != _utc_value(row["scanned_at_utc"])
+        ):
+            raise StoreError()
+        return StoredScanReport(
+            scan_id=_identifier(row["scan_id"]),
+            report=report,
+            stored_at_utc=_utc_value(row["stored_at_utc"]),
+        )
+
+    def _load_registration_locked(
+        self, connection: sqlite3.Connection, server_id: str
+    ) -> RegistryEntry | None:
+        row = connection.execute(
+            "SELECT * FROM registrations WHERE server_id=?", (server_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        _registry_server_id(row["server_id"])
+        tool_rows = connection.execute(
+            "SELECT * FROM registration_tools WHERE server_id=? ORDER BY tool_position",
+            (server_id,),
+        ).fetchall()
+        tools: list[ToolSpec] = []
+        for position, tool in enumerate(tool_rows):
+            if _integer(tool["tool_position"]) != position:
+                raise StoreError()
+            tools.append(
+                ToolSpec(
+                    server_id=server_id,
+                    tool_name=_identifier(tool["tool_name"]),
+                    kind=ToolKind(_text(tool["kind"])),
+                    destination_arg=tool["destination_arg"],
+                    resource_arg=tool["resource_arg"],
+                    input_schema=FrozenJsonObject(
+                        _read_registry_json(tool["input_schema_json"], _MAX_SCHEMA_BYTES)
+                    ),
+                    fingerprint=_sha256(tool["fingerprint"]),
+                    reviewed_description=_text(tool["reviewed_description"]),
+                )
+            )
+        registration = RegisteredServer(
+            server_id=server_id,
+            status=RegStatus(_text(row["status"])),
+            boundary=Boundary(
+                boundary_id=_identifier(row["boundary_id"]),
+                tier=TrustTier(_text(row["tier"])),
+                max_label=Label(_integer(row["max_label"])),
+            ),
+            tools=tuple(tools),
+            row_revision=_integer(row["row_revision"]),
+        )
+        _tool_rows(registration.tools)  # 합계 크기 제한과 저장 DTO 형식도 재검사한다.
+        last_scan = (
+            None
+            if row["last_scan_id"] is None
+            else self._load_scan_locked(connection, _identifier(row["last_scan_id"]))
+        )
+        reviewed_scan_id = row["reviewed_scan_id"]
+        if reviewed_scan_id is not None:
+            reviewed = self._load_scan_locked(connection, _identifier(reviewed_scan_id))
+            if reviewed.report.server_id != server_id:
+                raise StoreError()
+        return RegistryEntry(
+            registration=registration,
+            last_scan=last_scan,
+            reviewed_scan_id=reviewed_scan_id,
+            reviewed_by=row["reviewed_by"],
+            updated_at_utc=_utc_value(row["updated_at_utc"]),
+        )
+
+    def _require_registration_locked(
+        self, connection: sqlite3.Connection, server_id: str
+    ) -> RegistryEntry:
+        result = self._load_registration_locked(connection, server_id)
+        if result is None:
+            raise StoreError(Reason.STATE_MISSING)
+        return result
+
+    def _write_registry_locked(
+        self,
+        connection: sqlite3.Connection,
+        registration: RegisteredServer,
+        *,
+        previous: RegistryEntry | None,
+        timestamp: str,
+        event: str,
+        reason: Reason | None = None,
+        last_scan_id: str | None = None,
+        reviewed_scan_id: str | None = None,
+        reviewed_by: str | None = None,
+        changed_count: int = 0,
+    ) -> RegistryEntry:
+        revision = _integer(1 if previous is None else previous.registration.row_revision + 1)
+        values = (
+            registration.status.value,
+            registration.boundary.boundary_id,
+            registration.boundary.tier.value,
+            int(registration.boundary.max_label),
+            last_scan_id,
+            reviewed_scan_id,
+            reviewed_by,
+            revision,
+            timestamp,
+        )
+        if previous is None:
+            connection.execute(
+                """INSERT INTO registrations (server_id,status,boundary_id,tier,max_label,
+                last_scan_id,reviewed_scan_id,reviewed_by,row_revision,updated_at_utc)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (registration.server_id, *values),
+            )
+        else:
+            changed = connection.execute(
+                """UPDATE registrations SET status=?,boundary_id=?,tier=?,max_label=?,
+                last_scan_id=?,reviewed_scan_id=?,reviewed_by=?,row_revision=?,updated_at_utc=?
+                WHERE server_id=? AND row_revision=?""",
+                (*values, registration.server_id, previous.registration.row_revision),
+            ).rowcount
+            if changed != 1:
+                raise StoreError(Reason.APPROVAL_RACE)
+        connection.execute(
+            "DELETE FROM registration_tools WHERE server_id=?", (registration.server_id,)
+        )
+        connection.executemany(
+            """INSERT INTO registration_tools (server_id,tool_name,tool_position,kind,
+            destination_arg,resource_arg,input_schema_json,fingerprint,reviewed_description)
+            VALUES (?,?,?,?,?,?,?,?,?)""",
+            _tool_rows(registration.tools),
+        )
+        self._insert_registry_audit(
+            connection,
+            registration.server_id,
+            revision,
+            event,
+            reason,
+            timestamp,
+            last_scan_id,
+            len(registration.tools),
+            changed_count,
+        )
+        # 검증된 사본까지 TX 안에서 만든다. COMMIT 실패이면 호출자에게 전달되지 않는다.
+        return self._require_registration_locked(connection, registration.server_id)
+
+    def _insert_registry_audit(
+        self,
+        connection: sqlite3.Connection,
+        server_id: str,
+        revision: int,
+        event: str,
+        reason: Reason | None,
+        timestamp: str,
+        scan_id: str | None,
+        tool_count: int,
+        changed_count: int,
+    ) -> None:
+        if self._audit_id_factory is None:
+            raise StoreError()
+        event_id = _identifier(self._audit_id_factory())
+        detail = json.dumps(
+            {
+                "server_id": server_id,
+                "row_revision": revision,
+                "scan_id": scan_id,
+                "tool_count": tool_count,
+                "changed_count": changed_count,
+            },
+            separators=(",", ":"),
+        )
+        connection.execute(
+            """INSERT INTO audit_events
+            (event_id,request_id,task_id,event_type,reason_code,label,detail,at_utc)
+            VALUES (?,NULL,NULL,?,?,NULL,?,?)""",
+            (
+                event_id,
+                "REGISTRY_" + event,
+                None if reason is None else reason.value,
+                detail,
+                timestamp,
+            ),
+        )
 
     async def create_task(self, state: TaskState, *, created_at_utc: datetime) -> None:
         """Task와 제공된 승격 근거를 함께 저장. 중복 ID는 기존 행을 변경하지 않는다."""
@@ -384,7 +930,7 @@ class SQLiteStore:
         return result
 
     def _inspect_startup(self) -> _StartupInventory:
-        """B 시작 복구 준비용 내부 조회. 기존 v1 데이터만 읽고 실행 상태를 쓰지 않는다.
+        """B 시작 복구 준비용 내부 조회. v2의 Task/요청만 읽고 실행 상태를 쓰지 않는다.
 
         이 반환은 준비/복구 성공 ACK가 아니다. 순번 배정·schema 이관·상태/epoch
         변경과 앱 bootstrap 연결은 SEQ/REC 합의 후다. SQL은 지정 모듈에만 둔다.
@@ -1611,7 +2157,23 @@ class SQLiteStore:
                 for _, statement in _SCHEMA:
                     connection.execute(statement)
                 connection.execute("PRAGMA application_id=0x4D435047")
-                connection.execute("PRAGMA user_version=1")
+                connection.execute("PRAGMA user_version=2")
+            elif version == 1:
+                if (
+                    application != APPLICATION_ID
+                    or {row[0]: row[1] for row in entries} != dict(_SCHEMA_V1)
+                    or connection.execute("SELECT 1 FROM registrations LIMIT 1").fetchone()
+                    is not None
+                    or connection.execute("SELECT 1 FROM scan_reports LIMIT 1").fetchone()
+                    is not None
+                ):
+                    raise StoreError()
+                # BEGIN IMMEDIATE 안에서 검사·교체·버전 갱신. 다른 다섯 테이블은 보존.
+                connection.execute("DROP TABLE scan_reports")
+                connection.execute("DROP TABLE registrations")
+                for _, statement in _SCHEMA[5:]:
+                    connection.execute(statement)
+                connection.execute("PRAGMA user_version=2")
             elif (
                 version != SCHEMA_VERSION
                 or application != APPLICATION_ID
@@ -1642,6 +2204,146 @@ class SQLiteStore:
             failed = True
         if failed:
             raise StoreError()
+
+
+def _registry_input[T](operation: Callable[[], T]) -> T:
+    """새 Registry 입력만 INVALID_ARGUMENTS로 번역. 기존 Store 오류 의미는 유지."""
+    invalid = False
+    try:
+        result = operation()
+    except (TypeError, ValueError, OverflowError):
+        invalid = True
+    if invalid:
+        raise StoreError(Reason.INVALID_ARGUMENTS)
+    return result
+
+
+def _registry_server_id(value: object) -> str:
+    result = _identifier(value)
+    if not valid_server_id(result):
+        raise ValueError("invalid registry server identifier")
+    return result
+
+
+def _registry_write_input(
+    server_id: str, at_utc: datetime, *, expected_row_revision: int = 0
+) -> str:
+    _registry_server_id(server_id)
+    _integer(expected_row_revision)
+    return _utc_text(at_utc)
+
+
+def _registry_cas(current: RegistryEntry, expected: int) -> None:
+    if current.registration.row_revision != expected:
+        raise StoreError(Reason.APPROVAL_RACE)
+
+
+def _registry_json(value: object, maximum: int) -> str:
+    encoded = jcs_canonicalize(value)
+    if len(encoded) > maximum:
+        raise ValueError("registry JSON exceeds storage limit")
+    return encoded.decode("utf-8")
+
+
+def _read_registry_json(value: object, maximum: int) -> object:
+    document = _text(value)
+    if len(document.encode("utf-8")) > maximum:
+        raise StoreError()
+    failed = False
+    try:
+        decoded = json.loads(document, parse_int=_registry_json_integer)
+    except RecursionError:
+        failed = True
+    if failed:
+        raise StoreError()
+    if _registry_json(decoded, maximum) != document:
+        raise StoreError()
+    return decoded
+
+
+def _registry_json_integer(value: str) -> int | float:
+    """JCS는 1e20 같은 binary64도 정수 표기로 쓴다. 큰 정수 표기를 되읽는다.
+
+    쓰기 입력의 unsafe Python int 거부는 그대로다. JCS 출력의 숫자만 binary64로
+    복원하고 정규화 바이트 일치로 손상을 검사한다(파서의 기본 int 오해 방지).
+    """
+    integer = int(value)
+    return integer if -(2**53 - 1) <= integer <= 2**53 - 1 else float(value)
+
+
+def _tool_definition(tool: ToolSpec) -> dict[str, object]:
+    return tool.model_dump(mode="json", exclude={"reviewed_description"})
+
+
+def _tool_rows(tools: tuple[ToolSpec, ...]) -> tuple[tuple[object, ...], ...]:
+    rows: list[tuple[object, ...]] = []
+    total = 0
+    for position, tool in enumerate(tools):
+        _registry_server_id(tool.server_id)
+        _sha256(tool.fingerprint)
+        schema = _registry_json(tool.input_schema.to_dict(), _MAX_SCHEMA_BYTES)
+        # 이름·종류·인자·스키마·지문·검토 설명을 포함한 전체 메타데이터 상한.
+        total += len(jcs_canonicalize(tool.model_dump(mode="json")))
+        if total > _MAX_TOOLS_BYTES:
+            raise ValueError("registry tool metadata exceeds storage limit")
+        rows.append(
+            (
+                tool.server_id,
+                tool.tool_name,
+                position,
+                tool.kind.value,
+                tool.destination_arg,
+                tool.resource_arg,
+                schema,
+                tool.fingerprint,
+                tool.reviewed_description,
+            )
+        )
+    return tuple(rows)
+
+
+def _new_registration(value: RegisteredServer) -> RegisteredServer:
+    valid = RegisteredServer.model_validate(value)
+    _registry_server_id(valid.server_id)
+    if valid.status is not RegStatus.PENDING or valid.row_revision != 0:
+        raise ValueError("new registration requires initial pending state")
+    if any(tool.reviewed_description for tool in valid.tools):
+        raise ValueError("reviewed descriptions require a separate trusted review")
+    _tool_rows(valid.tools)
+    return valid
+
+
+def _observed_tools(server_id: str, values: tuple[ToolSpec, ...]) -> tuple[ToolSpec, ...]:
+    if type(values) is not tuple:
+        raise ValueError("observed tools require a tuple")
+    tools = tuple(ToolSpec.model_validate(value) for value in values)
+    if any(tool.server_id != server_id for tool in tools) or len(tools) != len(
+        {tool.tool_name for tool in tools}
+    ):
+        raise ValueError("observed tools require unique names and matching server")
+    _tool_rows(tools)
+    return tools
+
+
+def _scan_json(value: ScanReport) -> str:
+    valid = ScanReport.model_validate(value)
+    _registry_server_id(valid.server_id)
+    if any(finding.description for finding in valid.findings):
+        # C4.17 예외는 threat_summary뿐이다. SDK 원문 description은 저장하지 않는다.
+        raise ValueError("raw finding descriptions cannot be persisted")
+    return _registry_json(valid.model_dump(mode="json"), _MAX_REPORT_BYTES)
+
+
+def _fingerprint_map(value: Mapping[str, str]) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        raise ValueError("fingerprints require a mapping")
+    return {_identifier(name): _sha256(fingerprint) for name, fingerprint in value.items()}
+
+
+def _description_map(value: Mapping[str, str]) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        raise ValueError("reviewed descriptions require a mapping")
+    return {_identifier(name): _text(description) for name, description in value.items()}
 
 
 def _store_result[T](operation: Callable[[], T]) -> T:

@@ -1,4 +1,4 @@
-"""B6 시작 전 v1 저장 사실 읽기의 B 단위 검사(I4/I8/I9, T11/T19, S03).
+"""B6 시작 전 v2 저장 사실 읽기의 B 단위 검사(I4/I8/I9, T11/T19, S03).
 
 복구 상태를 결정하거나 순번을 배정하지 않는다. 테스트의 직접 SQL은 기존 분리
 저장의 잔존 행·손상·WAL 읽기 시점을 구성하는 용도이며 C 독립 인수를 대신하지 않는다.
@@ -51,6 +51,7 @@ def database_facts(store: SQLiteStore) -> dict[str, object]:
         "approvals": "SELECT * FROM approvals ORDER BY 1,2",
         "audit_events": "SELECT * FROM audit_events ORDER BY 1,2",
         "registrations": "SELECT * FROM registrations ORDER BY 1,2",
+        "registration_tools": "SELECT * FROM registration_tools ORDER BY 1,2",
         "scan_reports": "SELECT * FROM scan_reports ORDER BY 1,2",
     }
     result: dict[str, object] = {
@@ -181,15 +182,27 @@ def test_repeated_inventory_preserves_all_tables_schema_and_cached_contexts(
     pending(store)
     connection = store._owned_connection()
     connection.execute(
-        "INSERT INTO registrations VALUES (?,?,?,?,?,?,?,?)",
-        ("server-1", "pending", "internal", 2, '{"tool":"TEST_SECRET_fingerprint"}', None, None, 0),
+        "INSERT INTO registrations VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            "server-1",
+            "pending",
+            "boundary-1",
+            "internal",
+            2,
+            None,
+            None,
+            None,
+            1,
+            NOW.isoformat(timespec="microseconds"),
+        ),
     )
     connection.execute(
-        "INSERT INTO scan_reports VALUES (?,?,?,?)",
+        "INSERT INTO scan_reports VALUES (?,?,?,?,?)",
         (
             "scan-1",
             "server-1",
             '{"details":"TEST_SECRET_scanner"}',
+            NOW.isoformat(timespec="microseconds"),
             NOW.isoformat(timespec="microseconds"),
         ),
     )
@@ -444,12 +457,12 @@ def test_invalid_escalation_history_is_not_reinterpreted_as_recovery_evidence(
     "change",
     [
         "PRAGMA application_id=2",
-        "PRAGMA user_version=2",
+        f"PRAGMA user_version={SCHEMA_VERSION + 1}",
         "ALTER TABLE requests ADD COLUMN TEST_SECRET_extra TEXT",
         "CREATE VIEW TEST_SECRET_extra AS SELECT request_id FROM requests",
     ],
 )
-def test_schema_tags_and_exact_v1_structure_are_rechecked_and_never_repaired(
+def test_schema_tags_and_exact_current_structure_are_rechecked_and_never_repaired(
     store: SQLiteStore, change: str
 ) -> None:
     store._owned_connection().execute(change)

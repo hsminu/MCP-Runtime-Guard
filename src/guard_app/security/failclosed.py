@@ -29,12 +29,25 @@ async def after_dispatch[T](
     operation: Callable[[], Awaitable[T]],
     on_error: Callable[[BaseException], Awaitable[T]],
     on_containment_error: Callable[[BaseException], T],
+    *,
+    on_cancelled: Callable[[T], None] | None = None,
 ) -> T:
-    """예약 후 실패와 격리 기록 실패를 분리한다. 재전송 fallback은 없다."""
+    """예약 후 실패와 격리 기록 실패를 분리한다. 재전송 fallback은 없다.
+
+    승인 실행은 on_cancelled로 격리 결과를 알린 뒤 취소를 다시 전파한다.
+    콜백이 없는 기존 호출의 결과 변환 의미는 유지한다.
+    """
     try:
         return await operation()
     except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
+        cancelled = error if isinstance(error, asyncio.CancelledError) else None
         try:
-            return await on_error(error)
+            result = await on_error(error)
         except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001
-            return on_containment_error(containment_error)
+            result = on_containment_error(containment_error)
+            if cancelled is None and isinstance(containment_error, asyncio.CancelledError):
+                cancelled = containment_error
+        if cancelled is not None and on_cancelled is not None:
+            on_cancelled(result)
+            raise cancelled from None
+        return result

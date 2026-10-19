@@ -246,7 +246,9 @@ class _Host:
             return decision.model_copy(update={"decision": self.force_decision})
         return decision
 
-    async def dispatch_reserved(self, req, state, *, expires_at_utc=None, monotonic_deadline=None):
+    async def dispatch_reserved(
+        self, req, state, *, expires_at_utc=None, monotonic_deadline=None, on_cancelled=None
+    ):
         assert self.lock.locked()
         assert self.store.approvals["approval-1"].status is ApprovalStatus.CONSUMED
         assert self.service is not None
@@ -284,6 +286,17 @@ class _Host:
             raise StoreError()
         if isinstance(exc, StoreError):
             self.global_halt()
+        if (
+            isinstance(exc, asyncio.CancelledError)
+            and not self.globally_halted
+            and self.store.state.status
+            not in (
+                TaskStatus.HALTED,
+                TaskStatus.UNKNOWN_OUTCOME,
+                TaskStatus.CLOSED,
+            )
+        ):
+            await self.halt_task(task_id, Reason.INTERNAL_ERROR)
         return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
 
 
@@ -788,13 +801,17 @@ def test_cancellation_while_waiting_for_task_lock_is_contained(command):
         await asyncio.sleep(0)
         assert not queued.done()
         queued.cancel()
+        await asyncio.sleep(0)
+        assert not queued.done()
+        assert not host.globally_halted
+        assert store.state.status is TaskStatus.WAITING_APPROVAL
+        host.lock.release()
         result = await queued
         assert isinstance(result, Denied)
-        assert host.globally_halted
-        assert store.state.status is TaskStatus.WAITING_APPROVAL
+        assert not host.globally_halted
+        assert store.state.status is TaskStatus.HALTED
         assert not host.dispatched
         assert not store.consumed
-        host.lock.release()
 
     asyncio.run(scenario())
 
