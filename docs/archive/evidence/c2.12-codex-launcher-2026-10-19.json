@@ -1,0 +1,123 @@
+{
+ "item": "C2.12",
+ "date": "2026-10-19",
+ "codex": "0.162.1 (C6.13 설치본, codex.exe만)",
+ "launcher": {
+  "entry": "CodexLauncher.launch(task_dir) → launch_process",
+  "args": "app-server -c sqlite_home='<Task 폴더>'",
+  "env_names": [
+   "SYSTEMROOT",
+   "WINDIR",
+   "TEMP",
+   "TMP",
+   "LOCALAPPDATA",
+   "APPDATA",
+   "USERPROFILE",
+   "CODEX_HOME"
+  ],
+  "planted_in_parent_env": [
+   "OPENAI_API_KEY",
+   "CODEX_SQLITE_HOME",
+   "HTTPS_PROXY"
+  ],
+  "creation": "CREATE_SUSPENDED|CREATE_NO_WINDOW → Job Object(KILL_ON_JOB_CLOSE) 할당 → 첫 스레드 재개"
+ },
+ "first_launch_seconds_cold_hash": 1.95,
+ "tasks": {
+  "session-a": {
+   "launch_seconds": 0.419,
+   "initialize": "result",
+   "configRequirements/read": {
+    "supportsIndependentSpeedModes": true,
+    "requirements": null
+   },
+   "config/read": {
+    "sqlite_home_is_task_dir": true,
+    "model": "gpt-6.1-sol",
+    "web_search": "disabled"
+   },
+   "remoteControl/status/read": "disabled",
+   "remoteControl/status/changed": [
+    "disabled"
+   ],
+   "notifications_before_close": [
+    "remoteControl/status/changed"
+   ],
+   "server_requests_before_close": [],
+   "close_confirmed": true,
+   "close_seconds": 0.058,
+   "returncode": 0,
+   "exited_by_itself_on_stdin_eof": true,
+   "task_dir_after_exit": [
+    "codex-stderr.log",
+    "goals_1.sqlite",
+    "goals_1.sqlite-shm",
+    "goals_1.sqlite-wal",
+    "logs_2.sqlite",
+    "logs_2.sqlite-shm",
+    "logs_2.sqlite-wal",
+    "memories_1.sqlite",
+    "memories_1.sqlite-shm",
+    "memories_1.sqlite-wal",
+    "queue_1.sqlite",
+    "queue_1.sqlite-shm",
+    "queue_1.sqlite-wal",
+    "state_5.sqlite",
+    "state_5.sqlite-shm",
+    "state_5.sqlite-wal"
+   ],
+   "stderr_bytes": 373
+  },
+  "session-b": {
+   "launch_seconds": 0.391,
+   "initialize": "result",
+   "configRequirements/read": {
+    "supportsIndependentSpeedModes": true,
+    "requirements": null
+   },
+   "config/read": {
+    "sqlite_home_is_task_dir": true,
+    "model": "gpt-6.1-sol",
+    "web_search": "disabled"
+   },
+   "remoteControl/status/read": "disabled",
+   "remoteControl/status/changed": [
+    "disabled"
+   ],
+   "notifications_before_close": [
+    "remoteControl/status/changed"
+   ],
+   "server_requests_before_close": [],
+   "close_confirmed": true,
+   "close_seconds": 0.056,
+   "returncode": 0,
+   "exited_by_itself_on_stdin_eof": true,
+   "task_dir_after_exit": [
+    "codex-stderr.log",
+    "goals_1.sqlite",
+    "goals_1.sqlite-shm",
+    "goals_1.sqlite-wal",
+    "logs_2.sqlite",
+    "memories_1.sqlite",
+    "memories_1.sqlite-shm",
+    "memories_1.sqlite-wal",
+    "queue_1.sqlite",
+    "queue_1.sqlite-shm",
+    "queue_1.sqlite-wal",
+    "state_5.sqlite",
+    "state_5.sqlite-shm",
+    "state_5.sqlite-wal"
+   ],
+   "stderr_bytes": 373
+  }
+ },
+ "launches": 2,
+ "planted_CODEX_SQLITE_HOME_created": false,
+ "codex_home_after": [
+  "config.toml",
+  "installation_id",
+  "model_catalog.json"
+ ],
+ "codex_home_verify_after_exit": "passed",
+ "stderr_content": "경고 1줄: CODEX_HOME이 임시 폴더 아래라 PATH 보조 실행 파일을 만들지 않음(경로 포함이라 원문은 남기지 않음). 제품 경로의 tmp\u0007rg0은 C6.16"
+}
