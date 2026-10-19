@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-18 · main `139e5a0` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-19 · main `139e5a0` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -18,7 +18,7 @@
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | B의 AGT 제거 PR(같은 파일) | B | A44 |
 
-**A가 막고 있는 것**: B1.7·B2.11·C2.10·C5.8은 A 브랜치의 main 병합(A93)을, B6.9–B6.12·B6.16·B2.9·B2.10·B7.2·C1.9는 A 회신·리뷰(A92)를 기다린다.
+**A가 막고 있는 것**: 없음. B1.7·B2.11·C2.10·C5.8이 기다리는 A 브랜치 병합은 [PR #29](https://github.com/hsminu/MCP-Runtime-Guard/pull/29)로 올렸고 B·C 리뷰와 사용자 병합을 기다린다. A 회신·리뷰(A92)는 게시했다.
 
 ## 계약·환경
 
@@ -76,7 +76,7 @@
 - [x] A80 세션 관리자 승인 대기 감시 상한을 Profile의 `approval_ttl_seconds`에서 계산 · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A88 L3 감시·`request_user_input` 빈 응답·고정 문구표 연결·인증/한도 오류 정지(토큰 갱신 충돌은 `unauthorized` 경로로 그 Task만 정지) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A87 `dynamicTools` 이름 규칙 위반 도구 제외·보고 · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)
-- [ ] A92 contracts 10-17 "도구 이름 제한 없음"과 Codex 이름 규칙 충돌 알림
+- [x] A92 contracts 10-17 "도구 이름 제한 없음"과 Codex 이름 규칙 충돌 알림([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6251209139) 2절, 사용자 결정 대기) · [기록](archive/a/A92-contract-replies-and-b72-review.md)
 - [x] A90 `baseInstructions` 프롬프트 문구·C1.9 관측 지점(`SessionObservations`) · [기록](archive/a/A88-codex-session-manager.md)
 - [ ] A90 답변 스트리밍의 대화 화면 연결 — 부분 메시지 교체 UI 이벤트 필요
 - [ ] A74 Task 폴더 정리 실제 연결 — 막힘: C2.13 삭제 연산
@@ -141,8 +141,8 @@
 - [ ] A42 인수: 리뷰 결과와 검증 인계
 - [x] A84 제품 `CodexTaskRunner`·제품 시작 경로·icons/style 테스트 보강 · [기록](archive/a/A84-product-runner-and-startup-tests.md)
 - [x] A94 GPT·Opus QA와 B7.2 리뷰의 A 결함 수정(승인 경로·서버 단위 지문 차단·세션 정지 전역 정지 방지 등) · [기록](archive/a/A94-qa-gpt-opus-fixes.md)
-- [ ] A92 B6-01–06·ACCESS-01·AGT-04 회신, B7.2 Guard·Catalog 리뷰, #21 C1.9 관측 지점 조율(게시 전 사용자 확인)
-- [ ] A93 A 브랜치 main 병합 PR
+- [x] A92 B6-01–06·ACCESS-01·AGT-04 회신, B7.2 Guard·Catalog 리뷰, #21 C1.9 관측 지점 조율, PR #28 리뷰 · [기록](archive/a/A92-contract-replies-and-b72-review.md)
+- [x] A93 A 브랜치 main 병합 PR([#29](https://github.com/hsminu/MCP-Runtime-Guard/pull/29), B·C 리뷰·사용자 병합 대기) · [기록](archive/a/A93-main-merge-pr.md)
 - [x] A71 A 단위 테스트 포맷 제외 대상 정리·AST 동일 검증 · [기록](archive/a/A71-a-unit-format-baseline.md)
 - [x] A43 공통 포맷 제외 목록·타입/린트 예외 축소(A93 PR에서 공통 설정 변경으로 표시) · [기록](archive/a/A43-lint-type-baseline-reduction.md)
 - [ ] A44 시연 앱의 `tests.unit.test_guard` 대역 import 제거 — 막힘: B AGT 제거 PR과 같은 파일(`examples`)
