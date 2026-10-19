@@ -10,7 +10,7 @@
 | 시작 복구·영속 call_seq·조회/감사 API (B-SQL-01–06) | B | A13, A24–A27, A33–A35 |
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
 | `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22 |
-| 검토된 설명(DESC-01)·`final_model_message`(B 3차 PR). NOTIFY-01·STOP-01은 PR #28로 main 반영·A 연결 완료(A68) ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | B | A47, A68 문구 교체 |
+| 검토된 설명(DESC-01)·SCAN-01·`RegistryStore`(B 3차 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32), A 승인·병합 대기). `final_model_message`는 로컬 병합 위에서 A 연결 완료(A68) ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | B | A47, A68 푸시 |
 | 동기 `AccessChecker` 포트(ACCESS-01, B2.9)·AGT 코드 제거(B2.11, A 병합 대기)·계약 합의 | B·A·C | A02·A06, A41, A44, A53 |
 | Codex 0.162.1/MCP launcher·L1/L2 구현·T43/T46·수신 상한 독립 인수·경로·ScanReport·Scanner 자격증명 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
 | 설정 파일 형식(B3.11)과 경로·실행 파일 검증(C). Profile 로딩 함수는 main 반영([PR #25](https://github.com/hsminu/MCP-Runtime-Guard/pull/25)) ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | B·C | A24–A27, A49 |
@@ -75,7 +75,8 @@
 - [x] A68 Task별 도구 호출 FIFO·callId 중복 거부·취소/종료 격리의 A 내부 연결부 · [기록](archive/a/A68-task-tool-call-fifo.md)
 - [x] A68 Guard 호출·FIFO 세션 연결(A 내부 Pending 대기) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A68 NOTIFY-01·STOP-01로 교체, 사람 정지의 Store 직접 쓰기 제거(PR #29 B 리뷰 5) · [기록](archive/a/A68-notify-stop-integration.md)
-- [ ] A68 승인 결과 문구를 `final_model_message`로 교체 — 막힘: B 3차 PR
+- [x] A68 승인 결과 문구를 `final_model_message`로 교체(#32 로컬 병합 위) · [기록](archive/a/A68-final-model-message.md)
+- [ ] A68 교체분 푸시 — 막힘: #32 main 병합
 - [x] A80 세션 관리자 승인 대기 감시 상한을 Profile의 `approval_ttl_seconds`에서 계산 · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A88 L3 감시·`request_user_input` 빈 응답·고정 문구표 연결·인증/한도 오류 정지(토큰 갱신 충돌은 `unauthorized` 경로로 그 Task만 정지) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A87 `dynamicTools` 이름 규칙 위반 도구 제외·보고 · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)

@@ -396,6 +396,15 @@ def test_pending_answers_only_from_guards_final_result(cause, outcome, success, 
         pending_final("shutdown"),
         pending_final("rejected", task_id="other-task"),
         pending_final("rejected", epoch=TASK.epoch + 1),
+        # Bypasses PendingFinal validation: B's final_model_message refuses it.
+        PendingFinal.model_construct(
+            task_id=TASK.task_id,
+            epoch=TASK.epoch,
+            request_id="request-1",
+            approval_id="ap-1",
+            cause="rejected",
+            outcome=released("PRIVATE"),
+        ),
         None,
     ],
 )
