@@ -1,6 +1,5 @@
-"""A 리뷰 후속: NOTIFY-01 확정 문구와 executed에서만 공개 본문 전달(I5/I9)."""
+"""A 리뷰 후속: NOTIFY-01 고정 문구와 Released 본문 비조회(I5/I9)."""
 
-import json
 import traceback
 
 import pytest
@@ -77,9 +76,7 @@ def test_private_reason_masks_other_reasons_in_executed_denial():
 
 @pytest.mark.parametrize("is_error", [False, True])
 @pytest.mark.parametrize("structured", [None, {"value": PRIVATE, "count": 1, "array": [True, 0.1]}])
-def test_executed_released_serializes_only_released_payload_and_preserves_success_meaning(
-    is_error, structured
-):
+def test_executed_released_returns_empty_marker_and_preserves_success_meaning(is_error, structured):
     result = ReleasedResult(
         text=PRIVATE + " 한글", structured_content=structured, is_error=is_error
     )
@@ -87,19 +84,10 @@ def test_executed_released_serializes_only_released_payload_and_preserves_succes
     notice = final(outcome=released)
     success, content = final_model_message(notice)
     assert success is True
-    assert json.loads(content) == {
-        "text": PRIVATE + " 한글",
-        "structured_content": structured,
-        "is_error": is_error,
-    }
-    assert "한글" in content
-    assert "PRIVATE_task" not in content
-    assert "PRIVATE_request" not in content
-    assert "PRIVATE_approval" not in content
-    assert "CONFIDENTIAL" not in content
+    assert content == ""
+    assert PRIVATE not in content
     assert PRIVATE not in repr(notice)
-    assert outcome_model_message(released) == (True, "")  # 기존 API 본문 비조회 보존.
-    assert final_model_message(notice) == final_model_message(notice)
+    assert final_model_message(notice) == outcome_model_message(released) == (True, "")
 
 
 @pytest.mark.parametrize("kind", [Withheld, OutcomeUnknown])
@@ -164,21 +152,24 @@ def test_missing_fields_and_nonfinal_outcome_are_rejected():
 @pytest.mark.parametrize(
     "result", [None, PRIVATE, {"text": PRIVATE}, ReleasedResult.model_construct(text=object())]
 )
-def test_unvalidated_released_body_never_enters_errors(result):
+def test_executed_released_does_not_read_or_validate_body(result, monkeypatch):
     outcome = Released.model_construct(request_id="PRIVATE_request", result=result, label=None)
     forged = PendingFinal.model_construct(cause="executed", outcome=outcome)
-    with pytest.raises(ModelMessageError) as caught:
-        final_model_message(forged)
-    assert "PRIVATE_" not in repr(caught.value)
+    original = Released.__getattribute__
+
+    def unreadable(self, name):
+        if name == "result":
+            pytest.fail("고정 문구 함수는 Released 본문을 읽지 않는다")
+        return original(self, name)
+
+    monkeypatch.setattr(Released, "__getattribute__", unreadable)
+    assert final_model_message(forged) == (True, "")
 
 
-def test_serialization_failure_has_no_raw_exception_context():
+def test_executed_released_does_not_serialize_non_utf8_body():
     result = ReleasedResult.model_construct(
         text="\ud800PRIVATE_payload", structured_content=None, is_error=False
     )
     outcome = Released.model_construct(request_id="PRIVATE_request", result=result, label=None)
     forged = PendingFinal.model_construct(cause="executed", outcome=outcome)
-    with pytest.raises(ModelMessageError) as caught:
-        final_model_message(forged)
-    assert caught.value.__context__ is caught.value.__cause__ is None
-    assert "PRIVATE_" not in "".join(traceback.format_exception(caught.value))
+    assert final_model_message(forged) == (True, "")

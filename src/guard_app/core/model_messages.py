@@ -1,6 +1,5 @@
-"""B5.11·I5/I9: 모델 고정 문구와 확정된 최종 알림의 공개 결과 변환."""
+"""B5.11·I5/I9: 본문을 읽지 않는 모델 고정 문구와 확정된 최종 알림 변환."""
 
-import json
 from enum import StrEnum
 from types import MappingProxyType
 
@@ -10,10 +9,8 @@ from guard_app.domain.contracts import (
     Pending,
     PendingFinal,
     Released,
-    ReleasedResult,
     Withheld,
 )
-from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.reasons import Reason
 
 _DENIED_TEXT = "이 요청은 정책에 의해 차단되었습니다"
@@ -186,10 +183,10 @@ def _reason_message(reason: Reason) -> str:
 def final_model_message(final: PendingFinal) -> tuple[bool, str]:
     """NOTIFY-01의 확정 cause를 (success, 모델 content)로 변환한다.
 
-    success는 기존 문구 함수와 같이 Released 종류에만 True다. executed/Released만
-    공개 결과의 text·structured_content·is_error JSON envelope를 반환한다(A의 기존
-    결과 형식). is_error가 True여도 이 bool은 도구 성공 여부로 재해석하지 않는다.
-    다른 executed 결과는 outcome_model_message, 나머지 cause는 고정 종결 문구다.
+    executed는 outcome_model_message에 위임한다. executed/Released는 (True, "")이며
+    본문은 A가 승인 없이 바로 나온 결과와 같은 Released 경로로 변환한다.
+    이 함수는 본문을 읽거나 직렬화하지 않는다. success는 Released 종류에만 True고
+    도구의 업무 성공 여부로 재해석하지 않는다. 나머지 cause는 고정 종결 문구다.
     비실행 종결에는 사유를 덧붙이지 않아 비공개 코드나 본문이 섞이지 않는다.
     기존 outcome_model_message의 Released=(True, "") 동작은 그대로다.
     """
@@ -200,44 +197,8 @@ def final_model_message(final: PendingFinal) -> tuple[bool, str]:
         raise ModelMessageError("최종 알림 원인이 유효하지 않다")
     outcome = getattr(final, "outcome", None)
     if cause == "executed":
-        message = outcome_model_message(outcome)
-        if type(outcome) is Released:
-            return True, _released_content(getattr(outcome, "result", None))
-        return message
+        return outcome_model_message(outcome)
     if type(outcome) is not Denied:
         raise ModelMessageError("비실행 최종 알림 결과가 유효하지 않다")
     outcome_model_message(outcome)  # 변조된 사유도 고정 오류로 거부하되 종결에 붙이지 않는다.
     return fixed_model_message(_FINAL_KINDS[cause])
-
-
-def _released_content(result: object) -> str:
-    if (
-        type(result) is not ReleasedResult
-        or type(result.text) is not str
-        or type(result.is_error) is not bool
-        or (
-            result.structured_content is not None
-            and type(result.structured_content) is not FrozenJsonObject
-        )
-    ):
-        raise ModelMessageError("공개 결과 형식이 유효하지 않다")
-    failed = False
-    try:
-        content = json.dumps(
-            {
-                "text": result.text,
-                "structured_content": None
-                if result.structured_content is None
-                else result.structured_content.to_dict(),
-                "is_error": result.is_error,
-            },
-            ensure_ascii=False,
-            allow_nan=False,
-            separators=(",", ":"),
-        )
-        content.encode("utf-8")
-    except (TypeError, ValueError, RecursionError):
-        failed = True
-    if failed:
-        raise ModelMessageError("공개 결과를 모델 문구로 변환할 수 없다")
-    return content
