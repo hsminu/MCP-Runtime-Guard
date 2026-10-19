@@ -209,7 +209,6 @@ def test_ask_call_waits_with_its_approval_id_and_approval_completes_the_turn(tmp
             assert bindings.create_session is not None
             assert bindings.snapshot is not None
             assert bindings.human_control is not None
-            assert bindings.approval_resolved is not None
             snapshot = bindings.snapshot
             created = await bindings.create_session(SessionOptions())
             task_id = created.task_id
@@ -224,9 +223,10 @@ def test_ask_call_waits_with_its_approval_id_and_approval_completes_the_turn(tmp
             assert len(peer.calls) == 1  # only the READ; the SEND waits for a human
             started = list(events.seen)
 
+            # NOTIFY-01: the model turn resumes from Guard's final result alone;
+            # nothing forwards what the human approve call returned.
             outcome = await bindings.human_control.approve(approval_id)
             assert type(outcome) is Released
-            bindings.approval_resolved(approval_id, "approve", outcome)
             update = await asyncio.wait_for(advance, 5)
             after = await snapshot(task_id)
             return update, during, after, peer, servers[0], started, events.seen, task_id
@@ -303,7 +303,14 @@ async def stop_session_during_guard_submit(tmp_path, *, resume_first: bool):
         update = await asyncio.wait_for(other.advance(), 5)
         parked = not release.is_set()
         release.set()
-        return stopped, first_after, update, parked, peer, servers
+        # STOP-01 commits HALTED once the parked submit leaves the Task lock.
+        first_final = first_after
+        for _ in range(200):
+            first_final = await bindings.snapshot(first.task_id)
+            if first_final.status is TaskStatus.HALTED:
+                break
+            await asyncio.sleep(0.005)
+        return stopped, first_after, first_final, update, parked, peer, servers
     finally:
         release.set()
         assert bindings.close is not None
@@ -314,12 +321,17 @@ def test_session_stop_during_guard_submit_does_not_halt_guard_for_other_tasks(tm
     """B7.2/I8: stopping one Codex session while its call is inside Guard, before
     reservation, no longer cancels Guard (shield), so Guard is not globally halted
     and another Task still runs a tool."""
-    stopped, first_after, update, parked, peer, servers = asyncio.run(
+    stopped, first_after, first_final, update, parked, peer, servers = asyncio.run(
         stop_session_during_guard_submit(tmp_path, resume_first=False)
     )
     assert stopped.status == "halted"
-    assert first_after.status is TaskStatus.HALTED
+    # STOP-01: while Task 1's submit holds its Task lock, Guard has blocked its
+    # dispatch but not yet written HALTED; the session is already unusable.
+    assert first_after.status is TaskStatus.RUNNING
     assert first_after.connection_code == "CODEX_L3_VIOLATION"
+    assert not first_after.model_ready
+    assert not first_after.can_accept_message
+    assert first_final.status is TaskStatus.HALTED
     assert parked  # Task 1's submit was still inside Guard during Task 2's call
     assert update.status == "complete"
     result = servers[1].last_reply["result"]  # type: ignore[attr-defined]
@@ -330,7 +342,7 @@ def test_session_stop_during_guard_submit_does_not_halt_guard_for_other_tasks(tm
 
 def test_resumed_submit_of_a_stopped_session_does_not_halt_guard(tmp_path) -> None:
     """B7.2/I8: the shielded submit must also end without a global halt."""
-    _stopped, _first, update, parked, peer, servers = asyncio.run(
+    _stopped, _first, _final, update, parked, peer, servers = asyncio.run(
         stop_session_during_guard_submit(tmp_path, resume_first=True)
     )
     assert not parked
@@ -366,7 +378,8 @@ def test_l3_item_after_a_finished_turn_halts_the_task_in_store(tmp_path) -> None
             update = await asyncio.wait_for(runner.advance(), 5)
             before = await snapshot(task_id)
             servers[0].item("turn-1", "commandExecution")  # after the turn finished
-            await events.reach(1)  # republished once the Task stop finished
+            # Republished when the session closed and when Guard committed the stop.
+            await events.reach(2)
             after = await snapshot(task_id)
             return update, before, after, events.seen, task_id
         finally:
@@ -379,7 +392,7 @@ def test_l3_item_after_a_finished_turn_halts_the_task_in_store(tmp_path) -> None
     assert after.status is TaskStatus.HALTED
     assert after.connection_code == "CODEX_L3_VIOLATION"
     assert after.can_accept_message is False
-    assert events == [task_id]
+    assert events == [task_id, task_id]
 
 
 def test_tools_excluded_by_codex_name_rules_leave_codex_without_tools(tmp_path) -> None:

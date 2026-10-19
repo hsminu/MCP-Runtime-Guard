@@ -170,7 +170,12 @@ class AssembledGuard:
         return self.loaded.guard_settings
 
     async def aclose(self) -> None:
-        await self.transport.close()
+        # NOTIFY-01: end transport work first so reserved calls settle, then Guard
+        # refuses new approvals and drops unconsumed released text.
+        try:
+            await self.transport.close()
+        finally:
+            await self.guard.aclose()
 
 
 async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:

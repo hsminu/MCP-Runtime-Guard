@@ -10,8 +10,7 @@ from dataclasses import replace
 
 import pytest
 
-from guard_app.core.model_messages import ModelMessageKind
-from guard_app.domain.contracts import Denied, Pending
+from guard_app.domain.contracts import Pending
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.reasons import Reason
@@ -704,15 +703,15 @@ def test_snapshot_offers_the_waiting_approval_and_the_listener_sees_wait_start_a
                 approval_id="approval-1",
                 reasons=(Reason.INTERNAL_TO_EXTERNAL,),
             )
-            waiting = asyncio.ensure_future(approvals.wait(pending, first.task_id))
+            result = FinalResult()
+            waiting = asyncio.ensure_future(approvals.wait(pending, first.task_id, result))
             await asyncio.sleep(0)
             assert events == [first.task_id]
             assert approvals.approval_for(first.task_id) == "approval-1"
             assert (await runtime.snapshot(first.task_id)).approval_id == "approval-1"
             assert (await runtime.snapshot(second.task_id)).approval_id is None
-            approvals.resolve("approval-1", "reject", None)
-            final = await asyncio.wait_for(waiting, 1)
-            assert final.kind is ModelMessageKind.APPROVAL_REJECTED
+            result.final.set_result("guard-final")
+            assert await asyncio.wait_for(waiting, 1) == "guard-final"
             assert events == [first.task_id, first.task_id]
             assert (await runtime.snapshot(first.task_id)).approval_id is None
         finally:
@@ -721,18 +720,16 @@ def test_snapshot_offers_the_waiting_approval_and_the_listener_sees_wait_start_a
     asyncio.run(run())
 
 
-@pytest.mark.parametrize(
-    ("reasons", "kind"),
-    [
-        ((Reason.APPROVAL_STALE,), ModelMessageKind.APPROVAL_INVALIDATED),
-        ((Reason.APPROVAL_RACE,), ModelMessageKind.APPROVAL_INVALIDATED),
-        ((Reason.APPROVAL_CONTEXT_LOST,), ModelMessageKind.APPROVAL_INVALIDATED),
-        ((Reason.TASK_NOT_RUNNING,), ModelMessageKind.APPROVAL_REJECTED),
-        (None, ModelMessageKind.APPROVAL_REJECTED),
-    ],
-)
-def test_reject_of_an_already_resolved_approval_is_reported_as_invalidated(reasons, kind):
-    """A reject Guard refused as stale must not tell the model a human rejected it."""
+class FinalResult:
+    def __init__(self):
+        self.final = asyncio.get_running_loop().create_future()
+
+    async def wait(self):
+        return await asyncio.shield(self.final)
+
+
+def test_cancelled_wait_clears_the_offered_approval_but_not_guards_result():
+    """NOTIFY-01: the watchdog cancels only the wait; the projection stops offering it."""
 
     async def run():
         approvals = ApprovalOutcomes()
@@ -741,13 +738,16 @@ def test_reject_of_an_already_resolved_approval_is_reported_as_invalidated(reaso
             approval_id="approval-1",
             reasons=(Reason.INTERNAL_TO_EXTERNAL,),
         )
-        outcome = None if reasons is None else Denied(request_id=None, reasons=reasons)
-        waiting = asyncio.ensure_future(approvals.wait(pending, "task-1"))
+        result = FinalResult()
+        waiting = asyncio.ensure_future(approvals.wait(pending, "task-1", result))
         await asyncio.sleep(0)
-        approvals.resolve("approval-1", "reject", outcome)
-        assert (await asyncio.wait_for(waiting, 1)).kind is kind
+        assert approvals.approval_for("task-1") == "approval-1"
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
         assert not approvals.waiting("approval-1")
         assert approvals.approval_for("task-1") is None
+        assert not result.final.cancelled()
 
     asyncio.run(run())
 

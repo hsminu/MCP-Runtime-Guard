@@ -320,6 +320,11 @@ class GuardWindow(QMainWindow):
         bridge.account_changed.connect(self.codex_login_info.set_view)
         bridge.policy_changed.connect(self.policy_page.set_view)
         bridge.policy_changed.connect(self._policy_changed)
+        self.policy_page.allow_change_requested.connect(
+            lambda server_id, allowed, denied: self.policy_page.set_change_pending(
+                bridge.request_policy_access(server_id, allowed, denied)
+            )
+        )
         login = self.codex_login_info
         login.read_requested.connect(lambda: bridge.request_account("account_read"))
         login.device_login_requested.connect(lambda: bridge.request_account("account_login_device"))
@@ -341,6 +346,14 @@ class GuardWindow(QMainWindow):
         bridge.command_changed.connect(
             lambda event: (
                 self.sessions.settle_command(event.command_id, event.code)
+                if event.stage
+                in (CommandStage.REJECTED, CommandStage.UNCONFIRMED, CommandStage.BACKEND_RETURNED)
+                else None
+            )
+        )
+        bridge.command_changed.connect(
+            lambda event: (
+                self.policy_page.settle_change(event.command_id, event.code)
                 if event.stage
                 in (CommandStage.REJECTED, CommandStage.UNCONFIRMED, CommandStage.BACKEND_RETURNED)
                 else None

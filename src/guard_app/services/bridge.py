@@ -122,9 +122,6 @@ class BackendBindings:
     # Fixed code of what is known to prevent new sessions now, or None. Probed
     # on the backend thread at READY and after each creation attempt.
     session_blocker: Callable[[], str | None] | None = None
-    # A-local stand-in for NOTIFY-01: called on the backend loop with the
-    # approval ID, the human action and HumanControl's returned outcome.
-    approval_resolved: Callable[[str, str, object], None] | None = None
     # Codex account methods on a C-launched app-server (A52); None = unavailable.
     account: CodexAccountPort | None = None
     # Read-only Profile/rules for the policy screen (A91); None = no Profile.
@@ -135,6 +132,11 @@ class BackendBindings:
     # Registers a backend-loop callback (task_id, epoch, piece) for the model
     # answer while a run is in progress (A90). Pieces outside a run are dropped.
     answer_partials: Callable[[Callable[[str, int, str], None]], None] | None = None
+    # B3.10 server access change: (server_id, allowed, denied) -> new policy view.
+    # None when no saver for the Profile document is connected.
+    policy_access: (
+        Callable[[str, tuple[str, ...], tuple[str, ...]], Awaitable[PolicyView]] | None
+    ) = None
 
 
 # Streamed answer text is republished at most this often (A90).
@@ -238,6 +240,7 @@ class _Command:
     epoch: int | None = None
     user_text: str | None = field(default=None, repr=False)
     options: SessionOptions | None = None
+    access: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -490,6 +493,29 @@ class BackendBridge(QObject):
             action,
             self._id(target_id),
             user_text=secret if action == "account_login_api_key" else None,
+        )
+        self._submit(command)
+        return command.command_id
+
+    def request_policy_access(
+        self, server_id: str, allowed: tuple[str, ...], denied: tuple[str, ...]
+    ) -> str:
+        """B3.10: replace one server's allow/deny rules from the activation dialog."""
+
+        self._require_qt_thread()
+        if not valid_server_id(server_id) or any(
+            type(names) is not tuple
+            or len(names) > 256
+            or any(type(name) is not str or not name or len(name) > 128 for name in names)
+            for names in (allowed, denied)
+        ):
+            raise ValueError("Policy access change is invalid")
+        command = _Command(
+            self._id(None, generate=True),
+            "control",
+            "policy_access",
+            self._id(server_id),
+            access=(allowed, denied),
         )
         self._submit(command)
         return command.command_id
@@ -1201,6 +1227,8 @@ class BackendBridge(QObject):
                 await self._publish_after(command.target_id)
         if command.action in _ACCOUNT_ACTIONS:
             return await self._account(bindings, command)
+        if command.action == "policy_access":
+            return await self._policy_access(bindings, command)
         control = bindings.human_control
         if control is None:
             if command.action not in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
@@ -1275,6 +1303,22 @@ class BackendBridge(QObject):
         self.account_changed.emit(view)
         return f"ACCOUNT_{view.state}"
 
+    async def _policy_access(self, bindings: BackendBindings, command: _Command) -> str:
+        change = bindings.policy_access
+        if change is None or command.access is None:
+            return "POLICY_CHANGE_UNAVAILABLE"
+        try:
+            view = await change(command.target_id, *command.access)
+        except SessionStartError as error:
+            return error.code
+        finally:
+            # Stopped sessions change what a new session may do.
+            self._publish_session_capability()
+        if type(view) is not PolicyView:
+            return "POLICY_CHANGE_UNCONFIRMED"
+        self.policy_changed.emit(view)
+        return "POLICY_CHANGED"
+
     async def _await_login(self, account: CodexAccountPort, login_id: str) -> None:
         try:
             async with asyncio.timeout(DEVICE_LOGIN_TIMEOUT_S):
@@ -1319,8 +1363,6 @@ class BackendBridge(QObject):
             result = await control.approve(command.target_id)
         else:
             result = await control.reject(command.target_id)
-        if bindings.approval_resolved is not None:
-            bindings.approval_resolved(command.target_id, str(command.action), result)
         pending = self._pending_runs.get(command.target_id)
         if pending is not None:
             task_id, epoch = pending

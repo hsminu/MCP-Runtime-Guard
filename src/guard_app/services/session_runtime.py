@@ -9,16 +9,19 @@ persistence, model API, Guard protocol or replacement B port is implemented here
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
+from typing import cast
 from uuid import uuid4
 
+from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.codex_protocol import build_dynamic_tools
-from guard_app.domain.enums import TaskStatus
+from guard_app.domain.contracts import TaskIdentity
+from guard_app.domain.enums import SystemStopReason, TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import TaskState
 from guard_app.domain.reasons import Reason
-from guard_app.ports import Store
+from guard_app.ports import SessionAudit, Store
 from guard_app.services.bridge import (
     BackendBindings,
     ControlAction,
@@ -26,10 +29,21 @@ from guard_app.services.bridge import (
     SessionStartError,
     TaskProjection,
 )
-from guard_app.services.catalog import GuardSettings
+from guard_app.services.catalog import (
+    CatalogConfigError,
+    GuardSettings,
+    PreparedPolicyChange,
+    prepare_server_access_change,
+)
 from guard_app.services.codex_composition import codex_session_factory
+from guard_app.services.guard import (
+    PolicyChangeError,
+    PolicyTaskSource,
+    SystemControl,
+    SystemControlError,
+)
 from guard_app.services.guard_relay import ApprovalOutcomes
-from guard_app.services.policy_view import policy_view
+from guard_app.services.policy_view import PolicyView, policy_view
 from guard_app.services.product_assembly import AssembledGuard, ProductInputs, assemble_guard
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.services.session_preparation import (
@@ -48,7 +62,30 @@ type CodexSessionFactory = Callable[
     [TaskState, SessionOptions, TaskResources], Awaitable[CodexSession]
 ]
 
+# Stores B's prepared policy document (B3.11/B3.12 file format is A·C, open).
+# True only after the document is durably saved; apply follows only then.
+type ProfileSaver = Callable[[PreparedPolicyChange], Awaitable[bool]]
+
 SESSION_CLEANUP_TIMEOUT_S = 0.5
+
+# A session stop code -> STOP-01 reason (PR #28 review mapping, agreed by B).
+# A token refresh conflict arrives as `unauthorized` like any auth failure, so
+# AUTH_REFRESH_CONFLICT is not chosen until C's T46 finds a signal.
+_STOP_REASONS = {
+    "CODEX_L3_VIOLATION": SystemStopReason.L3_VIOLATION,
+    "CODEX_WATCHDOG_TIMEOUT": SystemStopReason.WATCHDOG_EXCEEDED,
+    "CODEX_AUTH_FAILED": SystemStopReason.AUTH_FAILED,
+    "CODEX_USAGE_LIMIT": SystemStopReason.USAGE_LIMIT,
+    "CODEX_TOOL_CALL_INVALID": SystemStopReason.PROTOCOL_FAILED,
+    "CODEX_SERVER_REQUEST_REFUSED": SystemStopReason.PROTOCOL_FAILED,
+    "CODEX_ANSWER_TOO_LARGE": SystemStopReason.PROTOCOL_FAILED,
+    "CODEX_INPUT_INVALID": SystemStopReason.PROTOCOL_FAILED,
+}
+
+
+def stop_reason(code: str) -> SystemStopReason:
+    """Process exit, turn/start failures and anything unlisted count as PROCESS_FAILED."""
+    return _STOP_REASONS.get(code, SystemStopReason.PROCESS_FAILED)
 
 
 class SessionRuntimeError(SessionStartError):
@@ -66,9 +103,26 @@ class SessionRuntime:
         guard_settings: GuardSettings | None = None,
         assembled: AssembledGuard | None = None,
         approvals: ApprovalOutcomes | None = None,
+        profile_document: Mapping[str, object] | None = None,
+        profile_saver: ProfileSaver | None = None,
     ) -> None:
         if assembled is not None:
             guard_settings = assembled.settings
+        # STOP-01: session stops go through Guard's system channel, audited in the
+        # Store (SQLiteStore implements SessionAudit), not the human channel.
+        self._system: SystemControl | None = (
+            assembled.guard.system_control(cast(SessionAudit, store))
+            if assembled is not None and callable(getattr(store, "record_session_event", None))
+            else None
+        )
+        # Every Task this Guard governs, for apply_policy_change (SQLiteStore.list_tasks).
+        list_tasks = getattr(store, "list_tasks", None)
+        self._task_source: PolicyTaskSource | None = (
+            cast(PolicyTaskSource, list_tasks) if callable(list_tasks) else None
+        )
+        self._profile_document = profile_document
+        self._profile_saver = profile_saver
+        self._policy_lock = asyncio.Lock()
         self.store = store
         # Profile identity and policy_version for new Task rows. Without a loaded
         # Profile no Task is created; there is no placeholder policy (A79).
@@ -295,6 +349,10 @@ class SessionRuntime:
             if callable(set_partial):
                 task_id, epoch = state.task_id, state.epoch
                 set_partial(lambda piece: self._answer_partial(task_id, epoch, piece))
+            set_user_input = getattr(session, "set_user_input_handler", None)
+            if callable(set_user_input):
+                identity = TaskIdentity(task_id=state.task_id, epoch=state.epoch)
+                set_user_input(lambda: self._record_user_input(identity))
             snapshot = await self.snapshot(state.task_id)
             self._check_creation_allowed()
             adopted = True
@@ -359,20 +417,123 @@ class SessionRuntime:
         runner = self._runners[task_id]
         runner.close()
         try:
-            await self._halt_task(task_id)
+            await self._system_stop(task_id, runner.epoch, code)
         finally:
             await self._close_session(task_id, interrupt=True)
 
+    async def _system_stop(self, task_id: str, epoch: int, code: str) -> None:
+        """STOP-01: Guard stops the Task; the session is closed after this call.
+
+        `stop_task` blocks dispatch before it waits for the Task lock, so an
+        in-flight (shielded) submit is refused at its next check. Its Store write
+        and audit happen under that lock, so A must not write HALTED itself: a
+        competing write would fail Guard's commit and halt every Task. The wait
+        runs in the background and the Task is republished when it settles. If
+        it fails, Guard is halted globally and the Task shows that the stop was
+        not confirmed rather than applied.
+        """
+        system = self._system
+        if system is None:
+            await self._halt_store_task(task_id)
+            return
+        identity = TaskIdentity(task_id=task_id, epoch=epoch)
+
+        async def stop() -> None:
+            try:
+                await system.stop_task(identity, stop_reason(code))
+            except (SystemControlError, StoreError):
+                self._codes[task_id] = "SESSION_STOP_UNCONFIRMED"
+                raise
+            finally:
+                if not self._closed:
+                    self._task_changed(task_id)
+
+        stopping = asyncio.ensure_future(stop())
+        self._cleanup_operations.add(stopping)
+        stopping.add_done_callback(self._consume_cleanup)
+        await asyncio.sleep(0)  # let stop_task block dispatch now
+
+    def _record_user_input(self, identity: TaskIdentity) -> None:
+        """Audit that Codex asked the user (answered empty); never its text."""
+        system = self._system
+        if system is None or self._closed:
+            return
+        recording = asyncio.ensure_future(system.record_request_user_input(identity))
+        self._cleanup_operations.add(recording)
+        recording.add_done_callback(self._consume_cleanup)
+
+    async def change_server_access(
+        self, server_id: str, allowed: tuple[str, ...], denied: tuple[str, ...]
+    ) -> PolicyView:
+        """B3.10: prepare -> save -> apply; then stop the sessions Guard stopped.
+
+        The saved document is the only new current document. If saving fails
+        nothing is applied. If applying fails Guard is halted and this raises.
+        """
+        assembled = self._assembled
+        document = self._profile_document
+        saver = self._profile_saver
+        task_source = self._task_source
+        if (
+            assembled is None
+            or document is None
+            or saver is None
+            or task_source is None
+            or self._closed
+        ):
+            raise SessionRuntimeError("POLICY_CHANGE_UNAVAILABLE")
+        if set(allowed) & set(denied):
+            raise SessionRuntimeError("POLICY_CHANGE_INVALID")
+        async with self._policy_lock:
+            try:
+                change = prepare_server_access_change(
+                    document,
+                    assembled.registry,
+                    server_id=server_id,
+                    tool_permissions={
+                        **{name: True for name in allowed},
+                        **{name: False for name in denied},
+                    },
+                )
+            except CatalogConfigError:
+                raise SessionRuntimeError("POLICY_CHANGE_INVALID") from None
+            if not change.changed:
+                return policy_view(assembled, change_available=True)
+            if await saver(change) is not True:
+                raise SessionRuntimeError("POLICY_SAVE_FAILED")
+            self._profile_document = change.document
+            try:
+                result = await assembled.guard.apply_policy_change(
+                    change,
+                    AccessRulesChecker(change.loaded_profile.access_rules),
+                    task_source=task_source,
+                )
+            except PolicyChangeError:
+                raise SessionRuntimeError("POLICY_APPLY_FAILED") from None
+            # New Task rows and the policy screen follow the applied Profile.
+            assembled.loaded = change.loaded_profile
+            self._guard_settings = change.loaded_profile.guard_settings
+            for task_id in result.stopped_task_ids:
+                runner = self._runners.get(task_id)
+                if runner is None:
+                    continue
+                self._codes[task_id] = "POLICY_CHANGED"
+                runner.close()
+                try:
+                    await self._close_session(task_id, interrupt=True)
+                finally:
+                    self._task_changed(task_id)
+            return policy_view(assembled, change_available=True)
+
     async def _halt_task(self, task_id: str) -> None:
-        """Stop a Task through Guard when one is assembled.
+        """A human stop through Guard's human channel when one is assembled.
 
         Writing HALTED to the Store behind Guard's back makes a still running
         (shielded) submit fail its own Store write, which Guard treats as a
         global halt for every Task. Guard's cancel records the stop intent at
         once, so the in-flight submit is denied as TASK_NOT_RUNNING at its next
         check; the cancel itself waits for the Task lock in the background.
-        Until STOP-01 (PR #28) this uses the human channel, so the audit names
-        the configured operator.
+        Session failures use STOP-01 instead (`_system_stop`).
         """
         assembled = self._assembled
         if assembled is not None:
@@ -585,10 +746,21 @@ class SessionRuntime:
             create_session=self.create_session,
             stop_session=self.stop_session,
             session_blocker=self.creation_blocker,
-            approval_resolved=None if self._approvals is None else self._approvals.resolve,
-            policy=None if assembled is None else policy_view(assembled),
+            policy=None
+            if assembled is None
+            else policy_view(assembled, change_available=self._policy_change_available),
             task_events=self.set_task_listener,
             answer_partials=self.set_partial_listener,
+            policy_access=self.change_server_access if self._policy_change_available else None,
+        )
+
+    @property
+    def _policy_change_available(self) -> bool:
+        return (
+            self._assembled is not None
+            and self._profile_document is not None
+            and self._profile_saver is not None
+            and self._task_source is not None
         )
 
 
@@ -598,6 +770,7 @@ async def bootstrap_product(
     session_factory: CodexSessionFactory | None = None,
     preparation: SessionPreparation | None = None,
     product: ProductInputs | None = None,
+    profile_saver: ProfileSaver | None = None,
 ) -> BackendBindings:
     """Product start. `product` comes from B3.11 file loading and C's launcher/Registry."""
 
@@ -620,6 +793,8 @@ async def bootstrap_product(
         close_store=store.close,
         assembled=assembled,
         approvals=approvals,
+        profile_document=None if product is None else product.profile_document,
+        profile_saver=profile_saver,
     )
     adopted = False
     try:

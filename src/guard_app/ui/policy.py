@@ -27,6 +27,18 @@ from .widgets import KeyboardActionButton, plain_label
 NO_PROFILE = "Guard 정책(Profile) 설정이 아직 연결되지 않았어. 규칙을 표시할 수 없어."
 SAVE_UNAVAILABLE = "규칙 저장 기능(정책 변경 명령)이 아직 연결되지 않아 저장할 수 없어."
 STOP_WARNING = "저장하면 정책 버전이 바뀌어 실행 중인 Task가 모두 정지돼."
+CHANGE_PENDING = "규칙을 저장하고 적용하는 중이야."
+# Fixed text per backend result code; never the backend's own wording.
+CHANGE_RESULTS = {
+    "POLICY_CHANGED": "규칙을 저장하고 적용했어. 이전 정책으로 실행 중이던 Task는 정지됐어.",
+    "POLICY_SAVE_FAILED": "설정을 저장하지 못해 적용하지 않았어.",
+    "POLICY_APPLY_FAILED": (
+        "설정은 저장했지만 적용을 확정하지 못해 Guard를 정지했어. 앱을 다시 시작해."
+    ),
+    "POLICY_CHANGE_INVALID": "선택한 도구 목록이 현재 설정과 맞지 않아 저장하지 않았어.",
+    "POLICY_CHANGE_UNAVAILABLE": SAVE_UNAVAILABLE,
+}
+CHANGE_UNCONFIRMED = "규칙 변경 결과를 확인하지 못했어. 정책 화면을 다시 확인해."
 
 
 class ToolAllowDialog(QDialog):
@@ -89,6 +101,10 @@ class PolicyPage(QWidget):
         layout.addWidget(plain_label("정책 · 경계", name="pageTitle"))
         self.summary = plain_label(NO_PROFILE, name="secondary")
         layout.addWidget(self.summary)
+        self.notice = plain_label("", name="secondary")
+        self.notice.setVisible(False)
+        layout.addWidget(self.notice)
+        self._change_command: str | None = None
         self.rules = QTableWidget(0, 3)
         self.rules.setAccessibleName("접근 규칙 목록")
         self.rules.setHorizontalHeaderLabels(["MCP 서버", "도구", "규칙"])
@@ -131,6 +147,19 @@ class PolicyPage(QWidget):
             button.clicked.connect(lambda _=False, s=server: self.open_allow_dialog(s))
             self.server_area.addWidget(button)
             self.server_buttons[server.server_id] = button
+
+    def set_change_pending(self, command_id: str) -> None:
+        self._change_command = command_id
+        self.notice.setText(CHANGE_PENDING)
+        self.notice.setVisible(True)
+
+    def settle_change(self, command_id: str, code: str) -> None:
+        """Show the result of this page's own change command only."""
+        if command_id != self._change_command:
+            return
+        self._change_command = None
+        self.notice.setText(CHANGE_RESULTS.get(code, CHANGE_UNCONFIRMED))
+        self.notice.setVisible(True)
 
     def open_allow_dialog(self, server: PolicyServer) -> ToolAllowDialog | None:
         view = self._view

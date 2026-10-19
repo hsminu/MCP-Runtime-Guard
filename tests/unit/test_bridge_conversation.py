@@ -260,7 +260,6 @@ def _guarded_codex_bridge(app, stops, resolved):
             snapshot=snapshot,
             initial_task_id="task-1",
             stop_session=stop_session,
-            approval_resolved=lambda *event: resolved.append(event),
         )
 
     bridge = BackendBridge(bootstrap)
@@ -271,7 +270,8 @@ def _guarded_codex_bridge(app, stops, resolved):
 
 
 @pytest.mark.parametrize("action", ["approve", "reject"])
-def test_human_approval_result_reaches_the_waiting_model_call(app, action):
+def test_human_approval_goes_to_guard_only_never_to_the_model_call(app, action):
+    """NOTIFY-01: the waiting model call hears Guard's final result, not this return."""
     from guard_app.services.bridge import ControlAction
 
     stops, resolved = [], []
@@ -279,7 +279,8 @@ def test_human_approval_result_reaches_the_waiting_model_call(app, action):
     try:
         command = bridge.request_control(ControlAction(action), "approval-7")
         pump_until(app, lambda: finished(receiver, command))
-        assert [(event[0], event[1]) for event in resolved] == [("approval-7", action)]
+        assert [(call[0], call[1]) for call in control.calls] == [(action, "approval-7")]
+        assert resolved == []
         assert stops == []
     finally:
         close_bridge(app, bridge)

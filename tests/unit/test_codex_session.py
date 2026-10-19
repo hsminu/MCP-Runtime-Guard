@@ -14,10 +14,12 @@ import json
 import pytest
 
 from guard_app.adapters.codex_protocol import build_dynamic_tools
+from guard_app.core.model_messages import ModelMessageKind, fixed_model_message
 from guard_app.domain.contracts import (
     Denied,
     OutcomeUnknown,
     Pending,
+    PendingFinal,
     Released,
     ReleasedResult,
     ToolView,
@@ -40,6 +42,16 @@ SCHEMA = {"type": "object", "properties": {"path": {"type": "string"}}}
 TASK = TrustedTask("task-trusted", 4)
 
 
+class FakePendingResult:
+    """Like B's handle: a cancelled wait leaves the result in place."""
+
+    def __init__(self) -> None:
+        self.result: asyncio.Future[PendingFinal] = asyncio.get_running_loop().create_future()
+
+    async def wait(self) -> PendingFinal:
+        return await asyncio.shield(self.result)
+
+
 class FakeGuard:
     def __init__(
         self,
@@ -53,6 +65,16 @@ class FakeGuard:
         self.delays = list(delays)
         self.active = 0
         self.max_active = 0
+        self.results: dict[str, FakePendingResult] = {}
+        self.unknown_requests: set[str] = set()
+
+    def pending_result(self, request_id: str) -> FakePendingResult:
+        if request_id in self.unknown_requests:
+            raise ValueError("unknown request")
+        return self.results.setdefault(request_id, FakePendingResult())
+
+    def finish(self, final: PendingFinal) -> None:
+        self.pending_result(final.request_id).result.set_result(final)
 
     async def submit(self, task_id: str, call: object, *, expected_epoch: int | None = None):
         self.calls.append((task_id, call, expected_epoch))
@@ -274,35 +296,121 @@ def test_withheld_or_unknown_answers_stopped_then_stops_the_task(kind) -> None:
     asyncio.run(run())
 
 
+PENDING = Pending(
+    request_id="request-1", approval_id="ap-1", reasons=(Reason.INTERNAL_TO_EXTERNAL,)
+)
+
+
+def pending_final(cause: str, outcome: object = None, **identity: object) -> PendingFinal:
+    if outcome is None:
+        outcome = Denied(request_id="request-1", reasons=(Reason.APPROVAL_STALE,))
+    fields = {"task_id": TASK.task_id, "epoch": TASK.epoch, **identity}
+    return PendingFinal(
+        request_id="request-1", approval_id="ap-1", cause=cause, outcome=outcome, **fields
+    )
+
+
+async def wait_for_approval(approvals: ApprovalOutcomes) -> None:
+    for _ in range(200):
+        if approvals.waiting("ap-1"):
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("approval wait never started")
+
+
 @pytest.mark.parametrize(
-    ("action", "final", "success", "text"),
+    ("cause", "outcome", "success", "text"),
     [
-        ("approve", released("approved text"), True, "approved text"),
-        ("reject", None, False, "승인 요청이 거절되었습니다"),
+        ("executed", released("approved text"), True, "approved text"),
+        ("rejected", None, *fixed_model_message(ModelMessageKind.APPROVAL_REJECTED)),
+        ("expired", None, *fixed_model_message(ModelMessageKind.APPROVAL_EXPIRED)),
+        ("cancelled", None, *fixed_model_message(ModelMessageKind.APPROVAL_CANCELLED)),
+        ("invalidated", None, *fixed_model_message(ModelMessageKind.APPROVAL_INVALIDATED)),
     ],
 )
-def test_pending_waits_for_the_human_result_without_guessing(action, final, success, text) -> None:
+def test_pending_answers_only_from_guards_final_result(cause, outcome, success, text) -> None:
+    """NOTIFY-01: the model answer is Guard's PendingFinal, not a human return value."""
+
     async def run() -> None:
-        pending = Pending(
-            request_id="r1", approval_id="ap-1", reasons=(Reason.INTERNAL_TO_EXTERNAL,)
+        released_outcome = (
+            outcome.model_copy(update={"request_id": "request-1"}) if outcome is not None else None
         )
-        guard, approvals = FakeGuard(pending), ApprovalOutcomes()
+        guard, approvals = FakeGuard(PENDING), ApprovalOutcomes()
         fake = FakeAppServer(_tool_script({"call_id": "c1", "tool": "read", "arguments": {}}))
         session = await started(fake, guard, approvals=approvals)
         try:
             sending = asyncio.ensure_future(session.send("go"))
-            for _ in range(200):
-                if approvals.waiting("ap-1"):
-                    break
-                await asyncio.sleep(0.005)
-            assert approvals.waiting("ap-1")
+            await wait_for_approval(approvals)
+            assert approvals.approval_for(TASK.task_id) == "ap-1"
             assert not sending.done()
-            approvals.resolve("ap-1", action, final)
+            guard.finish(pending_final(cause, released_outcome))
             assert await asyncio.wait_for(sending, 2) == "done"
             result = reply_result(fake)
             assert result["success"] is success
             assert result["contentItems"][0]["text"] == text
             assert len(guard.calls) == 1
+            assert approvals.approval_for(TASK.task_id) is None
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "final",
+    [
+        pending_final("failed"),
+        pending_final("shutdown"),
+        pending_final("rejected", task_id="other-task"),
+        pending_final("rejected", epoch=TASK.epoch + 1),
+        None,
+    ],
+)
+def test_unsettled_foreign_or_unknown_pending_result_stops_the_task(final) -> None:
+    async def run() -> None:
+        guard, approvals = FakeGuard(PENDING), ApprovalOutcomes()
+        if final is None:
+            guard.unknown_requests.add("request-1")
+
+        async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+            server.last_reply = await server.tool_call(turn_id, "c1", "read", {})  # type: ignore[attr-defined]
+            await asyncio.Event().wait()
+
+        fake = FakeAppServer(script)
+        session = await started(fake, guard, approvals=approvals)
+        try:
+            sending = asyncio.ensure_future(session.send("go"))
+            if final is not None:
+                await wait_for_approval(approvals)
+                guard.finish(final)
+            with pytest.raises(CodexSessionError) as stopped:
+                await asyncio.wait_for(sending, 2)
+            assert stopped.value.code == "CODEX_TOOL_STOPPED"
+            assert reply_result(fake)["contentItems"][0]["text"] == "작업이 정지되었습니다"
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_watchdog_cancels_only_the_wait_and_keeps_guards_result() -> None:
+    async def run() -> None:
+        guard, approvals = FakeGuard(PENDING), ApprovalOutcomes()
+
+        async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+            server.last_reply = await server.tool_call(turn_id, "c1", "read", {})  # type: ignore[attr-defined]
+            await asyncio.Event().wait()
+
+        fake = FakeAppServer(script)
+        session = await started(
+            fake, guard, approvals=approvals, limits=SessionLimits(call_watchdog_s=0.05)
+        )
+        try:
+            with pytest.raises(CodexSessionError) as stopped:
+                await asyncio.wait_for(session.send("go"), 2)
+            assert stopped.value.code == "CODEX_WATCHDOG_TIMEOUT"
+            assert not approvals.waiting("ap-1")
+            assert not guard.results["request-1"].result.cancelled()
         finally:
             await session.aclose()
 
@@ -406,10 +514,13 @@ def test_request_user_input_gets_an_empty_answer_and_is_only_counted() -> None:
 
         fake = FakeAppServer(script)
         session = await started(fake, FakeGuard())
+        asked: list[None] = []
+        session.set_user_input_handler(lambda: asked.append(None))
         try:
             assert await session.send("go") == "continued"
             assert reply_result(fake) == {"answers": {}}
             assert session.observations.user_input_requests == 1
+            assert len(asked) == 1  # STOP-01 audit hook; no question text is passed
         finally:
             await session.aclose()
 

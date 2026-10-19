@@ -104,6 +104,7 @@ class CodexAppServerSession:
         self._version = version
         self._limits = limits or SessionLimits()
         self._on_partial = on_partial
+        self._on_user_input: Callable[[], None] | None = None
         self.observations = SessionObservations(
             excluded_tools=plan.excluded, dynamic_tool_refs=tuple(sorted(plan.tool_refs))
         )
@@ -148,6 +149,10 @@ class CodexAppServerSession:
     def set_partial_handler(self, handler: Callable[[str], None] | None) -> None:
         """Receives the current turn's answer text piece by piece (A90)."""
         self._on_partial = handler
+
+    def set_user_input_handler(self, handler: Callable[[], None] | None) -> None:
+        """Called for each `requestUserInput`, which is answered empty (STOP-01 audit)."""
+        self._on_user_input = handler
 
     def set_stop_handler(self, handler: Callable[[str], None] | None) -> None:
         """Called once when the session stops while no send() is waiting."""
@@ -297,6 +302,8 @@ class CodexAppServerSession:
             return {"decision": "decline"}
         if method == "item/tool/requestUserInput":
             self.observations.user_input_requests += 1
+            if self._on_user_input is not None:
+                self._on_user_input()
             return {"answers": {}}
         self._stop("CODEX_L3_VIOLATION")
         raise CodexProtocolError("CODEX_SERVER_REQUEST_REFUSED")
