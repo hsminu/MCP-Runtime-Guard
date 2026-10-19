@@ -50,6 +50,7 @@
 - [x] A15·A16 등록 요구·단위 구현
 - [x] A86 연결 직후 지문 대조·불일치 도구 차단(A15·A16, 주입형 Registry) · [기록](archive/a/A86-profile-guard-assembly.md)
 - [x] A96 등록에 없는 도구가 보이면 서버 차단(PR #29 B 리뷰 3) · [기록](archive/a/A96-live-listing-added-tools.md)
+- [x] A97 MCP 도구 오류(`is_error`)를 Codex에 실패로 전달 · [기록](archive/a/A97-released-tool-error.md)
 - [ ] A15·A16 실제 Registry·launcher 연결 — 막힘: C Registry. 지문 계산 기준(SDK 재구성 dict) C 확인 필요
 
 ## 접근 규칙·모델·Runner

@@ -89,10 +89,15 @@ class FakeGuard:
             self.active -= 1
 
 
-def released(text: str = "doc text", structured: dict[str, object] | None = None) -> Released:
+def released(
+    text: str = "doc text",
+    structured: dict[str, object] | None = None,
+    *,
+    is_error: bool = False,
+) -> Released:
     return Released(
         request_id="request-1",
-        result=ReleasedResult(text=text, structured_content=structured),
+        result=ReleasedResult(text=text, structured_content=structured, is_error=is_error),
         label=Label.PUBLIC,
     )
 
@@ -213,6 +218,34 @@ def test_released_call_uses_trusted_task_and_returns_text_and_structured_json() 
                 '{"resource_id": "public/a"}',
             ]
             assert session.observations.responses_by_call == {"c1": 1}
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("approved", [False, True], ids=["direct", "after-approval"])
+def test_released_tool_error_reaches_codex_as_a_failed_call(approved) -> None:
+    """MCP `isError`: the released text still reaches the model, marked as failed."""
+
+    async def run() -> None:
+        outcome = released("tool said no", is_error=True)
+        approvals = ApprovalOutcomes()
+        guard = FakeGuard(PENDING if approved else outcome)
+        fake = FakeAppServer(
+            _tool_script({"call_id": "c1", "tool": "read", "arguments": {"path": "a"}})
+        )
+        session = await started(fake, guard, approvals=approvals)
+        try:
+            sending = asyncio.ensure_future(session.send("read it"))
+            if approved:
+                await wait_for_approval(approvals)
+                guard.finish(pending_final("executed", outcome))
+            assert await asyncio.wait_for(sending, 2) == "done"
+            result = reply_result(fake)
+            assert result["success"] is False
+            assert [item["text"] for item in result["contentItems"]] == ["tool said no"]
+            assert session.stop_code is None  # a tool error is not a Task stop
         finally:
             await session.aclose()
 

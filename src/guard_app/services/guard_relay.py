@@ -201,7 +201,10 @@ class GuardToolRelay:
 
     def _answer(self, outcome: object) -> RelayResult:
         if type(outcome) is Released:
-            return RelayResult(tool_call_response(True, released_texts(outcome.result)))
+            # An MCP tool error (`isError`) is still released text, but the call
+            # failed: Codex must not read it as a successful tool result.
+            succeeded = outcome.result.is_error is not True
+            return RelayResult(tool_call_response(succeeded, released_texts(outcome.result)))
         if type(outcome) is Denied:
             return self._fixed(outcome_model_message(outcome))
         # Withheld/OutcomeUnknown, or anything that is not a known final
