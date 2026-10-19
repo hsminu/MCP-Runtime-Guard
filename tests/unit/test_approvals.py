@@ -246,7 +246,9 @@ class _Host:
             return decision.model_copy(update={"decision": self.force_decision})
         return decision
 
-    async def dispatch_reserved(self, req, state, *, expires_at_utc=None, monotonic_deadline=None):
+    async def dispatch_reserved(
+        self, req, state, *, expires_at_utc=None, monotonic_deadline=None, on_cancelled=None
+    ):
         assert self.lock.locked()
         assert self.store.approvals["approval-1"].status is ApprovalStatus.CONSUMED
         assert self.service is not None

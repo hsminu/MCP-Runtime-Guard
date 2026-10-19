@@ -574,6 +574,7 @@ class GuardService:
             TaskStatus.CLOSED,
         ):
             return
+        self._approvals._discard_task_released(state.task_id, state.epoch)
         signal = self._stop_requests.get(state.task_id)
         if signal is not None:
             signal.terminal_epoch = state.epoch
@@ -791,6 +792,7 @@ class GuardService:
         *,
         expires_at_utc: datetime | None = None,
         monotonic_deadline: float | None = None,
+        on_cancelled: Callable[[Outcome], None] | None = None,
     ) -> Outcome:
         # 예약 후 결과를 예약 전 래퍼로 되돌리지 않는다.
         return await after_dispatch(
@@ -799,6 +801,7 @@ class GuardService:
             ),
             lambda exc: self._contain_post_dispatch(req, exc, expected_state=state),
             on_containment_error=lambda exc: self._post_failure_fallback(req, exc),
+            on_cancelled=on_cancelled,
         )
 
     async def _dispatch_and_commit(
@@ -1029,9 +1032,14 @@ class _ApprovalHost:
         *,
         expires_at_utc: datetime | None = None,
         monotonic_deadline: float | None = None,
+        on_cancelled: Callable[[Outcome], None] | None = None,
     ) -> Outcome:
         return await self._guard._dispatch_reserved(
-            req, state, expires_at_utc=expires_at_utc, monotonic_deadline=monotonic_deadline
+            req,
+            state,
+            expires_at_utc=expires_at_utc,
+            monotonic_deadline=monotonic_deadline,
+            on_cancelled=on_cancelled,
         )
 
     async def halt_task(

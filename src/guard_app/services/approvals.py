@@ -79,6 +79,7 @@ class ApprovalHost(Protocol):
         *,
         expires_at_utc: datetime | None = None,
         monotonic_deadline: float | None = None,
+        on_cancelled: Callable[[Outcome], None] | None = None,
     ) -> Outcome: ...
 
     async def halt_task(
@@ -124,7 +125,8 @@ class PendingResultHandle:
     """NOTIFY-01 단일 소비 핸들. 대기 취소는 공유 결과·승인·타이머와 무관하다.
 
     완료가 먼저면 wait까지 보관한다. 소비 직후 서비스와 핸들 모두 본문 참조를
-    놓는다. 앱 종료 시 미소비 Released는 폐기하며 wait는 고정 오류를 낸다.
+    놓는다. Task 정지·앱 종료 시 미소비 Released는 폐기하며 wait는 고정 오류를
+    낸다. 이미 대기 중이면 수신을 보장하되 그 대기마저 취소되면 폐기한다.
     """
 
     def __init__(self, consumed: Callable[[], None]) -> None:
@@ -133,6 +135,7 @@ class PendingResultHandle:
         self._waiting = False
         self._completed = False
         self._consumed = False
+        self._discard_requested = False
         self._consumed_callback = consumed
 
     def __repr__(self) -> str:
@@ -153,6 +156,8 @@ class PendingResultHandle:
             return result
         finally:
             self._waiting = False
+            if self._discard_requested:
+                self._discard_released()
 
     def _complete(self, result: PendingFinal) -> bool:
         if self._completed:
@@ -164,6 +169,9 @@ class PendingResultHandle:
 
     def _discard_released(self) -> None:
         if self._result is not None and isinstance(self._result.outcome, Released):
+            if self._waiting:
+                self._discard_requested = True
+                return
             self._result = None
             self._consumed = True
             self._consumed_callback()
@@ -430,6 +438,12 @@ class ApprovalService:
             ):
                 self._complete(approval_id, Denied(request_id=owner.request_id, reasons=(reason,)))
 
+    def _discard_task_released(self, task_id: str, epoch: int) -> None:
+        """완료된 미소비 본문만 폐기한다. 다른 Task·생애와 본문 없는 결과는 보존한다."""
+        for owner in tuple(self._pending.values()):
+            if owner.task_id == task_id and owner.epoch == epoch:
+                owner.handle._discard_released()
+
     def _register_pending(self, record: ApprovalRecord, snapshot: ApprovalSnapshot) -> None:
         def consumed() -> None:
             self._results.pop(record.request_id, None)
@@ -672,6 +686,7 @@ class ApprovalService:
                 if owner.task_id == task_id and owner.epoch == expected_epoch
             )
         )
+        self._discard_task_released(task_id, expected_epoch)
         owners = tuple(
             owner
             for owner in self._pending.values()
@@ -685,6 +700,7 @@ class ApprovalService:
             await self._stop_pending_owner(
                 owner, Reason.TASK_NOT_RUNNING, "cancelled", halt_completed=True
             )
+        self._discard_task_released(task_id, expected_epoch)
         return sum(owner.handle._completed for owner in owners)
 
     async def _wait_openings(self, owners: tuple[_OpeningOwner, ...]) -> None:
@@ -802,6 +818,7 @@ class ApprovalService:
                     prepared.state,
                     expires_at_utc=prepared.expires_at_utc,
                     monotonic_deadline=prepared.monotonic_deadline,
+                    on_cancelled=lambda outcome: self._complete(approval_id, outcome, "executed"),
                 )
                 self._complete(approval_id, result, "executed")
                 return result

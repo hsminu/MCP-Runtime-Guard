@@ -167,7 +167,9 @@ def test_file_sqlite_approval_survives_utc_before_creation_without_ttl_extension
                 req, initial, arguments_digest=json_digest(req.arguments), at_utc=clock.utc
             )
 
-            async def dispatched(request, waiting, *, expires_at_utc, monotonic_deadline):
+            async def dispatched(
+                request, waiting, *, expires_at_utc, monotonic_deadline, on_cancelled=None
+            ):
                 saved = await store.get_approval("approval-1")
                 assert saved is not None
                 assert saved.status is ApprovalStatus.CONSUMED
