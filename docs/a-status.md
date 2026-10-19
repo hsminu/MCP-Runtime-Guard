@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-19 · main `139e5a0` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-19 · main `013ecec` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -10,11 +10,11 @@
 | 시작 복구·영속 call_seq·조회/감사 API (B-SQL-01–06) | B | A13, A24–A27, A33–A35 |
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
 | `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22 |
-| Pending 최종 알림 형식·종료 처리(NOTIFY-01)·시스템 Task 정지(STOP-01)·검토된 설명(DESC-01) ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | B | A19–A22, A47 |
+| 검토된 설명(DESC-01)·`final_model_message`(B 3차 PR). NOTIFY-01·STOP-01은 PR #28로 main 반영·A 연결 완료(A68) ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | B | A47, A68 문구 교체 |
 | 동기 `AccessChecker` 포트(ACCESS-01, B2.9)·AGT 코드 제거(B2.11, A 병합 대기)·계약 합의 | B·A·C | A02·A06, A41, A44, A53 |
 | Codex 0.162.1/MCP launcher·L1/L2 구현·T43/T46·수신 상한 독립 인수·경로·ScanReport·Scanner 자격증명 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
 | 설정 파일 형식(B3.11)과 경로·실행 파일 검증(C). Profile 로딩 함수는 main 반영([PR #25](https://github.com/hsminu/MCP-Runtime-Guard/pull/25)) ([#19](https://github.com/hsminu/MCP-Runtime-Guard/issues/19)) | B·C | A24–A27, A49 |
-| 정책 변경 명령(B3.10)·Registry 활성화. 허용 목록 결정은 main 반영([PR #26](https://github.com/hsminu/MCP-Runtime-Guard/pull/26)) | B·C | A81 |
+| Profile 저장 형식(B3.11/B3.12)·Registry 활성화(C, B 3차 `activate_server`). B3.10은 PR #28로 main 반영·A 연결 완료(A81) | B·C | A81 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | B의 AGT 제거 PR(같은 파일) | B | A44 |
 
@@ -49,6 +49,7 @@
 - [ ] A14 공개 handler 인수 — 막힘: C 로그 정책(A39와 함께)
 - [x] A15·A16 등록 요구·단위 구현
 - [x] A86 연결 직후 지문 대조·불일치 도구 차단(A15·A16, 주입형 Registry) · [기록](archive/a/A86-profile-guard-assembly.md)
+- [x] A96 등록에 없는 도구가 보이면 서버 차단(PR #29 B 리뷰 3) · [기록](archive/a/A96-live-listing-added-tools.md)
 - [ ] A15·A16 실제 Registry·launcher 연결 — 막힘: C Registry. 지문 계산 기준(SDK 재구성 dict) C 확인 필요
 
 ## 접근 규칙·모델·Runner
@@ -64,7 +65,7 @@
 - [ ] A53 B의 AGT 코드 제거 중 A 소유 파일 리뷰 — 막힘: B PR
 - [x] A87 Codex 0.162.1 프로토콜 순수 함수·대본형 가짜 app-server · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)
 - [x] A88 Codex 세션 관리자 A 계층(L3·Guard 중계·FIFO·감시 상한·제품 연결·취소 시 세션 정지) · [기록](archive/a/A88-codex-session-manager.md)
-- [ ] A19·A20 실제 codex.exe 연결 — 막힘: C launcher(C2.12)·L2(C6.14), NOTIFY-01·STOP-01(#20), 세션 관리자 계약 합의
+- [ ] A19·A20 실제 codex.exe 연결 — 막힘: C launcher(C2.12)·L2(C6.14), 세션 관리자 계약 합의
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
 - [x] A58 JSON-RPC 전송 마감·처리기 안 close 교착·종료 사유 보정 · [기록](archive/a/A58-jsonrpc-send-and-close.md)
@@ -72,7 +73,8 @@
 - [ ] A50 Codex 0.162.1 실제 프로세스·메서드 연결 — 막힘: B 세션 계약·C launcher·L1/L2 구현([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21))
 - [x] A68 Task별 도구 호출 FIFO·callId 중복 거부·취소/종료 격리의 A 내부 연결부 · [기록](archive/a/A68-task-tool-call-fifo.md)
 - [x] A68 Guard 호출·FIFO 세션 연결(A 내부 Pending 대기) · [기록](archive/a/A88-codex-session-manager.md)
-- [ ] A68 NOTIFY-01·STOP-01로 교체 — 막힘: B5.9·B5.10
+- [x] A68 NOTIFY-01·STOP-01로 교체, 사람 정지의 Store 직접 쓰기 제거(PR #29 B 리뷰 5) · [기록](archive/a/A68-notify-stop-integration.md)
+- [ ] A68 승인 결과 문구를 `final_model_message`로 교체 — 막힘: B 3차 PR
 - [x] A80 세션 관리자 승인 대기 감시 상한을 Profile의 `approval_ttl_seconds`에서 계산 · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A88 L3 감시·`request_user_input` 빈 응답·고정 문구표 연결·인증/한도 오류 정지(토큰 갱신 충돌은 `unauthorized` 경로로 그 Task만 정지) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A87 `dynamicTools` 이름 규칙 위반 도구 제외·보고 · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)
@@ -117,7 +119,8 @@
 - [x] A54 등록 화면 서버 ID 즉시 안내·bridge에서 B 검사 결과 전달 · [기록](archive/a/A54-server-id-bridge-validation.md)
 - [x] A81 서버 활성화 단계의 도구별 허용 체크박스·Task 정지 안내(정책 화면) · [기록](archive/a/A91-policy-screen.md)
 - [x] A91 정책 화면(Profile·정책 버전·TTL·taint·접근 규칙 읽기 전용) · [기록](archive/a/A91-policy-screen.md)
-- [ ] A81·A91 규칙 저장·서버 목록 활성화 흐름 — 막힘: B3.10·C Registry 활성화
+- [x] A81 규칙 저장을 B3.10에 연결(prepare → 주입형 저장 → apply, 정지 세션 종료) · [기록](archive/a/A81-policy-change-save.md)
+- [ ] A81·A91 실제 Profile 저장·서버 목록 활성화 흐름 — 막힘: B3.11/B3.12 저장 형식·C Registry 활성화·B 3차 `activate_server`
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
