@@ -253,7 +253,13 @@ def test_bridge_open_failure_is_fixed_startup_failure(tmp_path, observed):
     bridge.command_changed.connect(commands.append)
     try:
         bridge.start()
-        pump_until(app, lambda: bridge.thread_done, timeout=8)
+        # The last lifecycle event is delivered through the Qt queue after the
+        # backend thread ends; wait for the delivered event, not only the thread.
+        pump_until(
+            app,
+            lambda: bridge.thread_done and bool(events) and events[-1].state is BridgeState.FAILED,
+            timeout=8,
+        )
         assert bridge.state is BridgeState.FAILED
         assert events[-1].code == "STARTUP_FAILED"
         bridge.request_run("unavailable")
@@ -797,3 +803,36 @@ def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeyp
     )
     assert after_approval == old_approval
     assert after_task == old_task
+
+
+@pytest.mark.parametrize(
+    "flag", [["--scenario", "ask"], ["--agt-mode", "mock"], ["--store", "memory"]]
+)
+def test_cli_product_mode_refuses_demo_only_options(monkeypatch, capsys, tmp_path, flag):
+    """제품 실행에서 시연 전용 옵션을 조용히 무시하지 않는다."""
+    db = tmp_path / "product.db"
+    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db), *flag])
+    with pytest.raises(SystemExit) as caught:
+        main()
+    assert caught.value.code == 2
+    assert "--demo와 함께만" in capsys.readouterr().err
+    assert not db.exists()
+
+
+def test_cli_demo_without_examples_package_fails_without_traceback(monkeypatch, capsys):
+    """설치된 wheel처럼 examples가 없으면 고정 안내로 끝난다."""
+    import importlib.util
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a: None if name == "examples" else real_find_spec(name, *a),
+    )
+    monkeypatch.setattr(sys, "argv", ["guard-app", "--demo", "--agt-mode", "mock"])
+    with pytest.raises(SystemExit) as caught:
+        main()
+    assert caught.value.code == 2
+    output = capsys.readouterr()
+    assert "소스 checkout" in output.err
+    assert "Traceback" not in output.err

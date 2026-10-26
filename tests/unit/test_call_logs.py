@@ -35,7 +35,7 @@ def app():
 
 def test_list_distinguishes_unavailable_loading_error_and_empty(app) -> None:
     page = CallLogPage()
-    assert "조회 연결 대기" in page.state_message.message.text()
+    assert "조회 기능 미연결" in page.state_message.message.text()
     assert not page.csv_button.isEnabled()
 
     page.set_calls(Surface(LoadState.LOADING))
@@ -276,9 +276,7 @@ def test_csv_uses_only_public_fields_and_neutralizes_formula_prefixes(app) -> No
         reason_code="=raw-reason-must-not-echo",
         approval_status="APPROVED",
         current_status="UNKNOWN_OUTCOME",
-        occurred_at=datetime(
-            2026, 10, 11, 11, 30, tzinfo=timezone(timedelta(hours=-4))
-        ),
+        occurred_at=datetime(2026, 10, 11, 11, 30, tzinfo=timezone(timedelta(hours=-4))),
     )
     with pytest.raises(TypeError):
         PublicCallSummary(call_id="safe", raw_body="do-not-export")  # type: ignore[call-arg]

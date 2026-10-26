@@ -1,19 +1,21 @@
 """Qt-thread command ingress and a separate asyncio backend lifetime.
 
 This is an A-owned bridge kernel. Bootstrap runs in the backend thread and
-must supply existing TaskRunner instances and B's human-only capability. It
+must supply TaskExecution instances and B's human-only capability. It
 does not create Tasks, authorize operators, or infer durable Task state.
-Only frozen, public lifecycle/command metadata crosses into Qt signals.
+Frozen lifecycle/command metadata and ephemeral public conversation events
+cross into Qt signals. Raw tool results never cross this boundary.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import threading
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC
 from enum import StrEnum
 from typing import Any
@@ -29,10 +31,26 @@ from guard_app.domain.contracts import (
     Released,
     Withheld,
 )
-from guard_app.domain.enums import TaskStatus
+from guard_app.domain.enums import Label, TaskStatus
 from guard_app.domain.errors import StoreError
+from guard_app.services import catalog_sources
 from guard_app.services.approvals import HumanControl
-from guard_app.services.runner import RunUpdate, TaskRunner
+from guard_app.services.codex_account import AccountError, CodexAccountPort
+from guard_app.services.codex_account import AccountView as AccountView  # UI re-export
+from guard_app.services.policy_view import PolicyServer as PolicyServer  # UI re-export
+from guard_app.services.policy_view import PolicyTool as PolicyTool  # UI re-export
+from guard_app.services.policy_view import PolicyView as PolicyView  # UI re-export
+from guard_app.services.runner import RunUpdate, TaskExecution
+
+
+def valid_server_id(server_id: object) -> bool:
+    """Forward B's pure syntax result, including before backend startup/after close.
+
+    This local hint neither normalizes input nor grants Registry acceptance.
+    Registry remains responsible for validating every submitted registration.
+    """
+
+    return catalog_sources.valid_server_id(server_id)
 
 
 class BackendCleanupError(StoreError):
@@ -84,8 +102,8 @@ class CommandEvent:
 class BackendBindings:
     """Construct only in the backend thread from trusted app composition.
 
-    ``runner_for_task`` must resolve a Store-created Task's TaskRunner. The
-    bridge invokes only ``TaskRunner.advance``; it accepts no user-supplied
+    ``runner_for_task`` must resolve a Store-created Task's execution handle. The
+    bridge invokes only ``TaskExecution.advance``; it accepts no user-supplied
     coroutine or direct transport operation. ``human_control`` is the B
     capability obtained from ``GuardService.human_control``.
     ``discard_queued`` settles a Task's queued, not-yet-active transport
@@ -93,12 +111,69 @@ class BackendBindings:
     cancel or emergency halt starts.
     """
 
-    runner_for_task: Callable[[str], TaskRunner]
-    human_control: HumanControl
+    runner_for_task: Callable[[str], TaskExecution]
+    human_control: HumanControl | None
     close: Callable[[], Awaitable[None]] | None = None
     snapshot: Callable[[str], Awaitable[TaskProjection]] | None = None
     initial_task_id: str | None = None
     discard_queued: Callable[[str], int] | None = None
+    create_session: Callable[[SessionOptions], Awaitable[TaskProjection]] | None = None
+    stop_session: Callable[[str, int, ControlAction], Awaitable[None]] | None = None
+    # Fixed code of what is known to prevent new sessions now, or None. Probed
+    # on the backend thread at READY and after each creation attempt.
+    session_blocker: Callable[[], str | None] | None = None
+    # Codex account methods on a C-launched app-server (A52); None = unavailable.
+    account: CodexAccountPort | None = None
+    # Read-only Profile/rules for the policy screen (A91); None = no Profile.
+    policy: PolicyView | None = None
+    # Registers a backend-loop callback for Task changes outside a command
+    # (approval waits, asynchronous session stops).
+    task_events: Callable[[Callable[[str], None]], None] | None = None
+    # Registers a backend-loop callback (task_id, epoch, piece) for the model
+    # answer while a run is in progress (A90). Pieces outside a run are dropped.
+    answer_partials: Callable[[Callable[[str, int, str], None]], None] | None = None
+    # B3.10 server access change: (server_id, allowed, denied) -> new policy view.
+    # None when no saver for the Profile document is connected.
+    policy_access: (
+        Callable[[str, tuple[str, ...], tuple[str, ...]], Awaitable[PolicyView]] | None
+    ) = None
+
+
+# Streamed answer text is republished at most this often (A90).
+PARTIAL_FLUSH_S = 0.1
+# Above Codex's answer limit plus item breaks; a longer stream stops updating.
+MAX_PARTIAL_CHARS = 70_000
+
+# A device-code login left unfinished is abandoned after this long.
+DEVICE_LOGIN_TIMEOUT_S = 15 * 60
+
+# The only model pinned by C's config/codex/codex.lock.json (allowed_models).
+CODEX_MODEL_ID = "gpt-6.1-sol"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionOptions:
+    mode: str = "codex"
+    model: str = CODEX_MODEL_ID
+
+    def __post_init__(self) -> None:
+        if self.mode != "codex" or self.model != CODEX_MODEL_ID:
+            raise ValueError("Invalid Codex selection")
+
+
+class SessionStartError(ValueError):
+    """Fixed public rejection codes from trusted A session composition."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCreated:
+    command_id: str
+    draft_key: str
+    snapshot: TaskProjection
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +187,38 @@ class TaskProjection:
     agt_mode: str = "unconfigured"
     model_mode: str = "unconfigured"
     can_advance: bool = False
+    can_accept_message: bool = False
+    model_ready: bool = True
+    model_id: str = ""
+    connection_code: str = ""
+    runner_state: str = ""
+    tools_available: bool = True
+    # Store TaskState.high_watermark / unclassified; None when not supplied.
+    label: Label | None = None
+    unclassified: bool = False
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ConversationEvent:
+    """Ephemeral plain text for one Task/epoch, never command/audit metadata."""
+
+    task_id: str
+    epoch: int
+    role: str
+    text: str
+    command_id: str
+
+
+@dataclass(slots=True, repr=False)
+class _AnswerStream:
+    """Backend loop only: the in-progress answer of one run command (A90)."""
+
+    epoch: int
+    command_id: str
+    pieces: list[str] = field(default_factory=list)
+    chars: int = 0
+    dirty: bool = False
+    flush: asyncio.TimerHandle | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -130,6 +237,10 @@ class _Command:
     lane: str
     action: str
     target_id: str
+    epoch: int | None = None
+    user_text: str | None = field(default=None, repr=False)
+    options: SessionOptions | None = None
+    access: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +308,14 @@ class BackendBridge(QObject):
     command_changed = Signal(object)
     task_changed = Signal(object)
     review_ready = Signal(object)
+    conversation_ready = Signal(object)
+    # The whole answer so far for one run command; replaces the previous one.
+    conversation_partial = Signal(object)
+    session_created = Signal(object)
+    # str: fixed blocker code, or "" when new sessions may be requested.
+    session_capability_changed = Signal(str)
+    account_changed = Signal(object)
+    policy_changed = Signal(object)
 
     def __init__(
         self,
@@ -263,6 +382,9 @@ class BackendBridge(QObject):
         self._recent: OrderedDict[str, CommandEvent] = OrderedDict()
         self._operations: dict[str, asyncio.Task[object]] = {}
         self._pending_runs: dict[str, tuple[str, int]] = {}
+        self._account_waits: set[asyncio.Future[None]] = set()
+        self._run_locks: dict[str, asyncio.Lock] = {}
+        self._streams: dict[str, _AnswerStream] = {}
         # Bound commands before they become asyncio ready callbacks. A normal
         # command flood must leave an independent ingress slot for urgent work.
         self._ingress_lock = threading.Lock()
@@ -327,6 +449,7 @@ class BackendBridge(QObject):
         target_id: str,
         *,
         command_id: str | None = None,
+        epoch: int | None = None,
     ) -> str:
         self._require_qt_thread()
         if type(action) is not ControlAction:
@@ -336,6 +459,79 @@ class BackendBridge(QObject):
             "control",
             action.value,
             self._id(target_id),
+            epoch=epoch,
+        )
+        self._submit(command)
+        return command.command_id
+
+    def request_message(
+        self, task_id: str, epoch: int, text: str, *, command_id: str | None = None
+    ) -> str:
+        """Queue a user turn through the existing Runner, without new sessions."""
+        self._require_qt_thread()
+        if type(epoch) is not int or epoch < 0:
+            raise ValueError("Message epoch is invalid")
+        if type(text) is not str or not text.strip() or len(text) > 32768:
+            raise ValueError("Message text is invalid")
+        command = _Command(
+            self._id(command_id, generate=True), "run", "message", self._id(task_id), epoch, text
+        )
+        self._submit(command)
+        return command.command_id
+
+    def request_account(
+        self, action: str, *, target_id: str = "account", secret: str | None = None
+    ) -> str:
+        """Codex login commands. `secret` is an API key, never kept or shown."""
+
+        self._require_qt_thread()
+        if action not in _ACCOUNT_ACTIONS:
+            raise ValueError("Account action is invalid")
+        command = _Command(
+            self._id(None, generate=True),
+            "control",
+            action,
+            self._id(target_id),
+            user_text=secret if action == "account_login_api_key" else None,
+        )
+        self._submit(command)
+        return command.command_id
+
+    def request_policy_access(
+        self, server_id: str, allowed: tuple[str, ...], denied: tuple[str, ...]
+    ) -> str:
+        """B3.10: replace one server's allow/deny rules from the activation dialog."""
+
+        self._require_qt_thread()
+        if not valid_server_id(server_id) or any(
+            type(names) is not tuple
+            or len(names) > 256
+            or any(type(name) is not str or not name or len(name) > 128 for name in names)
+            for names in (allowed, denied)
+        ):
+            raise ValueError("Policy access change is invalid")
+        command = _Command(
+            self._id(None, generate=True),
+            "control",
+            "policy_access",
+            self._id(server_id),
+            access=(allowed, denied),
+        )
+        self._submit(command)
+        return command.command_id
+
+    def request_new_session(
+        self, draft_key: str, options: SessionOptions, *, command_id: str | None = None
+    ) -> str:
+        self._require_qt_thread()
+        if type(options) is not SessionOptions:
+            raise ValueError("Invalid model selection")
+        command = _Command(
+            self._id(command_id, generate=True),
+            "run",
+            "new_session",
+            self._id(draft_key),
+            options=options,
         )
         self._submit(command)
         return command.command_id
@@ -366,10 +562,9 @@ class BackendBridge(QObject):
         self.lifecycle_changed.emit(LifecycleEvent(BridgeState.CLOSING, "CLOSING"))
         self._reject_ingress("SHUTTING_DOWN")
         if loop is not None and stop_async is not None:
-            try:
+            # The backend loop may already have completed.
+            with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(stop_async.set)
-            except RuntimeError:
-                pass  # Backend loop has already completed.
 
     @staticmethod
     def _id(value: str | None, *, generate: bool = False) -> str:
@@ -549,12 +744,19 @@ class BackendBridge(QObject):
             queue = self._urgent_queue
         else:
             queue = self._control_queue
-        assert queue is not None
+        if queue is None:
+            raise RuntimeError("BRIDGE_QUEUE_UNAVAILABLE")
         accepted: CommandEvent | None = None
         rejection = "CLOSING"
         with self._state_lock:
             if self._state is BridgeState.READY:
                 try:
+                    if (
+                        lane == "run"
+                        and sum(event.lane == "run" for event in self._records.values())
+                        >= self._run_queue_size + 1
+                    ):
+                        raise asyncio.QueueFull
                     queue.put_nowait(command)
                 except asyncio.QueueFull:
                     rejection = "QUEUE_FULL"
@@ -685,7 +887,11 @@ class BackendBridge(QObject):
             not adopted
             or bindings is None
             or not callable(bindings.runner_for_task)
-            or not isinstance(bindings.human_control, HumanControl)
+            or (
+                bindings.human_control is not None
+                and not isinstance(bindings.human_control, HumanControl)
+            )
+            or (bindings.human_control is None and not callable(bindings.stop_session))
             or (bindings.close is not None and not callable(bindings.close))
             or (bindings.discard_queued is not None and not callable(bindings.discard_queued))
         ):
@@ -739,6 +945,15 @@ class BackendBridge(QObject):
             asyncio.create_task(self._worker("control")) for _ in range(self._control_workers)
         )
         workers.extend(asyncio.create_task(self._worker("urgent")) for _ in range(2))
+        self._publish_session_capability()
+        self.account_changed.emit(
+            AccountView("UNAVAILABLE" if bindings.account is None else "UNKNOWN")
+        )
+        self.policy_changed.emit(bindings.policy)
+        if bindings.task_events is not None:
+            bindings.task_events(self._task_event)
+        if bindings.answer_partials is not None:
+            bindings.answer_partials(self._answer_partial)
         self._set_state(BridgeState.READY, "READY")
         await stop
         self._set_state(BridgeState.CLOSING, "CLOSING")
@@ -750,6 +965,8 @@ class BackendBridge(QObject):
                 queue.task_done()
         for task in self._operations.values():
             task.cancel()
+        for waiter in tuple(self._account_waits):
+            waiter.cancel()
         for worker in workers:
             worker.cancel()
         active = tuple(self._operations.values()) + tuple(workers)
@@ -758,7 +975,7 @@ class BackendBridge(QObject):
             _, pending = await asyncio.wait(active, timeout=self._shutdown_timeout)
             unfinished = bool(pending)
         for command_id, event in tuple(self._records.items()):
-            if event.stage is CommandStage.PROCESSING:
+            if event.stage in (CommandStage.PROCESSING, CommandStage.ACCEPTED):
                 self._emit_command(
                     _Command(command_id, event.lane, event.action, event.target_id),
                     CommandStage.UNCONFIRMED,
@@ -797,9 +1014,9 @@ class BackendBridge(QObject):
             return not isinstance(boot.exception(), BackendCleanupError)
         if not self._adopt_bootstrap_result(boot):
             return False
-        return await self._cleanup_bindings(timeout=max(0.0, deadline - loop.time()))
+        return await self._cleanup_bindings(limit_s=max(0.0, deadline - loop.time()))
 
-    async def _cleanup_bindings(self, *, timeout: float | None = None) -> bool:
+    async def _cleanup_bindings(self, *, limit_s: float | None = None) -> bool:
         bindings = self._bindings
         self._bindings = None
         if bindings is None or bindings.close is None:
@@ -807,14 +1024,15 @@ class BackendBridge(QObject):
         if not callable(bindings.close):
             return False
 
+        close = bindings.close
+
         async def invoke_close() -> None:
-            assert bindings.close is not None
-            await bindings.close()
+            await close()
 
         cleanup = asyncio.create_task(invoke_close())
         cleanup.add_done_callback(self._consume_task)
         done, _ = await asyncio.wait(
-            {cleanup}, timeout=self._shutdown_timeout if timeout is None else timeout
+            {cleanup}, timeout=self._shutdown_timeout if limit_s is None else limit_s
         )
         if cleanup not in done:
             cleanup.cancel()
@@ -828,42 +1046,202 @@ class BackendBridge(QObject):
             queue = self._urgent_queue
         else:
             queue = self._control_queue
-        assert queue is not None
+        if queue is None:
+            raise RuntimeError("BRIDGE_QUEUE_UNAVAILABLE")
         while True:
             command = await queue.get()
-            self._emit_command(command, CommandStage.PROCESSING, "BACKEND_STARTED")
-            operation = asyncio.create_task(self._execute(command))
+            operation = asyncio.create_task(self._operate(command, queue))
             operation.add_done_callback(self._consume_task)
             self._operations[command.command_id] = operation
-            try:
+            if lane != "run":
                 await asyncio.wait({operation})
-                if operation.cancelled() or operation.exception() is not None:
-                    self._emit_command(command, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
-                elif self._records[command.command_id].stage is CommandStage.PROCESSING:
-                    self._emit_command(command, CommandStage.BACKEND_RETURNED, operation.result())
-            finally:
-                self._operations.pop(command.command_id, None)
-                queue.task_done()
+            del command, operation
+
+    async def _operate(self, command: _Command, queue: asyncio.Queue[_Command]) -> None:
+        try:
+            if command.lane == "run":
+                lock = self._run_locks.setdefault(command.target_id, asyncio.Lock())
+                async with lock:
+                    await self._perform(command)
+            else:
+                await self._perform(command)
+        finally:
+            self._operations.pop(command.command_id, None)
+            queue.task_done()
+            if command.lane == "run" and not any(
+                event.lane == "run" and event.target_id == command.target_id
+                for event in self._records.values()
+            ):
+                self._run_locks.pop(command.target_id, None)
+
+    async def _perform(self, command: _Command) -> None:
+        self._emit_command(command, CommandStage.PROCESSING, "BACKEND_STARTED")
+        completed = False
+        try:
+            code = await self._execute(command)
+            completed = True
+            if self._records[command.command_id].stage is CommandStage.PROCESSING:
+                self._emit_command(command, CommandStage.BACKEND_RETURNED, code)
+        finally:
+            if not completed:
+                self._emit_command(command, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
+
+    def _task_event(self, task_id: str) -> None:
+        """Backend loop only: republish one Task without waiting for a command."""
+        if self._stop_requested.is_set() or type(task_id) is not str or not task_id:
+            return
+        publish = asyncio.ensure_future(self._publish_after(task_id))
+        publish.add_done_callback(self._consume_task)
+        # A failed session can change what new sessions may do.
+        self._publish_session_capability()
+
+    def _answer_partial(self, task_id: str, epoch: int, piece: str) -> None:
+        """Backend loop only: collect a streamed piece of the running answer."""
+        stream = self._streams.get(task_id)
+        if (
+            stream is None
+            or stream.epoch != epoch
+            or type(piece) is not str
+            or not piece
+            or self._stop_requested.is_set()
+        ):
+            return
+        if stream.chars + len(piece) > MAX_PARTIAL_CHARS:
+            return
+        stream.pieces.append(piece)
+        stream.chars += len(piece)
+        stream.dirty = True
+        if stream.flush is None:
+            stream.flush = asyncio.get_running_loop().call_later(
+                PARTIAL_FLUSH_S, self._flush_stream, task_id, stream
+            )
+
+    def _flush_stream(self, task_id: str, stream: _AnswerStream) -> None:
+        stream.flush = None
+        if not stream.dirty or self._streams.get(task_id) is not stream:
+            return
+        stream.dirty = False
+        if self._stop_requested.is_set():
+            return
+        self.conversation_partial.emit(
+            ConversationEvent(
+                task_id, stream.epoch, "assistant", "".join(stream.pieces), stream.command_id
+            )
+        )
+
+    def _end_stream(self, task_id: str, stream: _AnswerStream) -> None:
+        """Publish what is left; the final answer, if any, is emitted after this."""
+        if stream.flush is not None:
+            stream.flush.cancel()
+        self._flush_stream(task_id, stream)
+        if self._streams.get(task_id) is stream:
+            del self._streams[task_id]
+
+    def _publish_session_capability(self) -> None:
+        bindings = self._bindings
+        if bindings is None or bindings.create_session is None:
+            code: str | None = "SESSION_CREATION_UNAVAILABLE"
+        elif bindings.session_blocker is None:
+            code = None
+        else:
+            code = bindings.session_blocker()
+        self.session_capability_changed.emit(
+            code if type(code) is str and code else "" if code is None else "SESSION_UNAVAILABLE"
+        )
 
     async def _execute(self, command: _Command) -> str:
         bindings = self._bindings
-        assert bindings is not None
+        if bindings is None:
+            raise RuntimeError("BRIDGE_BINDINGS_UNAVAILABLE")
+        if command.action == "new_session":
+            if bindings.create_session is None or command.options is None:
+                return "SESSION_CREATION_UNAVAILABLE"
+            try:
+                created_snapshot = await bindings.create_session(command.options)
+            except SessionStartError as error:
+                return error.code
+            finally:
+                self._publish_session_capability()
+            if type(created_snapshot) is not TaskProjection:
+                return "SESSION_CREATION_UNCONFIRMED"
+            self.session_created.emit(
+                SessionCreated(command.command_id, command.target_id, created_snapshot)
+            )
+            await self._publish_after(created_snapshot.task_id)
+            return "SESSION_CREATED"
         if command.lane == "run":
             runner = bindings.runner_for_task(command.target_id)
-            if not isinstance(runner, TaskRunner) or runner.task_id != command.target_id:
+            if not isinstance(runner, TaskExecution) or runner.task_id != command.target_id:
                 return "RUNNER_UNAVAILABLE"
             try:
-                update = await runner.advance()
+                if command.action == "message":
+                    if bindings.snapshot is None:
+                        return "MESSAGE_UNAVAILABLE"
+                    state = await bindings.snapshot(command.target_id)
+                    if (
+                        type(state) is not TaskProjection
+                        or state.task_id != command.target_id
+                        or state.epoch != command.epoch
+                        or runner.epoch != command.epoch
+                        or not state.model_ready
+                        or state.status is not TaskStatus.RUNNING
+                        or not runner.can_accept_message
+                    ):
+                        return "MESSAGE_UNAVAILABLE"
+                    if command.user_text is None:
+                        return "MESSAGE_UNAVAILABLE"
+                    runner.add_user_message(command.user_text)
+                    self.conversation_ready.emit(
+                        ConversationEvent(
+                            command.target_id,
+                            state.epoch,
+                            "user",
+                            command.user_text,
+                            command.command_id,
+                        )
+                    )
+                stream = _AnswerStream(runner.epoch, command.command_id)
+                self._streams[command.target_id] = stream
+                try:
+                    update = await runner.advance()
+                finally:
+                    self._end_stream(command.target_id, stream)
                 if type(update) is not RunUpdate or update.task_id != command.target_id:
                     return "RUNNER_UNCONFIRMED"
                 if update.approval_id is not None:
                     self._pending_runs[update.approval_id] = (update.task_id, update.epoch)
+                if update.assistant_text is not None:
+                    self.conversation_ready.emit(
+                        ConversationEvent(
+                            update.task_id,
+                            update.epoch,
+                            "assistant",
+                            update.assistant_text,
+                            command.command_id,
+                        )
+                    )
                 return f"RUN_{update.status.upper()}_QUERY_REQUIRED"
             finally:
                 # Even a failed or unclassified run must not leave the UI on
                 # an older projection; Store decides what is displayed.
                 await self._publish_after(command.target_id)
+        if command.action in _ACCOUNT_ACTIONS:
+            return await self._account(bindings, command)
+        if command.action == "policy_access":
+            return await self._policy_access(bindings, command)
         control = bindings.human_control
+        if control is None:
+            if command.action not in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
+                return "CONTROL_UNAVAILABLE"
+            if bindings.stop_session is None or command.epoch is None:
+                return "CONTROL_UNAVAILABLE"
+            try:
+                await bindings.stop_session(
+                    command.target_id, command.epoch, ControlAction(command.action)
+                )
+                return "SESSION_STOP_RETURNED"
+            finally:
+                await self._publish_after(command.target_id)
         if command.action == ControlAction.REVIEW:
             snapshot = await control.review(command.target_id)
             if snapshot is None:
@@ -881,7 +1259,7 @@ class BackendBridge(QObject):
             return "REVIEW_READY"
         if command.action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
             runner = bindings.runner_for_task(command.target_id)
-            if not isinstance(runner, TaskRunner) or runner.task_id != command.target_id:
+            if not isinstance(runner, TaskExecution) or runner.task_id != command.target_id:
                 return "RUNNER_UNAVAILABLE"
             try:
                 return await self._stop_task(bindings, control, command)
@@ -896,6 +1274,61 @@ class BackendBridge(QObject):
             routed = known or self._pending_runs.get(command.target_id)
             if routed is not None:
                 await self._publish_after(routed[0])
+
+    async def _account(self, bindings: BackendBindings, command: _Command) -> str:
+        account = bindings.account
+        if account is None:
+            self.account_changed.emit(AccountView("UNAVAILABLE"))
+            return "ACCOUNT_UNAVAILABLE"
+        try:
+            if command.action == "account_read":
+                view = await account.read()
+            elif command.action == "account_login_api_key":
+                view = await account.login_api_key(command.user_text or "")
+            elif command.action == "account_login_device":
+                view = await account.start_device_login()
+                if view.state == "PENDING_DEVICE" and view.login_id is not None:
+                    # Waiting for the user must not hold a control worker:
+                    # cancel and approvals run on the same lane (A89 QA).
+                    waiter = asyncio.ensure_future(self._await_login(account, view.login_id))
+                    self._account_waits.add(waiter)
+                    waiter.add_done_callback(self._account_waits.discard)
+                    waiter.add_done_callback(self._consume_task)
+            elif command.action == "account_cancel_login":
+                view = await account.cancel_login(command.target_id)
+            else:
+                view = await account.logout()
+        except AccountError:
+            view = AccountView("FAILED")
+        self.account_changed.emit(view)
+        return f"ACCOUNT_{view.state}"
+
+    async def _policy_access(self, bindings: BackendBindings, command: _Command) -> str:
+        change = bindings.policy_access
+        if change is None or command.access is None:
+            return "POLICY_CHANGE_UNAVAILABLE"
+        try:
+            view = await change(command.target_id, *command.access)
+        except SessionStartError as error:
+            return error.code
+        finally:
+            # Stopped sessions change what a new session may do.
+            self._publish_session_capability()
+        if type(view) is not PolicyView:
+            return "POLICY_CHANGE_UNCONFIRMED"
+        self.policy_changed.emit(view)
+        return "POLICY_CHANGED"
+
+    async def _await_login(self, account: CodexAccountPort, login_id: str) -> None:
+        try:
+            async with asyncio.timeout(DEVICE_LOGIN_TIMEOUT_S):
+                view = await account.wait_login(login_id)
+        except TimeoutError:
+            view = AccountView("LOGIN_NOT_COMPLETED")
+        except AccountError:
+            view = AccountView("FAILED")
+        if not self._stop_requested.is_set():
+            self.account_changed.emit(view)
 
     async def _stop_task(
         self, bindings: BackendBindings, control: HumanControl, command: _Command
@@ -913,6 +1346,12 @@ class BackendBridge(QObject):
                 result = await control.cancel(command.target_id)
             else:
                 result = await control.emergency_halt(command.target_id)
+        # A model session (Codex) outlives Guard's Task stop unless it is
+        # interrupted and closed too; its cleanup result decides confirmation.
+        if bindings.stop_session is not None and command.epoch is not None:
+            await bindings.stop_session(
+                command.target_id, command.epoch, ControlAction(command.action)
+            )
         if isinstance(result, (Denied, Pending, Released, Withheld, OutcomeUnknown)):
             return f"CONTROL_{result.kind.upper()}_QUERY_REQUIRED"
         return "CONTROL_UNCONFIRMED"
@@ -952,12 +1391,39 @@ class BackendBridge(QObject):
             return
         if type(snapshot) is not TaskProjection or snapshot.task_id != task_id:
             raise ValueError("Invalid public Task projection")
+        runner = bindings.runner_for_task(task_id)
+        if isinstance(runner, TaskExecution):
+            if snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+                # Invalidate late model responses and drop terminal Task history.
+                runner.close()
+            snapshot = replace(
+                snapshot,
+                can_accept_message=(
+                    snapshot.status is TaskStatus.RUNNING
+                    and snapshot.model_ready
+                    and runner.task_id == snapshot.task_id
+                    and getattr(runner, "epoch", None) == snapshot.epoch
+                    and bool(getattr(runner, "can_accept_message", False))
+                ),
+                runner_state=getattr(runner, "runtime_status", ""),
+            )
         self.task_changed.emit(snapshot)
 
     @staticmethod
     def _consume_task(task: asyncio.Future[Any]) -> None:
         if not task.cancelled():
             task.exception()  # Suppress default raw exception logging; events use fixed codes.
+
+
+_ACCOUNT_ACTIONS = frozenset(
+    {
+        "account_read",
+        "account_login_api_key",
+        "account_login_device",
+        "account_cancel_login",
+        "account_logout",
+    }
+)
 
 
 def _review_header(snapshot: ApprovalSnapshot) -> str:

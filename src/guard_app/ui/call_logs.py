@@ -318,6 +318,7 @@ class CallLogPage(QWidget):
 
         self._actions_layout = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.detail_button = KeyboardActionButton("선택한 호출 상세 보기")
+        self.detail_button.set_visual(icon="eye", variant="soft")
         self.detail_button.clicked.connect(self._open_selected)
         self._actions_layout.addWidget(self.detail_button)
         self.csv_button = KeyboardActionButton("현재 표시 행 CSV 복사")
@@ -405,8 +406,7 @@ class CallLogPage(QWidget):
         else:
             proportions = (16, 16, 20, 8, 11, 12)
             widths = {
-                column: available * percent // 100
-                for column, percent in enumerate(proportions)
+                column: available * percent // 100 for column, percent in enumerate(proportions)
             }
             widths[6] = available - sum(widths.values())
         for column, width in widths.items():
@@ -444,9 +444,7 @@ class CallLogPage(QWidget):
         if (
             self._detail_dialog is not None
             and self._detail_request is not None
-            and not any(
-                row.call_id == self._detail_request.call_id for row in self._rows
-            )
+            and not any(row.call_id == self._detail_request.call_id for row in self._rows)
         ):
             self._detail_dialog.close()
 
@@ -461,24 +459,15 @@ class CallLogPage(QWidget):
                     self.table.scrollToItem(item)
                 return
 
-    def set_detail(
-        self, request: DetailRequest, surface: Surface[PublicCallDetail]
-    ) -> None:
+    def set_detail(self, request: DetailRequest, surface: Surface[PublicCallDetail]) -> None:
         """Apply only the response for this exact dialog opening and call ID."""
 
         dialog = self._detail_dialog
-        if (
-            dialog is None
-            or type(request) is not DetailRequest
-            or request != self._detail_request
-        ):
+        if dialog is None or type(request) is not DetailRequest or request != self._detail_request:
             return
         if surface.state in (LoadState.READY, LoadState.STALE):
             value = surface.value
-            if (
-                type(value) is PublicCallDetail
-                and value.summary.call_id == request.call_id
-            ):
+            if type(value) is PublicCallDetail and value.summary.call_id == request.call_id:
                 text = _detail_text(value)
                 if surface.state == LoadState.STALE:
                     text = "이전 조회 결과 · 다시 확인 필요\n\n" + text
@@ -496,7 +485,7 @@ class CallLogPage(QWidget):
         )
         self.detail_button.setEnabled(enabled and self._selected_call_id() is not None)
 
-    def _apply_filter(self, *_args) -> None:
+    def _apply_filter(self, *_args: object) -> None:
         selected = self._selected_call_id()
         term = self.search.text().strip().casefold()
         self._visible_rows = [
@@ -528,9 +517,7 @@ class CallLogPage(QWidget):
                 self.state_message.set_message("조회된 호출이 없어")
             elif not self._visible_rows:
                 self.state_message.set_message("현재 조회 결과와 일치하는 호출이 없어")
-        self.state_message.setVisible(
-            self._state != LoadState.READY or not self._visible_rows
-        )
+        self.state_message.setVisible(self._state != LoadState.READY or not self._visible_rows)
         self._update_table_columns(force=True)
         self._selection_changed()
 
@@ -539,19 +526,13 @@ class CallLogPage(QWidget):
         if len(selected) != 1:
             return None
         index = selected[0].row()
-        return (
-            self._visible_rows[index].call_id
-            if 0 <= index < len(self._visible_rows)
-            else None
-        )
+        return self._visible_rows[index].call_id if 0 <= index < len(self._visible_rows) else None
 
     def _selection_changed(self) -> None:
         self.detail_button.setEnabled(self._selected_call_id() is not None)
-        self.csv_button.setEnabled(
-            self._state == LoadState.READY and bool(self._visible_rows)
-        )
+        self.csv_button.setEnabled(self._state == LoadState.READY and bool(self._visible_rows))
 
-    def _open_selected(self, *_args) -> None:
+    def _open_selected(self, *_args: object) -> None:
         call_id = self._selected_call_id()
         if call_id is None:
             return

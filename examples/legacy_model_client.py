@@ -1,4 +1,4 @@
-"""Provider-neutral model boundary for B's ModelClient port.
+"""Synthetic demo response validation only; no product/provider integration.
 
 The provider-specific API remains a separate, explicitly selected integration.
 This module accepts its normalized response as untrusted data and returns only
@@ -104,10 +104,7 @@ def validate_model_conversation_budget(conversation: Conversation) -> None:
     The bound is local to one request; each turn includes all retained history.
     """
 
-    if (
-        type(conversation) is not tuple
-        or len(conversation) > MAX_MODEL_CONVERSATION_MESSAGES
-    ):
+    if type(conversation) is not tuple or len(conversation) > MAX_MODEL_CONVERSATION_MESSAGES:
         raise ModelFormatError()
     remaining = [MAX_MODEL_CONVERSATION_UTF8_BYTES]
 
@@ -147,10 +144,7 @@ def validate_model_conversation_budget(conversation: Conversation) -> None:
 
     consume(2 + max(0, len(conversation) - 1))
     for message in conversation:
-        if (
-            not isinstance(message, ConversationMessage)
-            or len(message.calls) > MAX_MODEL_CALLS
-        ):
+        if not isinstance(message, ConversationMessage) or len(message.calls) > MAX_MODEL_CALLS:
             raise ModelFormatError()
         walk(
             {
@@ -217,9 +211,9 @@ def _copy_object_budget(value: dict[str, object]) -> tuple[dict[str, object], in
     chars = 0
     seen_containers: set[int] = set()
     copied_root: dict[str, object] | None = None
-    pending: list[
-        tuple[object, dict[str, object] | list[object] | None, str | int | None, int]
-    ] = [(value, None, None, 0)]
+    pending: list[tuple[object, dict[str, object] | list[object] | None, str | int | None, int]] = [
+        (value, None, None, 0)
+    ]
     while pending:
         item, parent, slot, depth = pending.pop()
         nodes += 1
@@ -298,9 +292,7 @@ def _check_completion_budget(
 ) -> tuple[tuple[str, str, str | dict[str, object]], ...]:
     """Snapshot one bounded completion before parsing or retaining calls."""
 
-    if (text is not None and len(text) > MAX_MODEL_TEXT_CHARS) or len(
-        calls
-    ) > MAX_MODEL_CALLS:
+    if (text is not None and len(text) > MAX_MODEL_TEXT_CHARS) or len(calls) > MAX_MODEL_CALLS:
         raise ModelFormatError()
     total_chars = len(text) if text is not None else 0
     prepared: list[tuple[str, str, str | dict[str, object]]] = []
@@ -383,9 +375,7 @@ def parse_model_turn(value: object, tools: tuple[ToolView, ...]) -> ModelTurn:
     JSON keys and all unknown fields are rejected rather than stripped.
     """
 
-    if type(tools) is not tuple or any(
-        not isinstance(tool, ToolView) for tool in tools
-    ):
+    if type(tools) is not tuple or any(not isinstance(tool, ToolView) for tool in tools):
         raise ModelFormatError()
     names = tuple(tool.tool_ref for tool in tools)
     if len(names) != len(set(names)) or any("__" not in name for name in names):
@@ -394,12 +384,7 @@ def parse_model_turn(value: object, tools: tuple[ToolView, ...]) -> ModelTurn:
     # output is validated directly: wrapping it in ArgumentSchema again would
     # treat Catalog's internal allOf closure as a new registered schema.
     schemas = {tool.tool_ref: tool.input_schema for tool in tools}
-    if (
-        type(value) is not dict
-        or len(value) != 2
-        or "text" not in value
-        or "calls" not in value
-    ):
+    if type(value) is not dict or len(value) != 2 or "text" not in value or "calls" not in value:
         raise ModelFormatError()
     try:
         text = value["text"]
@@ -478,9 +463,7 @@ class ProviderNeutralModelClient:
         self._completion = completion
         self._timeout_s = float(timeout_s)
 
-    async def step(
-        self, conversation: Conversation, tools: tuple[ToolView, ...]
-    ) -> ModelTurn:
+    async def step(self, conversation: Conversation, tools: tuple[ToolView, ...]) -> ModelTurn:
         if type(conversation) is not tuple or type(tools) is not tuple:
             raise ModelFormatError()
         if len(conversation) > MAX_MODEL_CONVERSATION_MESSAGES:
@@ -488,9 +471,7 @@ class ProviderNeutralModelClient:
         # B contracts are frozen. Re-validation rejects adapter callers that
         # try to smuggle a mutable or malformed message into the backend.
         try:
-            safe_conversation = tuple(
-                ConversationMessage.model_validate(m) for m in conversation
-            )
+            safe_conversation = tuple(ConversationMessage.model_validate(m) for m in conversation)
             safe_tools = tuple(ToolView.model_validate(tool) for tool in tools)
         except ValidationError:
             raise ModelFormatError() from None
