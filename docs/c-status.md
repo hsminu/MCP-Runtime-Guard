@@ -37,7 +37,7 @@
 - [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
 - [ ] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용 · [결정](contracts.md#사용자-결정) — 막힘: A 입력 화면
 - [x] C2.12 codex.exe 실행 launcher(`security/launcher.py`): 쓰기 금지 핸들로 실행마다 SHA-256 대조, 허용 목록 환경, `-c sqlite_home='<Task 폴더>'`, 멈춘 채 생성 후 Job Object 할당, stdin/stdout은 A `CodexPipes` 형식, stderr는 Task 폴더 격리 파일, `close()`로 종료 확인(#21 2번). stdio MCP 서버도 같은 `launch_process`를 쓴다(#21 5번) · [기록](archive/c/C2.12-codex-launcher.md)
-- [ ] C2.13 앱 폴더 경로·권한: codex 설치·CODEX_HOME·Task 폴더를 `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 사용자 전용 권한으로, Task 폴더는 Task 종료·앱 시작 때 삭제(#21 6번)
+- [x] C2.13 앱 폴더 경로·권한(`security/paths.py`): `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 codex 설치·CODEX_HOME·Task 폴더·config에 사용자·SYSTEM만의 보호된 DACL, 단일 실행 잠금, Task 폴더 생성·삭제와 앱 시작 때 남은 폴더 삭제(#21 6번) · [기록](archive/c/C2.13-app-folders.md)
 - [ ] C2.11 제품용 읽기 전용 파일 MCP 서버(stdio): 폴더 목록·파일 읽기만, `safe_path`(C2.3) 사용, `structuredContent.resource_id` 보고, UTF-8 텍스트만 · [결정](contracts.md#사용자-결정)
 - [ ] C2.14 설정 파일·Profile 로딩의 경로·실행 파일 검증(B가 읽어 Catalog에 넣고 A가 앱 시작에 연결, #19 1번) · [결정](contracts.md#사용자-결정)
 

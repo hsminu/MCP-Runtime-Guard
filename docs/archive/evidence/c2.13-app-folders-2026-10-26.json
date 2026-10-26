@@ -1,0 +1,121 @@
+{
+ "item": "C2.13",
+ "date": "2026-10-26",
+ "codex": "0.162.1 (C6.13 설치본을 앱 폴더 codex\u0000.162.1에 복사, launcher가 실행마다 해시 대조)",
+ "dacl_expected": "보호된 DACL: 현재 사용자 FA + SYSTEM FA, OICI 상속. 하위 항목은 이 둘만 상속",
+ "root": "%LOCALAPPDATA%\\MCPRuntimeGuard-c213-smoke",
+ "layout": [
+  "app.lock",
+  "codex/",
+  "codex_home/",
+  "config/",
+  "tasks/"
+ ],
+ "private": {
+  "": true,
+  "codex": true,
+  "codex_home": true,
+  "tasks": true,
+  "config": true
+ },
+ "install": "copied C6.13 install (launcher verifies hash per launch)",
+ "install_dir_private_inherited": true,
+ "sequential": {
+  "initialize": "result",
+  "sqlite_home_is_task_dir": true,
+  "close_confirmed": true,
+  "returncode": 0,
+  "task_dir_after_exit": [
+   "codex-stderr.log",
+   "goals_1.sqlite",
+   "goals_1.sqlite-shm",
+   "goals_1.sqlite-wal",
+   "logs_2.sqlite",
+   "logs_2.sqlite-wal",
+   "memories_1.sqlite",
+   "memories_1.sqlite-shm",
+   "memories_1.sqlite-wal",
+   "queue_1.sqlite",
+   "queue_1.sqlite-shm",
+   "queue_1.sqlite-wal",
+   "state_5.sqlite",
+   "state_5.sqlite-shm",
+   "state_5.sqlite-wal"
+  ],
+  "stderr_bytes": 0,
+  "stderr_mentions_temp_refusal": false,
+  "task_folder_private": true,
+  "task_folder_removed": true
+ },
+ "concurrent_seconds": 0.72,
+ "concurrent": [
+  {
+   "initialize": "result",
+   "sqlite_home_is_task_dir": true,
+   "close_confirmed": true,
+   "returncode": 0,
+   "task_dir_after_exit": [
+    "codex-stderr.log",
+    "goals_1.sqlite",
+    "goals_1.sqlite-shm",
+    "goals_1.sqlite-wal",
+    "logs_2.sqlite",
+    "logs_2.sqlite-shm",
+    "logs_2.sqlite-wal",
+    "memories_1.sqlite",
+    "memories_1.sqlite-shm",
+    "memories_1.sqlite-wal",
+    "queue_1.sqlite",
+    "queue_1.sqlite-shm",
+    "queue_1.sqlite-wal",
+    "state_5.sqlite",
+    "state_5.sqlite-shm",
+    "state_5.sqlite-wal"
+   ],
+   "stderr_bytes": 0,
+   "stderr_mentions_temp_refusal": false,
+   "task_folder_private": true,
+   "task_folder_removed": true
+  },
+  {
+   "initialize": "result",
+   "sqlite_home_is_task_dir": true,
+   "close_confirmed": true,
+   "returncode": 0,
+   "task_dir_after_exit": [
+    "codex-stderr.log",
+    "goals_1.sqlite",
+    "goals_1.sqlite-shm",
+    "goals_1.sqlite-wal",
+    "logs_2.sqlite",
+    "logs_2.sqlite-shm",
+    "logs_2.sqlite-wal",
+    "memories_1.sqlite",
+    "memories_1.sqlite-shm",
+    "memories_1.sqlite-wal",
+    "queue_1.sqlite",
+    "queue_1.sqlite-shm",
+    "queue_1.sqlite-wal",
+    "state_5.sqlite",
+    "state_5.sqlite-shm",
+    "state_5.sqlite-wal"
+   ],
+   "stderr_bytes": 0,
+   "stderr_mentions_temp_refusal": false,
+   "task_folder_private": true,
+   "task_folder_removed": true
+  }
+ ],
+ "launches": 3,
+ "codex_home_after": [
+  "config.toml",
+  "installation_id",
+  "model_catalog.json",
+  "tmp/",
+  "tmp/arg0/"
+ ],
+ "codex_home_verify_after": "passed",
+ "tasks_after": [],
+ "restart_stale_removed": 0,
+ "smoke_root_deleted": true
+}
