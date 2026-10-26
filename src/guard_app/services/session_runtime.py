@@ -363,9 +363,25 @@ class SessionRuntime:
             ):
                 raise SessionRuntimeError("CODEX_SESSION_INVALID")
             self._check_creation_allowed()
-            await self.store.create_task(state, created_at_utc=datetime.now(UTC))
-            created = True
-            confirmed = await self.store.load_task(state.task_id)
+            # B3.12 (A105): the row takes the Profile in force when it is written.
+            # A policy change holds this lock from save to stopping old sessions,
+            # so no row is written under rules that are being replaced. The
+            # session only knows task_id and epoch, which stay the same.
+            async with self._policy_lock:
+                self._check_creation_allowed()
+                settings = self._guard_settings
+                if type(settings) is not GuardSettings:
+                    raise SessionRuntimeError("GUARD_PROFILE_UNAVAILABLE")
+                state = TaskState(
+                    task_id=state.task_id,
+                    epoch=state.epoch,
+                    profile_id=settings.profile_id,
+                    policy_version=settings.policy_version,
+                    status=TaskStatus.RUNNING,
+                )
+                await self.store.create_task(state, created_at_utc=datetime.now(UTC))
+                created = True
+                confirmed = await self.store.load_task(state.task_id)
             if confirmed != state:
                 raise StoreError()
             self._check_creation_allowed()

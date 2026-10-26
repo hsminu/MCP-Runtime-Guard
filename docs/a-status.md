@@ -15,7 +15,7 @@
 | L2(C6.14)·T43/T46·수신 상한 독립 인수(C5.8)·MCP 서버 실행 파일 해시 출처(C2.6)·ScanReport·Scanner 자격증명(C2.10). launcher·앱 폴더(C2.12·C2.13)는 [PR #35](https://github.com/hsminu/MCP-Runtime-Guard/pull/35) 병합 대기 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
 | CFG-01 설정 파일: B 변환 함수([PR #36](https://github.com/hsminu/MCP-Runtime-Guard/pull/36) 병합 대기)·C 파일 연산(C2.14)·경로·실행 파일 검증 ([#33](https://github.com/hsminu/MCP-Runtime-Guard/issues/33)) | B·C | A24–A27, A49 |
 | Profile 저장 연결(C2.14)·Registry 활성화(C4.10). B `activate_server`는 #32로 main 반영 | C | A81 |
-| `main` 병합 순서: A 브랜치에 C 브랜치(#35)가 병합돼 있음 | C·사용자 | A68 main 반영, A98–A104 |
+| `main` 병합 순서: A 브랜치에 C 브랜치(#35)가 병합돼 있음 | C·사용자 | A68 main 반영, A98–A105 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | B의 AGT 제거 PR(같은 파일) | B | A44 |
 
@@ -131,6 +131,9 @@
 - [x] A91 정책 화면(Profile·정책 버전·TTL·taint·접근 규칙 읽기 전용) · [기록](archive/a/A91-policy-screen.md)
 - [x] A81 규칙 저장을 B3.10에 연결(prepare → 주입형 저장 → apply, 정지 세션 종료) · [기록](archive/a/A81-policy-change-save.md)
 - [x] A104 저장 뒤 적용 실패·적용 전 거부면 Guard를 닫고 새 세션·재저장을 막아 재시작 안내(#33 B 답변) · [기록](archive/a/A104-policy-apply-failure-restart.md)
+- [x] A105 새 Task 행을 정책 잠금 안에서 그때의 policy_version으로 씀(B3.12의 Task 생성 직렬화) · [기록](archive/a/A105-task-creation-policy-lock.md)
+- [ ] A105 서버 활성화도 같은 잠금으로 묶음 — 막힘: C Registry 활성화(C4.10)
+- [ ] A106 제품 DB를 앱 폴더 고정 경로로 옮기고 `--demo`가 그 경로를 열지 못하게 함 — 막힘: C `AppPaths` DB 경로(#35 B 리뷰 1번)
 - [ ] A81·A91 실제 Profile 저장·서버 목록 활성화 흐름 — 막힘: #36 병합·C2.14·C Registry 활성화(C4.10)
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)

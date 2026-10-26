@@ -152,9 +152,13 @@ def test_failed_system_stop_is_never_shown_as_applied(tmp_path) -> None:
     assert session.closed == 1
 
 
-async def policy_product(tmp_path, servers, saved, *, save_result=True, script=read_then_answer):
+async def policy_product(
+    tmp_path, servers, saved, *, save_result=True, script=read_then_answer, during_save=None
+):
     async def saver(change) -> bool:
         saved.append(change.document.to_dict())
+        if during_save is not None:
+            await during_save()
         return save_result
 
     peer = Peer([READ_DEFINITION])
@@ -300,6 +304,79 @@ def test_saved_but_unapplied_change_closes_guard_until_restart(tmp_path, monkeyp
     assert peer.calls == []
     assert servers[0].last_reply["result"]["success"] is False  # type: ignore[attr-defined]
     assert len(servers) == 1  # no new session was launched
+
+
+class WatchedLock(asyncio.Lock):
+    """Marks when someone has to wait for the lock (the policy change holds it)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.contended = asyncio.Event()
+
+    async def acquire(self) -> bool:
+        if self.locked():
+            self.contended.set()
+        return await super().acquire()
+
+
+def test_session_created_during_a_policy_change_takes_the_new_policy(tmp_path) -> None:
+    """A105 (B3.12): a Task row is written under the policy lock with the rules in force.
+
+    A session asked for while the change is saving gets its Codex process, then
+    waits; its row is written after the change with the new policy_version, so
+    the change does not stop it as an old-policy Task.
+    """
+    servers: list[FakeAppServer] = []
+    saved: list[dict[str, object]] = []
+    held: dict[str, object] = {}
+    written_while_saving: list[bool] = []
+
+    async def during_save() -> None:
+        runtime = held["runtime"]
+        held["creation"] = asyncio.ensure_future(runtime.create_session(SessionOptions()))
+        held["saving"] = True
+        waits = {
+            asyncio.ensure_future(runtime._policy_lock.contended.wait()),
+            asyncio.ensure_future(held["written"].wait()),
+        }
+        try:
+            await asyncio.wait_for(asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED), 5)
+        finally:
+            for waiting in waits:
+                waiting.cancel()
+            held["saving"] = False
+
+    async def run():
+        bindings, _peer = await policy_product(tmp_path, servers, saved, during_save=during_save)
+        try:
+            assert bindings.create_session is not None
+            assert bindings.policy_access is not None
+            assert bindings.snapshot is not None
+            runtime = bindings.create_session.__self__  # type: ignore[attr-defined]
+            runtime._policy_lock = WatchedLock()
+            held.update(runtime=runtime, written=asyncio.Event(), saving=False)
+            create_task = runtime.store.create_task
+
+            async def recording_create(state, **kwargs):
+                written_while_saving.append(held["saving"])
+                held["written"].set()
+                await create_task(state, **kwargs)
+
+            runtime.store.create_task = recording_create
+            view = await bindings.policy_access("docs", (), ("read",))
+            created = await asyncio.wait_for(held["creation"], 5)
+            row = await runtime.store.load_task(created.task_id)
+            after = await bindings.snapshot(created.task_id)
+            return view, row, after
+        finally:
+            assert bindings.close is not None
+            await bindings.close()
+
+    view, row, after = asyncio.run(run())
+    assert written_while_saving == [False]
+    assert row.policy_version == view.policy_version
+    assert after.status is TaskStatus.RUNNING
+    assert after.connection_code == "READY_CODEX"
 
 
 def test_without_a_profile_saver_policy_change_is_unavailable(tmp_path) -> None:
