@@ -4,6 +4,9 @@ Like C's launcher tests, this Python's python.exe stands in for codex.exe with a
 pinned copy of `codex.lock.json`. Real folders, DACLs, the app lock and a real
 child process run; L2 (C6.14) is not connected, so sessions stay refused (I11,
 T22/T43 A part). The real codex.exe is C's evidence, not exercised here.
+
+A102: the product claims the single-instance lock before its DB opens and does
+not start without it (REC-01, C2.13 part).
 """
 
 from __future__ import annotations
@@ -11,12 +14,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
 
 import pytest
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication
+
+import guard_app.__main__ as entry
+from guard_app.security import paths
 from guard_app.security.codex_home import (
     CODEX_CONFIG_DIR,
     HOME_FILES,
@@ -24,6 +34,7 @@ from guard_app.security.codex_home import (
     CodexConfigError,
 )
 from guard_app.security.launcher import LaunchError
+from guard_app.security.paths import AppPathError, prepare_app_folders
 from guard_app.services.bridge import SessionOptions
 from guard_app.services.codex_preparation import (
     CodexPreparationError,
@@ -57,13 +68,24 @@ def source_for(tmp_path: Path, size: int, sha256: str) -> Path:
     return source
 
 
-def preparation(tmp_path: Path, pin: tuple[int, str], **kwargs: object) -> CodexProcessPreparation:
+def preparation(
+    tmp_path: Path, pin: tuple[int, str], *, claim: bool = True, **kwargs: object
+) -> CodexProcessPreparation:
+    """An owner that already holds the app lock, as `main` hands it over."""
     options: dict[str, object] = {"executable": PYTHON, "root": tmp_path / "app"}
     options.update(kwargs)
-    return CodexProcessPreparation(
+    owner = CodexProcessPreparation(
         source_dir=source_for(tmp_path, *pin),
         **options,  # type: ignore[arg-type]
     )
+    if claim:
+        owner.claim()
+    return owner
+
+
+def assert_lock_held(root: Path) -> None:
+    with pytest.raises(AppPathError, match="^APP_ALREADY_RUNNING$"):
+        prepare_app_folders(root)
 
 
 def test_startup_prepares_folders_and_codex_home_and_reports_no_l2(tmp_path, pin) -> None:
@@ -92,10 +114,34 @@ def test_startup_prepares_folders_and_codex_home_and_reports_no_l2(tmp_path, pin
     again = CodexProcessPreparation(
         executable=PYTHON, root=tmp_path / "app", source_dir=tmp_path / "source"
     )
+    again.claim()
     try:
         asyncio.run(again.preparation().prepare_startup())
     finally:
         again.close()
+
+
+def test_the_claim_comes_first_and_holds_the_lock_until_close(tmp_path, pin) -> None:
+    """A102: startup needs the claim, and a second claim is refused while it holds."""
+    root = tmp_path / "app"
+    unclaimed = preparation(tmp_path, pin, claim=False)
+    with pytest.raises(CodexPreparationError, match="^CODEX_FOLDERS_UNCLAIMED$"):
+        asyncio.run(unclaimed.preparation().prepare_startup())
+    assert not root.exists()
+
+    owner = CodexProcessPreparation(executable=PYTHON, root=root, source_dir=tmp_path / "source")
+    owner.claim()
+    try:
+        with pytest.raises(CodexPreparationError, match="^CODEX_FOLDERS_CLAIMED$"):
+            owner.claim()
+        other = CodexProcessPreparation(root=root)
+        with pytest.raises(AppPathError, match="^APP_ALREADY_RUNNING$"):
+            other.claim()
+        other.close()
+        assert_lock_held(root)
+    finally:
+        owner.close()
+    prepare_app_folders(root).close()
 
 
 def test_task_runs_in_its_own_folder_which_is_removed_only_after_exit(tmp_path, pin) -> None:
@@ -159,10 +205,11 @@ def test_startup_refuses_an_executable_that_is_not_the_pinned_build(
     try:
         with pytest.raises(CodexPreparationError, match=f"^{code}$") as raised:
             asyncio.run(owner.preparation().prepare_startup())
+        # A102: the app keeps running on its DB, so the lock stays held.
+        assert_lock_held(tmp_path / "app")
     finally:
         owner.close()
     assert str(tmp_path) not in str(raised.value)
-    # The failed start released the app lock.
     (tmp_path / "again").mkdir()
     again = preparation(tmp_path / "again", pin, root=tmp_path / "app")
     try:
@@ -226,3 +273,57 @@ def test_receipt_has_the_shape_session_runtime_accepts(tmp_path, pin) -> None:
     finally:
         owner.close()
     assert valid_configuration(receipt.configuration)
+
+
+def no_bridge(*args: object, **kwargs: object) -> None:
+    raise AssertionError("the backend must not start")
+
+
+def test_main_does_not_start_while_another_instance_holds_the_lock(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """A102: no DB, backend or window without the single-instance lock."""
+    root, db = tmp_path / "app", tmp_path / "product.db"
+    monkeypatch.setattr(paths, "app_root", lambda: root)
+    monkeypatch.setattr(entry, "BackendBridge", no_bridge)
+    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db)])
+    first = prepare_app_folders(root)
+    try:
+        assert entry.main() == 1
+    finally:
+        first.close()
+    error = capsys.readouterr().err
+    assert "이미 실행 중이라 시작하지 않는다" in error
+    assert str(tmp_path) not in error
+    assert not db.exists()
+
+
+def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
+    monkeypatch, tmp_path
+) -> None:
+    """A102: the lock is held when the backend is built, before its bootstrap
+    opens the DB, and main releases it on the way out."""
+    root, db = tmp_path / "app", tmp_path / "product.db"
+    seen: list[bool] = []
+
+    class StoppedError(Exception):
+        pass
+
+    def bridge(bootstrap: object) -> None:
+        assert_lock_held(root)
+        seen.append(db.exists())
+        raise StoppedError
+
+    monkeypatch.setattr(paths, "app_root", lambda: root)
+    monkeypatch.setattr(entry, "BackendBridge", bridge)
+    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db)])
+    app = QApplication.instance() or QApplication([])
+    assert isinstance(app, QApplication)
+    quit_on_close = app.quitOnLastWindowClosed()
+    try:
+        with pytest.raises(StoppedError):
+            entry.main()
+    finally:
+        app.setQuitOnLastWindowClosed(quit_on_close)
+    assert seen == [False]
+    prepare_app_folders(root).close()

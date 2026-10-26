@@ -839,6 +839,40 @@ def test_cli_codex_exe_is_an_absolute_product_path(monkeypatch, capsys, tmp_path
     assert not db.exists()
 
 
+@pytest.mark.parametrize(
+    ("code", "shown"),
+    [
+        ("APP_ALREADY_RUNNING", "이미 실행 중이라 시작하지 않는다"),
+        ("APP_FOLDER_PERMISSION_FAILED", "(APP_FOLDER_PERMISSION_FAILED)"),
+        ("C:\\Users\\someone\\secret", "앱 폴더를 준비하지 못해 시작하지 않는다\n"),
+    ],
+    ids=["running", "folder-code", "not-a-code"],
+)
+def test_cli_product_does_not_start_without_the_app_lock(
+    monkeypatch, capsys, tmp_path, code, shown
+):
+    """A102: a refused claim ends with exit 1 before the DB, the backend and the window."""
+    import guard_app.__main__ as entry
+    from guard_app.security.paths import AppPathError
+    from guard_app.services.codex_preparation import CodexProcessPreparation
+
+    def refuse(self):
+        raise AppPathError(code)
+
+    def no_bridge(*args, **kwargs):
+        raise AssertionError("the backend must not start")
+
+    db = tmp_path / "product.db"
+    monkeypatch.setattr(CodexProcessPreparation, "claim", refuse)
+    monkeypatch.setattr(entry, "BackendBridge", no_bridge)
+    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db)])
+    assert main() == 1
+    error = capsys.readouterr().err
+    assert shown in error
+    assert "someone" not in error
+    assert not db.exists()
+
+
 def test_cli_demo_without_examples_package_fails_without_traceback(monkeypatch, capsys):
     """설치된 wheel처럼 examples가 없으면 고정 안내로 끝난다."""
     import importlib.util

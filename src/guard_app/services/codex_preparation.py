@@ -1,9 +1,12 @@
 """A's SessionPreparation over C's app folders, CODEX_HOME and codex.exe launcher (A101).
 
-The order is the one C2.13 lists for A: at app start `prepare_app_folders()`
-(single-instance lock, stale Task folders removed) and `write_codex_home`; per
-Task a new folder, then `CodexLauncher.launch`; `confirm_exit` is
-`LaunchedProcess.close()`; the folder is removed only after that returned True.
+The order is the one C2.13 lists for A. `claim` runs `prepare_app_folders()`
+(single-instance lock, stale Task folders removed) before the app opens its DB,
+and the app does not start without it (A102). Session startup then runs
+`write_codex_home`; per Task a new folder, then `CodexLauncher.launch`;
+`confirm_exit` is `LaunchedProcess.close()`; the folder is removed only after
+that returned True. The lock is held until `close`, also when the Codex part
+fails, because the app keeps running on its DB.
 
 codex.exe is the pinned build (`config/codex/codex.lock.json`). By default it is
 the copy `tools/install_codex.py` puts in the app folder; a developer may point
@@ -14,8 +17,8 @@ L2 (C6.14) is not connected yet, so the startup receipt carries no L2 result
 and every session is refused with CODEX_L2_UNAVAILABLE (10.4: no development
 skip). Errors carry fixed codes only, never paths.
 
-Folder operations run on the backend loop, not a thread: a cleanup that outlives
-SessionRuntime's bound would be reported unconfirmed and block new Tasks.
+Task folder operations run on the backend loop, not a thread: a cleanup that
+outlives SessionRuntime's bound would be reported unconfirmed and block new Tasks.
 """
 
 from __future__ import annotations
@@ -84,7 +87,8 @@ class CodexProcessPreparation:
     """App-lifetime owner of the folders and launcher behind Task sessions.
 
     `executable` overrides the installed copy. `root` and `source_dir` are for
-    tests. Call `close` after the backend has closed every session.
+    tests. Call `claim` before the DB opens and `close` after the backend has
+    closed every session.
     """
 
     def __init__(
@@ -113,6 +117,16 @@ class CodexProcessPreparation:
             self._cleanup_task,
         )
 
+    def claim(self) -> None:
+        """Take the single-instance lock and clear stale Task folders (A102).
+
+        Call before the DB opens. C's `AppPathError` (`APP_ALREADY_RUNNING` and
+        the other folder codes) means the app must not start.
+        """
+        if self._folders is not None:
+            raise CodexPreparationError("CODEX_FOLDERS_CLAIMED")
+        self._folders = prepare_app_folders(self._root)
+
     def close(self) -> None:
         """Release the single-instance lock. Safe to call more than once."""
         folders, self._folders = self._folders, None
@@ -124,24 +138,20 @@ class CodexProcessPreparation:
         if self._started:
             raise CodexPreparationError("CODEX_STARTUP_REPEATED")
         self._started = True
+        folders = self._folders
+        if folders is None:
+            raise CodexPreparationError("CODEX_FOLDERS_UNCLAIMED")
         pins = load_codex_pins(self._source_dir)
-        folders = prepare_app_folders(self._root)
-        prepared = False
-        try:
-            paths = folders.paths
-            home_digest = write_codex_home(paths.codex_home, source_dir=self._source_dir)
-            executable = self._executable or (
-                paths.codex_install(pins.codex_version) / pins.executable_file
-            )
-            _check_executable(executable, pins)
-            launcher = CodexLauncher(
-                executable, paths.codex_home, home_digest, source_dir=self._source_dir
-            )
-            prepared = True
-        finally:
-            if not prepared:
-                folders.close()
-        self._folders, self._launcher = folders, launcher
+        paths = folders.paths
+        home_digest = write_codex_home(paths.codex_home, source_dir=self._source_dir)
+        executable = self._executable or (
+            paths.codex_install(pins.codex_version) / pins.executable_file
+        )
+        _check_executable(executable, pins)
+        # A failure above leaves the lock held: the app keeps running on its DB.
+        self._launcher = CodexLauncher(
+            executable, paths.codex_home, home_digest, source_dir=self._source_dir
+        )
         self._home_digest = home_digest
         self._configuration = configuration_receipt(home_digest, pins)
         # C6.14 is not connected: no L2 result, so SessionRuntime refuses sessions.

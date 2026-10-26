@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,6 +19,8 @@ from guard_app.ui.window import GuardWindow
 
 if TYPE_CHECKING:
     from guard_app.services.codex_preparation import CodexProcessPreparation
+
+_APP_CODE = re.compile(r"APP_[A-Z_]{1,60}")
 
 
 def main() -> int:
@@ -65,13 +68,45 @@ def main() -> int:
         parser.error("제품 실행에는 기존 부모 폴더 안의 --db-path SQLite 경로를 지정해야 한다")
     if args.codex_exe is not None and (args.demo or not args.codex_exe.is_absolute()):
         parser.error("--codex-exe는 제품 실행에서 codex.exe의 절대 경로로만 쓸 수 있다")
-    store_title = "SQLite Store" if not args.demo or args.store == "sqlite" else "메모리 Store"
 
+    codex: CodexProcessPreparation | None = None
+    if not args.demo:
+        from guard_app.security.paths import AppPathError
+        from guard_app.services.codex_preparation import CodexProcessPreparation
+
+        # A102: the single-instance lock comes before the DB, the backend and the
+        # window. Without it the app does not start.
+        codex = CodexProcessPreparation(executable=args.codex_exe)
+        try:
+            codex.claim()
+        except AppPathError as error:
+            print(_claim_refusal(error), file=sys.stderr)
+            return 1
+    try:
+        return _run(args, codex)
+    finally:
+        # The backend has closed its sessions; release the single-instance lock.
+        if codex is not None:
+            codex.close()
+
+
+def _claim_refusal(error: Exception) -> str:
+    """Fixed text for a refused claim. C2.13 codes carry no paths; other text is not shown."""
+    code = error.args[0] if error.args else None
+    if code == "APP_ALREADY_RUNNING":
+        return "MCP Runtime Guard가 이미 실행 중이라 시작하지 않는다"
+    if type(code) is str and _APP_CODE.fullmatch(code):
+        return f"앱 폴더를 준비하지 못해 시작하지 않는다({code})"
+    return "앱 폴더를 준비하지 못해 시작하지 않는다"
+
+
+def _run(args: argparse.Namespace, codex: CodexProcessPreparation | None) -> int:
+    """Window, bridge and Qt loop. Product mode passes its claimed `codex`."""
+    store_title = "SQLite Store" if not args.demo or args.store == "sqlite" else "메모리 Store"
     existing = QApplication.instance()
     app = existing if isinstance(existing, QApplication) else QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
-    codex: CodexProcessPreparation | None = None
-    if args.demo:
+    if codex is None:
         from examples.synthetic_app import bootstrap
 
         bridge = BackendBridge(
@@ -85,14 +120,11 @@ def main() -> int:
             )
         )
     else:
-        from guard_app.services.codex_preparation import CodexProcessPreparation
         from guard_app.services.session_runtime import bootstrap_product
 
         # A101: C's app folders and launcher behind each Task's Codex session.
-        codex = CodexProcessPreparation(executable=args.codex_exe)
-        bridge = BackendBridge(
-            lambda: bootstrap_product(args.db_path, preparation=codex.preparation())
-        )
+        preparation = codex.preparation()
+        bridge = BackendBridge(lambda: bootstrap_product(args.db_path, preparation=preparation))
 
     class ApplicationWindow(GuardWindow):
         def closeEvent(self, event: QCloseEvent) -> None:
@@ -117,12 +149,7 @@ def main() -> int:
     app.aboutToQuit.connect(bridge.close)
     window.show()
     bridge.start()
-    try:
-        return app.exec()
-    finally:
-        # The backend has closed its sessions; release the single-instance lock.
-        if codex is not None:
-            codex.close()
+    return app.exec()
 
 
 if __name__ == "__main__":
