@@ -1,17 +1,15 @@
 # C 현황
 
-갱신: 2026-10-18 · main `a2698b2` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-26 · main `58afdd4` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| Store 계약 회신(B6-01–06) | B·A | C1.8, C3.5 |
-| ScanReport 번역·Registry 영속화 계약(B6-06) | B | C4.9, C4.10 |
+| Store 계약 회신(B6-01–05) | B·A | C1.8, C3.5 |
 | AGT 제거(구현) | A·B | C2.9, C6.3, C6.4, C6.9 |
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
-| Codex 세션 관리자(하네스 연결) | A | C6.14 앱 연결, C6.15 |
 | 설치판 리소스 위치(패키징) | A | C6.20 |
 
 ## C1 · 계약과 관측 기반
@@ -23,7 +21,7 @@
 - [x] C1.5 Store 계약 처리 제안 v1 · [기록](archive/tasks/c-store-proposal.md)
 - [x] C1.6 B 승인 코드 검토, C-B-01 발견과 수정 확인 · [기록](archive/tasks/c-b-review.md)
 - [x] C1.7 공통 의존성 조합 고정(main `pyproject.toml`·`uv.lock`, Scanner 포함) · #4 · #6
-- [ ] C1.8 B Store·Scanner·Registry·상태·감사 계약 검토와 합의 — 막힘: B6-01–06
+- [ ] C1.8 B Store·Scanner·Registry·상태·감사 계약 검토와 합의. B6-06·SCAN-01·DESC-01은 #32에서 합의 — 막힘: B6-01–05
 - [ ] C1.9 A와 fixture 실행 방법·host_dispatch 관측·지문 변경 알림 맞추기
 
 ## C2 · 위험 연산과 정적 강제
@@ -33,13 +31,13 @@
 - [ ] C2.3 safe_path: 빈 값·NUL·역슬래시·절대·상위·symlink·드라이브·UNC·junction 거부
 - [ ] C2.4 검사-열기 TOCTOU 한계와 no-follow 옵션 확인
 - [ ] C2.5 URL 검증: scheme·userinfo·IDNA·끝 점·기본 포트·인코딩 경로
-- [ ] C2.6 launcher: 등록된 절대 경로·인자 리스트·최소 환경, shell·동적 실행 금지
+- [ ] C2.6 launcher: 등록된 절대 경로·인자 리스트·최소 환경, shell·동적 실행 금지. 실행 핵심은 C2.12 `launch_process`. 남은 것은 `servers.yaml` 등록 값 검증과 MCP 서버 실행 파일 해시의 출처
 - [ ] C2.7 ids: 암호학적 난수, 비밀값 누락은 전용 예외
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
 - [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
 - [ ] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용 · [결정](contracts.md#사용자-결정) — 막힘: A 입력 화면
-- [ ] C2.12 codex.exe 실행 launcher: 실행마다 SHA-256 대조, 허용 목록 환경(`SYSTEMROOT`·`WINDIR`·`TEMP`·`TMP`·`LOCALAPPDATA`·`APPDATA`·`USERPROFILE`·`CODEX_HOME`, 최종 목록은 실제 실행으로 확정), `-c sqlite_home=<Task 폴더>`, stdin/stdout 반환, stderr는 Task 폴더 격리 파일(#21 2번). stdio MCP 서버 실행에도 같은 API를 쓴다(#21 5번)
-- [ ] C2.13 앱 폴더 경로·권한: codex 설치·CODEX_HOME·Task 폴더를 `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 사용자 전용 권한으로, Task 폴더는 Task 종료·앱 시작 때 삭제(#21 6번)
+- [x] C2.12 codex.exe 실행 launcher(`security/launcher.py`): 쓰기 금지 핸들로 실행마다 SHA-256 대조, 허용 목록 환경, `-c sqlite_home='<Task 폴더>'`, 멈춘 채 생성 후 Job Object 할당, stdin/stdout은 A `CodexPipes` 형식, stderr는 Task 폴더 격리 파일, `close()`로 종료 확인(#21 2번). stdio MCP 서버도 같은 `launch_process`를 쓴다(#21 5번) · [기록](archive/c/C2.12-codex-launcher.md)
+- [x] C2.13 앱 폴더 경로·권한(`security/paths.py`): `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 codex 설치·CODEX_HOME·Task 폴더·config에 사용자·SYSTEM만의 보호된 DACL, 단일 실행 잠금, Task 폴더 생성·삭제와 앱 시작 때 남은 폴더 삭제(#21 6번) · [기록](archive/c/C2.13-app-folders.md)
 - [ ] C2.11 제품용 읽기 전용 파일 MCP 서버(stdio): 폴더 목록·파일 읽기만, `safe_path`(C2.3) 사용, `structuredContent.resource_id` 보고, UTF-8 텍스트만 · [결정](contracts.md#사용자-결정)
 - [ ] C2.14 설정 파일·Profile 로딩의 경로·실행 파일 검증(B가 읽어 Catalog에 넣고 A가 앱 시작에 연결, #19 1번) · [결정](contracts.md#사용자-결정)
 
@@ -66,8 +64,8 @@
 - [x] C4.6 운영 설정 추천안과 실제 정의 144개 검증 · [추천안](archive/tasks/c-scanner-operating-proposal.md) · [검증](archive/tasks/c-scanner-operating-validation.md)
 - [x] C4.7 C 브랜치 main 병합 · #6
 - [x] C4.8 Scanner 준비가 이벤트 루프를 막지 않게 수정(C-CISCO-06) · #8
-- [ ] C4.9 Scanner 결과를 B ScanReport로 번역(필수 분석기·완료/생략/실패·지문·severity) — 막힘: B 계약
-- [ ] C4.10 Registry 등록·지문 영속화와 변경 시 승인 무효화. DB의 ACTIVE만으로 실행하지 않고 연결마다 실제 지문과 대조 · [결정](contracts.md#사용자-결정) — 막힘: B6-06
+- [ ] C4.9 Scanner 결과를 B ScanReport로 번역(필수 분석기·완료/생략/실패·지문·severity). B SCAN-01 형식(#32), 모델 문장은 `defang_scanner_text`로 무해화
+- [ ] C4.10 Registry 등록·지문 영속화와 변경 시 승인 무효화. DB의 ACTIVE만으로 실행하지 않고 연결마다 실제 지문과 대조 · [결정](contracts.md#사용자-결정). B `RegistryStore`(#32)로 저장. 지문 계산 입력은 #21 A 질문(FP-01)에 회신 필요
 - [ ] C4.11 신규 서버 PENDING, 사용자 확인 후 ACTIVE
 - [ ] C4.12 정의 전체로 도구 지문 계산(B digest, float 표기 포함) · [결정](contracts.md#사용자-결정)
 - [ ] C4.13 경고 데이터를 등록 화면과 도구 호출 승인 창에 제공 · [결정](contracts.md#사용자-결정) — 막힘: A 화면
@@ -103,8 +101,8 @@
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록
 - [x] C6.13 Codex 0.162.1 L1 설정·모델 정보 파일·고정값(`config/codex/`)·설치 스크립트, CODEX_HOME에 쓰고 해시를 돌려주는 함수(#21 4번) · [기록](archive/c/C6.13-codex-l1.md)
-- [ ] C6.14 L2 시작 시험(T22): `configRequirements/read`·`config/read` 대조, 가짜 모델 서버로 도구 목록 정확 대조·금지 도구 7종 거부·호출 순차·요청 프롬프트 확인, `config/read` 대조에서 Task별 `-c sqlite_home` 하나만 허용, 실패 시 시작 거부, 앱 시작·버전 변경·CI 실행. 스크래치 실험 스크립트를 저장소로. C 구현은 A가 여는 주입형 L2 결과 포트에 채움(#21 3번) · [결정](contracts.md#사용자-결정) — 막힘: A 세션 관리자(앱 연결)
-- [ ] C6.15 L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답 검증 · [결정](contracts.md#사용자-결정) — 막힘: A 세션 관리자
+- [ ] C6.14 L2 시작 시험(T22): `configRequirements/read`·`config/read` 대조, 가짜 모델 서버로 도구 목록 정확 대조·금지 도구 7종 거부·호출 순차·요청 프롬프트 확인, `config/read` 대조에서 Task별 `-c sqlite_home` 하나만 허용, 원격 제어 상태 `disabled` 확인(C-CODEX-07), 실패 시 시작 거부, 앱 시작·버전 변경·CI 실행. 스크래치 실험 스크립트를 저장소로. C 구현은 A가 여는 주입형 L2 결과 포트에 채움(#21 3번). A `SessionPreparation`(#29)에 C2.12·C2.13과 함께 연결 · [결정](contracts.md#사용자-결정)
+- [ ] C6.15 L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답, 원격 제어 상태가 `disabled`가 아닐 때 정지(C-CODEX-07) 검증 · [결정](contracts.md#사용자-결정)
 - [ ] C6.16 Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.sandbox_migration`·`tmp\arg0` 보조 파일·인증 파일 여부, T43·#21 8번)과 동시 실행 때 경합(T46) 확인 · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C6.17 (후속·선택) codex.exe AppContainer 실행 실험(C-CODEX-04)
 - [ ] C6.18 최종 제출 전 C-CODEX-05 약관 재확인(#19 8번) · [결정](contracts.md#사용자-결정)
