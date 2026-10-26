@@ -72,9 +72,11 @@ DECISIONS = {"ALLOW": "허용", "ASK": "승인 필요", "DENY": "차단"}
 # Backend command codes -> what happened and what the operator can do next.
 # The code itself stays visible only as secondary text.
 RUN_RESULTS = {
-    "RUN_CONTINUE_QUERY_REQUIRED": "호출 처리 완료 · '실행 / 다음 모델 단계'로 이어서 진행할 수 있어.",
+    "RUN_CONTINUE_QUERY_REQUIRED": "호출 처리 완료 · '실행 / 다음 모델 "
+    "단계'로 이어서 진행할 수 있어.",
     "RUN_COMPLETE_QUERY_REQUIRED": "모델 단계 완료 · 모델이 요청한 호출이 더 없어.",
-    "RUN_PENDING_QUERY_REQUIRED": "승인이 필요한 호출이 있어 · '승인 사본 확인' 후 승인하거나 거절해.",
+    "RUN_PENDING_QUERY_REQUIRED": "승인이 필요한 호출이 있어 · '승인 사본 "
+    "확인' 후 승인하거나 거절해.",
     "RUN_DENIED_QUERY_REQUIRED": (
         "호출이 차단됐어 · Guard 정책 또는 AGT가 허용하지 않아 실행하지 않았어. "
         "차단 사유 조회는 아직 이 화면에 연결되지 않았어."
@@ -92,11 +94,11 @@ RUN_RESULTS = {
     ),
     "RUN_GUARD_ERROR_QUERY_REQUIRED": (
         "Guard 내부 오류로 이 Task 실행을 멈췄어 · 이어서 실행할 수 없어. "
-        "앱을 다시 시작하고 관리자에게 확인해."
+        "Task 상태를 확인하고 새 작업을 시작해. 문제가 반복되면 앱을 다시 시작해."
     ),
     "RUN_WITHHELD_QUERY_REQUIRED": (
         "도구 결과를 공개하지 않았어 · 모델에는 결과 대신 비공개 안내만 전달했어. "
-        "Task는 계속 실행 중이라 새 사용자 지시로 이어갈 수 있어."
+        "Task 상태와 이어서 실행할 수 있는지는 다시 조회된 표시를 확인해."
     ),
     "RUNNER_UNAVAILABLE": "이 실행에서 다룰 수 없는 작업이야 · 실행·제어하지 않았어.",
     "RUNNER_UNCONFIRMED": "실행 결과를 확인하지 못했어 · 위 Task 상태를 확인해.",
@@ -104,8 +106,13 @@ RUN_RESULTS = {
 APPROVAL_RESULTS = {
     "CONTROL_RELEASED_QUERY_REQUIRED": "승인한 호출을 실행했어.",
     "CONTROL_PENDING_QUERY_REQUIRED": "승인 처리 후 다음 호출에 다시 승인이 필요해.",
-    "CONTROL_DENIED_QUERY_REQUIRED": "호출은 실행되지 않았어 · 거절, 만료 또는 상태 변경으로 처리가 끝났어.",
-    "CONTROL_WITHHELD_QUERY_REQUIRED": "호출은 실행됐지만 결과를 분류할 수 없어 공개하지 않았어.",
+    "CONTROL_DENIED_QUERY_REQUIRED": "호출은 실행되지 않았어 · 거절, "
+    "만료 또는 상태 변경으로 처리가 끝났어.",
+    "CONTROL_WITHHELD_QUERY_REQUIRED": (
+        "호출은 실행됐지만 결과를 공개하지 않았어 · "
+        "공개 조건을 확인하지 못한 결과는 보여주지 않아. "
+        "Task 상태는 위에 다시 조회된 표시를 확인해."
+    ),
     "CONTROL_OUTCOME_UNKNOWN_QUERY_REQUIRED": (
         "전송 결과를 확인할 수 없어 · 수신측에서 실제 반영 여부를 확인해."
     ),
@@ -154,9 +161,113 @@ PAGES = {
     "server_add": "MCP 추가 초안",
     "policy": "정책 · 경계",
     "audit": "감사 기록",
-    "runs": "에이전트 실행",
+    "runs": "대화",
+    "results": "결과 · 실행 활동",
     "settings": "설정",
 }
+
+# Fixed capability failures are shared by draft creation and existing Task views.
+# Backend exception text, filesystem paths and unknown codes are never echoed.
+_CODEX_FAILURE_DETAILS = {
+    "CODEX_SESSION_UNAVAILABLE": "Codex 연결이 준비되지 않았어.",
+    "CODEX_SESSION_INVALID": "Codex 연결을 확인하지 못했어.",
+    "CODEX_L2_UNAVAILABLE": "Codex 시작 검사가 준비되지 않았어.",
+    "CODEX_L2_FAILED": "Codex 시작 검사를 통과하지 못했어.",
+    "CODEX_CONFIG_UNAVAILABLE": "Codex 설정 검증이 준비되지 않았어.",
+    "CODEX_CONFIG_MISMATCH": "Codex 설정이 시작 검사에서 확인한 설정과 달라.",
+    "CODEX_PREPARATION_FAILED": "Codex 세션 준비를 완료하지 못했어.",
+    "CODEX_CLEANUP_UNCONFIRMED": "Codex 종료·임시 자료 정리 완료를 확인하지 못했어.",
+    "GUARD_PROFILE_UNAVAILABLE": "Guard 정책(Profile) 설정이 아직 연결되지 않았어.",
+}
+_CODEX_MISSING_COMPONENTS = frozenset(
+    {
+        "CODEX_SESSION_UNAVAILABLE",
+        "CODEX_L2_UNAVAILABLE",
+        "CODEX_CONFIG_UNAVAILABLE",
+        "GUARD_PROFILE_UNAVAILABLE",
+    }
+)
+# Bridge refusals before any backend work: nothing was run for these commands.
+COMMAND_REFUSALS = {
+    "NOT_READY": "요청을 접수하지 않았어 · 백엔드가 아직 준비되지 않았어. 준비된 뒤 다시 보내.",
+    "CLOSING": "요청을 접수하지 않았어 · 앱이 종료 중이야.",
+    "INGRESS_FULL": "요청을 접수하지 않았어 · 처리 대기 요청이 가득 찼어. 잠시 뒤 다시 보내.",
+    "QUEUE_FULL": "요청을 접수하지 않았어 · 처리 대기 요청이 가득 찼어. 잠시 뒤 다시 보내.",
+    "COMMAND_ID_CONFLICT": "요청을 접수하지 않았어 · 같은 요청이 이미 처리 중이야.",
+}
+
+
+# A session stopped while running (A88). Each text is complete on its own.
+_CODEX_STOP_NOTICES = {
+    "CODEX_L3_VIOLATION": (
+        "Codex가 허용되지 않은 기능이나 승인을 요청해 이 Task를 정지했어. 새 세션에서 다시 시작해."
+    ),
+    "CODEX_USAGE_LIMIT": (
+        "Codex 사용량 한도에 도달해 이 Task를 정지했어. 한도가 풀린 뒤 새 세션을 시작해."
+    ),
+    "CODEX_TOOL_STOPPED": (
+        "도구 결과를 공개할 수 없거나 전송 결과를 확인할 수 없어 이 Task를 정지했어. "
+        "결과 · 실행 활동에서 상태를 확인해."
+    ),
+    "CODEX_WATCHDOG_TIMEOUT": (
+        "도구 호출이 제한 시간 안에 끝나지 않아 이 Task를 정지했어. "
+        "전송이었다면 수신측에서 반영 여부를 확인해."
+    ),
+    "CODEX_TOOL_CALL_INVALID": "Codex가 형식이 맞지 않는 도구 호출을 보내 이 Task를 정지했어.",
+    "CODEX_TURN_FAILED": "Codex 응답이 실패해 이 Task를 정지했어. 새 세션에서 다시 시작해.",
+    "CODEX_TURN_INTERRUPTED": "Codex 응답이 중단돼 이 Task를 정지했어. 새 세션에서 다시 시작해.",
+    "CODEX_START_FAILED": "Codex 세션을 시작하지 못했어. 새 세션에서 다시 시작해.",
+    "CODEX_ANSWER_TOO_LARGE": "Codex 답변이 표시 상한을 넘어 이 Task를 정지했어.",
+    "CODEX_INPUT_INVALID": "보낼 수 없는 메시지라 이 Task를 정지했어. 새 세션에서 다시 시작해.",
+    "CODEX_INTERRUPT_UNCONFIRMED": (
+        "Codex 중단을 확인하지 못했어. 앱을 종료하고 정리 상태를 확인해."
+    ),
+    "CODEX_SESSION_FAILED": "Codex 세션이 실패해 이 Task를 정지했어. 새 세션에서 다시 시작해.",
+}
+
+
+def codex_failure_notice(code: str, *, creating: bool = False) -> str:
+    """Describe only known failures; cleanup uncertainty never implies no launch."""
+
+    stopped = _CODEX_STOP_NOTICES.get(code)
+    if stopped is not None and not creating:
+        return stopped
+    detail = _CODEX_FAILURE_DETAILS.get(code)
+    if detail is None:
+        return ""
+    if code == "CODEX_CLEANUP_UNCONFIRMED":
+        return detail + " 자동으로 다시 실행하지 않아. 앱을 종료하고 정리 상태를 확인해."
+    context = " 세션을 시작하지 않았어." if creating else " 이 Task를 실행할 수 없어."
+    if code in _CODEX_MISSING_COMPONENTS:
+        # The build lacks the component; restarting or editing settings cannot help.
+        return detail + context + " 이 앱 구성에서는 아직 이 기능을 쓸 수 없어."
+    return detail + context + " 앱 설정을 확인하고 앱을 다시 시작해."
+
+
+def task_label_text(label: object, unclassified: bool) -> str:
+    """Store-confirmed Task watermark; never inferred from model or tool text."""
+
+    name = getattr(label, "name", None)
+    text = LABELS.get(name) if type(name) is str else None
+    shown = "미제공" if text is None else f"{text[0]} · {text[1]}"
+    return f"Task 등급: {shown}" + (" · 미분류 자료 표시됨" if unclassified is True else "")
+
+
+def session_blocker_notice(code: str) -> str:
+    """Before any click: why new sessions are already known to be refused."""
+
+    if not code:
+        return ""
+    if code == "SESSION_CREATION_UNAVAILABLE":
+        return "이 실행 구성에는 새 Task 생성 기능이 연결되지 않았어."
+    detail = _CODEX_FAILURE_DETAILS.get(code)
+    if detail is None:
+        return "지금은 새 세션을 시작할 수 없어."
+    if code == "CODEX_CLEANUP_UNCONFIRMED":
+        return detail + " 새 세션을 시작하지 않아. 앱을 종료하고 정리 상태를 확인해."
+    if code in _CODEX_MISSING_COMPONENTS:
+        return detail + " 이 앱 구성에서는 아직 새 세션을 시작할 수 없어."
+    return detail + " 지금은 새 세션을 시작할 수 없어. 앱 설정을 확인하고 앱을 다시 시작해."
 
 
 def fixed(mapping: dict[str, str], value: str | None, *, default: str = "미확인") -> str:

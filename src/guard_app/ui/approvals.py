@@ -18,7 +18,6 @@ from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QBoxLayout,
-    QComboBox,
     QHeaderView,
     QLineEdit,
     QPlainTextEdit,
@@ -33,7 +32,7 @@ from guard_app.domain.enums import ApprovalStatus
 
 from .models import LoadState
 from .presentation import MISSING, format_kst, public_display_text
-from .widgets import KeyboardActionButton, StateMessage, plain_label
+from .widgets import KeyboardActionButton, SelectionBox, StateMessage, plain_label
 
 
 class ApprovalLane(StrEnum):
@@ -121,6 +120,10 @@ class ApprovalPage:
     as_of: datetime | None = None
 
 
+DEFAULT_APPROVAL_TTL_SECONDS = 300
+SOURCE_NOT_CONNECTED = "승인 목록 조회가 아직 연결되지 않았어 · 승인 요청은 대화 화면에서 처리해."
+
+
 class ApprovalListPage(QWidget):
     """Searches six-row backend pages without approval/denial controls.
 
@@ -145,6 +148,10 @@ class ApprovalListPage(QWidget):
         self._selected_id: str | None = None
         self._column_mode: str | None = None
         self._display_now: datetime | None = None
+        self._source_connected = True
+        # Profile approval TTL (GuardSettings); a PENDING row older than this
+        # should already be expiring, so it is flagged for a fresh read.
+        self._approval_ttl_seconds = DEFAULT_APPROVAL_TTL_SECONDS
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 28, 26, 42)
@@ -176,7 +183,7 @@ class ApprovalListPage(QWidget):
         self.server_filter.setAccessibleName("MCP 서버 ID 필터")
         self.server_filter.editingFinished.connect(self._filters_changed)
         self.filters.addWidget(self.server_filter, 1)
-        self.sort = QComboBox()
+        self.sort = SelectionBox()
         self.sort.addItem("오래된 순", ApprovalSort.OLDEST)
         self.sort.addItem("최신 순", ApprovalSort.NEWEST)
         self.sort.setAccessibleName("승인 목록 정렬")
@@ -221,9 +228,7 @@ class ApprovalListPage(QWidget):
         layout.addWidget(self.selection_detail)
 
         self.pager = QBoxLayout(QBoxLayout.Direction.TopToBottom)
-        self.count_label = plain_label(
-            "총건수 미제공 · 현재 페이지 0건", name="secondary"
-        )
+        self.count_label = plain_label("총건수 미제공 · 현재 페이지 0건", name="secondary")
         self.pager.addWidget(self.count_label)
         self.pager.addStretch(1)
         self.previous_button = KeyboardActionButton("이전")
@@ -235,6 +240,7 @@ class ApprovalListPage(QWidget):
         self.next_button.clicked.connect(self.next_page)
         self.pager.addWidget(self.next_button)
         self.refresh_button = KeyboardActionButton("새로고침")
+        self.refresh_button.set_visual(icon="refresh")
         self.refresh_button.clicked.connect(self.refresh)
         self.pager.addWidget(self.refresh_button)
         layout.addLayout(self.pager)
@@ -306,8 +312,7 @@ class ApprovalListPage(QWidget):
         else:
             fractions = (15, 13, 18, 16, 18)
             widths = {
-                column: available * percent // 100
-                for column, percent in enumerate(fractions)
+                column: available * percent // 100 for column, percent in enumerate(fractions)
             }
             widths[5] = available - sum(widths.values())
         for column, width in widths.items():
@@ -326,9 +331,9 @@ class ApprovalListPage(QWidget):
                 and now is not None
                 and now.tzinfo is not None
                 and now.utcoffset() is not None
-                and now - row.created_at >= timedelta(minutes=30)
+                and now - row.created_at >= timedelta(seconds=self._approval_ttl_seconds)
             ):
-                status += " · 30분 이상 대기(참고)"
+                status += " · 승인 유효 시간 지남 · 상태 다시 확인(참고)"
             if self._column_mode == "narrow":
                 age = _bounded_request_age(row.created_at, now) if now else None
                 if row.status in (ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED):
@@ -366,6 +371,31 @@ class ApprovalListPage(QWidget):
             None,
         )
 
+    def set_approval_ttl_seconds(self, seconds: int) -> None:
+        if type(seconds) is not int or seconds < 1:
+            raise ValueError("positive approval TTL required")
+        self._approval_ttl_seconds = seconds
+
+    @property
+    def source_connected(self) -> bool:
+        return self._source_connected
+
+    def set_source_connected(self, connected: bool) -> None:
+        """Without a backend query source, never enter LOADING and wait forever."""
+
+        self._source_connected = connected is True
+        for control in (self.lane_tabs, self.search, self.server_filter, self.sort):
+            control.setEnabled(self._source_connected)
+        self.refresh_button.setEnabled(self._source_connected)
+        if not self._source_connected:
+            self._sequence += 1
+            self._query = None
+            self._clear_rows()
+            self._state = LoadState.UNAVAILABLE
+            self.state_message.set_message(SOURCE_NOT_CONNECTED)
+            self.state_message.setVisible(True)
+            self._update_pager()
+
     def refresh(self) -> None:
         """Read again; never resend an approval/denial command."""
 
@@ -381,11 +411,7 @@ class ApprovalListPage(QWidget):
             self._request_page(self._query.page + 1)
 
     def previous_page(self) -> None:
-        if (
-            self._state is LoadState.READY
-            and self._query is not None
-            and self._query.page > 1
-        ):
+        if self._state is LoadState.READY and self._query is not None and self._query.page > 1:
             self._request_page(self._query.page - 1)
 
     def select_approval(self, approval_id: str) -> bool:
@@ -403,13 +429,13 @@ class ApprovalListPage(QWidget):
         self._request_page(1)
 
     def _request_page(self, page: int) -> None:
+        if not self._source_connected:
+            return
         self._sequence += 1
         self._query = ApprovalQuery(
             token=self._sequence,
             lane=(
-                ApprovalLane.PENDING
-                if self.lane_tabs.currentIndex() == 0
-                else ApprovalLane.HISTORY
+                ApprovalLane.PENDING if self.lane_tabs.currentIndex() == 0 else ApprovalLane.HISTORY
             ),
             search=self.search.text().strip(),
             server_id=self.server_filter.text().strip(),
@@ -423,9 +449,7 @@ class ApprovalListPage(QWidget):
         self._update_pager()
         self.query_requested.emit(self._query)
 
-    def set_page(
-        self, page: ApprovalPage, *, display_now: datetime | None = None
-    ) -> bool:
+    def set_page(self, page: ApprovalPage, *, display_now: datetime | None = None) -> bool:
         """Apply only a current, structurally valid backend response."""
 
         if type(page) is not ApprovalPage or page.query != self._query:
@@ -553,8 +577,7 @@ class ApprovalListPage(QWidget):
 
     def _update_pager(self) -> None:
         ready = self._state is LoadState.READY and self._query is not None
-        if ready:
-            assert self._query is not None
+        if ready and self._query is not None:
             self.count_label.setText(
                 f"전체 {self._total_count:,}건 · 현재 페이지 {len(self._rows)}건"
             )
@@ -593,9 +616,7 @@ class ApprovalListPage(QWidget):
                 ):
                     codepoint = ord(char)
                     parts.append(
-                        f"\\u{codepoint:04X}"
-                        if codepoint <= 0xFFFF
-                        else f"\\U{codepoint:08X}"
+                        f"\\u{codepoint:04X}" if codepoint <= 0xFFFF else f"\\U{codepoint:08X}"
                     )
                 else:
                     parts.append(char)
@@ -606,7 +627,8 @@ class ApprovalListPage(QWidget):
                 f"승인 ID: {one_line(row.approval_id)} · 서버 ID: {one_line(row.server_id)}",
                 f"상태: {_STATUS_TEXT[row.status]}",
                 f"Task ID: {one_line(row.task_id)} · 요청 ID: {one_line(row.request_id)}",
-                f"수신처 요약: {one_line(row.destination_summary) if row.destination_summary else MISSING}",
+                "수신처 요약: "
+                f"{one_line(row.destination_summary) if row.destination_summary else MISSING}",
                 f"요청 시각: {format_kst(row.created_at)}",
                 f"처리 시각: {format_kst(row.resolved_at)}",
             )

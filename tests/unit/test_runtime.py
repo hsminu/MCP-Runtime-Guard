@@ -154,7 +154,7 @@ def test_stop_without_confirmed_halt_is_not_reported_as_success():
     ("action", "code", "start", "fragment"),
     [
         ("run", "RUN_GUARD_ERROR_QUERY_REQUIRED", "Guard 내부 오류로", "이어서 실행할 수 없어"),
-        ("run", "RUN_WITHHELD_QUERY_REQUIRED", "도구 결과를 공개하지 않았어", "계속 실행 중"),
+        ("run", "RUN_WITHHELD_QUERY_REQUIRED", "도구 결과를 공개하지 않았어", "다시 조회된 표시"),
         ("run", "RUN_STOPPED_QUERY_REQUIRED", "실행이 정지됐어", "새 Task"),
         (
             ControlAction.APPROVE,
@@ -184,6 +184,10 @@ def test_runner_status_codes_have_korean_operator_text(action, code, start, frag
     text = panel._result_text(action, code)
     assert text.startswith(start) and fragment in text
     assert "도구 설정 오류" not in text
+    assert "관리자에게" not in text
+    if code == "RUN_WITHHELD_QUERY_REQUIRED":
+        assert "계속 실행 중" not in text
+        assert "정지됐어" not in text
     assert code not in text  # the code stays a secondary line only
     panel._commands["command"] = action
     panel._command(

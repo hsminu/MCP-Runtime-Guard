@@ -12,7 +12,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtWidgets import QApplication, QScrollArea
 
+from guard_app.services import catalog_sources
 from guard_app.ui.server_add import LocalDraftPreview, ServerAddForm
+from guard_app.ui.window import GuardWindow
 
 
 @pytest.fixture(scope="module")
@@ -210,7 +212,7 @@ def test_duplicate_local_click_emits_once_without_claiming_registration(
 ) -> None:
     _valid_stdio(form)
     previews: list[LocalDraftPreview] = []
-    form.localDraftPrepared.connect(previews.append)
+    form.local_draft_prepared.connect(previews.append)
     form.prepare_button.click()
     first_draft = form.validated_draft
     form.prepare_button.click()
@@ -365,3 +367,106 @@ def test_ordinary_local_and_punycode_urls_remain_accepted(form: ServerAddForm, u
     form.url.setText(url)
     assert not form._errors["url"].text()
     assert form.prepare_button.isEnabled()
+
+
+# A54 / I7 / T32 support: UI is a syntax hint; Registry enforces registration.
+@pytest.mark.parametrize("transport", ["stdio", "streamable_http"])
+@pytest.mark.parametrize("server_id", ["__", "docs__read", "docs_", "_", " docs_ "])
+def test_namespace_server_id_error_is_immediate_and_never_prepares_a_draft(
+    form: ServerAddForm, transport: str, server_id: str
+) -> None:
+    _valid_stdio(form)
+    form.transport.setCurrentIndex(form.transport.findData(transport))
+    form.url.setText("https://mcp.example.test/mcp")
+    previews: list[LocalDraftPreview] = []
+    form.local_draft_prepared.connect(previews.append)
+    assert form.prepare_button.isEnabled()
+
+    form.server_id.setText(server_id)
+
+    assert not catalog_sources.valid_server_id(server_id.strip())
+    assert "연속 밑줄(__)과 끝의 밑줄(_)" in form._errors["server_id"].text()
+    assert not form._errors["server_id"].isHidden()
+    assert form._errors["server_id"].property("validationError") is True
+    assert not form.prepare_button.isEnabled()
+    form.prepare_button.click()
+    form._prepare_local_draft()  # The submit handler rechecks even if invoked directly.
+    assert form.validated_draft is None
+    assert previews == []
+
+
+@pytest.mark.parametrize("server_id", ["docs", "local_docs", "_docs", "서버 이름", "a" * 128])
+def test_b_valid_server_ids_remain_accepted_after_existing_ui_checks(
+    form: ServerAddForm, server_id: str
+) -> None:
+    _valid_stdio(form)
+    assert catalog_sources.valid_server_id(server_id)
+    form.server_id.setText(f"  {server_id}  ")
+    assert form._errors["server_id"].text() == ""
+    assert form.prepare_button.isEnabled()
+    form.prepare_button.click()
+    assert form.validated_draft is not None
+    assert form.validated_draft.server_id == server_id
+    assert "Registry에 등록되지 않았어" in form.status.text()
+
+
+def test_editing_server_id_clears_prepared_draft_and_updates_errors_immediately(
+    form: ServerAddForm,
+) -> None:
+    _valid_stdio(form)
+    form.prepare_button.click()
+    assert form.validated_draft is not None
+
+    form.server_id.setText("docs__read")
+    assert form.validated_draft is None
+    assert "연속 밑줄" in form._errors["server_id"].text()
+    assert "입력 오류" in form.preview.toPlainText()
+
+    form.server_id.setText("")
+    assert form._errors["server_id"].text() == "서버 ID를 입력해."
+    form.server_id.setText("docs_read")
+    assert form._errors["server_id"].text() == ""
+    assert form._errors["server_id"].isHidden()
+    assert form._errors["server_id"].property("validationError") is False
+    assert form.prepare_button.isEnabled()
+    assert form.validated_draft is None
+
+
+def test_form_uses_same_b_result_through_bridge_with_trimmed_input(
+    form: ServerAddForm, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _valid_stdio(form)
+    check = catalog_sources.valid_server_id
+    calls: list[object] = []
+
+    def recording_check(server_id: object) -> bool:
+        calls.append(server_id)
+        return check(server_id)
+
+    monkeypatch.setattr(catalog_sources, "valid_server_id", recording_check)
+    form.server_id.setText("  docs_  ")
+    assert calls == ["docs_"]
+    assert not form.prepare_button.isEnabled()
+
+    form.server_id.setText("  docs_read  ")
+    assert calls[-1] == "docs_read"
+    assert form.prepare_button.isEnabled()
+
+
+def test_product_window_uses_bridge_validation_without_backend_startup(
+    app: QApplication,
+) -> None:
+    window = GuardWindow()
+    try:
+        window.navigate("server_add")
+        form = window.server_add_form
+        _valid_stdio(form)
+        form.server_id.setText("docs__read")
+        assert "연속 밑줄" in form._errors["server_id"].text()
+        assert not form.prepare_button.isEnabled()
+        form.server_id.setText("docs_read")
+        assert form._errors["server_id"].text() == ""
+        assert form.prepare_button.isEnabled()
+    finally:
+        window.close()
+        app.processEvents()

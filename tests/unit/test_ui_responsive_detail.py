@@ -53,8 +53,7 @@ def test_server_form_reflows_without_horizontal_page_scroll(app: QApplication) -
     assert scroll.horizontalScrollBar().maximum() == 0
     assert scroll.verticalScrollBar().maximum() > 0
     assert all(
-        layout.rowWrapPolicy() == QFormLayout.RowWrapPolicy.WrapAllRows
-        for layout in form._forms
+        layout.rowWrapPolicy() == QFormLayout.RowWrapPolicy.WrapAllRows for layout in form._forms
     )
     form.server_id.setText("synthetic-id")
     form.display_name.setText("Synthetic")
@@ -68,8 +67,7 @@ def test_server_form_reflows_without_horizontal_page_scroll(app: QApplication) -
     form.resize(980, 760)
     app.processEvents()
     assert all(
-        layout.rowWrapPolicy() == QFormLayout.RowWrapPolicy.DontWrapRows
-        for layout in form._forms
+        layout.rowWrapPolicy() == QFormLayout.RowWrapPolicy.DontWrapRows for layout in form._forms
     )
     form.resize(320, 420)
     app.processEvents()
@@ -95,10 +93,7 @@ def test_server_list_keeps_identity_and_status_at_small_width(
         page.width(),
         page.minimumSizeHint().width(),
         sorted(
-            (
-                (w.objectName(), w.minimumSizeHint().width())
-                for w in page.findChildren(QWidget)
-            ),
+            ((w.objectName(), w.minimumSizeHint().width()) for w in page.findChildren(QWidget)),
             key=lambda row: row[1],
             reverse=True,
         )[:12],
@@ -146,9 +141,7 @@ def test_detail_dialogs_fit_small_owner_and_keep_complete_values(
     plain.close()
 
     approval = ApprovalDetailDialog(owner)
-    approval.show_value(
-        ApprovalDetailValue("synthetic-destination", text.encode("utf-8"))
-    )
+    approval.show_value(ApprovalDetailValue("synthetic-destination", text.encode("utf-8")))
     app.processEvents()
     assert approval.width() <= owner.width()
     assert approval.height() <= owner.height()
@@ -202,9 +195,7 @@ def test_server_detail_keeps_security_summary_above_scan_on_short_owner(
             detail.session_status_field,
             detail.tier_field,
         )
-        positions = [
-            widget.mapTo(scroll.viewport(), QPoint(0, 0)).y() for widget in summary
-        ]
+        positions = [widget.mapTo(scroll.viewport(), QPoint(0, 0)).y() for widget in summary]
         assert positions == sorted(positions)
         assert positions[0] >= 0
         assert positions[-1] + summary[-1].height() <= scroll.viewport().height()
@@ -244,9 +235,7 @@ def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None
                     ),
                 ),
             ),
-            recent_calls=Surface(
-                LoadState.READY, (RecentCall(long_id, long_id, long_id),)
-            ),
+            recent_calls=Surface(LoadState.READY, (RecentCall(long_id, long_id, long_id),)),
         )
     )
     window.show()
@@ -256,8 +245,6 @@ def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None
         assert isinstance(scroll, QScrollArea)
         assert window.width() == 320
         assert scroll.horizontalScrollBar().maximum() == 0
-        assert any(
-            long_id in label.text() for label in window.overview.findChildren(QLabel)
-        )
+        assert any(long_id in label.text() for label in window.overview.findChildren(QLabel))
     finally:
         window.close()
