@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import sys
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCloseEvent
@@ -13,6 +15,9 @@ from PySide6.QtWidgets import QApplication
 from guard_app.services.bridge import BackendBridge
 from guard_app.ui.runtime import RuntimePanel
 from guard_app.ui.window import GuardWindow
+
+if TYPE_CHECKING:
+    from guard_app.services.codex_preparation import CodexProcessPreparation
 
 
 def main() -> int:
@@ -27,6 +32,12 @@ def main() -> int:
     parser.add_argument("--mcp-transport", choices=("stdio", "http"))
     parser.add_argument("--store", choices=("memory", "sqlite"))
     parser.add_argument("--db-path", metavar="PATH", help="기존 부모 디렉터리의 SQLite 파일")
+    parser.add_argument(
+        "--codex-exe",
+        metavar="PATH",
+        type=Path,
+        help="고정 버전 codex.exe의 절대 경로(기본: tools/install_codex.py 설치 위치)",
+    )
     parser.add_argument("--agt-mode", choices=("real", "mock"))
     parser.add_argument(
         "--agt-policy",
@@ -52,11 +63,14 @@ def main() -> int:
         parser.error("저장소 종류와 DB 경로 설정이 일치하지 않는다")
     if not args.demo and args.db_path is None:
         parser.error("제품 실행에는 기존 부모 폴더 안의 --db-path SQLite 경로를 지정해야 한다")
+    if args.codex_exe is not None and (args.demo or not args.codex_exe.is_absolute()):
+        parser.error("--codex-exe는 제품 실행에서 codex.exe의 절대 경로로만 쓸 수 있다")
     store_title = "SQLite Store" if not args.demo or args.store == "sqlite" else "메모리 Store"
 
     existing = QApplication.instance()
     app = existing if isinstance(existing, QApplication) else QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
+    codex: CodexProcessPreparation | None = None
     if args.demo:
         from examples.synthetic_app import bootstrap
 
@@ -71,9 +85,14 @@ def main() -> int:
             )
         )
     else:
+        from guard_app.services.codex_preparation import CodexProcessPreparation
         from guard_app.services.session_runtime import bootstrap_product
 
-        bridge = BackendBridge(lambda: bootstrap_product(args.db_path))
+        # A101: C's app folders and launcher behind each Task's Codex session.
+        codex = CodexProcessPreparation(executable=args.codex_exe)
+        bridge = BackendBridge(
+            lambda: bootstrap_product(args.db_path, preparation=codex.preparation())
+        )
 
     class ApplicationWindow(GuardWindow):
         def closeEvent(self, event: QCloseEvent) -> None:
@@ -98,7 +117,12 @@ def main() -> int:
     app.aboutToQuit.connect(bridge.close)
     window.show()
     bridge.start()
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        # The backend has closed its sessions; release the single-instance lock.
+        if codex is not None:
+            codex.close()
 
 
 if __name__ == "__main__":

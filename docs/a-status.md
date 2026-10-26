@@ -68,7 +68,8 @@
 - [ ] A53 B의 AGT 코드 제거 중 A 소유 파일 리뷰 — 막힘: B PR
 - [x] A87 Codex 0.162.1 프로토콜 순수 함수·대본형 가짜 app-server · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)
 - [x] A88 Codex 세션 관리자 A 계층(L3·Guard 중계·FIFO·감시 상한·제품 연결·취소 시 세션 정지) · [기록](archive/a/A88-codex-session-manager.md)
-- [ ] A19·A20 실제 codex.exe 연결 — 막힘: C launcher(C2.12)·L2(C6.14), 세션 관리자 계약 합의
+- [x] A101 C launcher(C2.12)·앱 폴더(C2.13)·CODEX_HOME을 세션 준비에 연결, 로컬 codex.exe 지정(`--codex-exe`), 준비 실패는 앱이 아니라 세션만 차단 · [기록](archive/a/A101-codex-launcher-preparation.md)
+- [ ] A19·A20 실제 codex.exe 세션 — 막힘: L2(C6.14)·Profile 설정 파일(CFG-01, B 변환·C 파일 연산)
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
 - [x] A58 JSON-RPC 전송 마감·처리기 안 close 교착·종료 사유 보정 · [기록](archive/a/A58-jsonrpc-send-and-close.md)
@@ -86,7 +87,7 @@
 - [x] A92 contracts 10-17 "도구 이름 제한 없음"과 Codex 이름 규칙 충돌 알림([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6251209139) 2절, 사용자 결정 대기) · [기록](archive/a/A92-contract-replies-and-b72-review.md)
 - [x] A90 `baseInstructions` 프롬프트 문구·C1.9 관측 지점(`SessionObservations`) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A90 답변 스트리밍의 대화 화면 연결(bridge `conversation_partial`, 부분 답 교체·중단 표시) · [기록](archive/a/A90-answer-streaming.md)
-- [ ] A74 Task 폴더 정리 실제 연결 — 막힘: C2.13 삭제 연산
+- [x] A74 Task 폴더 정리 실제 연결(A101, C2.13 `remove_task_folder`) · [기록](archive/a/A101-codex-launcher-preparation.md)
 - [x] A72 앱 시작 준비 1회·Task별 구성 지문/L2 대조 연결부 · [기록](archive/a/A72-per-task-configuration-gate.md)
 - [x] A73 Codex stdin/stdout 바이트 프레이밍 어댑터·상한/종료 검증 · [기록](archive/a/A73-codex-stream-framing.md)
 - [x] A74 주입형 Task 자원 준비·종료 확인·정리 순서와 미확인 재시작 차단 · [기록](archive/a/A74-task-resource-lifecycle.md)
@@ -94,7 +95,7 @@
 - [x] A99 Codex 원격 제어가 `disabled`가 아니면 Task 정지·로그인 연결 종료(C-CODEX-07, PR #35 A 리뷰) · [기록](archive/a/A99-remote-control-stop.md)
 - [x] A21·A22 Runner expected_epoch·승인 resume 연결
 - [x] A21·A22 Task별 새 세션·thread 격리(가짜 app-server) · [기록](archive/a/A88-codex-session-manager.md)
-- [ ] A21·A22 실제 codex.exe로 T21 — 막힘: C launcher
+- [ ] A21·A22 실제 codex.exe로 T21 — 막힘: L2(C6.14)·Profile(CFG-01). launcher 연결은 A101
 - [x] A23 B 리뷰: AGT 지연 중 긴급 차단 수정·회귀 · [기록](archive/tasks/a-b-review.md)
 - [ ] A23 독립 wire 검증 — 막힘: C
 

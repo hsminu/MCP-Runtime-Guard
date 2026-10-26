@@ -819,6 +819,26 @@ def test_cli_product_mode_refuses_demo_only_options(monkeypatch, capsys, tmp_pat
     assert not db.exists()
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--db-path", "{db}", "--codex-exe", "codex.exe"],
+        ["--demo", "--agt-mode", "mock", "--codex-exe", "{exe}"],
+    ],
+    ids=["relative", "demo"],
+)
+def test_cli_codex_exe_is_an_absolute_product_path(monkeypatch, capsys, tmp_path, args):
+    """A101: each developer may point at a local codex.exe, only in product mode."""
+    db, exe = tmp_path / "product.db", tmp_path / "codex.exe"
+    argv = [arg.format(db=db, exe=exe) for arg in args]
+    monkeypatch.setattr(sys, "argv", ["guard-app", *argv])
+    with pytest.raises(SystemExit) as caught:
+        main()
+    assert caught.value.code == 2
+    assert "--codex-exe는 제품 실행에서" in capsys.readouterr().err
+    assert not db.exists()
+
+
 def test_cli_demo_without_examples_package_fails_without_traceback(monkeypatch, capsys):
     """설치된 wheel처럼 examples가 없으면 고정 안내로 끝난다."""
     import importlib.util

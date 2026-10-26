@@ -592,7 +592,10 @@ def test_creation_blocker_reports_known_refusals_in_creation_order(tmp_path):
         failed, _ = make_runtime(tmp_path, l2=None)
         with pytest.raises(SessionRuntimeError, match="CODEX_L2_UNAVAILABLE"):
             await failed.create_session(SessionOptions())
-        assert failed.creation_blocker() == "CODEX_PREPARATION_FAILED"
+        # A101: the first refusal's code stays the blocker and answers later tries.
+        assert failed.creation_blocker() == "CODEX_L2_UNAVAILABLE"
+        with pytest.raises(SessionRuntimeError, match="^CODEX_L2_UNAVAILABLE$"):
+            await failed.create_session(SessionOptions())
         await failed.close()
         await runtime.close()
 
@@ -619,16 +622,63 @@ def test_product_bootstrap_without_c_components_starts_and_refuses_sessions(tmp_
     assert (tmp_path / "product.db").exists()
 
 
-def test_product_bootstrap_closes_the_store_when_startup_preparation_fails(tmp_path):
+def test_product_bootstrap_starts_and_keeps_a_startup_refusal_as_the_blocker(tmp_path):
+    """A101: a refused app-wide preparation blocks sessions, not the app (10.4
+    refuses Task starts). It runs once at start and is not retried."""
     from guard_app.services.session_runtime import bootstrap_product
 
+    preparation = synthetic_preparation(l2=None)
+    startups: list[None] = []
+
+    async def startup() -> StartupReceipt:
+        startups.append(None)
+        return await preparation.prepare_startup()
+
     async def run():
-        with pytest.raises(SessionRuntimeError, match="CODEX_L2_UNAVAILABLE"):
-            await bootstrap_product(
-                str(tmp_path / "failed.db"), preparation=synthetic_preparation(l2=None)
-            )
+        bindings = await bootstrap_product(
+            str(tmp_path / "failed.db"), preparation=replace(preparation, prepare_startup=startup)
+        )
+        try:
+            assert bindings.session_blocker is not None
+            assert bindings.create_session is not None
+            assert bindings.session_blocker() == "CODEX_L2_UNAVAILABLE"
+            with pytest.raises(SessionRuntimeError, match="^CODEX_L2_UNAVAILABLE$"):
+                await bindings.create_session(SessionOptions())
+        finally:
+            assert bindings.close is not None
+            await bindings.close()
 
     asyncio.run(run())
+    assert len(startups) == 1
+
+
+@pytest.mark.parametrize(
+    ("receipt", "code"),
+    [
+        (
+            StartupReceipt(ConfigurationReceipt("a" * 64, "b" * 64, "c" * 64), None, False),
+            "CODEX_L2_UNAVAILABLE",
+        ),
+        (None, "CODEX_PREPARATION_FAILED"),
+    ],
+    ids=["l2-missing", "callback-failed"],
+)
+def test_a_startup_refusal_is_reported_with_its_own_code(tmp_path, receipt, code):
+    async def run():
+        async def startup() -> StartupReceipt:
+            if receipt is None:
+                raise RuntimeError("raw-startup-detail")
+            return receipt
+
+        runtime, _ = make_runtime(tmp_path)
+        runtime._preparation = replace(synthetic_preparation(), prepare_startup=startup)
+        try:
+            await runtime.prepare_startup()
+            return runtime.creation_blocker()
+        finally:
+            await runtime.close()
+
+    assert asyncio.run(run()) == code
 
 
 def test_snapshot_carries_the_store_watermark_and_unclassified_flag(tmp_path):

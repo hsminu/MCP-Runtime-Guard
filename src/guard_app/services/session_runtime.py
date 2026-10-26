@@ -9,6 +9,7 @@ persistence, model API, Guard protocol or replacement B port is implemented here
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import cast
@@ -93,6 +94,21 @@ def stop_reason(code: str) -> SystemStopReason:
     return _STOP_REASONS.get(code, SystemStopReason.PROCESS_FAILED)
 
 
+def _startup_refusal(receipt: object) -> str | None:
+    """Why an app-wide startup receipt refuses sessions; None when it passes."""
+    if type(receipt) is not StartupReceipt or not valid_configuration(receipt.configuration):
+        return "CODEX_PREPARATION_FAILED"
+    if receipt.l2_configuration is None:
+        return "CODEX_L2_UNAVAILABLE"
+    if receipt.l2_passed is not True:
+        return "CODEX_L2_FAILED"
+    if not valid_configuration(receipt.l2_configuration):
+        return "CODEX_PREPARATION_FAILED"
+    if receipt.configuration != receipt.l2_configuration:
+        return "CODEX_CONFIG_MISMATCH"
+    return None
+
+
 class SessionRuntimeError(SessionStartError):
     pass
 
@@ -146,6 +162,7 @@ class SessionRuntime:
         self._startup_lock = asyncio.Lock()
         self._configuration: ConfigurationReceipt | None = None
         self._startup_attempted = False
+        self._startup_code = "CODEX_PREPARATION_FAILED"
         self._close_store = close_store
         self._runners: dict[str, CodexTaskRunner] = {}
         self._sessions: dict[str, CodexSession] = {}
@@ -186,7 +203,7 @@ class SessionRuntime:
         if type(preparation) is not SessionPreparation:
             return "CODEX_CONFIG_UNAVAILABLE"
         if self._startup_attempted and self._configuration is None:
-            return "CODEX_PREPARATION_FAILED"
+            return self._startup_code
         if self._session_factory is None:
             return "CODEX_SESSION_UNAVAILABLE"
         if type(self._guard_settings) is not GuardSettings:
@@ -224,24 +241,27 @@ class SessionRuntime:
                 raise SessionRuntimeError("CODEX_CONFIG_UNAVAILABLE")
             if self._configuration is None:
                 if self._startup_attempted:
-                    raise SessionRuntimeError("CODEX_PREPARATION_FAILED")
+                    raise SessionRuntimeError(self._startup_code)
                 self._startup_attempted = True
                 receipt = await self._prepared(preparation.prepare_startup)
                 self._check_creation_allowed()
-                if type(receipt) is not StartupReceipt or not valid_configuration(
-                    receipt.configuration
-                ):
-                    raise SessionRuntimeError("CODEX_PREPARATION_FAILED")
-                if receipt.l2_configuration is None:
-                    raise SessionRuntimeError("CODEX_L2_UNAVAILABLE")
-                if receipt.l2_passed is not True:
-                    raise SessionRuntimeError("CODEX_L2_FAILED")
-                if not valid_configuration(receipt.l2_configuration):
-                    raise SessionRuntimeError("CODEX_PREPARATION_FAILED")
-                if receipt.configuration != receipt.l2_configuration:
-                    raise SessionRuntimeError("CODEX_CONFIG_MISMATCH")
+                refusal = _startup_refusal(receipt)
+                if refusal is not None:
+                    # Kept as the session blocker; the same code answers later tries.
+                    self._startup_code = refusal
+                    raise SessionRuntimeError(refusal)
                 self._configuration = receipt.configuration
             return self._configuration
+
+    async def prepare_startup(self) -> None:
+        """Run the app-wide preparation once at product start (A101).
+
+        A refusal stays the session blocker with its fixed code rather than
+        failing the whole app: 10.4 refuses Task starts, and the approval and
+        policy screens remain usable while L2 or the launcher is missing.
+        """
+        with contextlib.suppress(SessionRuntimeError):
+            await self._check_startup()
 
     async def _verify_configuration(self, expected: ConfigurationReceipt) -> None:
         preparation = self._preparation
@@ -798,7 +818,7 @@ async def bootstrap_product(
     adopted = False
     try:
         if preparation is not None:
-            await runtime._check_startup()
+            await runtime.prepare_startup()
         bindings = runtime.bindings()
         adopted = True
         return bindings
