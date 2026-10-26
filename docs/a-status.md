@@ -129,6 +129,7 @@
 - [x] A81 서버 활성화 단계의 도구별 허용 체크박스·Task 정지 안내(정책 화면) · [기록](archive/a/A91-policy-screen.md)
 - [x] A91 정책 화면(Profile·정책 버전·TTL·taint·접근 규칙 읽기 전용) · [기록](archive/a/A91-policy-screen.md)
 - [x] A81 규칙 저장을 B3.10에 연결(prepare → 주입형 저장 → apply, 정지 세션 종료) · [기록](archive/a/A81-policy-change-save.md)
+- [x] A104 저장 뒤 적용 실패·적용 전 거부면 Guard를 닫고 새 세션·재저장을 막아 재시작 안내(#33 B 답변) · [기록](archive/a/A104-policy-apply-failure-restart.md)
 - [ ] A81·A91 실제 Profile 저장·서버 목록 활성화 흐름 — 막힘: B3.11/B3.12 저장 형식·C Registry 활성화·B 3차 `activate_server`
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)

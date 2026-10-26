@@ -178,6 +178,9 @@ class SessionRuntime:
         self._creating_ids: dict[asyncio.Task[object], str] = {}
         self._defer_store_close = False
         self._cleanup_unconfirmed = False
+        # Set when a saved policy change was not applied (A104): the file and
+        # Guard disagree until a restart loads the file.
+        self._restart_code: str | None = None
         self._resources: dict[str, TaskResources] = {}
         self._cleanup_started: set[str] = set()
         self._cleanup_outcomes: dict[str, asyncio.Future[bool]] = {}
@@ -194,6 +197,8 @@ class SessionRuntime:
             raise SessionRuntimeError("SESSION_UNAVAILABLE")
         if self._cleanup_unconfirmed:
             raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
+        if self._restart_code is not None:
+            raise SessionRuntimeError(self._restart_code)
 
     def creation_blocker(self) -> str | None:
         """What is already known to refuse a new session, in creation order.
@@ -204,6 +209,8 @@ class SessionRuntime:
             return "SESSION_UNAVAILABLE"
         if self._cleanup_unconfirmed:
             return "CODEX_CLEANUP_UNCONFIRMED"
+        if self._restart_code is not None:
+            return self._restart_code
         preparation = self._preparation
         if type(preparation) is not SessionPreparation:
             return "CODEX_CONFIG_UNAVAILABLE"
@@ -503,7 +510,10 @@ class SessionRuntime:
         """B3.10: prepare -> save -> apply; then stop the sessions Guard stopped.
 
         The saved document is the only new current document. If saving fails
-        nothing is applied. If applying fails Guard is halted and this raises.
+        nothing is applied. If Guard refuses or fails to apply a saved change,
+        Guard is closed to new tool calls, new sessions and further changes are
+        refused, and this raises POLICY_APPLY_FAILED; a restart loads the saved
+        file (A104, #33 B reply).
         """
         assembled = self._assembled
         document = self._profile_document
@@ -520,6 +530,9 @@ class SessionRuntime:
         if set(allowed) & set(denied):
             raise SessionRuntimeError("POLICY_CHANGE_INVALID")
         async with self._policy_lock:
+            if self._restart_code is not None:
+                # Saving again would hide that Guard does not run the saved file.
+                raise SessionRuntimeError(self._restart_code)
             try:
                 change = prepare_server_access_change(
                     document,
@@ -544,6 +557,11 @@ class SessionRuntime:
                     task_source=task_source,
                 )
             except PolicyChangeError:
+                # The file holds the new rules; Guard keeps the old ones when it
+                # refused before applying, and halted itself when applying failed.
+                # Either way no call runs under rules the screen does not show.
+                self._restart_code = "POLICY_APPLY_FAILED"
+                await assembled.guard.aclose()
                 raise SessionRuntimeError("POLICY_APPLY_FAILED") from None
             # New Task rows and the policy screen follow the applied Profile.
             assembled.loaded = change.loaded_profile

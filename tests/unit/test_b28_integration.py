@@ -12,9 +12,11 @@ import sqlite3
 import pytest
 
 from guard_app.domain.enums import SystemStopReason, TaskStatus
+from guard_app.domain.errors import StoreError
+from guard_app.domain.reasons import Reason
 from guard_app.security.digest import tool_fingerprint
 from guard_app.services.bridge import SessionOptions
-from guard_app.services.guard import SystemControlError
+from guard_app.services.guard import GuardService, PolicyChangeError, SystemControlError
 from guard_app.services.session_runtime import SessionRuntimeError, bootstrap_product, stop_reason
 
 from .fake_codex_app_server import THREAD_ID, FakeAppServer
@@ -241,6 +243,63 @@ def test_unsaved_or_invalid_access_change_applies_nothing(
     assert after.status is TaskStatus.RUNNING
     assert after.connection_code == "READY_CODEX"
     assert len(saved) == (1 if code == "POLICY_SAVE_FAILED" else 0)
+
+
+@pytest.mark.parametrize("failure", ["refused", "failed"])
+def test_saved_but_unapplied_change_closes_guard_until_restart(tmp_path, monkeypatch, failure):
+    """A104 (#33 B reply): the file holds the new rules but Guard does not.
+
+    "refused": Guard rejects before applying and would keep its old rules.
+    "failed": applying fails and Guard halts itself. Either way no new tool call
+    runs, no session starts and nothing is saved again until a restart.
+    """
+    if failure == "refused":
+
+        async def refuse(self, change, access_checker, *, task_source):
+            raise PolicyChangeError("private-refusal")
+
+        monkeypatch.setattr(GuardService, "apply_policy_change", refuse)
+    else:
+
+        async def fail(self, change, access_checker, task_source):
+            raise StoreError(Reason.STATE_COMMIT_FAILED)
+
+        monkeypatch.setattr(GuardService, "_apply_policy_change", fail)
+    servers: list[FakeAppServer] = []
+    saved: list[dict[str, object]] = []
+
+    async def run():
+        bindings, peer = await policy_product(tmp_path, servers, saved)
+        try:
+            assert bindings.policy_access is not None
+            assert bindings.create_session is not None
+            assert bindings.session_blocker is not None
+            old = await bindings.create_session(SessionOptions())
+            with pytest.raises(SessionRuntimeError) as refused:
+                await bindings.policy_access("docs", (), ("read",))
+            blocker = bindings.session_blocker()
+            with pytest.raises(SessionRuntimeError) as again:
+                await bindings.policy_access("docs", (), ("read",))
+            with pytest.raises(SessionRuntimeError) as created:
+                await bindings.create_session(SessionOptions())
+            runner = bindings.runner_for_task(old.task_id)
+            runner.add_user_message("summarize the public document")
+            update = await asyncio.wait_for(runner.advance(), 5)
+            return (refused.value, again.value, created.value), blocker, update, peer
+        finally:
+            assert bindings.close is not None
+            await bindings.close()
+
+    errors, blocker, update, peer = asyncio.run(run())
+    assert [error.code for error in errors] == ["POLICY_APPLY_FAILED"] * 3
+    assert all("private" not in str(error) for error in errors)
+    assert blocker == "POLICY_APPLY_FAILED"
+    assert len(saved) == 1  # never saved a second time
+    # The old session's READ is refused by the closed Guard, never dispatched.
+    assert update.status == "complete"
+    assert peer.calls == []
+    assert servers[0].last_reply["result"]["success"] is False  # type: ignore[attr-defined]
+    assert len(servers) == 1  # no new session was launched
 
 
 def test_without_a_profile_saver_policy_change_is_unavailable(tmp_path) -> None:
