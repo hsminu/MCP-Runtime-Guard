@@ -1,0 +1,640 @@
+{
+ "item": "A107",
+ "date": "2026-10-27",
+ "codex": {
+  "version": "0.162.1",
+  "sha256": "dd13bdb162a184fa04039488b234a8258ef9b76f84e926c505d5742b19249a6a"
+ },
+ "method": "tools/install_codex.py로 고정 codex.exe 설치 → bootstrap_product(실제 SessionRuntime·CodexAppServerSession·GuardToolRelay·GuardService·SQLiteStore·McpTransport) + CodexProcessPreparation(C2.13 앱 폴더·C2.12 launcher 해시 대조·Job Object·write_codex_home). 대역: 모델(127.0.0.1 /v1/responses SSE, Codex 0.162.1 Python SDK 하네스와 같은 이벤트 형식), MCP 서버(단위 테스트의 메모리 Peer), Registry, Profile 문서. 스파이크 전용 우회 2개: L2 통과 영수증을 같은 구성으로 직접 넣음(C6.14 미연결), codex.exe에 가짜 모델용 -c 플래그 추가.",
+ "runs": {
+  "allow": {
+   "scenario": "allow",
+   "blocker_before": null,
+   "tools_available": true,
+   "update_status": "complete",
+   "assistant_text": "summary of the document",
+   "task_status": "RUNNING",
+   "connection_code": "READY_CODEX",
+   "label": "PUBLIC",
+   "peer_calls": [
+    "read"
+   ],
+   "observations": {
+    "tool_calls_received": 1,
+    "guard_submits": 1,
+    "responses_by_call": {
+     "call-1": 1
+    },
+    "interrupts_sent": 0,
+    "dynamic_tool_refs": [
+     "docs__read"
+    ],
+    "excluded_tools": [],
+    "stop_code": null,
+    "user_input_requests": 0
+   },
+   "fake_unexpected": [],
+   "task_folders_left": [],
+   "model_requests": [
+    {
+     "body_bytes": 10060,
+     "model": "gpt-6.1-sol",
+     "reasoning": null,
+     "tool_choice": null,
+     "parallel_tool_calls": null,
+     "offered_tools": null,
+     "input_types": [
+      "additional_tools",
+      "message",
+      "message",
+      "message",
+      "message"
+     ],
+     "messages": [],
+     "function_call_outputs": []
+    },
+    {
+     "body_bytes": 10474,
+     "model": "gpt-6.1-sol",
+     "reasoning": null,
+     "tool_choice": null,
+     "parallel_tool_calls": null,
+     "offered_tools": null,
+     "input_types": [
+      "additional_tools",
+      "message",
+      "message",
+      "message",
+      "message",
+      "function_call",
+      "function_call_output"
+     ],
+     "messages": [],
+     "function_call_outputs": [
+      {
+       "call_id": "call-1",
+       "output": [
+        {
+         "type": "input_text",
+         "text": "public text"
+        },
+        {
+         "type": "input_text",
+         "text": "{\"resource_id\": \"public/a.txt\"}"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "codex_stderr": "PATH 별칭 경고 1줄(임시 폴더 아래라 helper 생성 거부). 그 밖에 없음"
+  },
+  "ask": {
+   "scenario": "ask",
+   "blocker_before": null,
+   "tools_available": true,
+   "approval_id_seen": true,
+   "peer_calls_before_approval": 1,
+   "model_requests_before_approval": 2,
+   "approve_outcome": "Released",
+   "approve_released": true,
+   "update_status": "complete",
+   "assistant_text": "sent it",
+   "task_status": "RUNNING",
+   "connection_code": "READY_CODEX",
+   "label": "INTERNAL",
+   "peer_calls": [
+    "read",
+    "send"
+   ],
+   "observations": {
+    "tool_calls_received": 2,
+    "guard_submits": 2,
+    "responses_by_call": {
+     "call-1": 1,
+     "call-2": 1
+    },
+    "interrupts_sent": 0,
+    "dynamic_tool_refs": [
+     "docs__read",
+     "docs__send"
+    ],
+    "excluded_tools": [],
+    "stop_code": null,
+    "user_input_requests": 0
+   },
+   "fake_unexpected": [],
+   "task_folders_left": [],
+   "model_requests": [
+    {
+     "body_bytes": 10465,
+     "model": "gpt-6.1-sol",
+     "reasoning": {
+      "effort": "low",
+      "context": "all_turns"
+     },
+     "tool_choice": "auto",
+     "parallel_tool_calls": false,
+     "offered_tools": [
+      {
+       "type": "namespace",
+       "name": "functions",
+       "tools": [
+        "request_user_input"
+       ]
+      },
+      {
+       "type": "namespace",
+       "name": "docs",
+       "tools": [
+        "read",
+        "send"
+       ]
+      }
+     ],
+     "input_types": [
+      "additional_tools",
+      "message",
+      "message",
+      "message",
+      "message"
+     ],
+     "messages": [
+      {
+       "role": "developer",
+       "chars": 770,
+       "head": "You are an assistant working inside MCP Runtime Guard.\n\n- The only tools you can"
+      },
+      {
+       "role": "developer",
+       "chars": 4860,
+       "head": "<permissions instructions>\nFilesystem sandboxing defines which files can be read"
+      },
+      {
+       "role": "user",
+       "chars": 120,
+       "head": "<environment_context> (날짜·시간대, 내용 생략)"
+      },
+      {
+       "role": "user",
+       "chars": 37,
+       "head": "send the internal note to the partner"
+      }
+     ],
+     "function_call_outputs": []
+    },
+    {
+     "body_bytes": 10883,
+     "model": "gpt-6.1-sol",
+     "reasoning": {
+      "effort": "low",
+      "context": "all_turns"
+     },
+     "tool_choice": "auto",
+     "parallel_tool_calls": false,
+     "offered_tools": [
+      {
+       "type": "namespace",
+       "name": "functions",
+       "tools": [
+        "request_user_input"
+       ]
+      },
+      {
+       "type": "namespace",
+       "name": "docs",
+       "tools": [
+        "read",
+        "send"
+       ]
+      }
+     ],
+     "input_types": [
+      "additional_tools",
+      "message",
+      "message",
+      "message",
+      "message",
+      "function_call",
+      "function_call_output"
+     ],
+     "messages": [
+      {
+       "role": "developer",
+       "chars": 770,
+       "head": "You are an assistant working inside MCP Runtime Guard.\n\n- The only tools you can"
+      },
+      {
+       "role": "developer",
+       "chars": 4860,
+       "head": "<permissions instructions>\nFilesystem sandboxing defines which files can be read"
+      },
+      {
+       "role": "user",
+       "chars": 120,
+       "head": "<environment_context> (날짜·시간대, 내용 생략)"
+      },
+      {
+       "role": "user",
+       "chars": 37,
+       "head": "send the internal note to the partner"
+      }
+     ],
+     "function_call_outputs": [
+      {
+       "call_id": "call-1",
+       "output": [
+        {
+         "type": "input_text",
+         "text": "public text"
+        },
+        {
+         "type": "input_text",
+         "text": "{\"resource_id\": \"internal/a.txt\"}"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "body_bytes": 11199,
+     "model": "gpt-6.1-sol",
+     "reasoning": {
+      "effort": "low",
+      "context": "all_turns"
+     },
+     "tool_choice": "auto",
+     "parallel_tool_calls": false,
+     "offered_tools": [
+      {
+       "type": "namespace",
+       "name": "functions",
+       "tools": [
+        "request_user_input"
+       ]
+      },
+      {
+       "type": "namespace",
+       "name": "docs",
+       "tools": [
+        "read",
+        "send"
+       ]
+      }
+     ],
+     "input_types": [
+      "additional_tools",
+      "message",
+      "message",
+      "message",
+      "message",
+      "function_call",
+      "function_call_output",
+      "function_call",
+      "function_call_output"
+     ],
+     "messages": [
+      {
+       "role": "developer",
+       "chars": 770,
+       "head": "You are an assistant working inside MCP Runtime Guard.\n\n- The only tools you can"
+      },
+      {
+       "role": "developer",
+       "chars": 4860,
+       "head": "<permissions instructions>\nFilesystem sandboxing defines which files can be read"
+      },
+      {
+       "role": "user",
+       "chars": 120,
+       "head": "<environment_context> (날짜·시간대, 내용 생략)"
+      },
+      {
+       "role": "user",
+       "chars": 37,
+       "head": "send the internal note to the partner"
+      }
+     ],
+     "function_call_outputs": [
+      {
+       "call_id": "call-1",
+       "output": [
+        {
+         "type": "input_text",
+         "text": "public text"
+        },
+        {
+         "type": "input_text",
+         "text": "{\"resource_id\": \"internal/a.txt\"}"
+        }
+       ]
+      },
+      {
+       "call_id": "call-2",
+       "output": "sent"
+      }
+     ]
+    }
+   ],
+   "codex_stderr": "PATH 별칭 경고 1줄(임시 폴더 아래라 helper 생성 거부). 그 밖에 없음"
+  },
+  "deny": {
+   "scenario": "deny",
+   "blocker_before": null,
+   "tools_available": true,
+   "update_status": "complete",
+   "assistant_text": "could not read it",
+   "task_status": "RUNNING",
+   "connection_code": "READY_CODEX",
+   "label": "PUBLIC",
+   "peer_calls": [],
+   "observations": {
+    "tool_calls_received": 1,
+    "guard_submits": 1,
+    "responses_by_call": {
+     "call-1": 1
+    },
+    "interrupts_sent": 0,
+    "dynamic_tool_refs": [
+     "docs__read"
+    ],
+    "excluded_tools": [],
+    "stop_code": null,
+    "user_input_requests": 0
+   },
+   "fake_unexpected": [],
+   "task_folders_left": [],
+   "model_requests": [
+    {
+     "body_bytes": 10060,
+     "model": "gpt-6.1-sol",
+     "reasoning": {
+      "effort": "low",
+      "context": "all_turns"
+     },
+     "tool_choice": "auto",
+     "parallel_tool_calls": false,
+     "offered_tools": [
+      {
+       "type": "namespace",
+       "name": "functions",
+       "tools": [
+        "request_user_input"
+       ]
+      },
+      {
+       "type": "namespace",
+       "name": "docs",
+       "tools": [
+        "read"
+       ]
+      }
+     ],
+     "input_types": [
+      "additional_tools",
+      "message",
+      "message",
+      "message",
+      "message"
+     ],
+     "messages": [
+      {
+       "role": "developer",
+       "chars": 770,
+       "head": "You are an assistant working inside MCP Runtime Guard.\n\n- The only tools you can"
+      },
+      {
+       "role": "developer",
+       "chars": 4860,
+       "head": "<permissions instructions>\nFilesystem sandboxing defines which files can be read"
+      },
+      {
+       "role": "user",
+       "chars": 120,
+       "head": "<environment_context> (날짜·시간대, 내용 생략)"
+      },
+      {
+       "role": "user",
+       "chars": 29,
+       "head": "summarize the public document"
+      }
+     ],
+     "function_call_outputs": []
+    },
+    {
+     "body_bytes": 10458,
+     "model": "gpt-6.1-sol",
+     "reasoning": {
+      "effort": "low",
+      "context": "all_turns"
+     },
+     "tool_choice": "auto",
+     "parallel_tool_calls": false,
+     "offered_tools": [
+      {
+       "type": "namespace",
+       "name": "functions",
+       "tools": [
+        "request_user_input"
+       ]
+      },
+      {
+       "type": "namespace",
+       "name": "docs",
+       "tools": [
+        "read"
+       ]
+      }
+     ],
+     "input_types": [
+      "additional_tools",
+      "message",
+      "message",
+      "message",
+      "message",
+      "function_call",
+      "function_call_output"
+     ],
+     "messages": [
+      {
+       "role": "developer",
+       "chars": 770,
+       "head": "You are an assistant working inside MCP Runtime Guard.\n\n- The only tools you can"
+      },
+      {
+       "role": "developer",
+       "chars": 4860,
+       "head": "<permissions instructions>\nFilesystem sandboxing defines which files can be read"
+      },
+      {
+       "role": "user",
+       "chars": 120,
+       "head": "<environment_context> (날짜·시간대, 내용 생략)"
+      },
+      {
+       "role": "user",
+       "chars": 29,
+       "head": "summarize the public document"
+      }
+     ],
+     "function_call_outputs": [
+      {
+       "call_id": "call-1",
+       "output": "이 요청은 정책에 의해 차단되었습니다"
+      }
+     ]
+    }
+   ],
+   "codex_stderr": "PATH 별칭 경고 1줄(임시 폴더 아래라 helper 생성 거부). 그 밖에 없음"
+  },
+  "allow_trimmed": {
+   "scenario": "allow",
+   "blocker_before": null,
+   "tools_available": true,
+   "update_status": "complete",
+   "assistant_text": "summary of the document",
+   "task_status": "RUNNING",
+   "connection_code": "READY_CODEX",
+   "label": "PUBLIC",
+   "peer_calls": [
+    "read"
+   ],
+   "observations": {
+    "tool_calls_received": 1,
+    "guard_submits": 1,
+    "responses_by_call": {
+     "call-1": 1
+    },
+    "interrupts_sent": 0,
+    "dynamic_tool_refs": [
+     "docs__read"
+    ],
+    "excluded_tools": [],
+    "stop_code": null,
+    "user_input_requests": 0
+   },
+   "fake_unexpected": [],
+   "task_folders_left": [],
+   "model_requests": [
+    {
+     "body_bytes": 5674,
+     "model": "gpt-6.1-sol",
+     "reasoning": {
+      "effort": "low",
+      "context": "all_turns"
+     },
+     "tool_choice": "auto",
+     "parallel_tool_calls": false,
+     "offered_tools": [
+      {
+       "type": "namespace",
+       "name": "functions",
+       "tools": [
+        "request_user_input"
+       ]
+      },
+      {
+       "type": "namespace",
+       "name": "docs",
+       "tools": [
+        "read"
+       ]
+      }
+     ],
+     "input_types": [
+      "additional_tools",
+      "message",
+      "message",
+      "message"
+     ],
+     "messages": [
+      {
+       "role": "developer",
+       "chars": 770,
+       "head": "You are an assistant working inside MCP Runtime Guard.\n\n- The only tools you can"
+      },
+      {
+       "role": "developer",
+       "chars": 920,
+       "head": "<collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. "
+      },
+      {
+       "role": "user",
+       "chars": 29,
+       "head": "summarize the public document"
+      }
+     ],
+     "function_call_outputs": []
+    },
+    {
+     "body_bytes": 6088,
+     "model": "gpt-6.1-sol",
+     "reasoning": {
+      "effort": "low",
+      "context": "all_turns"
+     },
+     "tool_choice": "auto",
+     "parallel_tool_calls": false,
+     "offered_tools": [
+      {
+       "type": "namespace",
+       "name": "functions",
+       "tools": [
+        "request_user_input"
+       ]
+      },
+      {
+       "type": "namespace",
+       "name": "docs",
+       "tools": [
+        "read"
+       ]
+      }
+     ],
+     "input_types": [
+      "additional_tools",
+      "message",
+      "message",
+      "message",
+      "function_call",
+      "function_call_output"
+     ],
+     "messages": [
+      {
+       "role": "developer",
+       "chars": 770,
+       "head": "You are an assistant working inside MCP Runtime Guard.\n\n- The only tools you can"
+      },
+      {
+       "role": "developer",
+       "chars": 920,
+       "head": "<collaboration_mode># Collaboration Mode: Default\n\nYou are now in Default mode. "
+      },
+      {
+       "role": "user",
+       "chars": 29,
+       "head": "summarize the public document"
+      }
+     ],
+     "function_call_outputs": [
+      {
+       "call_id": "call-1",
+       "output": [
+        {
+         "type": "input_text",
+         "text": "public text"
+        },
+        {
+         "type": "input_text",
+         "text": "{\"resource_id\": \"public/a.txt\"}"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "codex_stderr": "PATH 별칭 경고 1줄(임시 폴더 아래라 helper 생성 거부). 그 밖에 없음"
+  }
+ },
+ "permissions_instructions_head": "<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted.\n# Escalation Requests\r\n\r\nCommands are run outside the sandbox if they are approved by the user, or match an existing rule that allows it to run unrestricted. The command string is split into independent command segments at shell control operators, including but not limited to:\r\n\r\n- Pipes: |\r\n- Logical operators: &&, ||\r\n- Command separators: ;\r\n- Subshell boundaries: (...), $(...)\r\n\r\nEach resulting segm"
+}
