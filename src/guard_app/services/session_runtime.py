@@ -73,6 +73,11 @@ SESSION_CLEANUP_TIMEOUT_S = 0.5
 # Under the 0.5 s cleanup bound a slow but successful exit would be reported
 # unconfirmed and block new Tasks until restart (PR #35 A review).
 CONFIRM_EXIT_TIMEOUT_S = 12.0
+# cleanup_task deletes the Task folder in a worker thread (A103). A 20 MB SQLite
+# DB plus logs took about 10 ms on the development PC; the rest is margin for a
+# slow disk or a file scanner, so a successful delete is not reported
+# unconfirmed. Not measured on real Codex Task folders.
+TASK_CLEANUP_TIMEOUT_S = 5.0
 
 # A session stop code -> STOP-01 reason (PR #28 review mapping, agreed by B).
 # A token refresh conflict arrives as `unauthorized` like any auth failure, so
@@ -646,7 +651,7 @@ class SessionRuntime:
                 # timed-out callback later returns True, this path stays closed.
                 if closed and confirmation_finished and confirmed:
                     cleaned = await self._bounded_cleanup(
-                        lambda: preparation.cleanup_task(resources)
+                        lambda: preparation.cleanup_task(resources), TASK_CLEANUP_TIMEOUT_S
                     )
                     if cleaned:
                         self._resources.pop(task_id, None)

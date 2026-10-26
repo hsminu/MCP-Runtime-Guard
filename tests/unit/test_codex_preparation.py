@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -169,6 +170,36 @@ def test_task_runs_in_its_own_folder_which_is_removed_only_after_exit(tmp_path, 
         asyncio.run(run())
     finally:
         owner.close()
+
+
+def test_task_folder_is_removed_off_the_event_loop(tmp_path, pin, monkeypatch) -> None:
+    """A103 (PR #35 B review): deleting the Codex log DB must not stall other Tasks."""
+    owner = preparation(tmp_path, pin)
+    steps = owner.preparation()
+    folder = tmp_path / "app" / "tasks" / TASK_ID
+    removed_on: list[int] = []
+    remove = paths.AppFolders.remove_task_folder
+
+    def recording_remove(self: paths.AppFolders, task_dir: Path) -> None:
+        removed_on.append(threading.get_ident())
+        remove(self, task_dir)
+
+    monkeypatch.setattr(paths.AppFolders, "remove_task_folder", recording_remove)
+
+    async def run() -> int:
+        receipt = await steps.prepare_startup()
+        resources = await steps.prepare_task(TASK_ID, receipt.configuration)
+        assert await steps.confirm_exit(resources) is True
+        await steps.cleanup_task(resources)
+        return threading.get_ident()
+
+    try:
+        loop_thread = asyncio.run(run())
+    finally:
+        owner.close()
+    assert len(removed_on) == 1
+    assert removed_on[0] != loop_thread
+    assert not folder.exists()
 
 
 def test_a_refused_launch_removes_its_task_folder(tmp_path, pin) -> None:

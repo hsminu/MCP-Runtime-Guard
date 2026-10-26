@@ -17,12 +17,17 @@ L2 (C6.14) is not connected yet, so the startup receipt carries no L2 result
 and every session is refused with CODEX_L2_UNAVAILABLE (10.4: no development
 skip). Errors carry fixed codes only, never paths.
 
-Task folder operations run on the backend loop, not a thread: a cleanup that
-outlives SessionRuntime's bound would be reported unconfirmed and block new Tasks.
+Removing a Task folder after its session runs in a worker thread (A103, PR #35
+B review): the folder holds the Codex log DB, and deleting it on the backend
+loop would stall every other Task. SessionRuntime bounds this step with
+`TASK_CLEANUP_TIMEOUT_S`, not its short cleanup bound, so a slow but successful
+delete is not reported unconfirmed. Creating a folder, and removing the nearly
+empty one a refused launch leaves, stay on the loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -192,7 +197,7 @@ class CodexProcessPreparation:
         if not task.exited:
             raise CodexPreparationError("CODEX_EXIT_UNCONFIRMED")
         folders, _ = self._ready()
-        folders.remove_task_folder(task.folder)
+        await asyncio.to_thread(folders.remove_task_folder, task.folder)
         del self._tasks[resources.owner_token]
 
     def _ready(self) -> tuple[AppFolders, CodexLauncher]:

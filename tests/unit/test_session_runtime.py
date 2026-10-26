@@ -486,6 +486,56 @@ def test_confirm_exit_has_its_own_bound_longer_than_cleanup(tmp_path, monkeypatc
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("removed_in_time", [True, False])
+def test_task_folder_cleanup_has_its_own_bound_longer_than_cleanup(
+    tmp_path, monkeypatch, removed_in_time
+):
+    """A103: the folder is deleted in a thread; a slow delete that succeeds is confirmed (I9)."""
+
+    async def run():
+        runtime, _ = make_runtime(tmp_path)
+        first = await runtime.create_session(SessionOptions())
+        release = asyncio.Event()
+        cleanups = []
+
+        async def cleanup(resources):
+            cleanups.append(resources.task_id)
+            if resources.task_id == first.task_id:
+                await asyncio.sleep(0.1)  # longer than the cleanup bound below
+                if not removed_in_time:
+                    await release.wait()
+
+        runtime._preparation = replace(runtime._preparation, cleanup_task=cleanup)
+        monkeypatch.setattr("guard_app.services.session_runtime.SESSION_CLEANUP_TIMEOUT_S", 0.01)
+        monkeypatch.setattr(
+            "guard_app.services.session_runtime.TASK_CLEANUP_TIMEOUT_S",
+            1.0 if removed_in_time else 0.2,
+        )
+        stopping = runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL)
+        try:
+            if removed_in_time:
+                await asyncio.wait_for(stopping, 2)
+                assert first.task_id not in runtime._resources
+                assert runtime.creation_blocker() is None
+                second = await runtime.create_session(SessionOptions())
+                assert second.status is TaskStatus.RUNNING
+            else:
+                with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+                    await asyncio.wait_for(stopping, 2)
+                assert first.task_id in runtime._resources  # never reported removed
+                assert runtime.creation_blocker() == "CODEX_CLEANUP_UNCONFIRMED"
+        finally:
+            release.set()
+            if removed_in_time:
+                await runtime.close()
+            else:
+                with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+                    await runtime.close()
+        assert cleanups.count(first.task_id) == 1
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("failure", ["blocked", "raises"])
 def test_lost_interrupt_alone_leaves_cleanup_confirmed(tmp_path, monkeypatch, failure):
     """A88 QA: interrupt is a courtesy; close + confirm_exit + cleanup prove the stop (I9)."""
