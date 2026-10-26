@@ -1014,3 +1014,111 @@ def test_streamed_pieces_break_between_answer_items_and_the_handler_can_be_set_l
             await session.aclose()
 
     asyncio.run(run())
+
+
+# C-CODEX-07 (PR #35 A review): remote control must stay disabled (T22 L3 part, I11).
+
+
+def unstarted(fake: FakeAppServer) -> CodexAppServerSession:
+    relay = GuardToolRelay(TASK, FakeGuard(), ApprovalOutcomes())
+    return CodexAppServerSession(
+        fake,
+        task=TASK,
+        plan=build_dynamic_tools(views("docs__read")),
+        relay=relay.relay,
+        model="gpt-6.1-sol",
+        base_instructions=BASE_INSTRUCTIONS,
+        version="0.1.0",
+    )
+
+
+def test_disabled_remote_control_is_allowed_and_never_requested() -> None:
+    async def run() -> None:
+        fake = FakeAppServer()
+        session = await started(fake, FakeGuard())
+        try:
+            assert await asyncio.wait_for(session.send("hello"), 2) == "echo:hello"
+            assert session.stop_code is None
+            assert not any(method.startswith("remoteControl/") for method in fake.methods())
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("status", ["connecting", "connected", "errored", None, 1])
+def test_remote_control_reported_while_starting_rejects_the_start(status) -> None:
+    async def run() -> None:
+        fake = FakeAppServer(remote_control=status)
+        session = unstarted(fake)
+        try:
+            with pytest.raises(CodexSessionError) as stopped:
+                await asyncio.wait_for(session.start(), 2)
+            assert stopped.value.code == "CODEX_L3_VIOLATION"
+            assert "turn/start" not in fake.methods()
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"status": "connected"}, {"status": "errored"}, {"status": None}, {}, "disabled"],
+)
+def test_remote_control_leaving_disabled_during_a_turn_stops_the_task(params) -> None:
+    async def run() -> None:
+        async def script(server: FakeAppServer, _turn_id: str, _text: str) -> None:
+            server.emit({"method": "remoteControl/status/changed", "params": params})
+            await asyncio.Event().wait()
+
+        session = await started(FakeAppServer(script), FakeGuard())
+        try:
+            with pytest.raises(CodexSessionError) as stopped:
+                await asyncio.wait_for(session.send("go"), 2)
+            assert stopped.value.code == "CODEX_L3_VIOLATION"
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_remote_control_enabled_between_turns_reports_the_stop_once() -> None:
+    async def run() -> None:
+        fake = FakeAppServer()
+        session = await started(fake, FakeGuard())
+        stops: list[str] = []
+        session.set_stop_handler(stops.append)
+        try:
+            assert await asyncio.wait_for(session.send("go"), 2) == "echo:go"
+            fake.remote_control_status("connected")
+            fake.remote_control_status("connected")
+            await wait_for_condition(lambda: stops)
+            await asyncio.sleep(0.02)
+            assert stops == ["CODEX_L3_VIOLATION"]
+            with pytest.raises(CodexSessionError):
+                await session.send("again")
+            assert fake.methods().count("turn/start") == 1
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_stop_before_the_owner_registers_is_reported_on_registration() -> None:
+    # The runtime registers its handler only after Store writes that follow start().
+    async def run() -> None:
+        fake = FakeAppServer()
+        session = await started(fake, FakeGuard())
+        try:
+            fake.remote_control_status("connected")
+            await wait_for_condition(lambda: session.stop_code is not None)
+            stops: list[str] = []
+            session.set_stop_handler(stops.append)
+            assert stops == ["CODEX_L3_VIOLATION"]
+            session.set_stop_handler(stops.append)
+            assert stops == ["CODEX_L3_VIOLATION"]
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())

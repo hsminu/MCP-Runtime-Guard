@@ -24,8 +24,12 @@ async def answer_only(server: FakeAppServer, turn_id: str, text: str) -> None:
 
 
 class FakeAppServer:
-    def __init__(self, script: TurnScript = answer_only) -> None:
+    def __init__(
+        self, script: TurnScript = answer_only, *, remote_control: object = "disabled"
+    ) -> None:
         self.script = script
+        # Status reported right after initialize, as the pinned app-server does (C-CODEX-07).
+        self.remote_control = remote_control
         self.output = bytearray()
         self.available = asyncio.Event()
         self.received: list[dict[str, object]] = []
@@ -117,6 +121,17 @@ class FakeAppServer:
             {"threadId": THREAD_ID, "turnId": turn_id, "itemId": f"msg-{turn_id}", "delta": text},
         )
 
+    def remote_control_status(self, status: object) -> None:
+        self.notify(
+            "remoteControl/status/changed",
+            {
+                "status": status,
+                "serverName": "fake-host",
+                "installationId": "install-1",
+                "environmentId": None,
+            },
+        )
+
     def item(self, turn_id: str, kind: str) -> None:
         self.notify(
             "item/started",
@@ -160,6 +175,7 @@ class FakeAppServer:
         if method == "initialize":
             self.initialize_params = params
             self.emit({"id": request_id, "result": {"userAgent": "fake/0.162.1"}})
+            self.remote_control_status(self.remote_control)
         elif method == "thread/start":
             self.thread_params = params
             self.emit({"id": request_id, "result": {"thread": {"id": THREAD_ID}}})

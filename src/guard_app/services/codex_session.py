@@ -9,7 +9,9 @@ never launches or kills a process and never retries a write.
 - send: `turn/start`, collect the agent message until `turn/completed`.
 - L3: an item type outside the allow list, an approval request or an unknown
   server request stops the Task (fixed code). `request_user_input` gets an empty
-  answer and only its occurrence is counted.
+  answer and only its occurrence is counted. Remote control must stay
+  `disabled` (C-CODEX-07): this manager never sends `remoteControl/*`, and any
+  other reported status stops the Task.
 - Tool calls: `item/tool/call` -> per-Task FIFO -> Guard relay, bounded by a
   watchdog. A stop decided while answering a call happens after the answer has
   been written.
@@ -48,6 +50,9 @@ _DECLINED_APPROVALS = frozenset(
     {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}
 )
 _USAGE_LIMITS = frozenset({"usageLimitExceeded", "rateLimitExceeded"})
+# Codex 0.162.1 `RemoteControlStatusChangedNotification`; `status` is one of
+# disabled/connecting/connected/errored (app-server-protocol v2/remote_control.rs).
+REMOTE_CONTROL_STATUS = "remoteControl/status/changed"
 MAX_ANSWER_CHARS = 65_536
 
 
@@ -155,8 +160,14 @@ class CodexAppServerSession:
         self._on_user_input = handler
 
     def set_stop_handler(self, handler: Callable[[str], None] | None) -> None:
-        """Called once when the session stops while no send() is waiting."""
+        """Called once when the session stops while no send() is waiting.
+
+        A stop decided before the owner registered (Codex reports remote
+        control right after start) is reported on registration.
+        """
         self._stop_handler = handler
+        if self.observations.stop_code is not None:
+            self._report_stop()
 
     @property
     def stop_code(self) -> str | None:
@@ -180,6 +191,9 @@ class CodexAppServerSession:
         if type(thread_id) is not str or not thread_id:
             raise CodexSessionError("CODEX_START_FAILED")
         self._thread_id = thread_id
+        if self.stop_code is not None:
+            # No owner handler exists yet; a stop seen while starting rejects the start.
+            raise CodexSessionError(self.stop_code)
 
     async def send(self, text: str) -> str:
         self._sending = True
@@ -292,6 +306,9 @@ class CodexAppServerSession:
             limits = body.get("rateLimits")
             if type(limits) is dict and limits.get("rateLimitReachedType"):
                 self._stop("CODEX_USAGE_LIMIT")
+        elif method == REMOTE_CONTROL_STATUS and body.get("status") != "disabled":
+            # A remote client would bypass Guard's tools and this L3 (C-CODEX-07).
+            self._stop("CODEX_L3_VIOLATION")
 
     async def _server_request(self, method: str, params: object) -> object:
         if method == "item/tool/call":
@@ -364,11 +381,17 @@ class CodexAppServerSession:
         if self.observations.stop_code is None:
             self.observations.stop_code = code
         self._wake()
+        self._report_stop()
+
+    def _report_stop(self) -> None:
         # With no send() to raise it, the owner must stop the Task itself.
-        if not self._sending and not self._closed and not self._stop_reported:
+        code = self.observations.stop_code
+        handler = self._stop_handler
+        if code is None or handler is None or self._sending or self._closed:
+            return
+        if not self._stop_reported:
             self._stop_reported = True
-            if self._stop_handler is not None:
-                self._stop_handler(self.observations.stop_code)
+            handler(code)
 
     def _wake(self) -> None:
         self._changed.set()

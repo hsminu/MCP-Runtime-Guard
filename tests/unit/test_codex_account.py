@@ -15,7 +15,7 @@ import pytest
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit
 
 from guard_app.services.bridge import BackendBindings, BackendBridge, BridgeState
-from guard_app.services.codex_account import AccountView, CodexAccountClient
+from guard_app.services.codex_account import AccountError, AccountView, CodexAccountClient
 from guard_app.ui.model_settings import CodexLoginInfo
 
 from .fake_codex_app_server import FakeAppServer
@@ -92,6 +92,40 @@ def test_api_key_login_is_passed_to_codex_trimmed_and_reads_the_kind() -> None:
             assert (await account.login_api_key("  sk-unit  ")).state == "API_KEY"
             assert fake.login_requests == [{"type": "apiKey", "apiKey": "sk-unit"}]
             assert (await account.login_api_key("   ")).state == "FAILED"
+        finally:
+            await account.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("status", ["connected", None])
+def test_remote_control_not_disabled_ends_the_account_connection(status) -> None:
+    # C-CODEX-07: the login app-server is no safer than a Task's once a remote client may attach.
+    async def run() -> None:
+        fake = FakeAppServer()
+        account = await client(fake)
+        try:
+            assert (await account.start_device_login()).state == "PENDING_DEVICE"
+            waiting = asyncio.ensure_future(account.wait_login("login-1"))
+            await asyncio.sleep(0)
+            fake.remote_control_status(status)
+            fake.finish_device_login()  # never read once remote control is reported
+            assert (await asyncio.wait_for(waiting, 2)).state == "FAILED"
+            with pytest.raises(AccountError):
+                await account.login_api_key("sk-unit")
+            assert fake.login_requests == [{"type": "chatgptDeviceCode"}]
+        finally:
+            await account.aclose()
+
+    asyncio.run(run())
+
+
+def test_remote_control_reported_while_starting_fails_the_account_start() -> None:
+    async def run() -> None:
+        account = CodexAccountClient(FakeAppServer(remote_control="connected"), version="0.1.0")
+        try:
+            with pytest.raises(AccountError):
+                await asyncio.wait_for(account.start(), 2)
         finally:
             await account.aclose()
 
