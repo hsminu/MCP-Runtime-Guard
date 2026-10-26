@@ -1,7 +1,7 @@
 {
  "item": "C2.13",
  "date": "2026-10-26",
- "codex": "0.162.1 (C6.13 설치본을 앱 폴더 codex\u0000.162.1에 복사, launcher가 실행마다 해시 대조)",
+ "codex": "0.162.1 (C6.13 설치본을 앱 폴더 codex\\0.162.1에 복사, launcher가 실행마다 해시 대조)",
  "dacl_expected": "보호된 DACL: 현재 사용자 FA + SYSTEM FA, OICI 상속. 하위 항목은 이 둘만 상속",
  "root": "%LOCALAPPDATA%\\MCPRuntimeGuard-c213-smoke",
  "layout": [

@@ -119,5 +119,5 @@
   "model_catalog.json"
  ],
  "codex_home_verify_after_exit": "passed",
- "stderr_content": "경고 1줄: CODEX_HOME이 임시 폴더 아래라 PATH 보조 실행 파일을 만들지 않음(경로 포함이라 원문은 남기지 않음). 제품 경로의 tmp\u0007rg0은 C6.16"
+ "stderr_content": "경고 1줄: CODEX_HOME이 임시 폴더 아래라 PATH 보조 실행 파일을 만들지 않음(경로 포함이라 원문은 남기지 않음). 제품 경로의 tmp\\arg0은 C6.16"
 }
