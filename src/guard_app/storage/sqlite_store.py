@@ -511,7 +511,8 @@ class SQLiteStore:
     ) -> FingerprintChange:
         """C는 반환 즉시 동기 사본 교체 후 도구별 invalidate_tool을 호출한다.
 
-        이 메서드에는 내부 await가 없고 내구성 COMMIT 후에만 반환한다. C의 연결
+        변경 없는 관측은 쓰기 없이 현재 저장 사본을 반환하므로 C는 캐시 교체를
+        건너뛴다. 내부 await가 없고 트랜잭션 종료 후에만 반환한다. C의 연결
         직렬화/실패 게이트는 별도이며 기존 예약/소비의 S03 경쟁은 수정하지 않는다.
         """
 
@@ -535,6 +536,8 @@ class SQLiteStore:
                         or _tool_definition(old[name]) != _tool_definition(new[name])
                     )
                 )
+                if not changed:
+                    return FingerprintChange(entry=current, changed_tools=())
                 updated = tuple(
                     tool.model_copy(
                         update={
@@ -546,7 +549,7 @@ class SQLiteStore:
                     for tool in observed
                 )
                 status = current.registration.status
-                if changed and status is RegStatus.ACTIVE:
+                if status is RegStatus.ACTIVE:
                     status = RegStatus.PENDING
                 registration = current.registration.model_copy(
                     update={"status": status, "tools": updated}
@@ -556,11 +559,11 @@ class SQLiteStore:
                     registration,
                     previous=current,
                     timestamp=timestamp,
-                    event="FINGERPRINT_CHANGED" if changed else "FINGERPRINT_OBSERVED",
-                    reason=Reason.TOOL_FINGERPRINT_CHANGED if changed else None,
-                    last_scan_id=None if changed else current.last_scan_id,
-                    reviewed_scan_id=None if changed else current.reviewed_scan_id,
-                    reviewed_by=None if changed else current.reviewed_by,
+                    event="FINGERPRINT_CHANGED",
+                    reason=Reason.TOOL_FINGERPRINT_CHANGED,
+                    last_scan_id=None,
+                    reviewed_scan_id=None,
+                    reviewed_by=None,
                     changed_count=len(changed),
                 )
                 return FingerprintChange(entry=result, changed_tools=changed)

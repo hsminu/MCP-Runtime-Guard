@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-19 · main `139e5a0` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-26 · main `58afdd4` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -21,8 +21,7 @@
 | STOP-01 TaskIdentity·사유·감사 포트 합의와 A 세션 관리자 연결·T41/T42 독립 검증 | A·B·C | B5.14 |
 | SCAN-01 필드·고정 오류 코드 합의와 C Scanner 번역·A 경고 표시 | A·B·C | B1.9 |
 | DESC-01 검토 입력·원본 분리·Registry 저장·설명 변경 적용 의미 | A·B·C | B3.13 |
-| 설정 파일 B 제안(CFG-01)의 형식·구조·위치·첫 실행 결정 | 사용자 | B3.11 |
-| 정책 변경 화면·저장/Task 생성 직렬화 연결과 거부·누락 전송 0 검증 | A·C | B3.12 |
+| 설정 파일 안전 읽기·원자적 교체(C2.14)·A 시작/저장/Task 생성 직렬화와 거부·누락 전송 0 검증 | A·C | B3.12 |
 
 ## B1 · 공통 모델과 계약
 
@@ -62,8 +61,8 @@
 - [x] B3.8 DESC-01 검토된 설명 필드·Catalog 연결·합의 전 제안 · [기록](archive/b/B3.8-reviewed-description.md)
 - [x] B3.9 파싱된 설정·Profile 로딩 1단계와 policy_version 계산(10-18 결정) · [기록](archive/b/B3.9-profile-loading.md)
 - [x] B3.10 정책 변경 준비·적용·Task 정지·승인 무효화(10-18 결정) · [기록](archive/b/B3.10-policy-change.md)
-- [ ] B3.11 설정 파일 B 제안 작성·C 경로/실행 파일 검증·A 시작 연결 — 막힘: 사용자 결정(CFG-01) · [제안](archive/b/B3.11-settings-file-proposal.md)
-- [ ] B3.12 A81 허용 체크·정책 저장/적용·Task 생성 직렬화 연결·C 거부/누락 전송 0 검증 — 막힘: A·C 연결
+- [x] B3.11 CFG-01 B 변환 함수 완료, C 파일 연산(C2.14)·A 시작/저장 연결(B3.12) 대기 · [기록](archive/b/B3.11-settings-file.md)
+- [ ] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 — 막힘: C2.14 파일 연산·A 연결
 - [ ] B3.13 DESC-01 A 검토 입력·C Registry 원본 분리/저장·설명 변경 적용 의미 합의 — 막힘: 3인 합의·A/C 연결
 
 ## B4 · Guard와 응답 게이트
@@ -131,3 +130,4 @@
 - [x] B7.10 공통 문서 미결 상태 갱신 제안 · [PR #18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) · [기록](archive/b/B7.10-contract-status-proposal.md)
 - [x] B7.11 A 리뷰 후속 최종 알림 고정 문구·실행 본문 A 경로 위임·예약 전 취소 Task 격리 · [기록](archive/b/B7.11-a-review-followups.md)
 - [x] B7.12 C 리뷰 후속 미소비 공개 본문 폐기·예약 뒤 취소 최종 알림 · [기록](archive/b/B7.12-c-review-followups.md)
+- [x] B7.13 PR #32 C 리뷰 후속 취소 콜백 실패 격리·무변경 지문 관측 쓰기 제거 · [기록](archive/b/B7.13-c-review-followups.md)
