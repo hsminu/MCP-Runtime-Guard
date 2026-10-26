@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -20,16 +22,26 @@ from guard_app.adapters.mcp_transport import validated_stdio_stream_factory
 from guard_app.core.access_rules import AccessRules
 from guard_app.domain.contracts import (
     Denied,
+    Pending,
     RegisteredServer,
     Released,
     ToolView,
     TrustedContext,
 )
-from guard_app.domain.enums import Label, RegStatus, TaskStatus, ToolKind, TrustTier
+from guard_app.domain.enums import (
+    ApprovalStatus,
+    Label,
+    RegStatus,
+    TaskStatus,
+    ToolKind,
+    TrustTier,
+)
 from guard_app.domain.models import Boundary, ProposedCall, ResolvedRequest, TaskState, ToolSpec
 from guard_app.domain.reasons import Reason
 from guard_app.security.digest import tool_fingerprint
+from guard_app.services.guard import FailureEvent
 from guard_app.services.product_assembly import (
+    AssembledGuard,
     LiveCheckedRegistry,
     ProductAssemblyError,
     ProductInputs,
@@ -57,11 +69,24 @@ LIST_DEFINITION = {"name": "list", "description": "list documents", "inputSchema
 class Peer:
     """In-memory MCP server bytes: initialize, tools/list and tools/call only."""
 
-    def __init__(self, definitions: list[dict[str, object]]) -> None:
+    def __init__(
+        self, definitions: list[dict[str, object]], *, notify_on_list: bool = False
+    ) -> None:
         self.definitions = definitions
         self.output = bytearray()
         self.available = asyncio.Event()
         self.calls: list[dict[str, object]] = []
+        self.notify_on_list = notify_on_list
+
+    def notify_tools_changed(self) -> None:
+        # Params are optional; this carries one the Guard must never forward.
+        notice = {
+            "jsonrpc": "2.0",
+            "method": "notifications/tools/list_changed",
+            "params": {"_meta": {"note": "secret-notice-text"}},
+        }
+        self.output.extend(json.dumps(notice).encode() + b"\n")
+        self.available.set()
 
     async def read(self, size: int) -> bytes:
         while not self.output:
@@ -81,6 +106,8 @@ class Peer:
                 "serverInfo": {"name": "docs", "version": "1"},
             }
         elif method == "tools/list":
+            if self.notify_on_list:
+                self.notify_tools_changed()  # arrives before the listing it announces
             result = {"tools": self.definitions}
         elif method == "tools/call":
             self.calls.append(request["params"])
@@ -197,21 +224,27 @@ def document(
     return doc
 
 
-def inputs(peer: Peer, registry: Registry, doc: dict[str, object]) -> ProductInputs:
+def inputs(
+    peer: Peer,
+    registry: Registry,
+    doc: dict[str, object],
+    audits: list[FailureEvent] | None = None,
+) -> ProductInputs:
     sequence = iter(range(1, 1000))
 
     async def next_call_seq(_task_id: str) -> int:
         return next(sequence)
 
-    async def failure_audit(_event: object) -> None:
-        pass
+    async def failure_audit(event: FailureEvent) -> None:
+        if audits is not None:
+            audits.append(event)
 
     return ProductInputs(
         profile_document=doc,
         registry=registry,
         server_streams={"docs": validated_stdio_stream_factory(peer.read, peer.write, peer.drain)},
         next_call_seq=next_call_seq,
-        failure_audit=failure_audit,  # type: ignore[arg-type]
+        failure_audit=failure_audit,
         operator_id="local-operator",
         resource_resolver=lambda _tool, value: value,
     )
@@ -231,8 +264,28 @@ async def submit_call(
     tool_ref: str = "docs__read",
     before_submit: Callable[[], None] | None = None,
 ) -> tuple[object, tuple[ToolView, ...], LiveCheckedRegistry]:
+    async with running(tmp_path, peer, registry, doc) as (assembled, _store):
+        if before_submit is not None:
+            before_submit()
+        outcome = await assembled.guard.submit(
+            "task-1",
+            ProposedCall(tool_ref=tool_ref, arguments={"path": "public/a.txt"}, model_call_id="c1"),
+            expected_epoch=1,
+        )
+        return outcome, assembled.tool_views, assembled.registry
+
+
+@asynccontextmanager
+async def running(
+    tmp_path,
+    peer: Peer,
+    registry: Registry,
+    doc: dict[str, object],
+    audits: list[FailureEvent] | None = None,
+) -> AsyncIterator[tuple[AssembledGuard, SQLiteStore]]:
+    """Assembled Guard with RUNNING Task `task-1`; transport and Store closed after."""
     store = SQLiteStore(tmp_path / "assembly.db", audit_id_factory=lambda: f"audit-{uuid4().hex}")
-    assembled = await assemble_guard(store, inputs(peer, registry, doc))
+    assembled = await assemble_guard(store, inputs(peer, registry, doc, audits))
     try:
         settings = assembled.settings
         state = TaskState(
@@ -243,14 +296,7 @@ async def submit_call(
             status=TaskStatus.RUNNING,
         )
         await store.create_task(state, created_at_utc=datetime.now(UTC))
-        if before_submit is not None:
-            before_submit()
-        outcome = await assembled.guard.submit(
-            "task-1",
-            ProposedCall(tool_ref=tool_ref, arguments={"path": "public/a.txt"}, model_call_id="c1"),
-            expected_epoch=1,
-        )
-        return outcome, assembled.tool_views, assembled.registry
+        yield assembled, store
     finally:
         await assembled.aclose()
         store.close()
@@ -372,6 +418,121 @@ def test_registration_rewritten_mid_run_no_longer_matches_the_live_definition(tm
     assert peer.calls == []
     assert live == [tool_fingerprint(READ_DEFINITION)]
     assert view.blocked_servers == frozenset()
+
+
+SEND_SETTINGS = {"name": "send", "kind": "send", "destination_arg": "to"}
+
+
+def read_call(call_id: str, path: str = "public/a.txt") -> ProposedCall:
+    return ProposedCall(tool_ref="docs__read", arguments={"path": path}, model_call_id=call_id)
+
+
+async def eventually(condition: Callable[[], Awaitable[bool]]) -> None:
+    """The MCP SDK handles a notice on its own receive task, so poll for it."""
+    for _ in range(500):
+        if await condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition not reached")
+
+
+async def list_change_seen(view: LiveCheckedRegistry) -> None:
+    async def changed() -> bool:
+        return bool(view.listing_changed)
+
+    await eventually(changed)
+
+
+def test_tools_list_changed_after_the_comparison_blocks_the_server_for_this_run(
+    tmp_path, caplog
+) -> None:
+    """LIST-01: the server is PENDING for this run, so new calls are denied with
+    REG_NOT_ACTIVE and no tool of it is offered. C's Registry is not written."""
+    peer = Peer([READ_DEFINITION, LIST_DEFINITION])
+    registry = Registry(tool_fingerprint(READ_DEFINITION), spec(LIST_DEFINITION))
+    doc = document(tools=(READ_SETTINGS, LIST_SETTINGS))
+    audits: list[FailureEvent] = []
+
+    async def run():
+        async with running(tmp_path, peer, registry, doc, audits) as (assembled, store):
+            guard = assembled.guard
+            before = await guard.submit("task-1", read_call("c1"), expected_epoch=1)
+            peer.notify_tools_changed()
+            await list_change_seen(assembled.registry)
+            after = await guard.submit("task-1", read_call("c2"), expected_epoch=1)
+            offered = assembled.offered_tool_views()
+            state = await store.load_task("task-1")
+            return before, after, offered, assembled.tool_views, assembled.registry, state
+
+    with caplog.at_level(logging.DEBUG):
+        before, after, offered, views, view, state = asyncio.run(run())
+    assert type(before) is Released
+    assert type(after) is Denied
+    assert after.reasons == (Reason.REG_NOT_ACTIVE,)
+    assert len(peer.calls) == 1
+    # The existing reason is audited; the Task itself keeps running.
+    assert [(event.phase, event.reason) for event in audits] == [
+        ("before_dispatch", Reason.REG_NOT_ACTIVE)
+    ]
+    assert state.status is TaskStatus.RUNNING
+    assert view.listing_changed == frozenset({"docs"})
+    assert view.blocked_servers == frozenset({"docs"})
+    assert view.status("docs") is RegStatus.PENDING
+    # The definitions themselves were not compared again; they keep the live value.
+    assert view.mismatched == frozenset()
+    assert view.fingerprint(registry.record.tools[0]) == tool_fingerprint(READ_DEFINITION)
+    assert [v.tool_ref for v in views] == ["docs__read", "docs__list"]
+    assert offered == ()
+    assert registry.record.status is RegStatus.ACTIVE
+    assert "secret-notice-text" not in caplog.text
+
+
+def test_tools_list_changed_before_the_comparison_does_not_block(tmp_path) -> None:
+    """LIST-01: the comparison itself reads the listing announced before it."""
+    peer = Peer([READ_DEFINITION], notify_on_list=True)
+    outcome, views, view = asyncio.run(
+        submit_call(tmp_path, peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
+    )
+    assert type(outcome) is Released
+    assert [v.tool_ref for v in views] == ["docs__read"]
+    assert view.early_list_changes == 1
+    assert view.listing_changed == frozenset()
+    assert view.status("docs") is RegStatus.ACTIVE
+    assert len(peer.calls) == 1
+
+
+def test_tools_list_changed_invalidates_a_pending_approval(tmp_path) -> None:
+    """LIST-01: an approval waiting when the notice arrives is invalidated on its
+    recheck with REG_NOT_ACTIVE and its Task halts; the SEND is never dispatched."""
+    peer = Peer([READ_DEFINITION, SEND_DEFINITION])
+    registry = Registry(tool_fingerprint(READ_DEFINITION), spec(SEND_DEFINITION, ToolKind.SEND))
+    doc = document(
+        tools=(READ_SETTINGS, SEND_SETTINGS), sources=(INTERNAL_SOURCE,), destinations=(PARTNER,)
+    )
+    send = ProposedCall(
+        tool_ref="docs__send", arguments={"to": "partner", "body": "hello"}, model_call_id="c2"
+    )
+
+    async def run():
+        async with running(tmp_path, peer, registry, doc) as (assembled, store):
+            guard = assembled.guard
+            read = await guard.submit("task-1", read_call("c1", "internal/a.txt"), expected_epoch=1)
+            pending = await guard.submit("task-1", send, expected_epoch=1)
+            assert type(pending) is Pending
+            peer.notify_tools_changed()
+            await list_change_seen(assembled.registry)
+            approved = await guard.human_control("local-operator").approve(pending.approval_id)
+            record = await store.get_approval(pending.approval_id)
+            return read, approved, record, await store.load_task("task-1")
+
+    read, approved, record, state = asyncio.run(run())
+    assert type(read) is Released
+    assert type(approved) is Denied
+    assert approved.reasons == (Reason.REG_NOT_ACTIVE,)
+    assert record is not None
+    assert record.status is ApprovalStatus.INVALIDATED
+    assert [call["name"] for call in peer.calls] == ["read"]
+    assert state.status is TaskStatus.HALTED
 
 
 def test_unsupported_tool_schema_is_a_fixed_code_and_closes_the_transport(

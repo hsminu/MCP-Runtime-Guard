@@ -17,6 +17,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum, auto
+from functools import partial
 from types import TracebackType
 from typing import Any, Protocol, TextIO, cast
 
@@ -45,6 +46,8 @@ from mcp.types import (
     ListToolsResult,
     PaginatedRequestParams,
     RequestParams,
+    ServerNotification,
+    ToolListChangedNotification,
 )
 from pydantic import AnyUrl, BaseModel
 
@@ -739,10 +742,6 @@ async def _discard_logging(params: object) -> None:
     """Server notifications stay out of UI/model/logs until A14's sink exists."""
 
 
-async def _discard_message(message: object) -> None:
-    """Server notifications stay out of UI/model/logs until A14's sink exists."""
-
-
 class _DeliveryCheckedStream(ObjectReceiveStream[Any]):
     """SDK read stream that re-checks each response as the SDK takes it.
 
@@ -770,7 +769,9 @@ class _DeliveryCheckedStream(ObjectReceiveStream[Any]):
         await self._inner.aclose()
 
 
-def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
+def _sdk_session_factory(
+    stream_factory: StreamFactory, on_tools_changed: Callable[[], None] | None = None
+) -> SessionFactory:
     """Wrap only streams supplied by a verified composition root.
 
     C's connection validation and isolated output sinks precede wiring. SDK
@@ -778,6 +779,16 @@ def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
     """
 
     _install_sdk_log_containment()
+
+    async def handle_message(message: object) -> None:
+        # LIST-01: only the fact that the server's tool list changed leaves the
+        # SDK, never the notification's params. Everything else is discarded.
+        if (
+            on_tools_changed is not None
+            and isinstance(message, ServerNotification)
+            and isinstance(message.root, ToolListChangedNotification)
+        ):
+            on_tools_changed()
 
     @asynccontextmanager
     async def open_session() -> AsyncIterator[_ToolSession]:
@@ -795,7 +806,7 @@ def _sdk_session_factory(stream_factory: StreamFactory) -> SessionFactory:
                     read_stream,
                     streams[1],
                     logging_callback=_discard_logging,
-                    message_handler=_discard_message,
+                    message_handler=handle_message,
                 ) as session:
                     if isinstance(session, ClientSession):
                         session.listing_ingress = gate
@@ -1199,6 +1210,8 @@ class McpTransport:
     Runner, UI, or model client. No transport-specific trust tier is inferred.
     The composition root should set ``max_result_copy_bytes`` high enough for
     its ResponseGate limit plus envelope overhead, within the 8 MiB ceiling.
+    ``on_tools_changed`` receives only the server ID of each
+    ``notifications/tools/list_changed`` (LIST-01).
     """
 
     def __init__(
@@ -1212,9 +1225,12 @@ class McpTransport:
         max_pending_commands: int = _DEFAULT_PENDING_COMMANDS,
         on_dispatch: Callable[[str], None] | None = None,
         tool_list_limits: ToolListLimits | None = None,
+        on_tools_changed: Callable[[str], None] | None = None,
     ) -> None:
         if not isinstance(server_streams, Mapping):
             raise TypeError("server stream mapping required")
+        if on_tools_changed is not None and not callable(on_tools_changed):
+            raise TypeError("tools changed callback must be callable")
         if any(type(server_id) is not str or not server_id for server_id in server_streams):
             raise ValueError("nonempty server IDs required")
         if (
@@ -1231,7 +1247,10 @@ class McpTransport:
             raise ValueError("bounded positive pending command limit required")
         self._workers = {
             server_id: ServerWorker(
-                _sdk_session_factory(stream_factory),
+                _sdk_session_factory(
+                    stream_factory,
+                    None if on_tools_changed is None else partial(on_tools_changed, server_id),
+                ),
                 call_timeout_s=call_timeout_s,
                 startup_timeout_s=startup_timeout_s,
                 close_timeout_s=close_timeout_s,

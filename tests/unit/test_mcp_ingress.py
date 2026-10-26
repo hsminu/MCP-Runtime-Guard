@@ -407,6 +407,34 @@ async def test_concurrent_ping_cannot_steal_listing_response_budget_association(
     assert peer.ping_requests == 1
 
 
+@pytest.mark.asyncio
+async def test_real_sdk_session_reports_only_that_the_tool_list_changed() -> None:
+    """LIST-01: tools/list_changed reaches the callback as a bare call; params
+    and every other notification stay inside the SDK session."""
+    peer = _Peer(lambda request_id, _number: _page(request_id))
+    factory = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
+    seen: list[str] = []
+    async with _sdk_session_factory(factory, lambda: seen.append("changed"))() as session:
+        await session.initialize()
+        for method in (
+            "notifications/resources/list_changed",
+            "notifications/prompts/list_changed",
+            "notifications/tools/list_changed",
+            "notifications/tools/list_changed",
+        ):
+            notice = {"jsonrpc": "2.0", "method": method, "params": {"_meta": {"note": "x"}}}
+            peer.output.extend(json.dumps(notice).encode() + b"\n")
+        peer.available.set()
+        # The ping answer follows the notices, and the SDK handles them in order.
+        await session.send_ping()  # type: ignore[attr-defined]
+    assert seen == ["changed", "changed"]
+
+
+def test_transport_rejects_a_tools_changed_callback_that_is_not_callable() -> None:
+    with pytest.raises(TypeError, match="tools changed callback must be callable"):
+        McpTransport({}, on_tools_changed="not callable")  # type: ignore[arg-type]
+
+
 class _PredictingPeer(_Peer):
     """Pre-sends an oversized answer to the predicted first tools/list ID.
 

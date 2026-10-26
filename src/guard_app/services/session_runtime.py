@@ -137,9 +137,10 @@ class SessionRuntime:
         self._task_listener: Callable[[str], None] | None = None
         self._partial_listener: Callable[[str, int, str], None] | None = None
         # What Codex actually receives: Guard tools minus Codex name-rule exclusions.
-        self._tools_available = assembled is not None and bool(
-            build_dynamic_tools(assembled.tool_views).tool_refs
-        )
+        # Servers whose tool list changed this run drop out at snapshot (LIST-01).
+        self._tool_refs: frozenset[str] = frozenset()
+        if assembled is not None:
+            self._tool_refs = build_dynamic_tools(assembled.tool_views).tool_refs
         self._session_factory = session_factory
         self._preparation = preparation
         self._startup_lock = asyncio.Lock()
@@ -391,13 +392,17 @@ class SessionRuntime:
             model_ready=self._codes[task_id] == "READY_CODEX"
             and state.status is TaskStatus.RUNNING,
             connection_code=self._codes[task_id],
-            tools_available=self._tools_available,
+            tools_available=self._tools_available(),
             can_advance=runner.can_advance,
             can_accept_message=runner.can_accept_message and state.status is TaskStatus.RUNNING,
             runner_state=runner.runtime_status,
             label=state.high_watermark,
             unclassified=state.unclassified,
         )
+
+    def _tools_available(self) -> bool:
+        assembled = self._assembled
+        return assembled is not None and any(map(assembled.offers_tool, self._tool_refs))
 
     async def _halt_store_task(self, task_id: str) -> None:
         state = await self.store.load_task(task_id)

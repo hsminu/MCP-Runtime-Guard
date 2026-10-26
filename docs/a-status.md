@@ -51,6 +51,8 @@
 - [x] A86 연결 직후 지문 대조·불일치 도구 차단(A15·A16, 주입형 Registry) · [기록](archive/a/A86-profile-guard-assembly.md)
 - [x] A96 등록에 없는 도구가 보이면 서버 차단(PR #29 B 리뷰 3) · [기록](archive/a/A96-live-listing-added-tools.md)
 - [x] A97 MCP 도구 오류(`is_error`)를 Codex에 실패로 전달 · [기록](archive/a/A97-released-tool-error.md)
+- [x] A100 대조 뒤 `tools/list_changed`를 받으면 그 서버를 이번 실행 동안 PENDING 취급, 새 세션 도구 목록에서 제외(LIST-01, PR #34 결정) · [기록](archive/a/A100-tools-list-changed.md)
+- [ ] A100 서버별 목록 수신 뒤·대조 전 알림 처리 — 막힘: 사용자 결정(현재는 결정 문구대로 차단하지 않음)
 - [ ] A15·A16 실제 Registry·launcher 연결 — 막힘: C Registry. 지문 계산 기준(SDK 재구성 dict) C 확인 필요
 
 ## 접근 규칙·모델·Runner
