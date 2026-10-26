@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import ClassVar
 
 import shiboken6
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtCore import QPointF, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .icons import line_icon
 from .models import LoadState
 from .presentation import LABELS, format_kst
 
@@ -50,8 +53,37 @@ def size_detail_for_viewport(dialog: QDialog, width: int, height: int) -> None:
     dialog.resize(width, height)
 
 
+class SelectionBox(QComboBox):
+    """Native keyboard/popup behavior with a platform-independent chevron."""
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#7b8296" if self.isEnabled() else "#b0b6c4"), 1.5))
+        x = 18 if self.layoutDirection() == Qt.LayoutDirection.RightToLeft else self.width() - 18
+        y = self.height() / 2
+        painter.drawLine(QPointF(x - 3, y - 1.5), QPointF(x, y + 1.5))
+        painter.drawLine(QPointF(x, y + 1.5), QPointF(x + 3, y - 1.5))
+        painter.end()
+
+
 class KeyboardActionButton(QPushButton):
     """Activate focused actions with Return/Enter as well as Qt's Space key."""
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setIconSize(QSize(16, 16))
+
+    def set_visual(self, *, icon: str, variant: str = "default") -> None:
+        self.setProperty("variant", variant)
+        color = {"primary": "#ffffff", "soft": "#6658d7", "danger": "#b74455"}.get(
+            variant, "#70798c"
+        )
+        self.setIcon(line_icon(icon, color))
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -98,7 +130,7 @@ class StateMessage(QFrame):
     """Show loading, failure, stale, and empty as different states."""
 
     _MESSAGES: ClassVar[dict[LoadState, str]] = {
-        LoadState.UNAVAILABLE: "조회 연결 대기",
+        LoadState.UNAVAILABLE: "조회 기능 미연결",
         LoadState.LOADING: "불러오는 중…",
         LoadState.ERROR: "불러오지 못함 · 새로고침 필요",
         LoadState.STALE: "이전 조회 결과 · 다시 확인 필요",
@@ -114,7 +146,7 @@ class StateMessage(QFrame):
         layout.addWidget(self.message)
         self.set_state(LoadState.UNAVAILABLE)
 
-    def set_state(self, state: LoadState, *, as_of=None) -> None:
+    def set_state(self, state: LoadState, *, as_of: datetime | None = None) -> None:
         message = self._MESSAGES.get(state, "상태 확인 필요")
         if state == LoadState.STALE and as_of is not None:
             message += f" · 마지막 확인 {format_kst(as_of)}"

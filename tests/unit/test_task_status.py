@@ -41,10 +41,7 @@ def test_each_backend_status_has_distinct_guidance(
     assert title in card.status_label.text()
     assert guidance in card.detail_label.text()
     assert card.findChildren(QAbstractButton) == []
-    assert all(
-        label.textFormat() == Qt.TextFormat.PlainText
-        for label in card.findChildren(QLabel)
-    )
+    assert all(label.textFormat() == Qt.TextFormat.PlainText for label in card.findChildren(QLabel))
 
 
 def test_unknown_outcome_after_running_never_looks_complete_or_runnable(

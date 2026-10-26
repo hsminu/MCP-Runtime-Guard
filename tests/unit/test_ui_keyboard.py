@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -23,6 +22,9 @@ from guard_app.ui.server_add import ServerAddForm
 from guard_app.ui.servers import ServerListPage
 from guard_app.ui.widgets import KeyboardActionButton, PlainDetailDialog
 from guard_app.ui.window import GuardWindow
+
+# Absolute on this OS and ASCII-only; the form never touches the file.
+SYNTHETIC_COMMAND = r"C:\synthetic-server" if os.name == "nt" else "/synthetic-server"
 
 
 @pytest.fixture(scope="module")
@@ -161,9 +163,7 @@ def test_minimum_window_keeps_identity_label_and_status_visible(
         True,
     ]
     assert table.horizontalHeaderItem(0).text() == "서버 ID"
-    assert table.columnViewportPosition(4) + table.columnWidth(4) <= (
-        table.viewport().width()
-    )
+    assert table.columnViewportPosition(4) + table.columnWidth(4) <= (table.viewport().width())
     assert table.horizontalScrollBar().maximum() == 0
 
     table.selectRow(0)
@@ -283,9 +283,7 @@ def test_plain_detail_escape_returns_focus_to_opener(app: QApplication) -> None:
     opener.setFocus()
 
     detail = PlainDetailDialog(host)
-    detail.show_detail(
-        title="합성 상세", text="literal <b>text</b>", return_focus=opener
-    )
+    detail.show_detail(title="합성 상세", text="literal <b>text</b>", return_focus=opener)
     app.processEvents()
     assert detail.body.hasFocus()
     assert detail.body.toPlainText() == "literal <b>text</b>"
@@ -326,7 +324,9 @@ def test_add_form_keyboard_reaches_fields_and_prepares_only_local_draft(
         assert form.focusWidget() is form.transport
         QTest.keyClick(form.transport, Qt.Key.Key_Tab)
         assert form.focusWidget() is form.command
-        QTest.keyClicks(form.command, str(Path.cwd() / "synthetic-server"))
+        # QTest.keyClicks aborts the process (qasciikey.cpp ASSERT) on any
+        # non-ASCII character, so never type a path derived from the checkout.
+        QTest.keyClicks(form.command, SYNTHETIC_COMMAND)
         QTest.keyClick(form.command, Qt.Key.Key_Tab)
         assert form.focusWidget() is form.args_json
         before = form.args_json.toPlainText()
@@ -448,9 +448,7 @@ def test_approval_keyboard_changes_lane_and_sort_without_action_buttons(
         assert page.sort.currentIndex() == 1
         assert requests[-1].sort.value == "newest"
         assert requests[-1].lane.value == "history"
-        button_texts = {
-            button.text() for button in page.findChildren(KeyboardActionButton)
-        }
+        button_texts = {button.text() for button in page.findChildren(KeyboardActionButton)}
         assert "승인" not in button_texts
         assert "거절" not in button_texts
     finally:
@@ -530,9 +528,7 @@ def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(
         close_button = dialog.focusWidget()
         assert isinstance(close_button, KeyboardActionButton)
         assert close_button.text() == "닫기"
-        assert [
-            button.text() for button in dialog.findChildren(KeyboardActionButton)
-        ] == ["닫기"]
+        assert [button.text() for button in dialog.findChildren(KeyboardActionButton)] == ["닫기"]
         repeated_press = QKeyEvent(
             QEvent.Type.KeyPress,
             Qt.Key.Key_Return,

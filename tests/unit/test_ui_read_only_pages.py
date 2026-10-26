@@ -32,6 +32,7 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
 
     approval_queries = []
     window.approval_query_requested.connect(approval_queries.append)
+    window.set_approval_query_connected(True)
     window.navigate("approvals")
     assert window.approval_page.isVisibleTo(window)
     assert not window.log_page.isVisibleTo(window)
@@ -64,9 +65,7 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
     assert window.log_page.detail_button.isEnabled()
     window.log_page.detail_button.click()
     request = log_requests[-1]
-    window.set_call_log_detail(
-        request, Surface(LoadState.READY, PublicCallDetail(call))
-    )
+    window.set_call_log_detail(request, Surface(LoadState.READY, PublicCallDetail(call)))
     dialog = window.log_page._detail_dialog
     assert dialog is not None
     assert "수신측 확인 필요" in dialog.body.toPlainText()
@@ -78,9 +77,7 @@ def test_server_scan_reply_is_bound_to_current_detail_opening(
     app: QApplication,
 ) -> None:
     window = GuardWindow()
-    window.set_server_snapshot(
-        Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),))
-    )
+    window.set_server_snapshot(Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),)))
     requested = []
     window.scan_snapshot_requested.connect(
         lambda server_id, token: requested.append((server_id, token))
@@ -120,9 +117,7 @@ def test_repeated_server_details_release_dialogs_and_reject_old_scan_reply(
     app: QApplication,
 ) -> None:
     window = GuardWindow()
-    window.set_server_snapshot(
-        Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),))
-    )
+    window.set_server_snapshot(Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),)))
     requested: list[tuple[str, int]] = []
     window.scan_snapshot_requested.connect(
         lambda server_id, token: requested.append((server_id, token))
@@ -172,4 +167,30 @@ def test_repeated_server_details_release_dialogs_and_reject_old_scan_reply(
     assert reused.width() <= max(240, window.width() - 24)
     assert reused.height() <= max(200, window.height() - 24)
     reused.close()
+    window.close()
+
+
+def test_product_window_without_approval_source_never_waits_forever(app: QApplication) -> None:
+    window = GuardWindow()
+    window.show()
+    approval_queries = []
+    window.approval_query_requested.connect(approval_queries.append)
+    window.navigate("approvals")
+    page = window.approval_page
+    assert not page.source_connected
+    assert not page.refresh_button.isEnabled()
+    assert not page.search.isEnabled()
+    page.refresh()
+    page.lane_tabs.setCurrentIndex(1)
+    assert approval_queries == []
+    assert page.state is LoadState.UNAVAILABLE
+    assert "아직 연결되지 않았어" in page.state_message.message.text()
+    assert "불러오는 중" not in page.state_message.message.text()
+    window.set_approval_query_connected(True)
+    page.refresh()
+    assert len(approval_queries) == 1
+    assert page.state is LoadState.LOADING
+    window.set_approval_query_connected(False)
+    assert page.state is LoadState.UNAVAILABLE
+    assert page.current_query is None
     window.close()

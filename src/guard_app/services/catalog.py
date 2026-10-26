@@ -150,7 +150,11 @@ class Catalog:
         return self.classify_source(req.tool.server_id, req.tool.tool_name, resource_id)
 
     def tool_views(self, server_ids: tuple[str, ...]) -> tuple[ToolView, ...]:
-        """현재 ACTIVE·지원 종류·지문 일치 도구의 닫힌 스키마를 모델에 노출한다."""
+        """ACTIVE·지원 종류·지문 일치 도구의 스키마와 검토된 설명만 노출한다.
+
+        DESC-01 합의 전 제안: 원본 schema의 description 등으로 자동 대체하지 않는다.
+        사용자 검토·저장은 A 입력/C Registry 책임이며 빈 값은 빈 설명 그대로다.
+        """
         if not isinstance(server_ids, tuple):
             raise CatalogConfigError("도구 목록의 서버 ID는 tuple이어야 한다")
         seen: set[str] = set()
@@ -173,7 +177,7 @@ class Catalog:
                     ToolView(
                         tool_ref=f"{server_id}__{tool.tool_name}",
                         input_schema=ArgumentSchema(tool.input_schema).schema,
-                        description="",
+                        description=tool.reviewed_description,
                     )
                 )
         return tuple(views)

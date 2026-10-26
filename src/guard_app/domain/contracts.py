@@ -9,10 +9,11 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
-from guard_app.domain.enums import ApprovalStatus, RegStatus
+from guard_app.domain.enums import ApprovalStatus, RegStatus, ScanErrorCode
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import Boundary, Frozen, ProposedCall, StrictLabel, TaskState, ToolSpec
 from guard_app.domain.reasons import Reason
+from guard_app.domain.text import ScanRisk, ThreatSummary
 
 type Identifier = Annotated[str, Field(min_length=1)]
 type Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -194,9 +195,34 @@ class Finding(Frozen):
     severity: Identifier
     tool_fingerprint: Sha256 | None = None
     description: str = Field(default="", repr=False)
+    # SCAN-01 합의 전 제안. severity는 SDK 값 그대로이며 아래 값으로 내리지 않는다.
+    tool_name: Identifier | None = Field(default=None, repr=False)
+    source: Literal["LLM", "YARA"] | None = None
+    overall_risk: ScanRisk | None = Field(default=None, repr=False)
+    threat_summary: ThreatSummary = Field(default="", repr=False)
+
+
+class AnalyzerDiagnostic(Frozen):
+    """SCAN-01 합의 전 제안. 실패/생략 사유이며 예외·SDK 원문 필드는 없다.
+
+    검사 전체가 시작되지 못하면 필수 분석기 전부를 analyzers_failed에 두고,
+    분석기마다 같은 고정 코드 진단을 붙인다. 도구 정보·지문은 미확정이면 생략한다.
+    이 경우 빈 findings·지문 집합은 검사 완료나 안전을 뜻하지 않는다.
+    """
+
+    analyzer: Identifier
+    code: ScanErrorCode
+    tool_name: Identifier | None = Field(default=None, repr=False)
+    tool_fingerprint: Sha256 | None = None
 
 
 class ScanReport(Frozen):
+    """SCAN-01 합의 전 제안. 자체 평가는 표시 전용이며 판정·정렬에 쓰지 않는다.
+
+    새 필드는 기본값으로 생략할 수 있다. 옛 실패/생략 목록도 그대로 보존하며,
+    빈 findings·비어 있는 진단 목록은 검사 완료나 안전의 근거가 아니다.
+    """
+
     server_id: Identifier
     fingerprint_set: tuple[Sha256, ...]
     analyzers_required: tuple[Identifier, ...]
@@ -207,6 +233,9 @@ class ScanReport(Frozen):
     findings: tuple[Finding, ...]
     scanned_at_utc: datetime
     scanner_version: Identifier
+    overall_risk: ScanRisk | None = Field(default=None, repr=False)
+    threat_summary: ThreatSummary = Field(default="", repr=False)
+    analyzer_diagnostics: tuple[AnalyzerDiagnostic, ...] = ()
 
     @field_validator("scanned_at_utc")
     @classmethod
@@ -227,6 +256,20 @@ class ScanReport(Frozen):
         completed, skipped, failed = map(set, inventories[2:])
         if completed & skipped or completed & failed or skipped & failed:
             raise ValueError("analyzer outcomes must be disjoint")
+        diagnostic_keys = tuple(
+            (item.analyzer, item.tool_name, item.tool_fingerprint, item.code)
+            for item in self.analyzer_diagnostics
+        )
+        if len(diagnostic_keys) != len(set(diagnostic_keys)):
+            raise ValueError("analyzer diagnostics cannot contain duplicates")
+        for item in self.analyzer_diagnostics:
+            if item.analyzer not in skipped | failed:
+                raise ValueError("analyzer diagnostic requires skipped or failed outcome")
+            if (
+                item.tool_fingerprint is not None
+                and item.tool_fingerprint not in self.fingerprint_set
+            ):
+                raise ValueError("analyzer diagnostic fingerprint is outside the scan")
         return self
 
 
@@ -247,6 +290,64 @@ class RegisteredServer(Frozen):
         if len(names) != len(set(names)):
             raise ValueError("registered tool names must be unique within a server")
         return self
+
+
+class StoredScanReport(Frozen):
+    """B6-06 합의 전 제안. 원문은 report_json에만 보관하는 저장 검사 사본."""
+
+    scan_id: Identifier
+    report: ScanReport = Field(repr=False)
+    stored_at_utc: datetime
+
+    @field_validator("stored_at_utc")
+    @classmethod
+    def check_utc(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
+
+class RegistryEntry(Frozen):
+    """B6-06 합의 전 제안. 기존 등록 DTO를 바꾸지 않는 저장 메타데이터.
+
+    last_scan은 가장 최근 저장 검사다. reviewed_scan_id는 사용자가 활성화 때
+    확인한 검사이며 서로 다를 수 있다. 이 사본만으로 연결 실행을 허가하지 않는다.
+    """
+
+    registration: RegisteredServer = Field(repr=False)
+    last_scan: StoredScanReport | None = Field(default=None, repr=False)
+    reviewed_scan_id: Identifier | None = None
+    reviewed_by: Identifier | None = Field(default=None, repr=False)
+    updated_at_utc: datetime
+
+    @property
+    def last_scan_id(self) -> str | None:
+        return None if self.last_scan is None else self.last_scan.scan_id
+
+    @field_validator("updated_at_utc")
+    @classmethod
+    def check_utc(cls, value: datetime) -> datetime:
+        return _require_utc(value)
+
+    @model_validator(mode="after")
+    def check_scan_ownership(self) -> Self:
+        if self.last_scan is not None and (
+            self.last_scan.report.server_id != self.registration.server_id
+        ):
+            raise ValueError("stored scan must belong to the registered server")
+        return self
+
+
+class FingerprintChange(Frozen):
+    """B6-06 합의 전 제안. 추가·삭제를 포함한 변경 이름과 커밋된 전체 사본."""
+
+    entry: RegistryEntry = Field(repr=False)
+    changed_tools: tuple[Identifier, ...] = Field(repr=False)
+
+    @field_validator("changed_tools")
+    @classmethod
+    def check_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))):
+            raise ValueError("changed tool names must be sorted and unique")
+        return value
 
 
 class ToolView(Frozen):

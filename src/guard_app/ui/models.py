@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Generic, TypeVar
 
 
 class LoadState(StrEnum):
@@ -22,6 +21,7 @@ class LoadState(StrEnum):
 
 
 class RuntimeMode(StrEnum):
+    CODEX = "codex"
     UNCONFIGURED = "unconfigured"
     MOCK = "mock"
     REAL = "real"
@@ -35,11 +35,8 @@ class RuntimeIdentity:
     model_mode: RuntimeMode = RuntimeMode.UNCONFIGURED
 
 
-T = TypeVar("T")
-
-
 @dataclass(frozen=True, slots=True)
-class Surface(Generic[T]):
+class Surface[T]:
     """A backend query result, distinct from an empty successful result."""
 
     state: LoadState = LoadState.UNAVAILABLE

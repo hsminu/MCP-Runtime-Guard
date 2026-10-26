@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-18 · main `139e5a0` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-19 · main `139e5a0` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -13,11 +13,14 @@
 | SEQ·REC 계약 회신 | C | B6.8 |
 | B6-01–06 계약 회신 | A·C | B1.5, B1.6, B6.9–B6.12, B6.16 |
 | safe_path | C | B3.3 |
-| Registry 영속화 계약(B6-06) | C | B6.14 |
+| Registry 영속화 B 제안 완료·C 검토·C4.10 연결 대기(B6-06) | A·C | B6.18 |
+| 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 합의 | A·B·C | B6.19 |
 | 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
 | 모델 고정 문구표 검토·세션 관리자 연결 | A | B5.12 |
 | NOTIFY-01 DTO·포트·종료 의미 합의와 A/C 연결·독립 검증 | A·B·C | B5.13 |
 | STOP-01 TaskIdentity·사유·감사 포트 합의와 A 세션 관리자 연결·T41/T42 독립 검증 | A·B·C | B5.14 |
+| SCAN-01 필드·고정 오류 코드 합의와 C Scanner 번역·A 경고 표시 | A·B·C | B1.9 |
+| DESC-01 검토 입력·원본 분리·Registry 저장·설명 변경 적용 의미 | A·B·C | B3.13 |
 | 설정 파일 형식 결정·경로/실행 파일 검증·시작 연결 | 사용자·C·A | B3.11 |
 | 정책 변경 화면·저장/Task 생성 직렬화 연결과 거부·누락 전송 0 검증 | A·C | B3.12 |
 
@@ -30,7 +33,8 @@
 - [ ] B1.5 명령·이벤트 payload, 원시 결과 격리·공개 결과 구분, 계수 연결 확정 — 막힘: A·C 합의
 - [ ] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 기록 — 막힘: B6-02
 - [ ] B1.7 ModelClient 제거·세션 관리자 DTO(TaskIdentity 등, #20 5번) — 막힘: A 제안 v1 검토·3인 합의, A 병합
-- [ ] B1.8 SCAN-01 ScanReport 확장(#21 7번 필드: overall_risk 참고·threat_summary 300자)
+- [x] B1.8 SCAN-01 DTO 확장·표시 검사 오탐/명시적 무해화 보완·합의 전 제안 · [기록](archive/b/B1.8-scan-report.md)
+- [ ] B1.9 SCAN-01 필드·고정 코드/무해화 합의·C Scanner 번역·A 경고 표시 — 막힘: 3인 합의·A/C 연결
 
 ## B2 · 순수 정책과 등급 누적
 
@@ -55,11 +59,12 @@
 - [x] B3.5 도구 단위 READ는 `prefix: []` 규칙만, 없으면 Unclassified
 - [x] B3.6 목적지는 등록 목록 정확 일치, 이름·IP·DNS·stdio를 신뢰 근거로 쓰지 않음
 - [x] B3.7 FP-01 JCS 지문 함수 · [기록](archive/b/B3.7-jcs-fingerprint.md)
-- [ ] B3.8 DESC-01 검토된 설명 필드
+- [x] B3.8 DESC-01 검토된 설명 필드·Catalog 연결·합의 전 제안 · [기록](archive/b/B3.8-reviewed-description.md)
 - [x] B3.9 파싱된 설정·Profile 로딩 1단계와 policy_version 계산(10-18 결정) · [기록](archive/b/B3.9-profile-loading.md)
 - [x] B3.10 정책 변경 준비·적용·Task 정지·승인 무효화(10-18 결정) · [기록](archive/b/B3.10-policy-change.md)
 - [ ] B3.11 설정 파일 형식 결정·C 경로/실행 파일 검증·A 시작 연결 — 막힘: 형식 결정 필요(C 경로 검증, A 시작 연결)
 - [ ] B3.12 A81 허용 체크·정책 저장/적용·Task 생성 직렬화 연결·C 거부/누락 전송 0 검증 — 막힘: A·C 연결
+- [ ] B3.13 DESC-01 A 검토 입력·C Registry 원본 분리/저장·설명 변경 적용 의미 합의 — 막힘: 3인 합의·A/C 연결
 
 ## B4 · Guard와 응답 게이트
 
@@ -105,10 +110,12 @@
 - [ ] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 — 막힘: B6-03·B6-04
 - [ ] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙과 예산(잠금 대기 1000ms는 미측정 제안값) — 막힘: B6-03
 - [ ] B6.13 SQLite 잠금 대기 중 이벤트 루프 정지·전역 정지(B-QA-03)
-- [ ] B6.14 Registry 등록·지문 영속화·변경 시 승인 무효화 — 막힘: B6-06·C
+- [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.15 규칙 버전 감사(AGT-02)
 - [ ] B6.16 A 시작 게이트·조회 요구와 C 인수 기준을 대조해 API 합의 기록 — 막힘: A·C 회신
 - [ ] B6.17 SEQ·REC B 결정안(A 회신의 질문 답변)
+- [ ] B6.18 RegistryStore 계약 합의·C4.10 사본 교체/승인 무효화 연결 — 막힘: A·C 검토·C 연결
+- [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) 원자 조건·독립 검증 — 막힘: 3인 합의·A/C 연결
 
 ## B7 · 검증과 인수
 
@@ -122,3 +129,5 @@
 - [ ] B7.8 C 독립 통합 인수 결과와 대상 커밋 기록 — 막힘: C
 - [ ] B7.9 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 A·C에 전달
 - [x] B7.10 공통 문서 미결 상태 갱신 제안 · [PR #18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) · [기록](archive/b/B7.10-contract-status-proposal.md)
+- [x] B7.11 A 리뷰 후속 최종 알림 고정 문구·실행 본문 A 경로 위임·예약 전 취소 Task 격리 · [기록](archive/b/B7.11-a-review-followups.md)
+- [x] B7.12 C 리뷰 후속 미소비 공개 본문 폐기·예약 뒤 취소 최종 알림 · [기록](archive/b/B7.12-c-review-followups.md)
