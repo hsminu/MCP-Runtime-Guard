@@ -41,7 +41,7 @@
 - [ ] C2.12 codex.exe 실행 launcher: 실행마다 SHA-256 대조, 허용 목록 환경(`SYSTEMROOT`·`WINDIR`·`TEMP`·`TMP`·`LOCALAPPDATA`·`APPDATA`·`USERPROFILE`·`CODEX_HOME`, 최종 목록은 실제 실행으로 확정), `-c sqlite_home=<Task 폴더>`, stdin/stdout 반환, stderr는 Task 폴더 격리 파일(#21 2번). stdio MCP 서버 실행에도 같은 API를 쓴다(#21 5번)
 - [ ] C2.13 앱 폴더 경로·권한: codex 설치·CODEX_HOME·Task 폴더를 `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 사용자 전용 권한으로, Task 폴더는 Task 종료·앱 시작 때 삭제(#21 6번)
 - [ ] C2.11 제품용 읽기 전용 파일 MCP 서버(stdio): 폴더 목록·파일 읽기만, `safe_path`(C2.3) 사용, `structuredContent.resource_id` 보고, UTF-8 텍스트만 · [결정](contracts.md#사용자-결정)
-- [ ] C2.14 설정 파일·Profile 로딩의 경로·실행 파일 검증(B가 읽어 Catalog에 넣고 A가 앱 시작에 연결, #19 1번) · [결정](contracts.md#사용자-결정)
+- [ ] C2.14 설정 파일·Profile 로딩의 경로·실행 파일 검증(B가 읽어 Catalog에 넣고 A가 앱 시작에 연결, #19 1번). CFG-01: `%LOCALAPPDATA%\MCPRuntimeGuard\config\settings.json` 경로·사용자 전용 권한, 1MiB 제한 읽기, 같은 폴더 임시 파일·fsync·교체(#33) · [결정](contracts.md#사용자-결정)
 
 ## C3 · B SQLite 리뷰와 독립 검증
 
@@ -86,6 +86,7 @@
 - [ ] C5.5 wire_tools_call과 wire_post 대응, 카운터는 테스트 임시 파일
 - [ ] C5.6 공격 fixture: 응답 유실·307/308·재연결·정의 변조·stderr/progress 유출
 - [ ] C5.7 관찰 불가 경로를 검증 불가로 기록
+- [ ] C5.9 실제 MCP 서버가 연결 뒤 `notifications/tools/list_changed`를 보내는지와 시점 관찰(LIST-01, #30). 연결 직후 습관적으로 보내는 서버가 많으면 3안(재조회·재대조) 재검토
 - [ ] C5.8 `tools/list` 바이트 상한(1MiB·8MiB) 집행 검증: `attack_fixtures/scanner_limits`로 stdio·HTTP 초과 시 파싱 전 중단·미완료 경고 확인(#21 5번) — 막힘: A 바이트 상한 층
 
 ## C6 · 검증·실험·CI
