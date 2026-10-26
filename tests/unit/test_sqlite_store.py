@@ -29,6 +29,7 @@ TABLES = {
     "approvals",
     "audit_events",
     "registrations",
+    "registration_tools",
     "scan_reports",
 }
 
@@ -155,7 +156,7 @@ def test_empty_existing_database_can_migrate(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "statement",
     [
-        "PRAGMA user_version=2",
+        f"PRAGMA user_version={SCHEMA_VERSION + 1}",
         "PRAGMA user_version=-1",
         "PRAGMA application_id=1",
         "CREATE TABLE unrelated (id TEXT)",
@@ -186,12 +187,12 @@ def test_unknown_database_is_not_adopted_or_overwritten(tmp_path: Path, statemen
     [
         "ALTER TABLE tasks ADD COLUMN raw_body TEXT",
         "DROP TABLE escalations",
-        "PRAGMA user_version=2",
+        f"PRAGMA user_version={SCHEMA_VERSION + 1}",
         "PRAGMA application_id=0",
         "CREATE TABLE sqliteXhidden (id TEXT)",
     ],
 )
-def test_modified_v1_schema_or_tag_is_rejected(tmp_path: Path, statement: str) -> None:
+def test_modified_current_schema_or_tag_is_rejected(tmp_path: Path, statement: str) -> None:
     path = tmp_path / "guard.db"
     SQLiteStore(path).close()
     with sqlite3.connect(path) as connection:
