@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-19 · main `013ecec` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-26 · main `013ecec` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -88,6 +88,7 @@
 - [x] A72 앱 시작 준비 1회·Task별 구성 지문/L2 대조 연결부 · [기록](archive/a/A72-per-task-configuration-gate.md)
 - [x] A73 Codex stdin/stdout 바이트 프레이밍 어댑터·상한/종료 검증 · [기록](archive/a/A73-codex-stream-framing.md)
 - [x] A74 주입형 Task 자원 준비·종료 확인·정리 순서와 미확인 재시작 차단 · [기록](archive/a/A74-task-resource-lifecycle.md)
+- [x] A98 종료 확인(`confirm_exit`) 상한을 정리 상한과 분리, C2.12 `close()` 대기 수용(PR #35 A 리뷰) · [기록](archive/a/A98-confirm-exit-bound.md)
 - [x] A21·A22 Runner expected_epoch·승인 resume 연결
 - [x] A21·A22 Task별 새 세션·thread 격리(가짜 app-server) · [기록](archive/a/A88-codex-session-manager.md)
 - [ ] A21·A22 실제 codex.exe로 T21 — 막힘: C launcher

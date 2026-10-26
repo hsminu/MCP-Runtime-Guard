@@ -67,6 +67,11 @@ type CodexSessionFactory = Callable[
 type ProfileSaver = Callable[[PreparedPolicyChange], Awaitable[bool]]
 
 SESSION_CLEANUP_TIMEOUT_S = 0.5
+# confirm_exit waits for C2.12 `LaunchedProcess.close()`: stdin EOF, up to 5 s
+# for Codex to exit, then the Job is terminated and seen empty (up to 5 s more).
+# Under the 0.5 s cleanup bound a slow but successful exit would be reported
+# unconfirmed and block new Tasks until restart (PR #35 A review).
+CONFIRM_EXIT_TIMEOUT_S = 12.0
 
 # A session stop code -> STOP-01 reason (PR #28 review mapping, agreed by B).
 # A token refresh conflict arrives as `unauthorized` like any auth failure, so
@@ -548,7 +553,9 @@ class SessionRuntime:
         finally:
             await self._close_session(task_id, interrupt=True)
 
-    async def _bounded_cleanup(self, action: Callable[[], Awaitable[object]]) -> bool:
+    async def _bounded_cleanup(
+        self, action: Callable[[], Awaitable[object]], timeout_s: float | None = None
+    ) -> bool:
         async def invoke() -> None:
             if await action() is not None:
                 raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
@@ -557,7 +564,9 @@ class SessionRuntime:
         self._cleanup_operations.add(operation)
         operation.add_done_callback(self._consume_cleanup)
         try:
-            done, _ = await asyncio.wait({operation}, timeout=SESSION_CLEANUP_TIMEOUT_S)
+            done, _ = await asyncio.wait(
+                {operation}, timeout=SESSION_CLEANUP_TIMEOUT_S if timeout_s is None else timeout_s
+            )
             return bool(done) and not operation.cancelled() and operation.exception() is None
         finally:
             if not operation.done():
@@ -607,7 +616,7 @@ class SessionRuntime:
                     nonlocal confirmed
                     confirmed = await preparation.confirm_exit(resources) is True
 
-                confirmation_finished = await self._bounded_cleanup(confirm)
+                confirmation_finished = await self._bounded_cleanup(confirm, CONFIRM_EXIT_TIMEOUT_S)
                 # No removal until termination is positively confirmed. If a
                 # timed-out callback later returns True, this path stays closed.
                 if closed and confirmation_finished and confirmed:

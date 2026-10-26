@@ -437,6 +437,55 @@ def test_task_cleanup_uncertainty_latches_without_stopping_other_task(tmp_path):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("exits_in_time", [True, False])
+def test_confirm_exit_has_its_own_bound_longer_than_cleanup(tmp_path, monkeypatch, exits_in_time):
+    """PR #35 A review: C2.12 close() may wait its grace period before it confirms (I9)."""
+
+    async def run():
+        runtime, _ = make_runtime(tmp_path)
+        first = await runtime.create_session(SessionOptions())
+        release = asyncio.Event()
+        confirmations = []
+
+        async def confirm(resources):
+            confirmations.append(resources.task_id)
+            if resources.task_id == first.task_id:
+                await asyncio.sleep(0.1)  # longer than the cleanup bound below
+                if not exits_in_time:
+                    await release.wait()
+            return True
+
+        runtime._preparation = replace(runtime._preparation, confirm_exit=confirm)
+        monkeypatch.setattr("guard_app.services.session_runtime.SESSION_CLEANUP_TIMEOUT_S", 0.01)
+        monkeypatch.setattr(
+            "guard_app.services.session_runtime.CONFIRM_EXIT_TIMEOUT_S",
+            1.0 if exits_in_time else 0.2,
+        )
+        stopping = runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL)
+        try:
+            if exits_in_time:
+                await asyncio.wait_for(stopping, 2)
+                assert first.task_id not in runtime._resources
+                assert runtime.creation_blocker() is None
+                second = await runtime.create_session(SessionOptions())
+                assert second.status is TaskStatus.RUNNING
+            else:
+                with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+                    await asyncio.wait_for(stopping, 2)
+                assert first.task_id in runtime._resources  # never erased without proof
+                assert runtime.creation_blocker() == "CODEX_CLEANUP_UNCONFIRMED"
+        finally:
+            release.set()
+            if exits_in_time:
+                await runtime.close()
+            else:
+                with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+                    await runtime.close()
+        assert confirmations.count(first.task_id) == 1
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("failure", ["blocked", "raises"])
 def test_lost_interrupt_alone_leaves_cleanup_confirmed(tmp_path, monkeypatch, failure):
     """A88 QA: interrupt is a courtesy; close + confirm_exit + cleanup prove the stop (I9)."""
