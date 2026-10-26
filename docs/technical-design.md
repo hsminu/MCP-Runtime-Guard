@@ -1340,13 +1340,14 @@ GUI ─ 명령 큐 ─▶ 세션 관리자 ─ stdio JSON-RPC ─▶ codex app-s
 ```
 
 - **실행:** Task마다 고정 버전(0.162.1) `codex app-server`를 새로 띄운다. 여러 Task를 동시에 실행할 수 있다. CODEX_HOME은 앱 전용 폴더이고, config는 모든 Task에 같은 내용으로 앱 시작 때 한 번 쓴 뒤 Task 시작마다 해시로 확인한다. `sqlite_home` 같은 Task별 값은 실행 인자로 넘긴다. `initialize`(experimentalApi) → `thread/start`(Guard 도구를 `dynamicTools`로 등록, `environments=[]`, `ephemeral`, `approvalsReviewer="user"`, `baseInstructions`) → `turn/start` 순서다. codex.exe는 `security.launcher`로만 띄우고, launcher가 실행할 때마다 SHA-256을 고정값과 대조해 다르면 시작을 거부한다. L2 결과는 세션 관리자의 주입형 포트로 받고(C 구현), 결과가 없거나 실패면 시작을 거부한다. 개발용 건너뛰기는 없다.
+- **도구 이름 제약:** Codex 0.162.1은 namespace·도구 이름에 영문·숫자·`_`·`-`만 받는다(도구 128자, namespace 64자, `mcp`·`mcp__` 접두와 예약 namespace 제외). 이 규칙 밖의 MCP 도구는 `dynamicTools`에서 빠져 쓸 수 없고, 빠진 도구는 화면에 이유와 함께 보여준다(A).
 - **도구 목록:** ACTIVE 서버의 등록 도구만, 서버 ID를 namespace 이름으로 하고 그 아래 도구 이름과 등록 시점 스키마로 만든다(모델에는 `서버이름.도구이름`처럼 보인다). 서버가 보낸 원본 설명문 대신 사용자가 검토한 설명을 쓰는 옵션을 둔다. `deferLoading`은 쓰지 않는다. 승인·취소·정책 조회 같은 제어 기능은 도구 목록에 없다.
 - **호출 변환:** `item/tool/call`은 `namespace`와 `tool`을 따로 보낸다. 세션 관리자는 둘을 `__`로 이어 `ProposedCall.tool_ref`(`server_id__tool_name`, 4.1절)를 만든다. `namespace`가 없으면 Guard에 넘기지 않고 DENY 고정 문구로 답한다. `item/tool/call`은 `ProposedCall`로만 변환한다. 모델이 출력한 `task_id`, `label` 같은 필드는 버려진다(extra="forbid"로 실패). Task 식별자는 세션 관리자가 thread와 묶어 둔 값을 쓴다(I7). 호출은 받은 순서대로 하나씩 처리한다.
 - **결과 반환:** `Released`만 `success:true`로 돌려준다. `Denied`·거절·만료·취소는 `success:false`와 짧은 고정 문구다(예: "이 요청은 정책에 의해 차단되었습니다: INTERNAL_TO_EXTERNAL"). `Withheld`·`OutcomeUnknown`은 `success:false`와 "작업이 정지되었습니다"로 답한 뒤 바로 `turn/interrupt`하고 codex 프로세스를 끝낸다. Task는 이미 HALTED·UNKNOWN_OUTCOME이다. 판정 내부 정보(경계 ID, 버전)는 모델에 주지 않는다.
 - **승인 대기:** `Pending`을 받으면 도구 호출에 바로 답하지 않고 Guard의 `request_id`별 최종 결과 알림을 기다린다(8.3절). 승인 실행 결과면 위 규칙대로, 거절·만료·취소면 `success:false`와 고정 문구로 답한다.
 - **Codex 자체 도구 차단:** L1 설정으로 끄고, L2 시작 시험(가짜 모델 서버로 도구 목록 대조·금지 도구 강제 호출 거부)으로 확인하며, 실패하면 시작을 거부한다(T22). 실행 중에는 L3가 허용 항목 밖의 이벤트·승인 요청을 거절하고 `turn/interrupt` 뒤 Task를 정지한다.
 - **대기 상한:** Codex는 도구 호출 대기 상한이 없다. 세션 관리자가 호출별 감시 상한(ASK 5분+MCP 실행 상한+여유)을 넘기면 interrupt하고 Task를 정지한다. SEND 전송 뒤면 결과 불명이다(I8).
-- **로그인:** ChatGPT 기기 코드 또는 API 키, 둘 다 Codex 안의 로그인이다. 동시 실행 중 토큰 갱신이 겹쳐 한 Task의 인증이 실패하면 그 Task만 정지하고 새 Task로 다시 시작하라고 안내한다(Codex 0.162.1은 프로세스 사이 갱신 잠금이 없다). 자격증명은 Codex가 직접 Windows 자격증명 관리자(keyring)에 저장하고 우리 `secrets.py`는 관여하지 않는다. OpenAI API를 직접 부르는 모델 경로는 두지 않는다(2026-10-18). Scanner는 별도 API 키를 쓴다.
+- **로그인:** ChatGPT 기기 코드 또는 API 키, 둘 다 Codex 안의 로그인이다. API 키는 Scanner 키 화면과 같은 규칙(가린 입력칸, 끝 4자리만 표시, 전송 직후 입력 폐기)으로 받아 Codex의 `account/login/start`에만 넘기고 우리가 저장하지 않는다(2026-10-18). 동시 실행 중 토큰 갱신이 겹쳐 한 Task의 인증이 실패하면 그 Task만 정지하고 새 Task로 다시 시작하라고 안내한다(Codex 0.162.1은 프로세스 사이 갱신 잠금이 없다). 자격증명은 Codex가 직접 Windows 자격증명 관리자(keyring)에 저장하고 우리 `secrets.py`는 관여하지 않는다. OpenAI API를 직접 부르는 모델 경로는 두지 않는다(2026-10-18). Scanner는 별도 API 키를 쓴다.
 - **실행 환경과 경로(C):** 앱 폴더는 `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 사용자 전용 권한이다. codex 설치 폴더(버전별), CODEX_HOME, Task 폴더(`tasks\<task_id>`)를 둔다. launcher는 환경변수를 허용 목록(`SYSTEMROOT`·`WINDIR`·`TEMP`·`TMP`·`LOCALAPPDATA`·`APPDATA`·`USERPROFILE`·`CODEX_HOME`)만 넘기고 `CODEX_*`·`OPENAI_*`·프록시 변수는 넘기지 않는다. Task 폴더는 `-c sqlite_home=<Task 폴더>`로 넘긴다. Codex는 설정의 `sqlite_home`을 환경변수 `CODEX_SQLITE_HOME`과 CODEX_HOME보다 우선한다(0.162.1 `core/src/config/mod.rs`). stderr는 Task 폴더의 격리 파일로 보내고 함께 지운다. L1 설정 파일과 모델 정보 파일은 저장소 `config/codex/`에 두고, 앱 시작 때 CODEX_HOME에 쓴다.
 - **원문:** Codex 로그 DB는 도구 결과 원문을 저장하고 끌 수 없다. `sqlite_home`을 Task 전용 폴더로 두고 Codex 종료 뒤·앱 시작 때 지운다(11.4절).
 - **화면:** 사용자 화면은 GUI 하나다. Codex TUI(`codex --remote`)는 app-server에 직접 붙는 별도 클라이언트라서 Guard 도구 등록·L3 감시를 건너뛰고 설정을 바꿀 수 있으므로 쓰지 않는다. 터미널 화면이 필요하면 세션 관리자 위에 붙인다.
@@ -1693,7 +1694,7 @@ def after_dispatch(fn):
     return wrapper
 ```
 
-넓은 예외(`except Exception`)를 잡을 수 있는 곳은 `fail_closed`, `after_dispatch`, `ServerWorker._execute`(9.2절) 세 곳뿐이다. 셋 모두 예외를 삼키지 않고 판정·Task 상태·future 중 하나로 전달하며, Semgrep 규칙 `broad-except-only-in-allowed`로 다른 위치를 막는다. 예외 메시지 원문에는 인자나 경로가 섞일 수 있으므로 타입 이름만 감사에 남긴다.
+넓은 예외(`except Exception`)를 잡을 수 있는 곳은 `fail_closed`, `after_dispatch`, `ServerWorker._execute`(9.2절) 세 곳뿐이다. 완료 콜백·대기 함수에서 `Task.exception()`으로 꺼낸 예외를 원문·타입명 없이 고정 실패 코드로 바꾸는 패턴은 넓은 예외 처리로 보지 않는다. 취소(`CancelledError`)는 삼키지 않고, 새 위치에 쓸 때는 리뷰에서 근거를 남긴다(2026-10-18). 셋 모두 예외를 삼키지 않고 판정·Task 상태·future 중 하나로 전달하며, Semgrep 규칙 `broad-except-only-in-allowed`로 다른 위치를 막는다. 예외 메시지 원문에는 인자나 경로가 섞일 수 있으므로 타입 이름만 감사에 남긴다.
 
 ```python
 # security/ids.py
