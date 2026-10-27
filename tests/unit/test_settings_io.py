@@ -244,3 +244,77 @@ def test_errors_carry_no_path_or_content(folders):
     assert _code(raised) == "SETTINGS_FILE_CHANGED"
     assert "marker" not in repr(raised.value)
     assert "settings.json" not in repr(raised.value)
+
+
+# #44 B 리뷰 후속
+
+
+def test_file_moved_in_while_closed_is_fixed_by_the_next_start(tmp_path):
+    """3번: 같은 볼륨에서 옮겨 넣은 파일은 원래 폴더의 상속 ACE를 들고 온다. 앱을 닫은 상태였다면
+    다음 시작의 `config` 권한 재적용이 상속 ACE를 다시 계산해서 읽을 수 있게 된다."""
+    root = tmp_path / "app"
+    prepare_app_folders(root).close()
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    _apply_dacl(downloads, f"D:(A;OICI;FA;;;{paths._current_user_sid()})(A;OICI;FR;;;WD)")
+    (downloads / "settings.json").write_bytes(FIRST)
+    moved = root / "config" / "settings.json"
+    os.rename(downloads / "settings.json", moved)
+    assert not paths.is_private_file(moved)
+    prepared = prepare_app_folders(root)
+    try:
+        assert paths.is_private_file(moved)
+        assert read_settings_file(prepared, max_bytes=LIMIT).data == FIRST
+    finally:
+        prepared.close()
+
+
+def test_file_moved_in_while_running_is_refused_for_read_and_save(folders, tmp_path):
+    """3번: 앱 실행 중에 옮겨 넣으면 권한이 다시 계산되지 않아 읽기·저장 모두 거부된다."""
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    _apply_dacl(downloads, f"D:(A;OICI;FA;;;{paths._current_user_sid()})(A;OICI;FR;;;WD)")
+    (downloads / "settings.json").write_bytes(FIRST)
+    os.rename(downloads / "settings.json", folders.paths.settings_file)
+    for action in (
+        lambda: read_settings_file(folders, max_bytes=LIMIT),
+        lambda: replace_settings_file(folders, SECOND, expected=None, max_bytes=LIMIT),
+    ):
+        with pytest.raises(SettingsIOError) as raised:
+            action()
+        assert _code(raised) == "SETTINGS_FILE_INVALID"
+    assert folders.paths.settings_file.read_bytes() == FIRST
+
+
+@pytest.mark.parametrize("extra", [1, 4096])
+def test_file_over_b_limit_reaches_b_as_too_large(folders, extra):
+    """4번: C 읽기와 B 해석이 같은 `SETTINGS_MAX_BYTES`로 맞물린다."""
+    from guard_app.services.catalog import SETTINGS_MAX_BYTES, SettingsFileError
+    from guard_app.services.catalog import parse_settings_bytes as parse
+
+    folders.paths.settings_file.write_bytes(b" " * (SETTINGS_MAX_BYTES + extra))
+    snapshot = read_settings_file(folders, max_bytes=SETTINGS_MAX_BYTES)
+    assert len(snapshot.data) == SETTINGS_MAX_BYTES + 1
+    with pytest.raises(SettingsFileError) as raised:
+        parse(snapshot.data)
+    assert raised.value.code == "SETTINGS_TOO_LARGE"
+
+
+def test_b_serialize_replace_read_parse_round_trip(folders):
+    """4번: B 직렬화 → C 교체 → C 읽기 → B 해석이 같은 설정으로 돌아오고 세대가 이어진다."""
+    from guard_app.services.catalog import SETTINGS_MAX_BYTES
+    from guard_app.services.catalog import parse_settings_bytes as parse
+    from guard_app.services.catalog import serialize_settings_bytes as serialize
+
+    first = {"policy": {"taint_mode": "accumulate"}, "note": "한글"}
+    second = {"policy": {"taint_mode": "last_read"}}
+    generation = replace_settings_file(
+        folders, serialize(first), expected=None, max_bytes=SETTINGS_MAX_BYTES
+    )
+    snapshot = read_settings_file(folders, max_bytes=SETTINGS_MAX_BYTES)
+    assert parse(snapshot.data) == first
+    assert snapshot.generation == generation
+    replace_settings_file(
+        folders, serialize(second), expected=generation, max_bytes=SETTINGS_MAX_BYTES
+    )
+    assert parse(read_settings_file(folders, max_bytes=SETTINGS_MAX_BYTES).data) == second

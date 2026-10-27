@@ -135,7 +135,12 @@ def replace_settings_file(
     `expected`는 마지막으로 읽거나 쓴 세대다. 첫 저장(파일 없음)이면 None이다. 지금 파일이 그와
     다르면 쓰지 않고 `SETTINGS_FILE_CHANGED`다. 교체가 확실히 일어나지 않았으면
     `SETTINGS_FILE_WRITE_FAILED`(A는 적용하지 않음), 일어났을 수도 있으면
-    `SETTINGS_FILE_WRITE_UNKNOWN`(A는 재시작을 요구)이다.
+    `SETTINGS_FILE_WRITE_UNKNOWN`(A는 재시작을 요구)이다. 대조하려고 지금 파일을 읽다가
+    `SETTINGS_FILE_INVALID`·`SETTINGS_FILE_READ_FAILED`가 날 수도 있다(쓰지 않음).
+
+    호출자가 한 번에 하나씩 부르도록 직렬화한다. 같은 `expected`로 동시에 부르면 둘 다 대조를
+    통과해 둘 다 성공 세대를 돌려주고, 디스크에는 나중 것만 남는다(#44 B 리뷰 2번). A는
+    정책 잠금(`TaskPolicy.lock`) 안에서 부른다.
     """
     _check_call(folders, max_bytes)
     if (
