@@ -382,6 +382,48 @@ def test_session_created_during_a_policy_change_takes_the_new_policy(tmp_path) -
     assert after.connection_code == "READY_CODEX"
 
 
+def test_overlapping_server_access_changes_build_on_each_other(tmp_path) -> None:
+    """A117 (B3.10): a change waiting for the policy lock starts from the document saved first.
+
+    The bridge runs control commands on several workers, so two activation
+    changes can overlap. One prepared from the document the other replaced
+    would be lost as "unchanged" or refused by Guard as stale.
+    """
+    servers: list[FakeAppServer] = []
+    saved: list[dict[str, object]] = []
+    held: dict[str, object] = {}
+
+    async def during_save() -> None:
+        if "second" in held:
+            return
+        held["second"] = asyncio.ensure_future(held["access"]("docs", ("read",), ()))
+        await asyncio.sleep(0)  # the second change runs up to the policy lock
+        held["waited"] = not held["second"].done()
+
+    async def run():
+        bindings, _peer = await policy_product(tmp_path, servers, saved, during_save=during_save)
+        try:
+            assert bindings.policy_access is not None
+            held["access"] = bindings.policy_access
+            first = await bindings.policy_access("docs", (), ("read",))
+            second = await asyncio.wait_for(held["second"], 5)
+            return first, second
+        finally:
+            assert bindings.close is not None
+            await bindings.close()
+
+    first, second = asyncio.run(run())
+    assert held["waited"]
+    assert first.deny == (("docs", "read"),)
+    assert [document["access_rules"] for document in saved] == [
+        {"allow": [], "deny": [["docs", "read"]]},
+        {"allow": [["docs", "read"]], "deny": []},
+    ]
+    assert second.allow == (("docs", "read"),)
+    assert second.deny == ()
+    assert second.policy_version != first.policy_version
+
+
 def test_without_a_profile_saver_policy_change_is_unavailable(tmp_path) -> None:
     async def run():
         bindings = await bootstrap_product(

@@ -137,6 +137,7 @@
 - [x] A104 저장 뒤 적용 실패·적용 전 거부면 Guard를 닫고 새 세션·재저장을 막아 재시작 안내(#33 B 답변) · [기록](archive/a/A104-policy-apply-failure-restart.md)
 - [x] A105 새 Task 행을 정책 잠금 안에서 그때의 policy_version으로 씀(B3.12의 Task 생성 직렬화) · [기록](archive/a/A105-task-creation-policy-lock.md)
 - [ ] A105 서버 활성화도 같은 잠금으로 묶음 — 막힘: C Registry 활성화(C4.10)
+- [x] A117 겹친 서버 접근 변경이 앞 변경이 저장한 문서에서 시작함(정책 잠금 안에서 문서를 읽음, A112 발견) · [기록](archive/a/A117-overlapping-policy-changes.md)
 - [ ] A106 제품 DB를 앱 폴더 고정 경로로 옮기고 `--demo`가 그 경로를 열지 못하게 함 — 막힘: C `AppPaths` DB 경로(#35 B 리뷰 1번)
 - [ ] A81·A91 실제 Profile 저장·서버 목록 활성화 흐름 — 막힘: #36 병합·C2.14·C Registry 활성화(C4.10)
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
@@ -180,7 +181,6 @@
 
 - [x] A111 0단계: A 모듈 계층·시큐어 코딩 규칙 테스트와 기준선 측정 · [기록](archive/a/A111-refactor-baseline-and-rules.md)
 - [x] A112 1단계: `SessionRuntime` 책임 분리(생성·정리·정책 변경·시작 게이트) · [기록](archive/a/A112-session-runtime-split.md)
-  - 남은 것: 정책 변경 두 개가 겹치면 앞의 변경이 사라질 수 있다(lock 전에 문서를 읽음). 동작 변경이라 따로 고친다.
 - [ ] A113 2단계: `mcp_transport` 모듈 분리(B 리뷰)
 - [ ] A114 3단계: Codex 계층(`codex_session`·`jsonrpc_client`·`codex_stream`·`guard_relay`) 정리
 - [ ] A115 4단계: `BackendBridge` 안쪽 분리(C 리뷰) — 막힘: B AGT 제거(B2.11, 같은 파일)

@@ -113,11 +113,10 @@ class TaskPolicy:
         refused, and this raises POLICY_APPLY_FAILED; a restart loads the saved
         file (A104, #33 B reply).
         """
-        assembled, document, saver = self._assembled, self._document, self._saver
-        task_source = self._task_source
+        assembled, saver, task_source = self._assembled, self._saver, self._task_source
         if (
             assembled is None
-            or document is None
+            or self._document is None
             or saver is None
             or task_source is None
             or self._admission.closed
@@ -129,6 +128,9 @@ class TaskPolicy:
             if self._admission.restart_code is not None:
                 # Saving again would hide that Guard does not run the saved file.
                 raise SessionRuntimeError(self._admission.restart_code)
+            # Read under the lock: a change that waited here starts from the
+            # document the change before it saved, not the one it replaced (A117).
+            document = self._document
             change = _server_access_change(document, assembled, server_id, allowed, denied)
             if change.changed:
                 if await saver(change) is not True:
