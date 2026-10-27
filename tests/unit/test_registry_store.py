@@ -522,14 +522,40 @@ def test_identical_observation_and_reordering_preserve_active_review_and_scan(
     entry = run(store.record_scan_report("scan", report(), at_utc=NOW))
     active = activate(store, entry, reviewed_scan_id="scan")
     observed = (tool("second"), tool(reviewed_description="원본은 무시"))
+    before = rows(store)
+    changes = store._owned_connection().total_changes
     changed = run(store.record_fingerprint_change("server-1", observed, at_utc=NOW))
     assert changed.changed_tools == ()
-    assert changed.entry.registration.status is RegStatus.ACTIVE
-    assert changed.entry.registration.row_revision == active.registration.row_revision + 1
-    assert changed.entry.last_scan == active.last_scan
-    assert changed.entry.reviewed_by == active.reviewed_by
-    assert changed.entry.reviewed_scan_id == active.reviewed_scan_id
-    assert changed.entry.registration.tools[1].reviewed_description == "검토 완료"
+    assert changed.entry == active
+    assert rows(store) == before
+    assert store._owned_connection().total_changes == changes
+    assert changed.entry.registration.tools[0].reviewed_description == "검토 완료"
+
+
+@pytest.mark.parametrize("status", list(RegStatus))
+@pytest.mark.parametrize("empty", [False, True])
+def test_identical_observation_never_writes_in_any_registration_state(
+    store: SQLiteStore, status: RegStatus, empty: bool
+) -> None:
+    entry = add(store, tools=() if empty else (tool(),))
+    if status is RegStatus.ACTIVE:
+        entry = activate(store, entry)
+    elif status is RegStatus.BLOCKED:
+        entry = run(store.block_server("server-1", expected_row_revision=1, at_utc=NOW))
+    before = rows(store)
+    changes = store._owned_connection().total_changes
+    # 무변경 관측은 감사 ID도 소비하지 않는다. 쓰려 하면 기존 ID와 충돌한다.
+    store._audit_id_factory = lambda: "audit-0"
+    for _ in range(2):
+        changed = run(
+            store.record_fingerprint_change(
+                "server-1", entry.registration.tools, at_utc=NOW + timedelta(seconds=1)
+            )
+        )
+        assert changed.changed_tools == ()
+        assert changed.entry == entry
+        assert rows(store) == before
+        assert store._owned_connection().total_changes == changes
 
 
 def test_empty_tool_set_supports_delete_all_and_explicit_activation(store: SQLiteStore) -> None:
@@ -632,14 +658,13 @@ def test_report_summary_stays_only_in_report_json_and_reprs_and_audit_are_redact
     assert RAW not in repr(data["audit_events"])
     assert RAW not in caplog.text
     events = data["audit_events"]
-    assert len(events) == 5
-    assert {json.loads(row[6])["row_revision"] for row in events} == set(range(1, 6))
+    assert len(events) == 4
+    assert {json.loads(row[6])["row_revision"] for row in events} == set(range(1, 5))
     assert {row[3] for row in events} == {
         "REGISTRY_REGISTERED",
         "REGISTRY_DESCRIPTIONS_REVIEWED",
         "REGISTRY_SCAN_RECORDED",
         "REGISTRY_ACTIVATED",
-        "REGISTRY_FINGERPRINT_OBSERVED",
     }
     assert all(row[1] is row[2] is None for row in events)
     assert all(

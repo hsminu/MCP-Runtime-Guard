@@ -149,13 +149,14 @@ class Registry(Protocol):
 class RegistryStore(Protocol):
     """B6-06 합의 전 제안. 신뢰된 A/C 제어 경로만 호출하는 단일 writer 저장.
 
-    모든 쓰기는 등록 revision +1·정의/검사·원문 없는 감사를 같은 트랜잭션에
-    커밋하고 전체 사본을 반환한다. 실패는 StoreError이며 원문을 담지 않는다.
+    실제 변경 쓰기는 등록 revision +1·정의/검사·원문 없는 감사를 같은 트랜잭션에
+    커밋하고 전체 사본을 반환한다. 무변경 지문 관측은 쓰지 않고 저장 사본을 반환한다.
+    실패는 StoreError이며 원문을 담지 않는다.
     지문은 C가 tools/list 원본으로 계산한다. 저장소는 형식만 검사한다.
 
     C: 연결 직후 실제 정의 대조 → record_fingerprint_change 커밋 → 반환 사본으로
-    동기 Registry 캐시 즉시 교체(반환과 교체 사이 await 금지) → changed_tools마다
-    await GuardService.invalidate_tool. 커밋 실패 시 그 서버를 사용하지 않는다.
+    동기 Registry 캐시 즉시 교체(동일 사본이면 생략, 반환과 교체 사이 await 금지) →
+    changed_tools마다 await GuardService.invalidate_tool. 커밋 실패 시 그 서버를 사용하지 않는다.
     이 순서만으로 이미 진행 중인 예약/전송 경쟁(S03)이 해결되지는 않는다.
 
     A: 화면 확인 → prepare_server_access_change → 설정 문서 저장 →
@@ -208,7 +209,8 @@ class RegistryStore(Protocol):
         """revision 조건 없이 관측 적용. ACTIVE 변경은 PENDING, BLOCKED는 유지.
 
         새/변경 도구의 검토 설명은 비우고 관측 입력 설명으로 대체하지 않는다.
-        변경이 없어도 성공한 관측 쓰기는 revision과 감사를 남긴다.
+        정의·지문이 모두 같으면 revision·감사·상태를 바꾸지 않는다.
+        changed_tools=()와 현재 저장 사본을 반환하며 목록 재정렬도 쓰지 않는다.
         """
         ...
 
