@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | ACCESS-01·AGT-04의 ports/domain 3인 합의 | A·B·C | B2.9, B2.10 |
 | A 브랜치 병합(A 소유 파일의 AGT·ModelClient 사용) | A | B1.7, B2.11 |
-| SEQ·REC B 결정안 A 동의(#37), C 회신 대기(단일 소유/백업·writer/ACK) | C | B6.8, B6.13 |
+| SEQ·REC A·C 동의(#37), 사용자 contracts 반영·C db_path/begin_backup 입구 대기 | 사용자·C | B6.8, B6.13 |
 | B6-01–06 계약 회신 | A·C | B1.5, B1.6, B6.9–B6.12, B6.16 |
 | safe_path | C | B3.3 |
 | Registry 영속화 B 제안 완료·C 검토·C4.10 연결 대기(B6-06) | A·C | B6.18 |
@@ -103,16 +103,16 @@
 - [x] B6.5 UTC 만료·쓰기 중 만료·ACK 유실, 원문·인자·비밀값 비기록과 고정 오류 코드 · [기록](archive/b6-sqlite-lifecycle.md)
 - [x] B6.6 영속 순번·시작 복구 설계와 검증 시나리오 50개 · [설계](archive/b6-sequence-recovery-design.md) · [시나리오](archive/b6-sequence-recovery-validation.md)
 - [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
-- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 구현 — 막힘: SEQ·REC/B6 계약 합의·C 단일 소유/백업·writer/ACK 검토
+- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 구현 — 막힘: SEQ·REC A·C 동의(#37), 사용자 contracts 반영·C db_path/begin_backup 입구 대기(B6 별도 계약 범위 유지)
 - [ ] B6.9 승인 생성·종결 원자화(현재 두 커밋 간격) — 막힘: B6-01
 - [ ] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 — 막힘: B6-02
 - [ ] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 — 막힘: B6-03·B6-04
 - [ ] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙과 예산(잠금 대기 1000ms는 미측정 제안값) — 막힘: B6-03
-- [ ] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — 막힘: SEQ-02·REC-01/05·writer/권위 상태 계약 합의
+- [ ] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — 막힘: SEQ·REC A·C 동의(#37), 사용자 contracts 반영·C db_path/begin_backup 입구 대기
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.15 규칙 버전 감사(AGT-02)
 - [ ] B6.16 A 시작 게이트·조회 요구와 C 인수 기준을 대조해 API 합의 기록 — 막힘: A·C 회신
-- [x] B6.17 SEQ·REC B 결정안·A 동의(#37), C 회신 대기·합의 전 제안 · [기록](archive/b/B6.17-seq-rec-decisions.md)
+- [x] B6.17 SEQ·REC B 결정안·A·C 동의(#37), 사용자 contracts 반영 대기 · [기록](archive/b/B6.17-seq-rec-decisions.md)
 - [ ] B6.18 RegistryStore 계약 합의·C4.10 사본 교체/승인 무효화 연결 — 막힘: A·C 검토·C 연결
 - [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) 원자 조건·독립 검증 — 막힘: 3인 합의·A/C 연결
 
