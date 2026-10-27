@@ -6,10 +6,13 @@ import asyncio
 import gzip
 import json
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
+import anyio
 import httpx
 import pytest
+from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage
 
 from guard_app.adapters import mcp_http_ingress, mcp_ingress
@@ -377,6 +380,75 @@ async def test_actual_sdk_session_without_ingress_refuses_list_without_dispatch(
     finally:
         for stream in (read_send, read_receive, write_send, write_receive):
             stream.close()
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_session_without_a_gate_is_never_ready_for_calls() -> None:
+    """Legacy SDK-spawned stdio has no raw ingress gate, so it cannot collect.
+
+    The listing reports that, and the worker must not advertise the session
+    READY either: Registry gets the fixed reason and the Guard gets no server.
+    """
+    peer = _Peer(lambda request_id, _number: _page(request_id))
+    gated = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
+
+    @asynccontextmanager
+    async def without_gate() -> AsyncIterator[tuple[Any, ...]]:
+        async with gated() as (read_stream, write_stream, _gate):
+            yield read_stream, write_stream
+
+    transport = McpTransport({"unit": without_gate}, tool_list_limits=ToolListLimits())
+    with pytest.raises(DispatchError) as failed:
+        await transport.start()
+    assert failed.value.exception_type == "SessionStartFailed"
+    listing = transport.tool_listing("unit")
+    assert listing is not None
+    assert listing.reason == "TOOLS_LIST_INGRESS_REQUIRED"
+    assert peer.list_requests == 0  # tools/list was never sent
+
+
+@pytest.mark.asyncio
+async def test_pipe_write_failure_fails_the_connection_gate_without_its_text() -> None:
+    async def read_bytes(_size: int) -> bytes:
+        await asyncio.Event().wait()  # the peer never answers
+        return b""
+
+    async def write_bytes(_frame: bytes) -> None:
+        raise OSError("private-pipe-detail")
+
+    async def drain() -> None:
+        pass
+
+    factory = validated_stdio_stream_factory(read_bytes, write_bytes, drain)
+    async with factory() as (_read_stream, write_stream, gate):
+        ping = JSONRPCMessage.model_validate({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        await write_stream.send(SessionMessage(ping))
+        await asyncio.wait_for(gate.failed.wait(), 1)
+    assert gate.reason == "TOOLS_LIST_INGRESS_IO_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_malformed_pipe_frame_fails_the_connection_gate_and_reaches_no_reader() -> None:
+    frames = [b"not-json-rpc\n"]
+
+    async def read_bytes(_size: int) -> bytes:
+        if frames:
+            return frames.pop()
+        await asyncio.Event().wait()
+        return b""
+
+    async def write_bytes(_frame: bytes) -> None:
+        pass
+
+    async def drain() -> None:
+        pass
+
+    factory = validated_stdio_stream_factory(read_bytes, write_bytes, drain)
+    async with factory() as (read_stream, _write_stream, gate):
+        await asyncio.wait_for(gate.failed.wait(), 1)
+        with pytest.raises(anyio.EndOfStream):
+            await read_stream.receive()
+    assert gate.reason == "TOOLS_LIST_MALFORMED"
 
 
 @pytest.mark.asyncio

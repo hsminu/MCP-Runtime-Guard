@@ -753,6 +753,43 @@ async def test_broken_connection_fails_queued_calls_without_retry(
 
 
 @pytest.mark.asyncio
+async def test_owner_cancelled_mid_call_settles_the_commands_still_queued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SDK cancels the session owner when its stream task fails during a call.
+
+    No stop path has emptied the queue then; the owner's own exit must settle
+    the waiting commands rather than leave their callers waiting forever (I9).
+    """
+
+    class CancelledSession(_Session):
+        async def call_tool(self, name: str, arguments: dict[str, object]) -> object:
+            await super().call_tool(name, arguments)
+            raise asyncio.CancelledError
+
+    session = CancelledSession()
+    session.block_first = True
+    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
+    transport = McpTransport({"server": _streams([])})
+    await transport.start()
+    active = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND, seq=1)))
+    await session.first_call.wait()
+    queued = asyncio.create_task(transport.call(_request(seq=2)))
+    await asyncio.sleep(0)
+    session.release_first.set()
+    with pytest.raises(DispatchError) as interrupted:
+        await asyncio.wait_for(active, 1)
+    assert interrupted.value.exception_type == "WorkerInterrupted"
+    with pytest.raises(DispatchError) as rejected:
+        await asyncio.wait_for(queued, 1)
+    assert rejected.value.exception_type == "WorkerClosed"
+    with pytest.raises(DispatchError) as closed:
+        await transport.close()
+    assert closed.value.exception_type == "WorkerOwnerFailed"
+    assert len(session.calls) == 1  # the queued call never reached the server
+
+
+@pytest.mark.asyncio
 async def test_sdk_error_payload_stays_raw_and_unknown_server_never_dispatches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -852,6 +889,47 @@ async def test_result_budget_covers_structured_content_and_nested_nodes(
     ]["text"] == "ready"
     await transport.close()
     assert len(session.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_result_content_block_count_is_a_bound_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With room left in the byte budget, one content block too many is still refused."""
+    monkeypatch.setattr(result_budget, "_MAX_RESULT_CONTENT_BLOCKS", 4)
+    blocks = [TextContent(type="text", text="") for _ in range(5)]
+    with pytest.raises(result_budget.ResultTooLarge):
+        await result_budget.check_result_budget(
+            CallToolResult(content=blocks), max_copy_bytes=1024 * 1024
+        )
+    await result_budget.check_result_budget(
+        CallToolResult(content=blocks[:4]), max_copy_bytes=1024 * 1024
+    )
+
+
+@pytest.mark.asyncio
+async def test_result_extra_fields_count_against_the_copy_budget() -> None:
+    """Fields the SDK keeps outside its model (extra="allow") are copied too."""
+    padded = CallToolResult(content=[], unexpected="E" * 1000)
+    assert padded.model_extra == {"unexpected": "E" * 1000}
+    with pytest.raises(result_budget.ResultTooLarge):
+        await result_budget.check_result_budget(padded, max_copy_bytes=512)
+    await result_budget.check_result_budget(CallToolResult(content=[]), max_copy_bytes=512)
+
+
+@pytest.mark.asyncio
+async def test_result_container_seen_twice_is_refused() -> None:
+    """A shared or cyclic container would be copied again at every reference."""
+    shared = {"value": "v"}
+    twice = CallToolResult(content=[], structuredContent={"a": shared, "b": shared})
+    assert twice.structuredContent is not None
+    assert twice.structuredContent["a"] is twice.structuredContent["b"]
+    with pytest.raises(result_budget.ResultTooLarge):
+        await result_budget.check_result_budget(twice, max_copy_bytes=1024 * 1024)
+    copies = CallToolResult(
+        content=[], structuredContent={"a": {"value": "v"}, "b": {"value": "v"}}
+    )
+    await result_budget.check_result_budget(copies, max_copy_bytes=1024 * 1024)
 
 
 @pytest.mark.asyncio
