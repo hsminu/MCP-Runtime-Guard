@@ -137,25 +137,12 @@ class CodexTaskRunner:
             self._status = "running"
             completed = failure_handled = False
             try:
-                try:
-                    response = await self._session.send(text)
-                except CodexAuthenticationError:
-                    if self._closed:
-                        return self._update("closed")
-                    failure_handled = True
-                    await self._failure("CODEX_AUTH_FAILED")
-                    return self._update("halted")
-                except CodexSessionError as error:
-                    if self._closed:
-                        return self._update("closed")
-                    failure_handled = True
-                    await self._failure(error.code)
-                    return self._update("halted")
+                code, response = await self._send(text)
                 if self._closed:
                     return self._update("closed")
-                if type(response) is not str or len(response) > 65_536:
+                if code is not None:
                     failure_handled = True
-                    await self._failure("CODEX_SESSION_FAILED")
+                    await self._failure(code)
                     return self._update("halted")
                 completed = True
                 return self._update("complete", response)
@@ -166,6 +153,20 @@ class CodexTaskRunner:
                             await self._failure("CODEX_SESSION_FAILED")
                     finally:
                         self.close()
+
+    async def _send(self, text: str) -> tuple[str | None, str]:
+        """The session's answer, or the code that halts this Task.
+
+        An authentication failure is a CodexSessionError with CODEX_AUTH_FAILED.
+        Any other exception reaches advance(), which halts with CODEX_SESSION_FAILED.
+        """
+        try:
+            response = await self._session.send(text)
+        except CodexSessionError as error:
+            return error.code, ""
+        if type(response) is not str or len(response) > 65_536:
+            return "CODEX_SESSION_FAILED", ""
+        return None, response
 
     async def resume_approval(
         self, task_id: str, epoch: int, approval_id: str, outcome: object

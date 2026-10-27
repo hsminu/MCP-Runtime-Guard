@@ -33,6 +33,7 @@ A_SERVICES = frozenset(
         "codex_preparation",
         "codex_prompt",
         "codex_session",
+        "codex_turns",
         "guard_relay",
         "policy_view",
         "product_assembly",

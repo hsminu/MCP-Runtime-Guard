@@ -28,11 +28,8 @@ from guard_app.domain.contracts import (
 from guard_app.domain.enums import Label
 from guard_app.domain.reasons import Reason
 from guard_app.services.codex_prompt import BASE_INSTRUCTIONS
-from guard_app.services.codex_session import (
-    MAX_ANSWER_CHARS,
-    CodexAppServerSession,
-    SessionLimits,
-)
+from guard_app.services.codex_session import CodexAppServerSession, SessionLimits
+from guard_app.services.codex_turns import MAX_ANSWER_CHARS
 from guard_app.services.guard_relay import ApprovalOutcomes, GuardToolRelay, TrustedTask
 from guard_app.services.runner import CodexAuthenticationError, CodexSessionError
 

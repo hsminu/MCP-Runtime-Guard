@@ -39,8 +39,9 @@ from guard_app.adapters.codex_protocol import (
 from guard_app.adapters.codex_stream import CodexStreamChannel
 from guard_app.adapters.jsonrpc_client import JsonRpcClient, JsonRpcError, JsonRpcRemoteError
 from guard_app.core.model_messages import ModelMessageKind, fixed_model_message
+from guard_app.services.codex_turns import TurnAnswers
 from guard_app.services.guard_relay import RelayResult, TrustedTask
-from guard_app.services.runner import CodexAuthenticationError, CodexSessionError
+from guard_app.services.runner import CodexSessionError
 from guard_app.services.task_tool_calls import TaskToolCallQueue, ToolCallQueueError
 
 L3_ALLOWED_ITEMS = frozenset(
@@ -49,11 +50,9 @@ L3_ALLOWED_ITEMS = frozenset(
 _DECLINED_APPROVALS = frozenset(
     {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}
 )
-_USAGE_LIMITS = frozenset({"usageLimitExceeded", "rateLimitExceeded"})
 # Codex 0.162.1 `RemoteControlStatusChangedNotification`; `status` is one of
 # disabled/connecting/connected/errored (app-server-protocol v2/remote_control.rs).
 REMOTE_CONTROL_STATUS = "remoteControl/status/changed"
-MAX_ANSWER_CHARS = 65_536
 
 
 @runtime_checkable
@@ -108,7 +107,7 @@ class CodexAppServerSession:
         self._instructions = base_instructions
         self._version = version
         self._limits = limits or SessionLimits()
-        self._on_partial = on_partial
+        self._answers = TurnAnswers(on_partial)
         self._on_user_input: Callable[[], None] | None = None
         self.observations = SessionObservations(
             excluded_tools=plan.excluded, dynamic_tool_refs=tuple(sorted(plan.tool_refs))
@@ -134,15 +133,6 @@ class CodexAppServerSession:
         )
         self._thread_id: str | None = None
         self._turn_id: str | None = None
-        self._turns: dict[str, dict[str, object]] = {}
-        self._texts: dict[str, list[str]] = {}
-        self._deltas: dict[str, list[str]] = {}
-        # Shown pieces: deltas, with a paragraph break where a new agentMessage begins.
-        self._pieces: dict[str, list[str]] = {}
-        self._piece_items: dict[str, str] = {}
-        self._streamed: dict[str, int] = {}
-        self._finals: dict[str, list[str]] = {}
-        self._answer_chars: dict[str, int] = {}
         self._changed = asyncio.Event()
         # Stops decided while answering, applied after that method's reply.
         self._deferred_stops: dict[str, str] = {}
@@ -153,7 +143,7 @@ class CodexAppServerSession:
 
     def set_partial_handler(self, handler: Callable[[str], None] | None) -> None:
         """Receives the current turn's answer text piece by piece (A90)."""
-        self._on_partial = handler
+        self._answers.set_partial_handler(handler)
 
     def set_user_input_handler(self, handler: Callable[[], None] | None) -> None:
         """Called for each `requestUserInput`, which is answered empty (STOP-01 audit)."""
@@ -186,9 +176,8 @@ class CodexAppServerSession:
             )
         except (JsonRpcError, JsonRpcRemoteError):
             raise CodexSessionError("CODEX_START_FAILED") from None
-        thread = result.get("thread") if type(result) is dict else None
-        thread_id = thread.get("id") if type(thread) is dict else None
-        if type(thread_id) is not str or not thread_id:
+        thread_id = _result_id(result, "thread")
+        if thread_id is None:
             raise CodexSessionError("CODEX_START_FAILED")
         self._thread_id = thread_id
         if self.stop_code is not None:
@@ -214,13 +203,12 @@ class CodexAppServerSession:
             raise CodexSessionError("CODEX_TURN_FAILED") from None
         except JsonRpcError:
             raise CodexSessionError(self.stop_code or "CODEX_SESSION_FAILED") from None
-        turn = result.get("turn") if type(result) is dict else None
-        turn_id = turn.get("id") if type(turn) is dict else None
-        if type(turn_id) is not str or not turn_id:
+        turn_id = _result_id(result, "turn")
+        if turn_id is None:
             raise CodexSessionError("CODEX_TURN_FAILED")
         self._turn_id = turn_id
-        self._stream(turn_id)  # deltas may arrive before turn/start's answer
-        while turn_id not in self._turns:
+        self._answers.stream(turn_id)  # deltas may arrive before turn/start's answer
+        while not self._answers.completed(turn_id):
             if self.stop_code is not None:
                 raise CodexSessionError(self.stop_code)
             if self._client.closed_reason is not None:
@@ -235,11 +223,11 @@ class CodexAppServerSession:
                 closed.cancel()
         if self.stop_code is not None:
             raise CodexSessionError(self.stop_code)
-        return self._turn_answer(turn_id)
+        return self._answers.answer(turn_id)
 
     async def interrupt(self) -> None:
         thread_id, turn_id = self._thread_id, self._turn_id
-        if thread_id is None or turn_id is None or turn_id in self._turns:
+        if thread_id is None or turn_id is None or self._answers.completed(turn_id):
             return
         if self._client.closed_reason is not None:
             # Nothing can be sent anymore; process exit is confirmed by the
@@ -260,55 +248,40 @@ class CodexAppServerSession:
         finally:
             await self._client.close()
             self._channel.close()
-            self._wake()
+            self._changed.set()
 
     # Notifications arrive synchronously and in order (JsonRpcClient).
     def _notification(self, method: str, params: object) -> None:
         body = params if type(params) is dict else {}
         if method in ("item/started", "item/completed"):
-            item = body.get("item")
-            kind = item.get("type") if type(item) is dict else None
-            if kind not in L3_ALLOWED_ITEMS:
-                self._stop("CODEX_L3_VIOLATION")
-                return
-            if method == "item/completed" and kind == "agentMessage" and type(item) is dict:
-                turn_id = body.get("turnId")
-                answer = item.get("text")
-                if type(turn_id) is str and type(answer) is str:
-                    self._texts.setdefault(turn_id, []).append(answer)
-                    if item.get("phase") == "final_answer":
-                        self._finals.setdefault(turn_id, []).append(answer)
+            self._item_event(method, body)
         elif method == "item/agentMessage/delta":
-            turn_id, delta = body.get("turnId"), body.get("delta")
-            if type(turn_id) is str and type(delta) is str:
-                total = self._answer_chars.get(turn_id, 0) + len(delta)
-                self._answer_chars[turn_id] = total
-                if total > MAX_ANSWER_CHARS:
-                    self._stop("CODEX_ANSWER_TOO_LARGE")
-                    return
-                self._deltas.setdefault(turn_id, []).append(delta)
-                piece, item_id = delta, body.get("itemId")
-                if type(item_id) is str:
-                    previous = self._piece_items.get(turn_id)
-                    if previous is not None and previous != item_id:
-                        piece = "\n\n" + delta
-                    self._piece_items[turn_id] = item_id
-                self._pieces.setdefault(turn_id, []).append(piece)
-                if turn_id == self._turn_id:
-                    self._stream(turn_id)
+            fits = self._answers.add_delta(
+                body.get("turnId"),
+                body.get("delta"),
+                body.get("itemId"),
+                current_turn=self._turn_id,
+            )
+            if not fits:
+                self._stop("CODEX_ANSWER_TOO_LARGE")
         elif method == "turn/completed":
-            turn = body.get("turn")
-            turn_id = turn.get("id") if type(turn) is dict else None
-            if type(turn) is dict and type(turn_id) is str:
-                self._turns[turn_id] = turn
-                self._wake()
-        elif method == "account/rateLimits/updated":
-            limits = body.get("rateLimits")
-            if type(limits) is dict and limits.get("rateLimitReachedType"):
-                self._stop("CODEX_USAGE_LIMIT")
+            recorded = self._answers.complete(body.get("turn"))
+            if recorded:
+                self._changed.set()
+        elif method == "account/rateLimits/updated" and _rate_limit_reached(body):
+            self._stop("CODEX_USAGE_LIMIT")
         elif method == REMOTE_CONTROL_STATUS and body.get("status") != "disabled":
             # A remote client would bypass Guard's tools and this L3 (C-CODEX-07).
             self._stop("CODEX_L3_VIOLATION")
+
+    def _item_event(self, method: str, body: dict[str, object]) -> None:
+        """L3: only allowed item types; a finished agent message is part of the answer."""
+        item = body.get("item")
+        kind = item.get("type") if type(item) is dict else None
+        if kind not in L3_ALLOWED_ITEMS:
+            self._stop("CODEX_L3_VIOLATION")
+        elif method == "item/completed" and kind == "agentMessage" and type(item) is dict:
+            self._answers.message_completed(body.get("turnId"), item)
 
     async def _server_request(self, method: str, params: object) -> object:
         if method == "item/tool/call":
@@ -361,14 +334,6 @@ class CodexAppServerSession:
         except TimeoutError:
             return RelayResult(stopped, "CODEX_WATCHDOG_TIMEOUT")
 
-    def _stream(self, turn_id: str) -> None:
-        if self._on_partial is None:
-            return
-        pieces = self._pieces.get(turn_id, [])
-        for piece in pieces[self._streamed.get(turn_id, 0) :]:
-            self._on_partial(piece)
-        self._streamed[turn_id] = len(pieces)
-
     def _defer_stop(self, method: str, code: str) -> None:
         self._deferred_stops.setdefault(method, code)
 
@@ -380,7 +345,7 @@ class CodexAppServerSession:
     def _stop(self, code: str) -> None:
         if self.observations.stop_code is None:
             self.observations.stop_code = code
-        self._wake()
+        self._changed.set()
         self._report_stop()
 
     def _report_stop(self) -> None:
@@ -393,9 +358,6 @@ class CodexAppServerSession:
             self._stop_reported = True
             handler(code)
 
-    def _wake(self) -> None:
-        self._changed.set()
-
     def _require_running(self) -> str:
         if self._closed or self._thread_id is None:
             raise CodexSessionError("CODEX_SESSION_FAILED")
@@ -403,30 +365,17 @@ class CodexAppServerSession:
             raise CodexSessionError(self.stop_code)
         return self._thread_id
 
-    def _turn_answer(self, turn_id: str) -> str:
-        turn = self._turns[turn_id]
-        status = turn.get("status")
-        if status == "completed":
-            finals = self._finals.get(turn_id)
-            texts = self._texts.get(turn_id)
-            if finals:
-                answer = "\n\n".join(finals)
-            elif texts:
-                answer = "\n\n".join(texts)
-            else:
-                answer = "".join(self._deltas.get(turn_id, []))
-            if len(answer) > MAX_ANSWER_CHARS:
-                raise CodexSessionError("CODEX_ANSWER_TOO_LARGE")
-            return answer
-        error = turn.get("error")
-        info = error.get("codexErrorInfo") if type(error) is dict else None
-        if info == "unauthorized":
-            raise CodexAuthenticationError()
-        if info in _USAGE_LIMITS:
-            raise CodexSessionError("CODEX_USAGE_LIMIT")
-        if status == "interrupted":
-            raise CodexSessionError("CODEX_TURN_INTERRUPTED")
-        raise CodexSessionError("CODEX_TURN_FAILED")
+
+def _result_id(result: object, key: str) -> str | None:
+    """`result[key]["id"]` when it is a non-empty string."""
+    value = result.get(key) if type(result) is dict else None
+    value_id = value.get("id") if type(value) is dict else None
+    return value_id if type(value_id) is str and value_id else None
+
+
+def _rate_limit_reached(body: dict[str, object]) -> bool:
+    limits = body.get("rateLimits")
+    return type(limits) is dict and bool(limits.get("rateLimitReachedType"))
 
 
 def _as_texts(message: tuple[bool, str]) -> tuple[bool, tuple[str, ...]]:
