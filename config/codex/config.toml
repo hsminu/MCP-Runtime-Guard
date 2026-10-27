@@ -6,12 +6,16 @@
 model = "gpt-6.1-sol"
 # 상대 경로는 이 파일이 있는 CODEX_HOME 기준으로 푼다. 서버가 내려주는 모델 정보를 쓰지 않는다(C-CODEX-03).
 model_catalog_json = "model_catalog.json"
-# 자격증명은 Codex가 Windows 자격증명 관리자에 직접 둔다. keyring을 못 쓰면 파일로 바꾸지 않고 실패한다.
+# 토큰은 CODEX_HOME/secrets/*.age 암호문으로, 그 암호는 Windows 자격증명 관리자에 둔다(2026-10-27 결정).
+# keyring을 못 쓰면 평문 파일로 바꾸지 않고 실패한다.
 cli_auth_credentials_store = "keyring"
 web_search = "disabled"
 check_for_update_on_startup = false
 project_doc_max_bytes = 0
 project_root_markers = []
+# 우리 설정에서 쓸 수 없는 셸·권한 상승 안내와 사용자 PC 날짜·시간대를 모델에 보내지 않는다(2026-10-27 결정).
+include_permissions_instructions = false
+include_environment_context = false
 
 [features]
 # 셸·명령 실행
