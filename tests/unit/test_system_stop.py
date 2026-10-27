@@ -238,37 +238,49 @@ def test_stop_during_transport_withholds_read_and_preserves_unknown_send(kind, a
 
 
 @pytest.mark.parametrize("approval_recheck", [False, True])
-def test_stop_interrupts_access_before_lock_and_no_dispatch(approval_recheck):
+def test_stop_during_store_wait_before_reservation_and_no_dispatch(approval_recheck):
     async def scenario():
         h, audit = _Harness(label=Label.INTERNAL if approval_recheck else Label.PUBLIC), _Audit()
-        entered = asyncio.Event()
-
-        async def blocked_access(req, context):
-            entered.set()
-            await asyncio.Event().wait()
+        entered, release = asyncio.Event(), asyncio.Event()
 
         handle = None
         if approval_recheck:
             pending = await h.guard.submit("task", _call("send"))
             assert isinstance(pending, Pending)
             handle = h.guard.pending_result(pending.request_id)
-        h.access.check_access = blocked_access
+        name = "get_approval" if approval_recheck else "record_decision"
+        original = getattr(h.store, name)
+
+        async def blocked_store(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await original(*args, **kwargs)
+
+        setattr(h.store, name, blocked_store)
         running = asyncio.create_task(
             h.guard.human_control("operator").approve(pending.approval_id)
             if approval_recheck
             else h.guard.submit("task", _call())
         )
-        await entered.wait()
-        state = await h.guard.system_control(audit).stop_task(IDENTITY, STOP)
-        assert isinstance(await running, Denied)
-        assert state.status is TaskStatus.HALTED
-        assert not h.transport.calls
-        if handle is not None:
-            final = await handle.wait()
-            assert final.cause == "invalidated"
-            assert final.outcome.reasons == (Reason(STOP.value),)
-        assert not h.guard._global_halt
-        await h.guard.aclose()
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            stopped = asyncio.create_task(h.guard.system_control(audit).stop_task(IDENTITY, STOP))
+            await asyncio.sleep(0)
+            assert h.guard._system_stop_requests[("task", 1)].is_set()
+            assert not stopped.done()
+            release.set()
+            assert isinstance(await asyncio.wait_for(running, 1), Denied)
+            state = await asyncio.wait_for(stopped, 1)
+            assert state.status is TaskStatus.HALTED
+            assert not h.transport.calls
+            if handle is not None:
+                final = await handle.wait()
+                assert final.cause == "invalidated"
+                assert final.outcome.reasons == (Reason(STOP.value),)
+            assert not h.guard._global_halt
+        finally:
+            release.set()
+            await h.guard.aclose()
 
     asyncio.run(scenario())
 
@@ -505,18 +517,18 @@ def test_failed_send_containment_is_not_overwritten_with_successful_halted_stop(
     asyncio.run(scenario())
 
 
-def test_old_epoch_stop_during_current_access_does_not_interrupt_current_life():
+def test_old_epoch_stop_during_decision_write_does_not_interrupt_current_life():
     async def scenario():
         h, audit = _Harness(), _Audit()
         entered, release = asyncio.Event(), asyncio.Event()
-        original = h.access.check_access
+        original = h.store.record_decision
 
-        async def access(req, context):
+        async def record_decision(*args, **kwargs):
             entered.set()
             await release.wait()
-            return await original(req, context)
+            return await original(*args, **kwargs)
 
-        h.access.check_access = access
+        h.store.record_decision = record_decision
         running = asyncio.create_task(h.guard.submit("task", _call()))
         await entered.wait()
         stopped = asyncio.create_task(

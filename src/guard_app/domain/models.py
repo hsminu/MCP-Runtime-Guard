@@ -156,7 +156,7 @@ class TaskState(Frozen):
 
 
 class AccessResult(Frozen):
-    """AGT 번역 결과. reason 원문은 기본 repr에서 숨긴다."""
+    """접근 규칙 판정 결과. reason 원문은 기본 repr에서 숨긴다."""
 
     allowed: bool
     reason: str = Field(repr=False)

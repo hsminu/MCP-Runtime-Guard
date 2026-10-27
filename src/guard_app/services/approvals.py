@@ -1066,7 +1066,7 @@ class ApprovalService:
             or any(0xD800 <= ord(char) <= 0xDFFF for char in task_id)
         ):
             return Denied(request_id=None, reasons=(Reason.STATE_MISSING,))
-        # AGT 재평가가 lock을 쥐고 있어도 인증된 정지 의도를 먼저 기록한다.
+        # 접근 규칙 재평가 전후에도 인증된 정지 의도를 먼저 기록한다.
         self._host.request_stop(task_id)
 
         async def operation() -> Denied:

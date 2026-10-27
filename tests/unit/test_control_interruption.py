@@ -1,46 +1,51 @@
-"""I2/I3/I5/I6/I7/I8/I9, T20/T37: 긴급 제어와 AGT 작업 수명 단위 검증.
+"""I2/I3/I5/I6/I7/I8/I9, T20/T37: 긴급 제어와 저장 대기 지점 단위 검증.
 
-Store·AGT·transport는 메모리 대역이며 실제 MCP·SQLite·wire 검증이 아니다.
+Store·접근 판정기·transport는 메모리 대역이며 실제 MCP·SQLite·wire 검증이 아니다.
 """
 
 import asyncio
-import gc
-import weakref
 
 import pytest
 
 from guard_app.domain.contracts import Denied, OutcomeUnknown, Pending, Released, Withheld
 from guard_app.domain.enums import Label, RequestStatus, TaskStatus
-from guard_app.domain.models import AccessResult
 from guard_app.domain.reasons import Reason
-from guard_app.services.guard import GuardConfigError
+from guard_app.services.approvals import PendingResultError
 
 from .test_guard import _call, _Harness
 
 
 @pytest.mark.parametrize("phase", ["submit", "approval"])
 @pytest.mark.parametrize("action", ["cancel", "emergency_halt"])
-@pytest.mark.parametrize("ignore_cancellation", [False, True])
-def test_urgent_control_interrupts_agt_before_dispatch(phase, action, ignore_cancellation):
+def test_urgent_control_during_store_wait_prevents_dispatch(phase, action, monkeypatch):
     async def scenario():
-        h = _Harness(label=Label.INTERNAL, access_cleanup_timeout_seconds=0.01)
+        h = _Harness(label=Label.INTERNAL)
         control = h.guard.human_control("operator")
         pending = await h.guard.submit("task", _call("send")) if phase == "approval" else None
         if phase == "approval":
             assert isinstance(pending, Pending)
+        handle = h.guard.pending_result(pending.request_id) if pending else None
+        completions = []
+        if handle is not None:
+            original_complete = handle._complete
+
+            def count_completion(value):
+                accepted = original_complete(value)
+                if accepted:
+                    completions.append(value)
+                return accepted
+
+            monkeypatch.setattr(handle, "_complete", count_completion)
         entered, release = asyncio.Event(), asyncio.Event()
+        name = "get_approval" if pending else "record_decision"
+        original = getattr(h.store, name)
 
-        async def slow(req, ctx):
+        async def delayed(*args, **kwargs):
             entered.set()
-            try:
-                await release.wait()
-            except asyncio.CancelledError:
-                if not ignore_cancellation:
-                    raise
-                await release.wait()
-            return AccessResult(allowed=True, reason="", error=False)
+            await release.wait()
+            return await original(*args, **kwargs)
 
-        h.access.check_access = slow
+        setattr(h.store, name, delayed)
         execution = asyncio.create_task(
             control.approve(pending.approval_id)
             if pending
@@ -48,16 +53,23 @@ def test_urgent_control_interrupts_agt_before_dispatch(phase, action, ignore_can
         )
         try:
             await asyncio.wait_for(entered.wait(), 1)
-            await asyncio.wait_for(getattr(control, action)("task"), 0.5)
-            assert isinstance(await asyncio.wait_for(execution, 0.5), Denied)
+            stopping = asyncio.create_task(getattr(control, action)("task"))
+            await asyncio.sleep(0)
+            assert h.guard._stop_requests["task"].is_set()
+            assert not stopping.done()
+            release.set()
+            assert isinstance(await asyncio.wait_for(execution, 1), Denied)
+            await asyncio.wait_for(stopping, 1)
             assert h.store.states["task"].status is TaskStatus.HALTED
             assert h.store.consume_count == 0
             assert h.transport.calls == []
-            release.set()
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            assert h.transport.calls == []
             assert not h.guard._global_halt
+            if handle is not None:
+                final = await asyncio.wait_for(handle.wait(), 1)
+                assert isinstance(final.outcome, Denied)
+                assert len(completions) == 1
+                with pytest.raises(PendingResultError):
+                    await handle.wait()
         finally:
             release.set()
 
@@ -175,184 +187,6 @@ def test_stop_during_decision_audit_prevents_reservation():
     asyncio.run(scenario())
 
 
-def test_unfinished_agt_blocks_new_jobs_until_actual_completion():
-    async def scenario():
-        h = _Harness(access_timeout_seconds=0.01, access_cleanup_timeout_seconds=0.01)
-        release, completed = asyncio.Event(), asyncio.Event()
-        starts = 0
-
-        async def cancellation_ignoring(req, ctx):
-            nonlocal starts
-            starts += 1
-            if starts > 1:
-                return AccessResult(allowed=True, reason="", error=False)
-            try:
-                try:
-                    await release.wait()
-                except asyncio.CancelledError:
-                    await release.wait()
-                return AccessResult(allowed=True, reason="", error=False)
-            finally:
-                completed.set()
-
-        h.access.check_access = cancellation_ignoring
-        try:
-            for _ in range(3):
-                result = await asyncio.wait_for(h.guard.submit("task", _call()), 0.5)
-                assert isinstance(result, Denied)
-                assert Reason.AGT_ERROR in result.reasons
-            assert starts == 1
-            assert not completed.is_set()
-            assert h.transport.calls == []
-            assert h.store.consume_count == 0
-            assert not any(event[0] == "reserve" for event in h.store.trace)
-            assert h.store.states["task"].status is TaskStatus.RUNNING
-            assert not h.guard._global_halt
-
-            release.set()
-            await asyncio.wait_for(completed.wait(), 1)
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            assert h.transport.calls == []
-
-            recovered = await h.guard.submit("task", _call())
-            assert isinstance(recovered, Released)
-            assert starts == 2
-            assert len(h.transport.calls) == 1
-        finally:
-            release.set()
-
-    asyncio.run(scenario())
-
-
-def test_concurrent_agt_limit_denies_extra_task_without_creating_checker():
-    async def scenario():
-        h = _Harness(
-            max_access_checks=2,
-            access_timeout_seconds=5,
-            access_cleanup_timeout_seconds=0.01,
-        )
-        initial = h.store.states["task"]
-        for task_id in ("task-2", "task-3"):
-            h.store.states[task_id] = initial.model_copy(update={"task_id": task_id})
-        release, two_entered = asyncio.Event(), asyncio.Event()
-        starts = 0
-
-        async def held(req, ctx):
-            nonlocal starts
-            starts += 1
-            if starts == 2:
-                two_entered.set()
-            await release.wait()
-            return AccessResult(allowed=True, reason="", error=False)
-
-        h.access.check_access = held
-        executions = [
-            asyncio.create_task(h.guard.submit(task_id, _call())) for task_id in ("task", "task-2")
-        ]
-        try:
-            await asyncio.wait_for(two_entered.wait(), 1)
-            excess = await asyncio.wait_for(h.guard.submit("task-3", _call()), 0.5)
-            assert isinstance(excess, Denied)
-            assert Reason.AGT_ERROR in excess.reasons
-            assert starts == 2
-            assert h.transport.calls == []
-            assert h.store.states["task-3"].status is TaskStatus.RUNNING
-            assert not h.guard._global_halt
-            release.set()
-            outcomes = await asyncio.wait_for(asyncio.gather(*executions), 1)
-            assert all(isinstance(outcome, Released) for outcome in outcomes)
-            assert starts == 2
-            assert len(h.transport.calls) == 2
-            assert {req.task_id for req in h.transport.calls} == {"task", "task-2"}
-        finally:
-            release.set()
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("cause", ["timeout", "parent_cancel"])
-def test_late_agt_exception_is_discarded_after_bounded_cleanup(cause):
-    async def scenario():
-        h = _Harness(
-            access_timeout_seconds=0.01 if cause == "timeout" else 5,
-            access_cleanup_timeout_seconds=0.01,
-        )
-        h.store.states["healthy"] = h.store.states["task"].model_copy(update={"task_id": "healthy"})
-        entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        loop = asyncio.get_running_loop()
-        previous_handler = loop.get_exception_handler()
-        leaked = []
-        worker_refs = []
-        starts = 0
-        loop.set_exception_handler(lambda _loop, context: leaked.append(context))
-
-        async def late_error(req, ctx):
-            nonlocal starts
-            starts += 1
-            if starts > 1:
-                return AccessResult(allowed=True, reason="", error=False)
-            worker_refs.append(weakref.ref(asyncio.current_task()))
-            entered.set()
-            try:
-                try:
-                    await release.wait()
-                except asyncio.CancelledError:
-                    await release.wait()
-                raise RuntimeError("RAW_AGT_EXCEPTION_MARKER")
-            finally:
-                completed.set()
-
-        h.access.check_access = late_error
-        execution = asyncio.create_task(h.guard.submit("task", _call()))
-        try:
-            await asyncio.wait_for(entered.wait(), 1)
-            if cause == "parent_cancel":
-                execution.cancel()
-            result = await asyncio.wait_for(execution, 0.5)
-            assert isinstance(result, Denied)
-            assert h.transport.calls == []
-            assert not completed.is_set()
-            assert not h.guard._global_halt
-            assert h.store.states["task"].status is (
-                TaskStatus.HALTED if cause == "parent_cancel" else TaskStatus.RUNNING
-            )
-            if cause == "parent_cancel":
-                # 취소를 무시한 체커는 실제 완료 전까지 기존 AGT 슬롯을 차지한다.
-                # 전역 정지와 구별하고, 이 동안 새 체커를 만들지 않음을 유지한다.
-                blocked = await h.guard.submit("healthy", _call())
-                assert isinstance(blocked, Denied)
-                assert blocked.reasons == (Reason.AGT_ERROR,)
-                assert starts == 1
-
-            release.set()
-            await asyncio.wait_for(completed.wait(), 1)
-            for _ in range(4):
-                await asyncio.sleep(0)
-            gc.collect()
-            assert all(ref() is None for ref in worker_refs)
-            assert leaked == []
-            assert h.transport.calls == []
-
-            next_result = await h.guard.submit("task", _call())
-            if cause == "timeout":
-                assert isinstance(next_result, Released)
-                assert starts == 2
-                assert len(h.transport.calls) == 1
-            else:
-                assert isinstance(next_result, Denied)
-                assert starts == 1
-                assert h.transport.calls == []
-                assert isinstance(await h.guard.submit("healthy", _call()), Released)
-                assert starts == 2
-                assert [req.task_id for req in h.transport.calls] == ["healthy"]
-        finally:
-            release.set()
-            loop.set_exception_handler(previous_handler)
-
-    asyncio.run(scenario())
-
-
 def test_checker_cancellation_halts_only_its_task():
     async def scenario():
         h = _Harness()
@@ -360,6 +194,7 @@ def test_checker_cancellation_halts_only_its_task():
         h.access.error = asyncio.CancelledError()
         result = await h.guard.submit("task", _call())
         assert isinstance(result, Denied)
+        assert result.reasons == (Reason.INTERNAL_ERROR,)
         assert not h.guard._global_halt
         assert h.store.states["task"].status is TaskStatus.HALTED
         assert h.transport.calls == []
@@ -369,71 +204,3 @@ def test_checker_cancellation_halts_only_its_task():
         assert [req.task_id for req in h.transport.calls] == ["healthy"]
 
     asyncio.run(scenario())
-
-
-def test_second_parent_cancellation_keeps_unfinished_checker_tracked():
-    async def scenario():
-        h = _Harness(access_timeout_seconds=5, access_cleanup_timeout_seconds=5)
-        h.store.states["healthy"] = h.store.states["task"].model_copy(update={"task_id": "healthy"})
-        entered, cleanup_entered = asyncio.Event(), asyncio.Event()
-        release, completed = asyncio.Event(), asyncio.Event()
-        worker = None
-
-        async def cancellation_ignoring(req, ctx):
-            nonlocal worker
-            worker = asyncio.current_task()
-            entered.set()
-            try:
-                try:
-                    await release.wait()
-                except asyncio.CancelledError:
-                    cleanup_entered.set()
-                    await release.wait()
-                return AccessResult(allowed=True, reason="", error=False)
-            finally:
-                completed.set()
-
-        h.access.check_access = cancellation_ignoring
-        execution = asyncio.create_task(h.guard.submit("task", _call()))
-        try:
-            await asyncio.wait_for(entered.wait(), 1)
-            execution.cancel()
-            await asyncio.wait_for(cleanup_entered.wait(), 1)
-            execution.cancel()
-            assert isinstance(await asyncio.wait_for(execution, 0.5), Denied)
-            assert not h.guard._global_halt
-            assert h.store.states["task"].status is TaskStatus.HALTED
-            assert not completed.is_set()
-            assert worker in h.guard._access_checks
-            assert worker in h.guard._unfinished_access_checks
-            assert h.transport.calls == []
-            blocked = await h.guard.submit("healthy", _call())
-            assert isinstance(blocked, Denied)
-            assert blocked.reasons == (Reason.AGT_ERROR,)
-
-            release.set()
-            await asyncio.wait_for(completed.wait(), 1)
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-            assert worker not in h.guard._access_checks
-            assert worker not in h.guard._unfinished_access_checks
-            assert h.transport.calls == []
-            assert isinstance(await h.guard.submit("task", _call()), Denied)
-            assert isinstance(await h.guard.submit("healthy", _call()), Released)
-            assert [req.task_id for req in h.transport.calls] == ["healthy"]
-        finally:
-            release.set()
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("value", [0, -1, True, 1.0, "2", None])
-def test_invalid_concurrent_agt_limit_is_rejected(value):
-    with pytest.raises(GuardConfigError):
-        _Harness(max_access_checks=value)
-
-
-@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), True, "0.1", None])
-def test_invalid_agt_cleanup_timeout_is_rejected(value):
-    with pytest.raises(GuardConfigError):
-        _Harness(access_cleanup_timeout_seconds=value)

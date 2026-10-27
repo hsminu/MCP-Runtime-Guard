@@ -507,9 +507,7 @@ class GuardWindow(QMainWindow):
             mode = None
         else:
             try:
-                identity = RuntimeIdentity(
-                    RuntimeMode(snapshot.agt_mode), RuntimeMode(snapshot.model_mode)
-                )
+                identity = RuntimeIdentity(model_mode=RuntimeMode(snapshot.model_mode))
             except ValueError:
                 identity = RuntimeIdentity()
             mode = snapshot.model_mode

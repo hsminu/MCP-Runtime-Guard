@@ -29,9 +29,8 @@ class RuntimeMode(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class RuntimeIdentity:
-    """Modes supplied by trusted bootstrap, never inferred from UI or SDK."""
+    """Model mode supplied by trusted bootstrap, never inferred from UI or SDK."""
 
-    agt_mode: RuntimeMode = RuntimeMode.UNCONFIGURED
     model_mode: RuntimeMode = RuntimeMode.UNCONFIGURED
 
 

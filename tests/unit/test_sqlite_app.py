@@ -36,14 +36,12 @@ def observed(monkeypatch, tmp_path):
         counters=[],
         http_starts=[],
         http_counts=[],
-        agt_starts=[],
     )
     original_store = synthetic_app.SQLiteStore
     original_transport_init = synthetic_app.McpTransport.__init__
     original_start = synthetic_app.McpTransport.start
     original_stream = synthetic_app.stdio_stream_factory
     original_http = synthetic_app.http_spike
-    original_agt_start = synthetic_app.AgentGovernanceAccessChecker.start
 
     def store(*args, **kwargs):
         instance = original_store(*args, **kwargs)
@@ -75,16 +73,11 @@ def observed(monkeypatch, tmp_path):
             seen.http_counts.append(spike.counts)
             yield spike
 
-    async def agt_start(self):
-        seen.agt_starts.append(1)
-        await original_agt_start(self)
-
     monkeypatch.setattr(synthetic_app, "SQLiteStore", store)
     monkeypatch.setattr(synthetic_app.McpTransport, "__init__", transport_init)
     monkeypatch.setattr(synthetic_app.McpTransport, "start", start)
     monkeypatch.setattr(synthetic_app, "stdio_stream_factory", stream)
     monkeypatch.setattr(synthetic_app, "http_spike", http)
-    monkeypatch.setattr(synthetic_app.AgentGovernanceAccessChecker, "start", agt_start)
     return seen
 
 
@@ -96,7 +89,7 @@ def counts(observed):
 
 def assert_not_started(observed):
     assert observed.starts == observed.dispatches == observed.counters == []
-    assert observed.http_starts == observed.http_counts == observed.agt_starts == []
+    assert observed.http_starts == observed.http_counts == []
     # stdio counts 파일/stream 구성도 없으므로 서버 spawn·wire·receiver effect가 없다.
 
 
@@ -133,7 +126,6 @@ async def test_sqlite_scenario_uses_real_store_and_transport(
     """I1/I2/I3/I4/I5, T01/T02/T03/T12의 A 부분: 판정·중복 승인·수신 계수."""
     bindings = await synthetic_app.bootstrap(
         scenario,
-        agt_mode="mock",
         mcp_transport=mcp_transport,
         store_kind="sqlite",
         db_path=tmp_path / "app.db",
@@ -185,7 +177,7 @@ async def test_open_failure_stops_before_external_resources(
         path = ":memory:"
     with pytest.raises(StoreError) as caught:
         await synthetic_app.bootstrap(
-            agt_mode="real", mcp_transport=mcp_transport, store_kind="sqlite", db_path=path
+            mcp_transport=mcp_transport, store_kind="sqlite", db_path=path
         )
     assert_not_started(observed)
     assert not observed.stores
@@ -233,7 +225,7 @@ async def test_task_gate_failure_closes_store_without_start(
         monkeypatch.setattr(SQLiteStore, "load_task", bad_load)
     path = tmp_path / "app.db"
     with pytest.raises(StoreError):
-        await synthetic_app.bootstrap(agt_mode="real", store_kind="sqlite", db_path=path)
+        await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
     assert_not_started(observed)
     assert closed == observed.stores and len(closed) == 1 and not guards
     with SQLiteStore(path):
@@ -245,9 +237,7 @@ def test_bridge_open_failure_is_fixed_startup_failure(tmp_path, observed):
     app = QApplication.instance() or QApplication([])
     events, commands = [], []
     bridge = BackendBridge(
-        lambda: synthetic_app.bootstrap(
-            agt_mode="mock", store_kind="sqlite", db_path=tmp_path / "absent" / "app.db"
-        )
+        lambda: synthetic_app.bootstrap(store_kind="sqlite", db_path=tmp_path / "absent" / "app.db")
     )
     bridge.lifecycle_changed.connect(events.append)
     bridge.command_changed.connect(commands.append)
@@ -276,7 +266,7 @@ def test_bridge_open_failure_is_fixed_startup_failure(tmp_path, observed):
 async def test_restart_does_not_restore_old_approval_or_task(tmp_path, observed):
     """I3/I4/I7/I8, T11 재시작 부분: 이전 승인 실행 0, 새 Task만 사용(대화·캐시 미검증)."""
     path = tmp_path / "app.db"
-    first = await synthetic_app.bootstrap(agt_mode="mock", store_kind="sqlite", db_path=path)
+    first = await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
     try:
         old_task_id = first.initial_task_id
         pending = await first.runner_for_task(old_task_id).advance()
@@ -287,7 +277,7 @@ async def test_restart_does_not_restore_old_approval_or_task(tmp_path, observed)
         assert counts(observed) == {"receiver_calls": 1, "receiver_effect": 0}
     finally:
         await first.close()
-    second = await synthetic_app.bootstrap(agt_mode="mock", store_kind="sqlite", db_path=path)
+    second = await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
     try:
         assert observed.stores[0] is not observed.stores[1]
         assert second.human_control is not first.human_control
@@ -315,7 +305,7 @@ async def test_restart_ids_do_not_collide_and_file_reopens(tmp_path, observed):
     path = tmp_path / "app.db"
     task_ids, approval_ids = set(), set()
     for _ in range(2):
-        bindings = await synthetic_app.bootstrap(agt_mode="mock", store_kind="sqlite", db_path=path)
+        bindings = await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
         try:
             task_ids.add(bindings.initial_task_id)
             approval_ids.add(await approve_once(bindings, observed))
@@ -332,7 +322,7 @@ async def test_restart_ids_do_not_collide_and_file_reopens(tmp_path, observed):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "agt", "transport"])
+@pytest.mark.parametrize("failure", [None, "transport"])
 async def test_store_closes_last_on_owner_thread(tmp_path, monkeypatch, failure):
     """직접 대응 T/S ID 없음, A 자원 수명(I6): 같은 스레드의 Store를 마지막 정리."""
     events = []
@@ -353,10 +343,7 @@ async def test_store_closes_last_on_owner_thread(tmp_path, monkeypatch, failure)
             events.append((label, threading.get_ident()))
 
         monkeypatch.setattr(cls, "close", closed)
-    for cls, label in [
-        (synthetic_app.McpTransport, "transport"),
-        (synthetic_app.AgentGovernanceAccessChecker, "agt"),
-    ]:
+    for cls, label in [(synthetic_app.McpTransport, "transport")]:
         original_close, original_start = cls.close, cls.start
 
         async def closed(self, original=original_close, label=label):
@@ -373,15 +360,14 @@ async def test_store_closes_last_on_owner_thread(tmp_path, monkeypatch, failure)
     path = tmp_path / "app.db"
     if failure:
         with pytest.raises(ValueError, match="합성 시작 실패"):
-            await synthetic_app.bootstrap(agt_mode="real", store_kind="sqlite", db_path=path)
+            await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
     else:
-        bindings = await synthetic_app.bootstrap(agt_mode="real", store_kind="sqlite", db_path=path)
+        bindings = await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
         await bindings.close()
     assert events[0][0] == "store_open" and events[-1][0] == "store"
     expected = {
-        None: ["store_open", "runner", "transport", "agt", "store"],
-        "agt": ["store_open", "agt", "store"],
-        "transport": ["store_open", "transport", "agt", "store"],
+        None: ["store_open", "runner", "transport", "store"],
+        "transport": ["store_open", "transport", "store"],
     }[failure]
     assert [label for label, _ in events] == expected
     assert all(thread == owner for _, thread in events)
@@ -411,9 +397,7 @@ def test_bridge_reports_store_cleanup_failure(tmp_path, monkeypatch, during_boot
     monkeypatch.setattr(SQLiteStore, "close", close)
     monkeypatch.setattr(SQLiteStore, "create_task", create)
     bridge = BackendBridge(
-        lambda: synthetic_app.bootstrap(
-            agt_mode="mock", store_kind="sqlite", db_path=tmp_path / "app.db"
-        )
+        lambda: synthetic_app.bootstrap(store_kind="sqlite", db_path=tmp_path / "app.db")
     )
     bridge.lifecycle_changed.connect(events.append)
     try:
@@ -445,7 +429,7 @@ def test_bridge_reports_store_cleanup_failure(tmp_path, monkeypatch, during_boot
 async def test_bootstrap_rejects_invalid_store_configuration(observed, kwargs):
     """A 설정 게이트(I1/I6/I7)는 직접 대응 T/S ID 없음; T19 부분(I9): 경로 비노출."""
     with pytest.raises(ValueError) as caught:
-        await synthetic_app.bootstrap(agt_mode="mock", **kwargs)
+        await synthetic_app.bootstrap(**kwargs)
     assert "PRIVATE_DB_MARKER" not in str(caught.value)
     assert_not_started(observed)
 
@@ -453,7 +437,7 @@ async def test_bootstrap_rejects_invalid_store_configuration(observed, kwargs):
 @pytest.mark.parametrize("args", [["--db-path", "PRIVATE_DB_MARKER"], ["--store", "sqlite"]])
 def test_cli_rejects_invalid_store_configuration(monkeypatch, capsys, args):
     """A CLI 설정(I6/I7)은 직접 대응 T/S ID 없음; T19 부분(I9): DB 경로 비노출."""
-    monkeypatch.setattr(sys, "argv", ["guard-app", "--demo", "--agt-mode", "mock", *args])
+    monkeypatch.setattr(sys, "argv", ["guard-app", "--demo", *args])
     with pytest.raises(SystemExit) as caught:
         main()
     assert caught.value.code == 2
@@ -475,7 +459,7 @@ def test_old_task_commands_are_rejected_before_model_control_and_projection(
     path = tmp_path / "old-task.db"
 
     async def first_run():
-        bindings = await synthetic_app.bootstrap(agt_mode="mock", store_kind="sqlite", db_path=path)
+        bindings = await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
         try:
             old_id = bindings.initial_task_id
             update = await bindings.runner_for_task(old_id).advance()
@@ -519,9 +503,7 @@ def test_old_task_commands_are_rejected_before_model_control_and_projection(
 
         monkeypatch.setattr(HumanControl, name, counted)
     projections, commands = [], []
-    bridge = BackendBridge(
-        lambda: synthetic_app.bootstrap(agt_mode="mock", store_kind="sqlite", db_path=path)
-    )
+    bridge = BackendBridge(lambda: synthetic_app.bootstrap(store_kind="sqlite", db_path=path))
     bridge.task_changed.connect(projections.append)
     bridge.command_changed.connect(commands.append)
     dispatch_start = len(observed.dispatches)
@@ -597,9 +579,7 @@ def test_old_task_commands_are_rejected_before_model_control_and_projection(
 @pytest.mark.asyncio
 async def test_snapshot_rejects_foreign_task_before_store_read(tmp_path, observed, monkeypatch):
     """REC-03, I7: 현재 Runner 밖 Task projection을 조회 전에 거부; 대응 T/S ID 없음."""
-    bindings = await synthetic_app.bootstrap(
-        agt_mode="mock", store_kind="sqlite", db_path=tmp_path / "snapshot.db"
-    )
+    bindings = await synthetic_app.bootstrap(store_kind="sqlite", db_path=tmp_path / "snapshot.db")
     loads = []
     original = SQLiteStore.load_task
 
@@ -623,11 +603,8 @@ def isolate_process_start_gate(monkeypatch):
 
 
 @pytest.mark.parametrize("mcp_transport", ["stdio", "http"])
-@pytest.mark.parametrize("agt_mode", ["mock", "real"])
-def test_tainted_gate_starts_no_synthetic_resources(
-    observed, mcp_transport, agt_mode, monkeypatch, tmp_path
-):
-    """REC-01·REC-05, I1/I6: 실제 bootstrap·AGT·MCP·counts 구성 0; 대응 T/S ID 없음."""
+def test_tainted_gate_starts_no_synthetic_resources(observed, mcp_transport, monkeypatch, tmp_path):
+    """REC-01·REC-05, I1/I6: 실제 bootstrap·MCP·counts 구성 0; 대응 T/S ID 없음."""
     app = QApplication.instance() or QApplication([])
     gate = bridge_module._ProcessStartGate()
     owner = object()
@@ -641,7 +618,7 @@ def test_tainted_gate_starts_no_synthetic_resources(
 
     async def boot():
         calls.append(1)
-        return await synthetic_app.bootstrap(agt_mode=agt_mode, mcp_transport=mcp_transport)
+        return await synthetic_app.bootstrap(mcp_transport=mcp_transport)
 
     bridge = BackendBridge(boot, start_gate=gate)
     bridge.lifecycle_changed.connect(events.append)
@@ -665,7 +642,7 @@ def test_clean_bridge_restart_runs_real_synthetic_send(observed):
 
     async def boot():
         starts.append(1)
-        return await synthetic_app.bootstrap(agt_mode="mock")
+        return await synthetic_app.bootstrap()
 
     for _ in range(2):
         projections, commands, events = [], [], []
@@ -724,7 +701,7 @@ def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeyp
 
     async def first_run():
         bindings = await synthetic_app.bootstrap(
-            agt_mode="mock", mcp_transport="stdio", store_kind="sqlite", db_path=path
+            mcp_transport="stdio", store_kind="sqlite", db_path=path
         )
         try:
             old_task_id = bindings.initial_task_id
@@ -752,9 +729,7 @@ def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeyp
 
     monkeypatch.setattr(synthetic_app.SyntheticModel, "step", step)
     bridge = BackendBridge(
-        lambda: synthetic_app.bootstrap(
-            agt_mode="mock", mcp_transport="stdio", store_kind="sqlite", db_path=path
-        )
+        lambda: synthetic_app.bootstrap(mcp_transport="stdio", store_kind="sqlite", db_path=path)
     )
     bridge.task_changed.connect(projections.append)
     bridge.command_changed.connect(commands.append)
@@ -807,7 +782,7 @@ def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeyp
 
 @pytest.mark.parametrize(
     "flag",
-    [["--scenario", "ask"], ["--agt-mode", "mock"], ["--store", "memory"], ["--db-path", "{db}"]],
+    [["--scenario", "ask"], ["--store", "memory"], ["--db-path", "{db}"]],
 )
 def test_cli_product_mode_refuses_demo_only_options(monkeypatch, capsys, tmp_path, flag):
     """제품 실행에서 시연 전용 옵션을 조용히 무시하지 않는다.
@@ -824,11 +799,22 @@ def test_cli_product_mode_refuses_demo_only_options(monkeypatch, capsys, tmp_pat
     assert not db.exists()
 
 
+@pytest.mark.parametrize("prefix", [[], ["--demo"]], ids=["product", "demo"])
+@pytest.mark.parametrize("flag", [["--agt-mode", "mock"], ["--agt-policy", "deny-send"]])
+def test_cli_rejects_removed_access_options(monkeypatch, capsys, prefix, flag):
+    """기존 AGT CLI 옵션은 제품과 시연 양쪽에서 더 이상 허용하지 않는다."""
+    monkeypatch.setattr(sys, "argv", ["guard-app", *prefix, *flag])
+    with pytest.raises(SystemExit) as caught:
+        main()
+    assert caught.value.code == 2
+    assert flag[0] in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "args",
     [
         ["--codex-exe", "codex.exe"],
-        ["--demo", "--agt-mode", "mock", "--codex-exe", "{exe}"],
+        ["--demo", "--codex-exe", "{exe}"],
     ],
     ids=["relative", "demo"],
 )
@@ -883,7 +869,7 @@ def test_cli_demo_without_examples_package_fails_without_traceback(monkeypatch, 
         "find_spec",
         lambda name, *a: None if name == "examples" else real_find_spec(name, *a),
     )
-    monkeypatch.setattr(sys, "argv", ["guard-app", "--demo", "--agt-mode", "mock"])
+    monkeypatch.setattr(sys, "argv", ["guard-app", "--demo"])
     with pytest.raises(SystemExit) as caught:
         main()
     assert caught.value.code == 2

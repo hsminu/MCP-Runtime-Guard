@@ -24,6 +24,10 @@ def healthy(h):
 
 def assert_cancelled_denial(h, outcome):
     assert isinstance(outcome, Denied)
+    assert_cancelled_task(h)
+
+
+def assert_cancelled_task(h):
     assert not h.guard._global_halt
     assert h.store.states["task"].status is TaskStatus.HALTED
     assert not [req for req in h.transport.calls if req.task_id == "task"]
@@ -32,7 +36,7 @@ def assert_cancelled_denial(h, outcome):
     assert h.audit[-1].exception_type == "CancelledError"
 
 
-@pytest.mark.parametrize("stage", ["load", "sequence", "access", "decision"])
+@pytest.mark.parametrize("stage", ["load", "sequence", "decision"])
 def test_actual_submit_cancellation_halts_only_its_task_before_reservation(stage):
     async def scenario():
         h = _Harness(source_label=Label.PUBLIC)
@@ -65,15 +69,6 @@ def test_actual_submit_cancellation_halts_only_its_task_before_reservation(stage
                 return await original(task_id)
 
             h.guard._next_call_seq = sequence
-        elif stage == "access":
-            original = h.access.check_access
-
-            async def access(req, ctx):
-                if req.task_id == "task":
-                    await pause()
-                return await original(req, ctx)
-
-            h.access.check_access = access
         else:
             original = h.store.record_decision
 
@@ -104,6 +99,7 @@ def test_access_checker_cancelled_error_is_also_task_local():
         h.access.error = asyncio.CancelledError("PRIVATE_checker")
         outcome = await h.guard.submit("task", _call())
         assert_cancelled_denial(h, outcome)
+        assert "PRIVATE_checker" not in repr(outcome) + repr(h.audit)
         h.access.error = None
         assert isinstance(await h.guard.submit("healthy", _call()), Released)
 
@@ -161,11 +157,11 @@ def test_cancellation_containment_failure_still_halts_globally(failure):
         healthy(h)
         started = asyncio.Event()
 
-        async def access(req, ctx):
+        async def record_decision(req, decision, **kwargs):
             started.set()
             await asyncio.Event().wait()
 
-        h.access.check_access = access
+        h.store.record_decision = record_decision
         work = asyncio.create_task(h.guard.submit("task", _call()))
         await started.wait()
         if failure in {"load", "status"}:
@@ -347,14 +343,15 @@ def test_approval_cancellation_before_consumption_is_task_local():
         pending = await h.guard.submit("task", _call("send"))
         assert isinstance(pending, Pending)
         entered = asyncio.Event()
+        original = h.store.get_approval
 
-        async def access(req, ctx):
-            if req.task_id == "task":
+        async def get_approval(approval_id):
+            if not entered.is_set():
                 entered.set()
                 await asyncio.Event().wait()
-            return h.access.result
+            return await original(approval_id)
 
-        h.access.check_access = access
+        h.store.get_approval = get_approval
         work = asyncio.create_task(h.guard.human_control("operator").approve(pending.approval_id))
         await entered.wait()
         work.cancel()
@@ -366,7 +363,8 @@ def test_approval_cancellation_before_consumption_is_task_local():
     asyncio.run(scenario())
 
 
-def test_sqlite_cancelled_task_halt_and_audit_survive_restart(tmp_path):
+@pytest.mark.parametrize("cancel_source", ["task", "checker"])
+def test_sqlite_cancelled_task_halt_and_audit_survive_restart(tmp_path, cancel_source):
     async def scenario():
         h = _PolicyHarness()
         h.add_task("healthy")
@@ -376,20 +374,30 @@ def test_sqlite_cancelled_task_halt_and_audit_survive_restart(tmp_path):
             for state in h.store.states.values():
                 await store.create_task(state, created_at_utc=h.now)
             h.guard = h.build_guard(store)
-            entered = asyncio.Event()
-            original = h.access.check_access
+            if cancel_source == "task":
+                entered = asyncio.Event()
+                original_sequence = h.guard._next_call_seq
 
-            async def access(req, ctx):
-                if req.task_id == "task":
-                    entered.set()
-                    await asyncio.Event().wait()
-                return await original(req, ctx)
+                async def next_call_seq(task_id):
+                    if task_id == "task":
+                        entered.set()
+                        await asyncio.Event().wait()
+                    return await original_sequence(task_id)
 
-            h.access.check_access = access
-            work = asyncio.create_task(h.guard.submit("task", _call()))
-            await entered.wait()
-            work.cancel("PRIVATE_cancellation")
-            assert isinstance(await asyncio.wait_for(work, 1), Denied)
+                h.guard._next_call_seq = next_call_seq
+                work = asyncio.create_task(h.guard.submit("task", _call()))
+                await entered.wait()
+                work.cancel("PRIVATE_cancellation")
+                assert isinstance(await asyncio.wait_for(work, 1), Denied)
+            else:
+                original_checker = h.access.check_access
+
+                def check_access(req, ctx):
+                    raise asyncio.CancelledError("PRIVATE_checker_cancellation")
+
+                h.access.check_access = check_access
+                assert isinstance(await h.guard.submit("task", _call()), Denied)
+                h.access.check_access = original_checker
             assert (await store.load_task("task")).status is TaskStatus.HALTED
             assert not h.guard._global_halt
             assert h.audit[-1].exception_type == "CancelledError"

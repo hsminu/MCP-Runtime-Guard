@@ -62,9 +62,14 @@ def jcs_canonicalize(value: object) -> bytes:
 
 
 def tool_fingerprint(tool: object) -> str:
-    """tools/list에서 파싱한 Tool dict 전체의 소문자 SHA-256 지문.
+    """SDK가 재구성한 Tool 정의 dict 전체의 JCS SHA-256 소문자 지문.
 
-    필드를 골라내거나 기본값을 채우지 않은 원본 dict를 전달한다.
+    호출자는 tools/list의 SDK Tool에
+    `tool.model_dump(mode="json", by_alias=True, exclude_unset=True)`를 적용한
+    전체 dict를 전달한다. 원본 수신 JSON은 입력으로 쓰지 않는다.
+    C Registry 등록과 A 연결 직후 대조는 같은 변환을 사용해야 한다.
+    SDK 버전은 lock으로 고정하며, 버전 변경으로 변환 결과가 달라지면
+    모든 서버가 재등록 대기가 된다(fail-closed). C4.12에서 예시 지문을 고정한다.
     파서의 중복 키·비표준 NaN 토큰 허용 설정도 호출자가 확인해야 한다.
     """
     if type(tool) is not dict:

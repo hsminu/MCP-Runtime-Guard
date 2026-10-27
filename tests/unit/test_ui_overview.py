@@ -308,6 +308,8 @@ def test_runtime_mode_is_unconfigured_until_trusted_bootstrap_sets_it(app) -> No
     assert window.runtime_identity.text() == "모델: 미설정"
     window.set_runtime_identity(RuntimeIdentity(model_mode=RuntimeMode.MOCK))
     assert window.runtime_identity.text() == "모델: mock"
+    window.set_runtime_identity(RuntimeIdentity(model_mode=RuntimeMode.CODEX))
+    assert window.runtime_identity.text() == "모델: Codex"
 
 
 def test_runs_page_only_displays_backend_status_without_controls(app) -> None:
