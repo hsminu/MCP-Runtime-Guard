@@ -9,10 +9,14 @@ L1 설정이 실제로 먹혔는지 앱 시작 때 확인한다. 제품 세션�
 원격 제어 꺼짐(C-CODEX-07), 모델 요청의 도구가 시험용 Guard 도구와 `request_user_input`뿐인지
 (T39), 프롬프트가 우리 `baseInstructions`이고 Codex 안내 블록이 없는지(C6.21), 금지 도구 강제
 호출이 모두 거부되고 실행·승인 요청 항목이 생기지 않는지(T40), 한 응답의 Guard 도구 호출 두 개가
-하나씩 넘어오는지, Codex가 끝나고 시험 폴더가 지워지는지. 하나라도 어긋나면 불통과다(T22).
+하나씩 넘어오는지, 가짜 모델 서버에 정상 요청 두 개 말고 다른 요청(다른 경로·토큰 오류·읽을 수
+없는 요청)이 오지 않는지, Codex가 끝나고 시험 폴더가 지워지는지. 하나라도 어긋나면 불통과다(T22).
+
+관찰하지 않는 것: codex.exe가 가짜 모델 서버가 아닌 다른 호스트로 나가는 연결. C6.14 기록의
+연결 표 실측(로그인 전, 표본 방식)은 근거일 뿐 판정에 쓰지 않는다(#41 A 리뷰 1번).
 
 `thread/start` 인자는 A의 세션 관리자가 만드는 함수를 받아 쓴다. 제품 세션과 같은 인자로
-시험하기 위해서다. Windows 전용이다.
+시험하기 위해서다. 전체 시간은 `deadline_s`(기본 `L2_DEADLINE_S`)로 묶는다. Windows 전용이다.
 """
 
 from __future__ import annotations
@@ -87,10 +91,14 @@ FORBIDDEN_PROMPT_TAGS = (
     "<goal_context>",
     "<startup_context>",
 )
-# A의 L3 허용 항목(`codex_session.L3_ALLOWED_ITEMS`)과 같다.
+# A의 L3 허용 항목(`codex_session.L3_ALLOWED_ITEMS`)과 같아야 한다. 테스트가 둘을 대조한다.
+# security가 services를 가져오지 않도록 사본으로 둔다.
 ALLOWED_ITEM_TYPES = frozenset(
     {"userMessage", "agentMessage", "reasoning", "contextCompaction", "dynamicToolCall"}
 )
+# 시험 전체(초기화부터 turn 완료까지)의 상한. 실측은 1.1–3.1초다(C6.14 기록).
+L2_DEADLINE_S = 30.0
+_MAX_DEADLINE_S = 600.0
 _REQUEST_TIMEOUT_S = 20.0
 _PROBE_HOLD_S = 0.3
 _MAX_LINE_BYTES = 8 << 20
@@ -530,8 +538,14 @@ async def observe_l2(
     thread_params: ThreadParams,
     task_id: str | None = None,
     first_response: list[dict[str, object]] | None = None,
+    deadline_s: float = L2_DEADLINE_S,
 ) -> L2Observation:
-    """시험 한 번을 실행해 관찰을 모은다. 시험 폴더는 Codex 종료를 확인한 뒤에만 지운다."""
+    """시험 한 번을 실행해 관찰을 모은다. 시험 폴더는 Codex 종료를 확인한 뒤에만 지운다.
+
+    초기화부터 turn 완료까지가 `deadline_s`를 넘으면 `L2_DEADLINE_EXCEEDED`를 남기고 정리한다.
+    """
+    if type(deadline_s) not in (int, float) or not 0 < deadline_s <= _MAX_DEADLINE_S:
+        raise L2Error("L2_DEADLINE_INVALID")
     observation = L2Observation()
     token = secrets.token_urlsafe(32)
     model = MockModel(token, first_response=first_response)
@@ -550,9 +564,11 @@ async def observe_l2(
         rpc = _Rpc(process, observation)
         reader = asyncio.create_task(rpc.run())
         try:
-            await _drive(rpc, observation, folder, thread_params)
+            await asyncio.wait_for(_drive(rpc, observation, folder, thread_params), deadline_s)
         except L2Error as error:
             observation.errors.append(str(error))
+        except TimeoutError:
+            observation.errors.append("L2_DEADLINE_EXCEEDED")
         finally:
             observation.exit_confirmed = await process.close()
             rpc.cancel_answers()
@@ -613,15 +629,35 @@ async def _drive(
 
 
 async def run_l2(
-    launcher: CodexLauncher, folders: AppFolders, *, thread_params: ThreadParams
+    launcher: CodexLauncher,
+    folders: AppFolders,
+    *,
+    thread_params: ThreadParams,
+    deadline_s: float = L2_DEADLINE_S,
 ) -> L2Report:
     """앱 시작 때 한 번 부른다. 통과하지 못하면 그 앱 실행에서 Codex 세션을 시작하지 않는다(T22).
 
     `thread_params`는 A 세션 관리자가 `thread/start` 인자를 만드는 함수다. 시험용 도구를 받아
-    제품 세션과 같은 인자를 돌려줘야 한다. 실패 사유는 고정 코드로만 남는다.
+    제품 세션과 같은 인자를 돌려줘야 한다.
+
+    **시간:** 초기화부터 turn 완료까지를 `deadline_s`로 묶고, 넘으면 `L2_DEADLINE_EXCEEDED`로
+    불통과다. 그 뒤 Codex 종료 확인(`close`: stdin EOF 뒤 5초, Job 종료 뒤 5초)과 정리(응답 읽기
+    2초, 가짜 모델 닫기 2초, 폴더 삭제)가 이어지므로, 최악 시간은 `deadline_s`에 약 15초를 더한
+    값이다. 부른 쪽이 취소해도(`asyncio.wait_for` 등) 위 정리를 거친 뒤 취소가 전달된다(A가
+    0.2·0.5·0.8초 상한으로 확인, #41 A 리뷰).
+
+    **결과와 예외:** 시험 중 생긴 문제는 `L2Report.failures`의 고정 코드로 돌려준다. 다음은
+    `L2Report` 없이 예외로 끝난다. 원문을 싣지 않으므로 부른 쪽은 고정 코드로 바꿔 보여 준다.
+      - 고정값(`codex.lock.json`)·L1 `config.toml`을 읽지 못함: `CodexConfigError`·`OSError`·
+        `tomllib.TOMLDecodeError`
+      - 가짜 모델 서버를 `127.0.0.1`에 열지 못함: `OSError`
+      - `thread_params`가 낸 예외(그대로 전달)
+      - `deadline_s`가 양수가 아니거나 너무 큼: `L2Error("L2_DEADLINE_INVALID")`
     """
     pins = load_codex_pins(launcher.source_dir)
-    observation = await observe_l2(launcher, folders, thread_params=thread_params)
+    observation = await observe_l2(
+        launcher, folders, thread_params=thread_params, deadline_s=deadline_s
+    )
     l1 = tomllib.loads((launcher.source_dir / "config.toml").read_text(encoding="utf-8"))
     failures = evaluate(observation, l1_config=l1, codex_home=folders.paths.codex_home)
     return L2Report(
