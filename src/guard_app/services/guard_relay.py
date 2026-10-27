@@ -28,7 +28,9 @@ from guard_app.adapters.codex_protocol import (
     tool_call_response,
 )
 from guard_app.core.model_messages import (
+    ModelMessageError,
     ModelMessageKind,
+    final_model_message,
     fixed_model_message,
     outcome_model_message,
 )
@@ -60,15 +62,9 @@ class PendingWait(Protocol):
     async def wait(self) -> PendingFinal: ...
 
 
-# Non-execution causes of a Pending's final result (NOTIFY-01). B is to add
-# `final_model_message(PendingFinal)` to its fixed table (PR #28); until then
-# this mirrors the mapping B accepted there.
-_FINAL_MESSAGES = {
-    "rejected": ModelMessageKind.APPROVAL_REJECTED,
-    "expired": ModelMessageKind.APPROVAL_EXPIRED,
-    "cancelled": ModelMessageKind.APPROVAL_CANCELLED,
-    "invalidated": ModelMessageKind.APPROVAL_INVALIDATED,
-}
+# Final causes where Guard could not settle the request (NOTIFY-01): B's
+# `final_model_message` gives the fixed stop text, and the Task is stopped.
+_UNSETTLED_CAUSES = frozenset({"failed", "shutdown"})
 
 
 class ApprovalOutcomes:
@@ -192,12 +188,14 @@ class GuardToolRelay:
         ):
             return self._stopped()
         if final.cause == "executed":
+            # Same conversion as an unapproved Released/Denied (B7.11 review 1).
             return self._answer(final.outcome)
-        kind = _FINAL_MESSAGES.get(final.cause)
-        if kind is None:
-            # failed/shutdown: Guard could not settle the request; stop the Task.
+        try:
+            success, text = final_model_message(final)
+        except ModelMessageError:
             return self._stopped()
-        return self._fixed(fixed_model_message(kind))
+        stop_code = TOOL_STOP_CODE if final.cause in _UNSETTLED_CAUSES else None
+        return RelayResult(tool_call_response(success, (text,)), stop_code)
 
     def _answer(self, outcome: object) -> RelayResult:
         if type(outcome) is Released:

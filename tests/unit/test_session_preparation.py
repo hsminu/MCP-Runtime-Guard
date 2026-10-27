@@ -15,6 +15,7 @@ from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.services.bridge import ControlAction, SessionOptions
 from guard_app.services.catalog import GuardSettings
+from guard_app.services.session_cleanup import CleanupLimits
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
     SessionPreparation,
@@ -86,11 +87,16 @@ class Harness:
         self.preparation = SessionPreparation(
             self.startup, self.verify, self.prepare, self.confirm, self.cleanup
         )
+        self.build(self.preparation)
+
+    def build(self, preparation, *, factory=None, cleanup_limits=None):
+        """A runtime over these counters. Tests rebuild it before it has run."""
         self.runtime = SessionRuntime(
             self.store,
-            session_factory=self.factory,
-            preparation=self.preparation,
+            session_factory=factory or self.factory,
+            preparation=preparation,
             guard_settings=GuardSettings(profile_id="unit-profile", policy_version="unit-v1"),
+            cleanup_limits=cleanup_limits,
         )
 
     async def startup(self):
@@ -162,7 +168,7 @@ def test_shared_preparation_once_but_verification_for_every_task_and_before_fact
         for state in (first, second):
             operations = [name for name, task_id in harness.trace if task_id == state.task_id]
             assert operations[-4:] == ["interrupt", "close", "confirm", "cleanup"]
-        assert not runtime._resources
+        assert not runtime.pending_cleanup
 
     asyncio.run(run())
 
@@ -200,7 +206,7 @@ def test_missing_malformed_or_unbound_l2_never_creates_resources_session_or_stor
 def test_no_preparation_has_no_boolean_l2_bypass():
     async def run():
         harness = Harness()
-        harness.runtime._preparation = None
+        harness.build(None)
         with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_UNAVAILABLE"):
             await harness.runtime.create_session(SessionOptions())
         assert harness.startups == harness.factories == harness.store.creates == 0
@@ -261,7 +267,7 @@ def test_change_during_resource_setup_is_rechecked_before_factory_and_reclaimed(
             harness.observed = CHANGED
             return resources
 
-        harness.runtime._preparation = replace(harness.preparation, prepare_task=prepare)
+        harness.build(replace(harness.preparation, prepare_task=prepare))
         with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_MISMATCH"):
             await harness.runtime.create_session(SessionOptions())
         assert harness.factories == harness.store.creates == 0
@@ -292,14 +298,18 @@ def test_resource_receipt_configuration_must_match_startup():
 def test_shared_resource_receipt_never_closes_or_erases_another_task(shared_field):
     async def run():
         harness = Harness()
-        first = await harness.runtime.create_session(SessionOptions())
-        owned = harness.resources[first.task_id]
+        owned = []
 
         async def prepare(task_id, expected):
+            # The first Task gets its own receipt; later ones share a field of it.
             resource = await harness.prepare(task_id, expected)
-            return replace(resource, **{shared_field: getattr(owned, shared_field)})
+            if not owned:
+                return resource
+            return replace(resource, **{shared_field: getattr(owned[0], shared_field)})
 
-        harness.runtime._preparation = replace(harness.preparation, prepare_task=prepare)
+        harness.build(replace(harness.preparation, prepare_task=prepare))
+        first = await harness.runtime.create_session(SessionOptions())
+        owned.append(harness.resources[first.task_id])
         with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
             await harness.runtime.create_session(SessionOptions())
         assert not harness.sessions[first.task_id].closed
@@ -331,8 +341,7 @@ def test_store_failure_closes_confirms_then_cleans_before_releasing_ownership():
             ("confirm", task_id),
             ("cleanup", task_id),
         ]
-        assert not harness.runtime._sessions
-        assert not harness.runtime._resources
+        assert not harness.runtime.pending_cleanup
         await harness.runtime.close()
 
     asyncio.run(run())
@@ -348,7 +357,7 @@ def test_unconfirmed_exit_retains_resources_blocks_new_tasks_and_preserves_other
         with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
             await harness.runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL)
         assert not harness.cleaned
-        assert first.task_id in harness.runtime._resources
+        assert first.task_id in harness.runtime.pending_cleanup
         assert (await harness.runtime.snapshot(first.task_id)).status is TaskStatus.HALTED
         assert (await harness.runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
         runner = harness.runtime.runner_for_task(second.task_id)
@@ -373,7 +382,7 @@ def test_cleanup_result_must_be_none_before_ownership_is_released(result):
         harness.cleanup_result = result
         with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
             await harness.runtime.stop_session(state.task_id, state.epoch, ControlAction.CANCEL)
-        assert state.task_id in harness.runtime._resources
+        assert state.task_id in harness.runtime.pending_cleanup
         with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
             await harness.runtime.create_session(SessionOptions())
         assert harness.factories == harness.store.creates == 1
@@ -385,10 +394,11 @@ def test_cleanup_result_must_be_none_before_ownership_is_released(result):
 
 
 @pytest.mark.parametrize("stage", ["startup", "prepare", "verify", "factory"])
-def test_shutdown_reclaims_cancellation_ignoring_late_returns_in_order(stage, monkeypatch):
+def test_shutdown_reclaims_cancellation_ignoring_late_returns_in_order(stage):
     async def run():
         harness = Harness()
         entered, release = asyncio.Event(), asyncio.Event()
+        factory = None
 
         async def delay(action):
             entered.set()
@@ -419,11 +429,12 @@ def test_shutdown_reclaims_cancellation_ignoring_late_returns_in_order(stage, mo
             preparation = replace(harness.preparation, verify_configuration=verify)
         else:
             preparation = harness.preparation
-            harness.runtime._session_factory = lambda state, options, resources: delay(
-                lambda: harness.factory(state, options, resources)
-            )
-        harness.runtime._preparation = preparation
-        monkeypatch.setattr("guard_app.services.session_runtime.SESSION_CLEANUP_TIMEOUT_S", 0.01)
+
+            async def delayed_factory(state, options, resources):
+                return await delay(lambda: harness.factory(state, options, resources))
+
+            factory = delayed_factory
+        harness.build(preparation, factory=factory, cleanup_limits=CleanupLimits(session_s=0.01))
         creation = asyncio.create_task(harness.runtime.create_session(SessionOptions()))
         await asyncio.wait_for(entered.wait(), 1)
         with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
@@ -450,8 +461,7 @@ def test_shutdown_reclaims_cancellation_ignoring_late_returns_in_order(stage, mo
                 ]
             else:
                 assert harness.factories == 0
-        assert not harness.runtime._resources
-        assert not harness.runtime._sessions
+        assert not harness.runtime.pending_cleanup
 
     asyncio.run(run())
 
@@ -465,7 +475,7 @@ def test_honored_preparation_cancellation_remains_cancelled_and_never_creates_se
             entered.set()
             await asyncio.Future()
 
-        harness.runtime._preparation = replace(harness.preparation, prepare_task=prepare)
+        harness.build(replace(harness.preparation, prepare_task=prepare))
         creation = asyncio.create_task(harness.runtime.create_session(SessionOptions()))
         await entered.wait()
         creation.cancel()

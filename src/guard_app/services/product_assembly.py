@@ -10,6 +10,13 @@ fingerprints (A15/A16, FP-01 via B's `tool_fingerprint`). A mismatching or
 missing tool is reported through the Registry view handed to Catalog/Guard, so
 Guard denies it with TOOL_FINGERPRINT_CHANGED and it is left out of the model's
 tool list. Moving the registration back to PENDING is C's Registry path (I10).
+
+A `notifications/tools/list_changed` received after that comparison makes its
+server PENDING for the rest of this run (LIST-01): new calls are denied with
+REG_NOT_ACTIVE, pending approvals fail their recheck, and new Codex sessions do
+not list its tools. Nothing is written to the Registry; the next connection
+compares again. A notice received before the comparison is not blocking, since
+that comparison already reads the newer listing.
 """
 
 from __future__ import annotations
@@ -70,6 +77,10 @@ class LiveCheckedRegistry:
     PENDING). For other servers the fingerprint reported to Catalog/Guard is
     the live value, so a registration rewritten during the run no longer
     matches the definitions this session actually received.
+
+    A server whose tool list changed after the comparison is PENDING too
+    (LIST-01). Its fingerprints stay the live values, so REG_NOT_ACTIVE is the
+    only reason Guard reports for it.
     """
 
     def __init__(self, registry: Registry) -> None:
@@ -77,6 +88,8 @@ class LiveCheckedRegistry:
         self._live: dict[tuple[str, str], str] = {}
         self._blocked: frozenset[str] = frozenset()
         self._mismatched: frozenset[tuple[str, str]] = frozenset()
+        self._changed: set[str] = set()
+        self._early_changes = 0
         self._sealed = False
 
     def seal(self, view: LiveFingerprints) -> None:
@@ -93,13 +106,29 @@ class LiveCheckedRegistry:
 
     @property
     def blocked_servers(self) -> frozenset[str]:
-        return self._blocked
+        return self._blocked | self._changed
+
+    @property
+    def listing_changed(self) -> frozenset[str]:
+        return frozenset(self._changed)
+
+    @property
+    def early_list_changes(self) -> int:
+        return self._early_changes
+
+    def tools_changed(self, server_id: str) -> None:
+        """Record only the fact; the notification's params never reach here."""
+
+        if not self._sealed:
+            self._early_changes += 1
+            return
+        self._changed.add(server_id)
 
     def registration(self, server_id: str) -> RegisteredServer | None:
         return self._registry.registration(server_id)
 
     def status(self, server_id: str) -> RegStatus | None:
-        if self._sealed and server_id in self._blocked:
+        if self._sealed and (server_id in self._blocked or server_id in self._changed):
             return RegStatus.PENDING
         return self._registry.status(server_id)
 
@@ -182,6 +211,19 @@ class AssembledGuard:
     def settings(self) -> GuardSettings:
         return self.loaded.guard_settings
 
+    def offers_tool(self, tool_ref: str) -> bool:
+        """False once the tool's server changed its tool list this run (LIST-01).
+
+        Server IDs never contain "__", so the namespace prefix is the server ID.
+        """
+
+        return tool_ref.partition("__")[0] not in self.registry.listing_changed
+
+    def offered_tool_views(self) -> tuple[ToolView, ...]:
+        """Tools a new Codex session may list."""
+
+        return tuple(view for view in self.tool_views if self.offers_tool(view.tool_ref))
+
     async def aclose(self) -> None:
         # NOTIFY-01: end transport work first so reserved calls settle, then Guard
         # refuses new approvals and drops unconsumed released text.
@@ -210,6 +252,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         {server_id: inputs.server_streams[server_id] for server_id in server_ids},
         call_timeout_s=inputs.call_timeout_s,
         tool_list_limits=inputs.tool_list_limits,
+        on_tools_changed=registry.tools_changed,
     )
     adopted = False
     try:

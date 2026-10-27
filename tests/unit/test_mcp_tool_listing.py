@@ -11,7 +11,6 @@ from examples.http_spike_server import http_spike
 from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData, ListToolsResult, Tool
 
-from guard_app.adapters import mcp_transport
 from guard_app.adapters.mcp_transport import (
     McpTransport,
     ServerWorker,
@@ -19,6 +18,7 @@ from guard_app.adapters.mcp_transport import (
     ToolListLimits,
     collect_tool_definitions,
     http_stream_factory,
+    sdk_session,
 )
 from guard_app.domain.errors import DispatchError
 
@@ -215,9 +215,7 @@ async def test_worker_lists_after_initialize_and_before_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _ListingSession([ListToolsResult(tools=[_tool("tool")])])
-    monkeypatch.setattr(
-        mcp_transport, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session
-    )
+    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
     transport = McpTransport({"one": _streams([])}, tool_list_limits=ToolListLimits())
     await transport.start()
     try:
@@ -237,9 +235,7 @@ async def test_incomplete_listing_is_reported_and_worker_still_serves_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _ListingSession([McpError(ErrorData(code=-32601, message="no tools"))])
-    monkeypatch.setattr(
-        mcp_transport, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session
-    )
+    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
     transport = McpTransport({"one": _streams([])}, tool_list_limits=ToolListLimits())
     await transport.start()
     try:
@@ -255,9 +251,7 @@ async def test_collection_is_off_by_default_and_never_lists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _ListingSession([])
-    monkeypatch.setattr(
-        mcp_transport, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session
-    )
+    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
     transport = McpTransport({"one": _streams([])})
     await transport.start()
     try:
@@ -344,9 +338,7 @@ async def test_initialization_bound_includes_connecting(
 ) -> None:
     # C proposal v1: "서버 연결·initialize 완료까지. 대기 시작부터 계산".
     session = _ListingSession([ListToolsResult(tools=[])])
-    monkeypatch.setattr(
-        mcp_transport, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session
-    )
+    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
     transport = McpTransport(
         {"one": _SlowStreams(0.3)},
         startup_timeout_s=0.1,
@@ -393,9 +385,7 @@ async def test_close_during_collection_is_a_clean_close(
 ) -> None:
     session = _ListingSession([ListToolsResult(tools=[])])
     session.pages.delay = 5.0
-    monkeypatch.setattr(
-        mcp_transport, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session
-    )
+    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
     transport = McpTransport({"one": _streams([])}, tool_list_limits=ToolListLimits())
     starting = asyncio.create_task(transport.start())
     for _ in range(50):

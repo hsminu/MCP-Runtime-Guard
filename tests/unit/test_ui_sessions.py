@@ -662,6 +662,7 @@ def test_creation_unavailable_and_unconfirmed_have_distinct_notices(
         ("CODEX_CONFIG_UNAVAILABLE", "아직 새 세션을 시작할 수 없어"),
         ("CODEX_CLEANUP_UNCONFIRMED", "정리 상태를 확인해"),
         ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않았어"),
+        ("POLICY_APPLY_FAILED", "Guard를 정지했어"),
         ("SOMETHING_NEW", "지금은 새 세션을 시작할 수 없어"),
     ],
 )

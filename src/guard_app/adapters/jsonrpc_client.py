@@ -323,7 +323,10 @@ class JsonRpcClient:
                 self._on_notification(method, params)
                 self._in_notification = False
             return
-        request_id = message["id"]
+        self._dispatch_request(message["id"], method, params)
+
+    def _dispatch_request(self, request_id: object, method: str, params: object) -> None:
+        """Answer a server request in its own task; a live ID cannot be reused."""
         if not _valid_id(request_id):
             raise InvalidMessageError()
         request_id = cast("JsonId", request_id)

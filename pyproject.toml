@@ -60,8 +60,6 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "RET", "BLE", "S", "ASYNC",
 # ---- A+B 통합 기준선(2026-10-14) ----
 # 통합 시점에 이미 있던 위반만 파일별로 면제한다. 새 파일과 B 파일에는 적용하지 않는다.
 # 담당자가 해당 파일을 고치면 항목을 지운다. 범위는 docs/archive/integration-a-b.md 참고.
-# ResultTooLarge는 DispatchError.exception_type(감사 메타데이터) 값이라 이름을 유지한다.
-"src/guard_app/adapters/mcp_transport.py" = ["N818"]
 "examples/**" = ["E501", "I001", "PT018", "S101"]
 "tests/unit/test_agt.py" = ["PT018"]
 "tests/unit/test_agt_real.py" = ["ASYNC110", "B007", "I001", "PT006", "PT012", "PT018"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -37,6 +38,8 @@ from guard_app.services.catalog_sources import (
 )
 
 __all__ = [
+    "SETTINGS_MAX_BYTES",
+    "SETTINGS_MAX_DEPTH",
     "Catalog",
     "CatalogConfigError",
     "GuardSettings",
@@ -45,13 +48,226 @@ __all__ = [
     "PreparedPolicyChange",
     "ResourceResolver",
     "ServerSettings",
+    "SettingsFileError",
     "ToolSettings",
     "load_profile_settings",
+    "parse_settings_bytes",
     "prepare_policy_change",
     "prepare_server_access_change",
+    "serialize_settings_bytes",
 ]
 
 type ResourceResolver = Callable[[ToolSpec, str], str]
+
+SETTINGS_MAX_BYTES = 1_048_576
+SETTINGS_MAX_DEPTH = 64
+
+
+_SETTINGS_ERROR_CODES = frozenset(
+    {
+        "SETTINGS_LIMIT_INVALID",
+        "SETTINGS_TOO_LARGE",
+        "SETTINGS_ENCODING_INVALID",
+        "SETTINGS_JSON_INVALID",
+        "SETTINGS_DUPLICATE_KEY",
+        "SETTINGS_NONFINITE_NUMBER",
+        "SETTINGS_NUMBER_RANGE",
+        "SETTINGS_TOO_DEEP",
+        "SETTINGS_ENVELOPE_INVALID",
+        "SETTINGS_VERSION_UNSUPPORTED",
+    }
+)
+
+
+class SettingsFileError(ValueError):
+    """CFG-01 실패의 고정 code만 담는다. 입력·경로·원래 예외는 인자로 받지 않는다."""
+
+    def __init__(self, code: str) -> None:
+        self.code = (
+            code if type(code) is str and code in _SETTINGS_ERROR_CODES else "SETTINGS_JSON_INVALID"
+        )
+        super().__init__(self.code)
+
+
+def parse_settings_bytes(
+    data: bytes, *, max_bytes: int = SETTINGS_MAX_BYTES, max_depth: int = SETTINGS_MAX_DEPTH
+) -> dict[str, object]:
+    """CFG-01 v1 봉투를 벗긴 독립 JSON 사본. 파일·경로·Registry에 접근하지 않는다.
+
+    바이트 상한에는 BOM·공백도 포함한다. 선두 UTF-8 BOM 한 개만 허용하고
+    파싱 전에 문자열/escape를 구별해 깊이를 제한한다(봉투 1, settings 2).
+    중복 키·비유한 수·surrogate·JCS 안전 범위 밖 정수는 거부한다.
+    Profile 필드 검증과 policy_version 계산은 load_profile_settings가 맡는다.
+    상한은 신뢰된 호출자만 정하며, 인터프리터의 재귀 한계도 넘을 수 없다.
+    C의 크기 제한 읽기는 SETTINGS_MAX_BYTES + 1바이트까지만 읽어 넘긴다.
+    기본 상한을 두 곳에 따로 적지 않고 공개 SETTINGS_MAX_* 상수를 공유한다.
+    """
+    _settings_limits(max_bytes, max_depth)
+    if type(data) is not bytes:
+        raise SettingsFileError("SETTINGS_ENCODING_INVALID")
+    if len(data) > max_bytes:
+        raise SettingsFileError("SETTINGS_TOO_LARGE")
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    try:
+        text = data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise SettingsFileError("SETTINGS_ENCODING_INVALID") from None
+    _settings_text_depth(text, max_depth)
+    try:
+        parsed = json.loads(
+            text,
+            object_pairs_hook=_settings_pairs,
+            parse_constant=_settings_constant,
+            parse_int=_settings_integer,
+        )
+        envelope = _settings_json_copy(parsed, depth=0, max_depth=max_depth, active=set())
+    except json.JSONDecodeError:
+        raise SettingsFileError("SETTINGS_JSON_INVALID") from None
+    except RecursionError:
+        raise SettingsFileError("SETTINGS_TOO_DEEP") from None
+    if (
+        type(envelope) is not dict
+        or set(envelope) != {"schema_version", "settings"}
+        or type(envelope["schema_version"]) is not int
+        or type(envelope["settings"]) is not dict
+    ):
+        raise SettingsFileError("SETTINGS_ENVELOPE_INVALID")
+    if envelope["schema_version"] != 1:
+        raise SettingsFileError("SETTINGS_VERSION_UNSUPPORTED")
+    return cast(dict[str, object], envelope["settings"])
+
+
+def serialize_settings_bytes(
+    settings: Mapping[str, object],
+    *,
+    max_bytes: int = SETTINGS_MAX_BYTES,
+    max_depth: int = SETTINGS_MAX_DEPTH,
+) -> bytes:
+    """독립 JSON 사본을 v1 봉투로 직렬화한다. 입력 보정·변경·파일 접근은 없다.
+
+    저장 입력은 PreparedPolicyChange.document.to_dict()다. 해시용 정규화 사본
+    _Configuration.model_dump(mode="json")은 등급을 숫자로 바꾸므로 쓰지 않는다.
+    Profile 검증은 호출자가 먼저 수행한다. 문자열 키 정렬·들여쓰기 2칸·UTF-8
+    (BOM 없음)·LF·끝 LF 한 개를 쓰고 배열 순서와 JSON 값 타입은 보존한다.
+    내부 값은 정확한 dict/list/str/int/float/bool/None만 받는다. 깊이는 봉투를
+    포함하고 읽기와 같은 숫자·문자 제한을 적용한다. pretty bytes는 JCS가 아니다.
+    """
+    _settings_limits(max_bytes, max_depth)
+    if not isinstance(settings, Mapping):
+        raise SettingsFileError("SETTINGS_ENVELOPE_INVALID")
+    try:
+        envelope = _settings_json_copy(
+            {"schema_version": 1, "settings": dict(settings)},
+            depth=0,
+            max_depth=max_depth,
+            active=set(),
+        )
+        data = (
+            json.dumps(
+                envelope,
+                sort_keys=True,
+                indent=2,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ": "),
+            )
+            + "\n"
+        ).encode("utf-8")
+    except RecursionError:
+        raise SettingsFileError("SETTINGS_TOO_DEEP") from None
+    if len(data) > max_bytes:
+        raise SettingsFileError("SETTINGS_TOO_LARGE")
+    return data
+
+
+def _settings_limits(max_bytes: int, max_depth: int) -> None:
+    if type(max_bytes) is not int or max_bytes < 1 or type(max_depth) is not int or max_depth < 1:
+        raise SettingsFileError("SETTINGS_LIMIT_INVALID")
+
+
+def _settings_text_depth(text: str, max_depth: int) -> None:
+    depth = 0
+    quoted = escaped = False
+    for char in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > max_depth:
+                raise SettingsFileError("SETTINGS_TOO_DEEP")
+        elif char in "]}":
+            depth -= 1
+
+
+def _settings_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise SettingsFileError("SETTINGS_DUPLICATE_KEY")
+        result[key] = value
+    return result
+
+
+def _settings_constant(value: str) -> object:
+    raise SettingsFileError("SETTINGS_NONFINITE_NUMBER")
+
+
+def _settings_integer(value: str) -> int:
+    # JSON 정수 토큰은 leading zero가 없으므로 큰 int 생성 전에 거부할 수 있다.
+    if len(value.removeprefix("-")) > 16:
+        raise SettingsFileError("SETTINGS_NUMBER_RANGE")
+    return int(value)
+
+
+def _settings_json_copy(value: object, *, depth: int, max_depth: int, active: set[int]) -> object:
+    if value is None or type(value) is bool:
+        return value
+    if type(value) is str:
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+            raise SettingsFileError("SETTINGS_ENCODING_INVALID")
+        return value
+    if type(value) is int:
+        if not -(2**53 - 1) <= value <= 2**53 - 1:
+            raise SettingsFileError("SETTINGS_NUMBER_RANGE")
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise SettingsFileError("SETTINGS_NONFINITE_NUMBER")
+        return value
+    if type(value) not in (dict, list):
+        raise SettingsFileError("SETTINGS_JSON_INVALID")
+    depth += 1
+    if depth > max_depth:
+        raise SettingsFileError("SETTINGS_TOO_DEEP")
+    identity = id(value)
+    if identity in active:
+        raise SettingsFileError("SETTINGS_JSON_INVALID")
+    active.add(identity)
+    try:
+        if type(value) is list:
+            return [
+                _settings_json_copy(child, depth=depth, max_depth=max_depth, active=active)
+                for child in value
+            ]
+        result: dict[str, object] = {}
+        for key, child in cast(dict[object, object], value).items():
+            if type(key) is not str:
+                raise SettingsFileError("SETTINGS_JSON_INVALID")
+            _settings_json_copy(key, depth=depth, max_depth=max_depth, active=active)
+            result[key] = _settings_json_copy(
+                child, depth=depth, max_depth=max_depth, active=active
+            )
+        return result
+    finally:
+        active.remove(identity)
 
 
 class Catalog:
@@ -575,7 +791,8 @@ def load_profile_settings(
     policy(taint_mode/approval_ttl_seconds), access_rules(allow/deny)다.
     JSON 배열을 불변 tuple로 옮기며 생략된 기본값도 전체 설정 해시에 포함한다.
     접근 규칙은 normalize_access_rules로 정렬·중복 제거한다. 다른 배열의
-    순서는 보존한다. 형식 결정 필요(C 경로 검증, A 시작 연결).
+    순서는 보존한다. CFG-01 파일 봉투는 parse_settings_bytes로 먼저 벗긴다.
+    C 경로 검증·A 시작 연결은 별도다.
     """
     if not isinstance(document, Mapping):
         raise CatalogConfigError("Profile 설정은 JSON Mapping이어야 한다")

@@ -1,0 +1,133 @@
+{
+ "item": "A108",
+ "date": "2026-10-27",
+ "codex": {
+  "version": "0.162.1",
+  "sha256": "dd13bdb162a184fa04039488b234a8258ef9b76f84e926c505d5742b19249a6a"
+ },
+ "method": "A107과 같은 제품 경로(bootstrap_product → SessionRuntime → CodexAppServerSession → GuardService, C2.12 launcher·C2.13 앱 폴더, 제품 L1 설정 그대로, 가짜 모델 플래그 없음). 모델은 실제 gpt-6.1-sol. 대역: MCP 서버(메모리 Peer, 합성 문구), Registry, Profile. 스파이크 전용 우회: L2 통과 영수증, CODEX_HOME 허용 목록에 secrets 추가(아래 발견 1).",
+ "login": {
+  "device_code": "계정 보안 설정이나 워크스페이스 권한에서 허용돼야 함(OpenAI Codex 인증 문서). 이번 시험은 브라우저 로그인으로 진행",
+  "browser": {
+   "method": "account/login/start {type: chatgpt} → authUrl(127.0.0.1:1455 콜백, originator=mcp_runtime_guard)",
+   "result": "로그인됨",
+   "codex_home_entries_after": [
+    "config.toml",
+    "installation_id",
+    "model_catalog.json",
+    "secrets"
+   ],
+   "secrets_dir": "secrets/codex_auth.age(4,460바이트) 생성. 암호는 Windows 자격증명 관리자 'secrets|<CODEX_HOME 경로 해시>.codex'"
+  }
+ },
+ "product_path_after_login": {
+  "write_codex_home": "CODEX_HOME_UNEXPECTED_ENTRY",
+  "session": "CODEX_PREPARATION_FAILED(앱 시작 준비 실패, 모든 세션 거부)"
+ },
+ "turns": {
+  "allow": {
+   "update_status": "complete",
+   "task_status": "RUNNING",
+   "connection_code": "READY_CODEX",
+   "label": "PUBLIC",
+   "approval_id_seen": null,
+   "peer_calls_before_approval": null,
+   "approve_outcome": null,
+   "peer_calls": [
+    {
+     "name": "read",
+     "arguments": {
+      "path": "public/a.txt"
+     }
+    }
+   ],
+   "assistant_text": "The document contains the text “public text.”",
+   "observations": {
+    "tool_calls_received": 1,
+    "guard_submits": 1,
+    "responses_per_call": [
+     1
+    ],
+    "interrupts_sent": 0,
+    "dynamic_tool_refs": [
+     "docs__read"
+    ],
+    "stop_code": null,
+    "user_input_requests": 0
+   },
+   "codex_home_entries": [
+    ".sandbox_migration",
+    "config.toml",
+    "installation_id",
+    "model_catalog.json",
+    "secrets"
+   ],
+   "task_folders_left": []
+  },
+  "ask": {
+   "update_status": "complete",
+   "task_status": "RUNNING",
+   "connection_code": "READY_CODEX",
+   "label": "INTERNAL",
+   "approval_id_seen": true,
+   "peer_calls_before_approval": [
+    "read"
+   ],
+   "approve_outcome": "Released",
+   "peer_calls": [
+    {
+     "name": "read",
+     "arguments": {
+      "path": "internal/a.txt"
+     }
+    },
+    {
+     "name": "send",
+     "arguments": {
+      "body": "The document contains the text “public text.”",
+      "to": "partner"
+     }
+    }
+   ],
+   "assistant_text": "Sent a one-line summary to partner.",
+   "observations": {
+    "tool_calls_received": 2,
+    "guard_submits": 2,
+    "responses_per_call": [
+     1,
+     1
+    ],
+    "interrupts_sent": 0,
+    "dynamic_tool_refs": [
+     "docs__read",
+     "docs__send"
+    ],
+    "stop_code": null,
+    "user_input_requests": 0
+   },
+   "codex_home_entries": [
+    ".sandbox_migration",
+    "config.toml",
+    "installation_id",
+    "model_catalog.json",
+    "secrets"
+   ],
+   "task_folders_left": []
+  }
+ },
+ "logout": {
+  "account": {
+   "phase": "logout",
+   "account_before": "로그인됨",
+   "account_after": "SIGNED_OUT"
+  },
+  "codex_home_entries_after": [
+   ".sandbox_migration",
+   "config.toml",
+   "installation_id",
+   "model_catalog.json",
+   "secrets"
+  ],
+  "secrets_after": "secrets/codex_auth.age 208바이트로 남음, 자격증명 관리자 항목 남음"
+ }
+}

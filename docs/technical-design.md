@@ -32,7 +32,7 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 | --- | --- |
 | 사용자 | 앱을 설치해 쓰는 개인 한 명. 서버 등록, 폴더 등급, 정책 수정, 승인을 모두 한다 |
 | Task | 사용자가 GUI에서 시작한 하나의 에이전트 작업. 보안 상태의 단위 |
-| Epoch | 같은 Task 안에서 상태가 리셋되지 않는 실행 회차. 재시작·복구 시 증가 |
+| Epoch | Task 하나의 실행 회차. 같은 Task 안에서는 상태가 리셋되지 않는다. 복구는 옛 Task의 epoch를 바꾸지 않고, 재시작 뒤의 작업은 새 Task(epoch 1)로 한다. 옛 Task에서 명시적으로 이어 만들 때만 부모 epoch+1이다(11.5절) |
 | Label | 사용자가 폴더에 붙이는 자료 민감도. `PUBLIC`(공개해도 됨) < `INTERNAL`(개인 자료, 공개하지 않음) < `CONFIDENTIAL`(민감 자료)의 전순서. 이름은 코드 열거형 값이며 회사 분류 체계를 뜻하지 않는다 |
 | Unclassified | 출처나 결과를 확정하지 못한 상태. Label과 별개의 플래그이며 한 번 켜지면 꺼지지 않음 |
 | High-watermark | Task가 읽은 Label의 최댓값 |
@@ -1247,7 +1247,7 @@ servers:
       - { name: post_issue, kind: send, destination_arg: destination_id }
 ```
 
-도구 지문은 `tools/list` 결과의 Tool 객체 전체(모든 필드)를 키 정렬·공백 없는 UTF-8 JSON으로 직렬화해 SHA-256을 취한 값이다. 배열 순서가 바뀌어도 변경으로 본다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다. float는 거부하지 않고 정해진 표기로 처리한다(2026-10-15 결정). 승인 사본의 `canonical_json`(8.1절)과는 다른 함수이며, RFC 8785(JCS)로 정규화하고 B의 `digest.py`에 둔다. Registry·Scanner는 그 함수를 쓴다(FP-01). Registry는 DB의 ACTIVE 상태만 믿지 않고 연결할 때마다 실제 지문을 등록 지문과 대조한다. 연결 뒤 서버가 `notifications/tools/list_changed`를 보내면, 연결 직후 대조가 끝난 뒤에 온 알림에 한해 그 서버를 이번 실행 동안 PENDING으로 취급한다(새 호출 DENY, 대기 승인은 재평가에서 무효). 대조가 끝나기 전에 온 알림은 그 대조가 최신 목록을 보므로 차단하지 않는다. 다음 연결 때 다시 대조한다. 이 알림은 보안 경계가 아니며 정의 변조 방어는 연결 시 대조(I10)가 맡는다. 알림 내용은 화면·모델·로그로 내보내지 않고 고정 코드만 남긴다(LIST-01).
+도구 지문은 `tools/list` 결과의 Tool 객체 전체(모든 필드)를 키 정렬·공백 없는 UTF-8 JSON으로 직렬화해 SHA-256을 취한 값이다. 배열 순서가 바뀌어도 변경으로 본다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다. float는 거부하지 않고 정해진 표기로 처리한다(2026-10-15 결정). 승인 사본의 `canonical_json`(8.1절)과는 다른 함수이며, RFC 8785(JCS)로 정규화하고 B의 `digest.py`에 둔다. Registry·Scanner는 그 함수를 쓴다(FP-01). 계산 입력은 A transport가 SDK로 다시 만든 정의 dict(`model_dump(mode="json", by_alias=True, exclude_unset=True)`)이고, 등록과 연결 직후 대조가 같은 변환을 거친다. 원본 수신 JSON은 쓰지 않는다. SDK 버전은 lock으로 고정하며, 버전을 올려 변환이 달라지면 모든 서버가 재등록 대기가 된다(fail-closed, 2026-10-26). Registry는 DB의 ACTIVE 상태만 믿지 않고 연결할 때마다 실제 지문을 등록 지문과 대조한다. 연결 뒤 서버가 `notifications/tools/list_changed`를 보내면, 연결 직후 대조가 끝난 뒤에 온 알림에 한해 그 서버를 이번 실행 동안 PENDING으로 취급한다(새 호출 DENY, 대기 승인은 재평가에서 무효). 대조가 끝나기 전에 온 알림은 그 대조가 최신 목록을 보므로 차단하지 않는다. 다음 연결 때 다시 대조한다. 이 알림은 보안 경계가 아니며 정의 변조 방어는 연결 시 대조(I10)가 맡는다. 알림 내용은 화면·모델·로그로 내보내지 않고 고정 코드만 남긴다(LIST-01).
 
 등록 상태 전이:
 
@@ -1344,10 +1344,11 @@ GUI ─ 명령 큐 ─▶ 세션 관리자 ─ stdio JSON-RPC ─▶ codex app-s
 - **호출 변환:** `item/tool/call`은 `namespace`와 `tool`을 따로 보낸다. 세션 관리자는 둘을 `__`로 이어 `ProposedCall.tool_ref`(`server_id__tool_name`, 4.1절)를 만든다. `namespace`가 없으면 Guard에 넘기지 않고 DENY 고정 문구로 답한다. `item/tool/call`은 `ProposedCall`로만 변환한다. 모델이 출력한 `task_id`, `label` 같은 필드는 버려진다(extra="forbid"로 실패). Task 식별자는 세션 관리자가 thread와 묶어 둔 값을 쓴다(I7). 호출은 받은 순서대로 하나씩 처리한다.
 - **결과 반환:** `Released`만 `success:true`로 돌려준다. `Denied`·거절·만료·취소는 `success:false`와 짧은 고정 문구다(예: "이 요청은 정책에 의해 차단되었습니다: INTERNAL_TO_EXTERNAL"). `Withheld`·`OutcomeUnknown`은 `success:false`와 "작업이 정지되었습니다"로 답한 뒤 바로 `turn/interrupt`하고 codex 프로세스를 끝낸다. Task는 이미 HALTED·UNKNOWN_OUTCOME이다. 판정 내부 정보(경계 ID, 버전)는 모델에 주지 않는다.
 - **승인 대기:** `Pending`을 받으면 도구 호출에 바로 답하지 않고 Guard의 `request_id`별 최종 결과 알림을 기다린다(8.3절). 승인 실행 결과면 위 규칙대로, 거절·만료·취소면 `success:false`와 고정 문구로 답한다.
+- **Codex 안내 끄기:** L1에 `include_permissions_instructions = false`, `include_environment_context = false`를 둔다. 쓸 수 없는 셸·권한 상승 안내와 사용자 PC 날짜·시간대가 모델로 가지 않는다(2026-10-27).
 - **Codex 자체 도구 차단:** L1 설정으로 끄고, L2 시작 시험(가짜 모델 서버로 도구 목록 대조·금지 도구 강제 호출 거부)으로 확인하며, 실패하면 시작을 거부한다(T22). 실행 중에는 L3가 허용 항목 밖의 이벤트·승인 요청을 거절하고 `turn/interrupt` 뒤 Task를 정지한다.
 - **대기 상한:** Codex는 도구 호출 대기 상한이 없다. 세션 관리자가 호출별 감시 상한(ASK 5분+MCP 실행 상한+여유)을 넘기면 interrupt하고 Task를 정지한다. SEND 전송 뒤면 결과 불명이다(I8).
-- **로그인:** ChatGPT 기기 코드 또는 API 키, 둘 다 Codex 안의 로그인이다. API 키는 Scanner 키 화면과 같은 규칙(가린 입력칸, 끝 4자리만 표시, 전송 직후 입력 폐기)으로 받아 Codex의 `account/login/start`에만 넘기고 우리가 저장하지 않는다(2026-10-18). 동시 실행 중 토큰 갱신이 겹쳐 한 Task의 인증이 실패하면 그 Task만 정지하고 새 Task로 다시 시작하라고 안내한다(Codex 0.162.1은 프로세스 사이 갱신 잠금이 없다). 자격증명은 Codex가 직접 Windows 자격증명 관리자(keyring)에 저장하고 우리 `secrets.py`는 관여하지 않는다. OpenAI API를 직접 부르는 모델 경로는 두지 않는다(2026-10-18). Scanner는 별도 API 키를 쓴다.
-- **실행 환경과 경로(C):** 앱 폴더는 `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 사용자 전용 권한이다. codex 설치 폴더(버전별), CODEX_HOME, Task 폴더(`tasks\<task_id>`)를 둔다. launcher는 환경변수를 허용 목록(`SYSTEMROOT`·`WINDIR`·`TEMP`·`TMP`·`LOCALAPPDATA`·`APPDATA`·`USERPROFILE`·`CODEX_HOME`)만 넘기고 `CODEX_*`·`OPENAI_*`·프록시 변수는 넘기지 않는다. Task 폴더는 `-c sqlite_home=<Task 폴더>`로 넘긴다. Codex는 설정의 `sqlite_home`을 환경변수 `CODEX_SQLITE_HOME`과 CODEX_HOME보다 우선한다(0.162.1 `core/src/config/mod.rs`). stderr는 Task 폴더의 격리 파일로 보내고 함께 지운다. L1 설정 파일과 모델 정보 파일은 저장소 `config/codex/`에 두고, 앱 시작 때 CODEX_HOME에 쓴다.
+- **로그인:** ChatGPT 기기 코드 또는 API 키, 둘 다 Codex 안의 로그인이다. Codex 0.162.1은 토큰을 `CODEX_HOME/secrets/*.age` 암호문으로 두고 그 암호만 keyring에 둔다. 이 폴더는 CODEX_HOME 허용 항목이며 해시 대조에서 빠진다. 로그아웃 뒤에는 A가 C의 정리 함수로 암호문과 keyring 항목을 지운다(2026-10-27). API 키는 Scanner 키 화면과 같은 규칙(가린 입력칸, 끝 4자리만 표시, 전송 직후 입력 폐기)으로 받아 Codex의 `account/login/start`에만 넘기고 우리가 저장하지 않는다(2026-10-18). 동시 실행 중 토큰 갱신이 겹쳐 한 Task의 인증이 실패하면 그 Task만 정지하고 새 Task로 다시 시작하라고 안내한다(Codex 0.162.1은 프로세스 사이 갱신 잠금이 없다). 자격증명은 Codex가 직접 Windows 자격증명 관리자(keyring)에 저장하고 우리 `secrets.py`는 관여하지 않는다. OpenAI API를 직접 부르는 모델 경로는 두지 않는다(2026-10-18). Scanner는 별도 API 키를 쓴다.
+- **실행 환경과 경로(C):** 앱 폴더는 `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 사용자 전용 권한이다. codex 설치 폴더(버전별), CODEX_HOME, Task 폴더(`tasks\<task_id>`)를 둔다. 제품 DB `data\guard.sqlite3`와 이관 전 백업 폴더 `data\backups`도 이 안에 두고, 단일 실행 잠금 `app.lock`을 앱 수명 동안 쥔다(11.5절). launcher는 환경변수를 허용 목록(`SYSTEMROOT`·`WINDIR`·`TEMP`·`TMP`·`LOCALAPPDATA`·`APPDATA`·`USERPROFILE`·`CODEX_HOME`)만 넘기고 `CODEX_*`·`OPENAI_*`·프록시 변수는 넘기지 않는다. Task 폴더는 `-c sqlite_home=<Task 폴더>`로 넘긴다. Codex는 설정의 `sqlite_home`을 환경변수 `CODEX_SQLITE_HOME`과 CODEX_HOME보다 우선한다(0.162.1 `core/src/config/mod.rs`). stderr는 Task 폴더의 격리 파일로 보내고 함께 지운다. L1 설정 파일과 모델 정보 파일은 저장소 `config/codex/`에 두고, 앱 시작 때 CODEX_HOME에 쓴다.
 - **원문:** Codex 로그 DB는 도구 결과 원문을 저장하고 끌 수 없다. `sqlite_home`을 Task 전용 폴더로 두고 Codex 종료 뒤·앱 시작 때 지운다(11.4절).
 - **화면:** 사용자 화면은 GUI 하나다. Codex TUI(`codex --remote`)는 app-server에 직접 붙는 별도 클라이언트라서 Guard 도구 등록·L3 감시를 건너뛰고 설정을 바꿀 수 있으므로 쓰지 않는다. 터미널 화면이 필요하면 세션 관리자 위에 붙인다.
 - 모델 제공자로 나가는 프롬프트에는 이미 공개 승인된 결과만 들어간다. 그러나 모델 제공자 자체가 외부 수신자라는 문제는 이 Guard의 집행 범위 밖이며, 시연은 합성 자료와 승인된 모델 환경에서만 한다.
@@ -1366,7 +1367,7 @@ conn.execute("PRAGMA foreign_keys=ON")
 conn.execute("PRAGMA synchronous=FULL")      # 감사·승인 소비의 내구성 우선
 ```
 
-- 연결은 백엔드 스레드의 단일 writer가 소유한다. UI 스레드는 DB에 직접 접근하지 않고 이벤트로만 상태를 받는다.
+- 연결은 백엔드의 전용 writer 스레드 하나가 소유한다(11.5절). UI 스레드는 DB에 직접 접근하지 않고 이벤트로만 상태를 받는다.
 - `isolation_level=None`으로 자동 트랜잭션을 끄고, 필요한 곳에서 `BEGIN IMMEDIATE`를 명시한다.
 - 모든 SQL은 `storage/sqlite_store.py` 안에서만, 바인딩 파라미터로만 실행한다.
 
@@ -1489,6 +1490,92 @@ async def commit_send_outcome(self, req):
 문서 본문, 도구 인자 원문, 도구 결과 원문, 인증 헤더·토큰, 승인 사본 원문. 짧은 민감 값의 해시도 사전 대입으로 역산될 수 있으므로, 해시는 인자 전체처럼 엔트로피가 충분한 대상에만 쓴다.
 
 Codex 로그 DB는 이 규칙 밖이다. Codex가 도구 결과 원문을 자체 로그 DB에 쓰고 끌 수 없으므로, 이 DB에는 "Task 종료 뒤 원문 비잔존"을 적용한다. `sqlite_home`을 사용자 전용 권한의 Task 전용 폴더로 두고 Codex 종료 뒤와 앱 시작 때 지운다. Task 중 평문 존재와 삭제 파일 복구 가능성은 남는 한계다(C-CODEX-01).
+
+### 11.5 영속 순번과 시작 복구
+
+2026-10-27 결정(SEQ-01–03·REC-01–05)이다. 세부는 [B6.17 결정안](archive/b/B6.17-seq-rec-decisions.md)에 있다. 구현은 B6.8·B6.13(B), 제품 연결은 A, 앱 폴더·백업 입구와 독립 인수는 C가 맡는다.
+
+- **호출 순번(SEQ-01)**
+  - `call_seq`는 Task ID별 독립 계수다. 새 Task는 1부터 받고, epoch가 바뀌어도 계수를 리셋하지 않는다.
+  - 배정을 COMMIT한 뒤 판정 저장 실패·취소·ACK 유실이 나도 번호를 회수하지 않는다. 그래서 공백이 생길 수 있다.
+  - 번호와 epoch의 상한은 JCS 안전 정수 2^53−1이다. 닿으면 그 Task를 정지하고, 되감거나 wrap하지 않는다.
+  - 재시작 뒤 다음 번호는 이전에 커밋된 최대값보다 크다.
+- **배정과 실행 권한(SEQ-02)**
+  - Guard의 한 인자 순번 콜백은 그대로 둔다. A가 Store의 `allocate_call_seq(task_id)`를 주입한다.
+  - 배정·계수 증가·할당 감사는 같은 writer의 한 트랜잭션이다.
+  - 실패는 기존 Reason으로 나눈다(새 Reason 없음). COMMIT·rollback 결과를 모르면 Store가 실행 권한을 닫고 재시작을 요구한다.
+  - Store는 SQL 큐와 독립된 동기 조회 `execution_state()`를 제공한다. 담는 값은 run_id·phase·execution_enabled·state_revision·reason·commit_outcome·requires_restart 등이다.
+  - **A가 확인하는 때:** 새 `turn/start` 전, 도구 응답을 돌려주기 전, 새 Task·세션 준비 전. 그 밖에는 `state_revision`을 감시한다.
+  - **실행 불가일 때:** `execution_enabled=False`이면 A는 진행 중 turn을 interrupt하고 모든 Task 세션을 닫는다.
+  - Denied 하나의 사유나 DB의 `RUNNING` 행만으로 실행할 수 있다고 판단하지 않는다.
+  - 고장 난 DB에 정지 행을 반드시 쓸 수 있다고 보장하지 않는다.
+- **스키마 이관과 백업(SEQ-03)**
+  - v3 이관은 생성자의 부수 효과가 아니다. 시작 때의 명시적 저장소 준비 단계다.
+    - 순서는 검사 → 백업 → 이관 → 검증 → 복구다.
+    - 진행 코드는 `STORE_CHECK`·`STORE_BACKUP`·`STORE_MIGRATE`·`STORE_VERIFY`·`STORE_RECOVER`다. 이관할 것이 없으면 BACKUP·MIGRATE를 건너뛴다.
+  - 새 DB는 v3로 만든다. 이관 대상은 정확한 v2와 Registry가 빈 v1뿐이다.
+  - 아래는 고치지 않고 닫는다: Registry 행이 있는 v1, 다른 `application_id`, 미래 버전, DDL 불일치.
+  - 기존 자료가 있으면 이관 전 일관 백업이 필수다. 순서는 다음과 같다.
+    1. C의 `AppFolders.begin_backup(label)`이 `data\backups`에 임시 파일을 만든다.
+    2. B가 SQLite Backup API로 복사한 뒤 `quick_check`·`application_id`·`user_version`을 확인한다.
+    3. C의 `publish()`가 디스크에 내리고 최종 이름으로 바꾼다.
+  - 어느 단계든 실패하면 `STORE_BACKUP_FAILED`로 닫고 이관하지 않는다.
+  - 완성 백업은 자동으로 지우지 않는다. 복원은 앱 기능이 아니라 오프라인 절차다. 남은 임시 파일은 다음 앱 시작 때 C가 지운다.
+- **단일 소유와 시작 순서(REC-01)**
+  - `app.lock`과 앱 폴더 안의 고정 제품 DB `data\guard.sqlite3`가 DB 단일 소유다. DB 파일 단위 잠금은 따로 두지 않는다.
+  - 제품은 C의 `AppFolders.db_path()`로 경로를 받는다. 링크·하드링크·넓은 권한은 거부된다. `--db-path`는 쓰지 않고, 시연 모드는 제품 DB를 열지 않는다.
+  - 시작 순서:
+    1. 실행·제어 닫힘
+    2. C 단일 소유
+    3. B 검사·백업·이관 ACK
+    4. B 복구 ACK
+    5. C Registry 지문·정책·하네스 준비
+    6. A transport·새 Task·Guard·Runner 구성
+    7. Store 실행 회차 활성화 ACK
+    8. READY
+  - 앱의 접수 게이트와 Store의 거부를 함께 둔다.
+  - Store writer와 이전 구성요소가 끝난 것을 확인하기 전에는 잠금을 풀지 않는다.
+- **복구 규칙(REC-02)**
+  - 옛 Task와 승인은 재개하지 않는다.
+
+    | 저장된 상태 | 복구 |
+    | --- | --- |
+    | 비종결 Task(예약된 SEND 없음) | HALTED |
+    | 미예약 요청 | 요청 DENIED |
+    | PENDING·APPROVED 승인 | EXPIRED |
+    | 예약된 READ | 요청 WITHHELD(결과 미공개), Task HALTED |
+    | 예약된 SEND | 요청·Task UNKNOWN_OUTCOME |
+
+  - 종류·epoch를 잃은 legacy 예약 요청은 READ로 추정하지 않는다. 결과 불명으로 격리한다.
+  - 이미 종결된 Task는 상태를 보존하고, 불명 표시를 따로 붙인다(U8).
+  - 관계가 깨졌거나 설명할 수 없는 조합은 격리하지 않고 게이트를 닫는다.
+  - 등급·미분류는 감사 기록과 대조한다. 낮아졌거나 사라졌으면 복구하지 않는다(2026-10-15 결정).
+  - 원문을 복원하거나 확인용 `tools/call`을 보내지 않는다.
+  - 복구 항목은 `server_id`·`tool_name`·`destination_id`·`kind`·`epoch`를 보여 준다. 신뢰 값이 없는 legacy만 None이다. 재실행 입구는 없다.
+- **epoch(REC-03)**
+  - 복구는 옛 Task의 epoch와 과거 요청 epoch를 고치지 않는다.
+  - 지금 만드는 새 Task는 모두 부모 없는 새 ID·epoch 1이다.
+  - 옛 Task에서 명시적으로 이어 만드는 기능을 추가할 때만 `parent.epoch + 1`을 쓴다. 이때 부모·자식 관계를 새 Task 생성과 같은 트랜잭션에 남긴다.
+- **복구 결과(REC-04)**
+  - RecoveryReport는 10필드다: schema_version·recovery_version·run_id·committed_at_utc, 변경한 Task·요청·승인 수, 결과 불명 수, 격리 수, 미해결 수.
+  - 성공 report는 미해결 0이다. A는 성공 report만 복구 결과로 보여 준다.
+  - 같은 run을 다시 조회해도 다시 적용하지 않는다.
+  - 실패는 `execution_state()`와 고정 시작 실패 코드로 보인다. 이 코드는 기존 Reason과 별개다.
+    - `STORE_SCHEMA_UNSUPPORTED`
+    - `STORE_INTEGRITY_FAILED`
+    - `STORE_RECOVERY_UNRESOLVED`
+    - `STORE_BACKUP_FAILED`
+    - `STORE_MIGRATION_FAILED`
+    - `STORE_COMMIT_UNKNOWN`
+    - `STORE_DEADLINE_EXCEEDED`
+    - `STORE_IO_FAILED`
+- **시간 상한과 종료(REC-05)**
+  - writer는 전용 daemon 스레드 하나다. Store·Registry·순번·감사·이관·복구가 같은 큐를 쓴다.
+  - A가 바깥 60초 monotonic deadline을 B 준비 입구에 넘긴다. B는 그 안에서 복구 30초를 함께 집행한다.
+  - 상한을 넘으면 `STORE_DEADLINE_EXCEEDED`로 닫는다. 늦게 온 성공은 채택하지 않는다.
+  - close는 이벤트 루프를 막지 않는다. 5초 안에 닫힘을 확인하지 못하면 `CLEANUP_UNCONFIRMED`로 표시하고, 잠금을 먼저 풀지 않은 채 프로세스를 끝낸다.
+  - 같은 프로세스에서 Store를 다시 열거나 자동 재시도하지 않는다.
+  - 시간값은 측정 전 제안이다. C가 실제 프로세스로 잰 뒤 A·B·C가 다시 정한다.
 
 ---
 

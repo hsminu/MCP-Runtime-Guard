@@ -178,6 +178,7 @@ _CODEX_FAILURE_DETAILS = {
     "CODEX_PREPARATION_FAILED": "Codex 세션 준비를 완료하지 못했어.",
     "CODEX_CLEANUP_UNCONFIRMED": "Codex 종료·임시 자료 정리 완료를 확인하지 못했어.",
     "GUARD_PROFILE_UNAVAILABLE": "Guard 정책(Profile) 설정이 아직 연결되지 않았어.",
+    "POLICY_APPLY_FAILED": "저장한 정책을 적용하지 못해 Guard를 정지했어.",
 }
 _CODEX_MISSING_COMPONENTS = frozenset(
     {

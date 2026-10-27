@@ -196,6 +196,47 @@ def _external_read(h):
 
 
 @pytest.mark.parametrize("name", ["read", "send"])
+def test_cancelled_approval_callback_failure_sets_guard_global_halt(name, monkeypatch, caplog):
+    async def scenario():
+        h = _Harness(label=Label.INTERNAL)
+        if name == "read":
+            _external_read(h)
+        value, handle = await _pending(h, name=name)
+        entered = asyncio.Event()
+        original_complete = h.guard._approvals._complete
+
+        def complete(*args, **kwargs):
+            original_complete(*args, **kwargs)
+            raise RuntimeError("PRIVATE_CALLBACK")
+
+        async def transport(req):
+            h.transport.calls.append(req)
+            entered.set()
+            await asyncio.Event().wait()
+
+        h.transport.call = transport
+        monkeypatch.setattr(h.guard._approvals, "_complete", complete)
+        work = asyncio.create_task(h.guard.human_control("operator").approve(value.approval_id))
+        await asyncio.wait_for(entered.wait(), 1)
+        work.cancel()
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await asyncio.wait_for(work, 1)
+        monkeypatch.setattr(h.guard._approvals, "_complete", original_complete)
+        final = await asyncio.wait_for(handle.wait(), 1)
+        assert isinstance(final.outcome, Withheld if name == "read" else OutcomeUnknown)
+        assert h.guard._global_halt
+        assert h.store.states["task"].status is (
+            TaskStatus.HALTED if name == "read" else TaskStatus.UNKNOWN_OUTCOME
+        )
+        assert isinstance(await h.guard.submit("task", _call(name)), Denied)
+        assert len(h.transport.calls) == h.store.consume_count == 1
+        assert "PRIVATE" not in repr(final) + repr(h.audit) + repr(caught.value) + caplog.text
+        await h.guard.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("name", ["read", "send"])
 @pytest.mark.parametrize("stage", ["transport", "commit"])
 def test_reserved_approval_cancellation_completes_once_then_propagates(name, stage, monkeypatch):
     async def scenario():
