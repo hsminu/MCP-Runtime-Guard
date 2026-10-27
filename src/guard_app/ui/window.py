@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QAction, QResizeEvent
+from PySide6.QtGui import QAction, QGuiApplication, QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -42,9 +42,14 @@ from .scanner_key import ScannerKeyForm
 from .server_add import LocalFolderRulesForm, ServerAddForm
 from .servers import ServerListPage
 from .sessions import SessionWorkspace
-from .style import apply_style
+from .style import apply_style, current_theme, set_theme, system_theme
 from .task_status import TaskStatusCard
-from .widgets import KeyboardActionButton, plain_label
+from .widgets import IconMark, KeyboardActionButton, plain_label
+
+# Results read like a document, not a dashboard stretched across the screen.
+_RESULTS_MAX_WIDTH = 808
+# The docked results pane leaves the conversation most of the window.
+_ACTIVITY_PANE_WIDTH = 376
 
 
 def _scroll_page(content: QWidget) -> QScrollArea:
@@ -57,12 +62,12 @@ def _scroll_page(content: QWidget) -> QScrollArea:
 def _placeholder_page(page: str) -> QWidget:
     content = QWidget()
     layout = QVBoxLayout(content)
-    layout.setContentsMargins(30, 30, 30, 30)
-    layout.setSpacing(10)
+    layout.setContentsMargins(32, 32, 32, 32)
+    layout.setSpacing(12)
     layout.addWidget(plain_label(PAGES[page], name="pageTitle"))
     note = plain_label(
-        "백엔드 확정 조회 계약을 연결한 뒤 표시할 화면이야. "
-        "현황으로 돌아가면 현재 제공된 상태를 볼 수 있어.",
+        "백엔드 확정 조회 계약을 연결한 뒤 표시할 화면임. "
+        "현황으로 돌아가면 현재 제공된 상태를 볼 수 있음.",
         name="secondary",
     )
     layout.addWidget(note)
@@ -99,8 +104,11 @@ class GuardWindow(QMainWindow):
         self._menu_actions: dict[str, QAction] = {}
         self._page_indices: dict[str, int] = {}
         self._compact_navigation = False
+        self._activity_docked = False
         self._runtime_panel: RuntimePanel | None = None
         self._runtime_context = ""
+        # Follow the platform's light or dark scheme until the user picks one.
+        self._theme_pinned = False
         self.sessions = SessionWorkspace()
 
         central = QWidget()
@@ -109,53 +117,47 @@ class GuardWindow(QMainWindow):
         root.setSpacing(0)
         self.setCentralWidget(central)
 
+        # Sessions first (Codex, Claude Code, Conductor): new session, search,
+        # three views, the session list, then the management pages below it.
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
         self.sidebar.setFixedWidth(224)
         side = QVBoxLayout(self.sidebar)
-        side.setContentsMargins(14, 22, 14, 14)
-        side.setSpacing(4)
+        side.setContentsMargins(8, 8, 8, 8)
+        side.setSpacing(2)
         brand = QHBoxLayout()
-        brand.setSpacing(10)
-        mark = plain_label(name="brandMark")
-        mark.setFixedSize(40, 40)
-        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mark.setPixmap(line_icon("shield", "#ffffff").pixmap(QSize(24, 24)))
-        brand.addWidget(mark)
-        brand_copy = QVBoxLayout()
-        brand_copy.setSpacing(2)
-        brand_copy.addWidget(plain_label("MCP Guard", name="brandTitle"))
-        brand_copy.addWidget(plain_label("나의 도구, 안전한 실행", name="brandCaption"))
-        brand.addLayout(brand_copy, 1)
+        brand.setContentsMargins(8, 0, 0, 0)
+        brand.setSpacing(8)
+        brand.addWidget(IconMark("shield", "on_accent", 20, 13, name="brandMark"))
+        brand.addWidget(plain_label("MCP Runtime Guard", name="brandTitle"), 1)
+        self.theme_button = KeyboardActionButton()
+        self.theme_button.setObjectName("iconButton")
+        self.theme_button.clicked.connect(self._toggle_theme)
+        brand.addWidget(self.theme_button)
         side.addLayout(brand)
-        side.addSpacing(16)
+        side.addSpacing(8)
         self.new_session_button = KeyboardActionButton("새 세션")
-        self.new_session_button.set_visual(icon="plus", variant="soft")
+        self.new_session_button.setObjectName("newSessionButton")
+        self.new_session_button.set_visual(icon="compose", variant="soft")
         self.new_session_button.clicked.connect(self._new_session)
         side.addWidget(self.new_session_button)
         side.addWidget(self.sessions.search)
+        side.addSpacing(2)
         for page in ("runs", "results", "approvals"):
             side.addWidget(self._nav_button(page))
-        side.addWidget(plain_label("세션 · 이 앱에서만 유지", name="navCaption"))
+        side.addSpacing(16)
+        sessions_caption = plain_label("세션", name="navCaption")
+        sessions_caption.setToolTip("세션은 이 앱에서만 유지됨.")
+        side.addWidget(sessions_caption)
+        side.addSpacing(2)
         side.addWidget(self.sessions.list, 1)
-        side.addWidget(plain_label("관리", name="navCaption"))
-        management = QWidget()
-        management_layout = QVBoxLayout(management)
-        management_layout.setContentsMargins(0, 0, 0, 0)
-        management_layout.setSpacing(0)
+        side.addSpacing(8)
+        management_caption = plain_label("관리", name="navCaption")
+        management_caption.setToolTip("백엔드 확정 조회만 표시함.")
+        side.addWidget(management_caption)
+        side.addSpacing(2)
         for page in ("servers", "server_add", "overview", "logs", "policy", "audit", "settings"):
-            management_layout.addWidget(self._nav_button(page))
-        management_scroll = _scroll_page(management)
-        management_scroll.setMinimumHeight(80)
-        management_scroll.setMaximumHeight(220)
-        management_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        side.addWidget(management_scroll)
-        footer = QFrame()
-        footer.setObjectName("sidebarFooter")
-        footer_layout = QVBoxLayout(footer)
-        footer_layout.setContentsMargins(8, 16, 0, 0)
-        footer_layout.addWidget(plain_label("백엔드 확정 조회만 표시", name="secondary"))
-        side.addWidget(footer)
+            side.addWidget(self._nav_button(page))
         root.addWidget(self.sidebar)
         # Start with the compact shell so a 320 px resize cannot be constrained
         # by the sidebar before the first resize event has reflowed the layout.
@@ -169,7 +171,7 @@ class GuardWindow(QMainWindow):
         topbar = QFrame()
         topbar.setObjectName("topbar")
         top = QGridLayout(topbar)
-        top.setContentsMargins(26, 10, 26, 10)
+        top.setContentsMargins(20, 8, 16, 8)
         top.setHorizontalSpacing(12)
         top.setVerticalSpacing(4)
         self._top_layout = top
@@ -189,7 +191,7 @@ class GuardWindow(QMainWindow):
             self._menu_actions[page] = action
         self.menu_button.setMenu(self._nav_menu)
         self.menu_button.hide()
-        self.breadcrumb = plain_label("Workspace / 현황", name="cardTitle", wrap=False)
+        self.breadcrumb = plain_label(PAGES["overview"], name="breadcrumb", wrap=False)
         top.addWidget(self.breadcrumb, 0, 0)
         self.runtime_identity = plain_label(name="modeBadge", wrap=False)
         top.addWidget(self.runtime_identity, 0, 1)
@@ -197,9 +199,14 @@ class GuardWindow(QMainWindow):
         self.set_runtime_identity(RuntimeIdentity())
         work.addWidget(topbar)
 
+        self._back_row = QWidget()
+        back = QHBoxLayout(self._back_row)
+        back.setContentsMargins(16, 8, 16, 0)
         self.back_to_conversation = KeyboardActionButton("← 대화로 돌아가기")
+        self.back_to_conversation.setObjectName("ghostButton")
         self.back_to_conversation.clicked.connect(lambda: self.navigate("runs"))
-        work.addWidget(self.back_to_conversation, 0, Qt.AlignmentFlag.AlignLeft)
+        back.addWidget(self.back_to_conversation, 0, Qt.AlignmentFlag.AlignLeft)
+        work.addWidget(self._back_row)
 
         self.stack = QStackedWidget()
         self.overview = OverviewPage()
@@ -217,44 +224,91 @@ class GuardWindow(QMainWindow):
         # root that does calls set_approval_query_connected(True).
         self.approval_page.set_source_connected(False)
         self._page_indices["approvals"] = self.stack.addWidget(_scroll_page(self.approval_page))
+        # The draft form scrolls itself; the folder rules ride in the same scroll.
         self.server_add_form = ServerAddForm()
-        server_add_page = QWidget()
-        server_add_layout = QVBoxLayout(server_add_page)
-        server_add_layout.setContentsMargins(0, 0, 0, 0)
-        server_add_layout.addWidget(self.server_add_form)
         self.folder_rules_form = LocalFolderRulesForm()
-        server_add_layout.addWidget(self.folder_rules_form)
-        server_add_layout.addWidget(
-            plain_label(
-                "폴더 등급은 입력 초안이야. Registry·경로 검증 연결 전에는 적용되지 않아.",
-                name="secondary",
-            )
-        )
-        self._page_indices["server_add"] = self.stack.addWidget(_scroll_page(server_add_page))
-        task_page = QWidget()
-        task_layout = QVBoxLayout(task_page)
-        task_layout.setContentsMargins(26, 28, 26, 42)
-        task_layout.setSpacing(16)
-        task_layout.addWidget(plain_label("결과 · 실행 활동", name="pageTitle"))
-        task_layout.addWidget(
-            plain_label("Task 상태는 백엔드에서 확인된 값만 표시해.", name="secondary")
-        )
+        self.server_add_form.add_section(self.folder_rules_form)
+        self._page_indices["server_add"] = self.stack.addWidget(self.server_add_form)
+        # A session's results and activity are one block that moves between
+        # two hosts: the chat header's 활동 docks it beside the conversation,
+        # and the sidebar's 결과 · 실행 활동 opens it as a page of its own (the
+        # compact shell's only form). Status, run controls and approval review
+        # scroll; the stop controls stay pinned below them in both.
+        self._activity = QWidget()
+        self._activity.setObjectName("activityContent")
+        activity = QVBoxLayout(self._activity)
+        activity.setContentsMargins(0, 0, 0, 0)
+        activity.setSpacing(0)
+        self._results_body = QWidget()
+        self._results_body.setMaximumWidth(_RESULTS_MAX_WIDTH)
+        body_layout = QVBoxLayout(self._results_body)
+        body_layout.setContentsMargins(24, 24, 24, 24)
+        body_layout.setSpacing(0)
+        self._results_heading = QWidget()
+        heading = QVBoxLayout(self._results_heading)
+        heading.setContentsMargins(0, 0, 0, 16)
+        heading.setSpacing(4)
+        heading.addWidget(plain_label(PAGES["results"], name="pageTitle"))
+        self.results_scope = plain_label(name="secondary")
+        heading.addWidget(self.results_scope)
+        body_layout.addWidget(self._results_heading)
         self.task_status_card = TaskStatusCard()
-        task_layout.addWidget(self.task_status_card)
-        self.runtime_layout = task_layout
-        task_layout.addStretch(1)
-        self._page_indices["results"] = self.stack.addWidget(_scroll_page(task_page))
-        self._page_indices["runs"] = self.stack.addWidget(_scroll_page(self.sessions))
+        body_layout.addWidget(self.task_status_card)
+        self.runtime_layout = body_layout
+        body_layout.addStretch(1)
+        self._results_scroll = _scroll_page(self._results_body)
+        self._results_scroll.setObjectName("resultsScroll")
+        self._results_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        activity.addWidget(self._results_scroll, 1)
+        self._results_footer = QFrame()
+        self._results_footer.setObjectName("resultsFooter")
+        footer = QHBoxLayout(self._results_footer)
+        footer.setContentsMargins(0, 0, 0, 0)
+        self._results_footer_layout = footer
+        self._results_footer.hide()
+        activity.addWidget(self._results_footer)
+
+        self.results_page = QWidget()
+        self.results_page.setObjectName("resultsPage")
+        self._results_page_layout = QVBoxLayout(self.results_page)
+        self._results_page_layout.setContentsMargins(0, 0, 0, 0)
+        self._results_page_layout.addWidget(self._activity)
+        self._activity_host = self._results_page_layout
+
+        conversation = QWidget()
+        conversation_row = QHBoxLayout(conversation)
+        conversation_row.setContentsMargins(0, 0, 0, 0)
+        conversation_row.setSpacing(0)
+        self._conversation_scroll = _scroll_page(self.sessions)
+        conversation_row.addWidget(self._conversation_scroll, 1)
+        self.activity_pane = QFrame()
+        self.activity_pane.setObjectName("activityPane")
+        self.activity_pane.setFixedWidth(_ACTIVITY_PANE_WIDTH)
+        pane = QVBoxLayout(self.activity_pane)
+        pane.setContentsMargins(0, 0, 0, 0)
+        pane.setSpacing(0)
+        head = QFrame()
+        head.setObjectName("paneHead")
+        pane_head = QHBoxLayout(head)
+        pane_head.setContentsMargins(24, 8, 12, 8)
+        pane_head.addWidget(plain_label(PAGES["results"], name="paneTitle"), 1)
+        self.activity_close = KeyboardActionButton()
+        self.activity_close.setObjectName("iconButton")
+        self.activity_close.set_visual(icon="close")
+        self.activity_close.setAccessibleName("결과 · 실행 활동 패널 닫기")
+        self.activity_close.setToolTip("패널 닫기")
+        self.activity_close.clicked.connect(lambda: self.set_activity_docked(False))
+        pane_head.addWidget(self.activity_close)
+        pane.addWidget(head)
+        self._activity_pane_layout = pane
+        self.activity_pane.hide()
+        conversation_row.addWidget(self.activity_pane)
+        self._page_indices["runs"] = self.stack.addWidget(conversation)
+        self._page_indices["results"] = self.stack.addWidget(self.results_page)
         settings = QWidget()
         settings_layout = QVBoxLayout(settings)
-        settings_layout.setContentsMargins(26, 28, 26, 28)
+        settings_layout.setContentsMargins(24, 24, 24, 24)
         settings_layout.addWidget(plain_label("설정", name="pageTitle"))
-        settings_layout.addWidget(
-            plain_label(
-                "모델 연결과 Scanner 설정을 확인해.",
-                name="secondary",
-            )
-        )
         self.scanner_key_form = ScannerKeyForm()
         self.codex_login_info = CodexLoginInfo()
         settings_layout.addWidget(self.codex_login_info)
@@ -280,11 +334,38 @@ class GuardWindow(QMainWindow):
                 )
         work.addWidget(self.stack, 1)
         root.addWidget(workspace, 1)
-        apply_style(self)
+        self.set_theme(system_theme())
+        QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
         self._update_shell_layout()
-        self.sessions.results_requested.connect(lambda: self.navigate("results"))
+        self.sessions.results_requested.connect(self._toggle_activity)
         self.sessions.selection_changed.connect(self._session_selected)
         self.navigate("runs", "")
+        # Open on the message box, as messengers do.
+        self.sessions.current.draft.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def set_theme(self, theme: str) -> None:
+        """Repaint the shell in one palette; icons and painted rows follow it."""
+        set_theme(theme)
+        apply_style(self)
+        dark = theme == "dark"
+        self.theme_button.set_visual(icon="sun" if dark else "moon")
+        label = "라이트 테마로 전환" if dark else "다크 테마로 전환"
+        self.theme_button.setAccessibleName(label)
+        self.theme_button.setToolTip(label)
+        self.sessions.list.viewport().update()
+
+    def _toggle_theme(self) -> None:
+        self._theme_pinned = True
+        theme = "light" if current_theme() == "dark" else "dark"
+        self.set_theme(theme)
+        # The native title bar follows the app's scheme on Windows and macOS.
+        QGuiApplication.styleHints().setColorScheme(
+            Qt.ColorScheme.Dark if theme == "dark" else Qt.ColorScheme.Light
+        )
+
+    def _system_theme_changed(self, _scheme: Qt.ColorScheme) -> None:
+        if not self._theme_pinned:
+            self.set_theme(system_theme())
 
     def _new_session(self) -> None:
         self.sessions.new_session()
@@ -302,14 +383,56 @@ class GuardWindow(QMainWindow):
             state = self.sessions.current.snapshot
             panel.set_scope(None if state is None else (state.task_id, state.epoch))
         if hasattr(self, "stack"):
+            # The results page follows the selected session; elsewhere a pick
+            # opens its conversation.
+            self.navigate("results" if self._page == "results" else "runs")
+
+    def _toggle_activity(self) -> None:
+        """The chat header's 활동 docks results beside the conversation; the
+        compact shell has no room for a dock, so there it opens the page."""
+        if self._compact_navigation:
+            self.navigate("results")
+        else:
+            self.set_activity_docked(not self._activity_docked)
+
+    def set_activity_docked(self, docked: bool) -> None:
+        self._activity_docked = docked
+        if docked and self._page != "runs":
             self.navigate("runs")
+        else:
+            self._place_activity()
+
+    def _place_activity(self) -> None:
+        """Move the results block to the conversation dock or the results page."""
+        on_page = self._page == "results" or self._compact_navigation
+        docked = self._activity_docked and not on_page
+        host = self._activity_pane_layout if docked else self._results_page_layout
+        if host is not self._activity_host:
+            self._activity_host.removeWidget(self._activity)
+            host.addWidget(self._activity, 1)
+            self._activity_host = host
+            self._activity.show()
+        self._results_heading.setVisible(not docked)
+        self._results_body.setMaximumWidth(16777215 if docked else _RESULTS_MAX_WIDTH)
+        shown = docked and self._page == "runs"
+        self.activity_pane.setVisible(shown)
+        self.sessions.set_activity_open(shown)
 
     def attach_runtime(self, panel: RuntimePanel) -> None:
         """Keep the original human-control panel behind the session's detail view."""
         if self._runtime_panel is not None:
             raise ValueError("Runtime is already attached")
         self._runtime_panel = panel
-        self.runtime_layout.insertWidget(2, panel)
+        self.runtime_layout.insertWidget(
+            self.runtime_layout.indexOf(self.task_status_card) + 1, panel
+        )
+        stop = panel.pin_stop_section()
+        stop.setMaximumWidth(_RESULTS_MAX_WIDTH)
+        # Grows to the content width, so the stop buttons line up with the
+        # run button above; wider windows leave the rest empty.
+        self._results_footer_layout.addWidget(stop, 1)
+        self._results_footer_layout.addStretch(0)
+        self._results_footer.show()
         panel.set_scope(None)
         panel.state_changed.connect(lambda: self.sessions.set_busy_scopes(panel.busy_scopes))
         panel.selected_snapshot_changed.connect(self._sync_selected_task)
@@ -418,25 +541,34 @@ class GuardWindow(QMainWindow):
             self._top_layout.setContentsMargins(12, 8, 12, 8)
             self._top_layout.addWidget(self.menu_button, 0, 0)
             self._top_layout.addWidget(self.breadcrumb, 0, 1)
-            self._top_layout.addWidget(self.runtime_identity, 1, 0, 1, 2)
+            self._top_layout.addWidget(
+                self.runtime_identity, 1, 0, 1, 2, Qt.AlignmentFlag.AlignLeft
+            )
             self._top_layout.setColumnStretch(0, 0)
             self._top_layout.setColumnStretch(1, 1)
             self.breadcrumb.setWordWrap(True)
-            self.runtime_identity.setWordWrap(True)
+            self.runtime_identity.setWordWrap(False)
         else:
             self._top_layout.removeWidget(self.menu_button)
-            self._top_layout.setContentsMargins(26, 10, 26, 10)
+            self._top_layout.setContentsMargins(20, 8, 20, 8)
             self._top_layout.addWidget(self.breadcrumb, 0, 0)
             self._top_layout.addWidget(self.runtime_identity, 0, 1)
             self._top_layout.setColumnStretch(0, 1)
             self._top_layout.setColumnStretch(1, 0)
             self.breadcrumb.setWordWrap(False)
             self.runtime_identity.setWordWrap(False)
+        self._update_back_row()
+        self._place_activity()
+
+    def _update_back_row(self) -> None:
+        back = self._page != "runs"
+        self._back_row.setVisible(back)
+        self.back_to_conversation.setVisible(back)
 
     def _nav_button(self, page: str) -> QPushButton:
         button = KeyboardActionButton(PAGES[page])
-        button.setIcon(line_icon(self._nav_icon(page)))
-        button.setIconSize(QSize(18, 18))
+        button.setIcon(line_icon(self._nav_icon(page), "mute"))
+        button.setIconSize(QSize(15, 15))
         button.setObjectName("navButton")
         button.setAccessibleName(f"{PAGES[page]} 화면")
         button.clicked.connect(lambda: self.navigate(page, ""))
@@ -445,7 +577,12 @@ class GuardWindow(QMainWindow):
 
     @staticmethod
     def _nav_icon(page: str) -> str:
-        return {"policy": "shield", "runs": "play", "server_add": "plus"}.get(page, page)
+        return {
+            "policy": "shield",
+            "runs": "chat",
+            "results": "panel",
+            "server_add": "plus",
+        }.get(page, page)
 
     def set_overview_snapshot(self, snapshot: OverviewSnapshot) -> None:
         """Called on the Qt thread with a bridge-approved public projection."""
@@ -491,7 +628,7 @@ class GuardWindow(QMainWindow):
         self.log_page.set_detail(request, snapshot)
 
     def set_runtime_identity(self, identity: RuntimeIdentity) -> None:
-        """Show only modes explicitly confirmed by trusted app bootstrap."""
+        """Show only the model mode explicitly confirmed by trusted app bootstrap."""
 
         labels = {
             RuntimeMode.UNCONFIGURED: "미설정",
@@ -499,10 +636,7 @@ class GuardWindow(QMainWindow):
             RuntimeMode.REAL: "real",
             RuntimeMode.CODEX: "Codex",
         }
-        self.runtime_identity.setText(
-            f"AGT: {labels.get(identity.agt_mode, '미확인')} · "
-            f"모델: {labels.get(identity.model_mode, '미확인')}"
-        )
+        self.runtime_identity.setText(f"모델: {labels.get(identity.model_mode, '미확인')}")
 
     def set_task_status(self, status: TaskStatus | None) -> None:
         """Render a backend-confirmed status; no Task control is inferred here."""
@@ -522,13 +656,16 @@ class GuardWindow(QMainWindow):
             self.log_page.select_call(target_id)
         elif page == "approvals" and target_id:
             self.approval_page.select_approval(target_id)
-        self.breadcrumb.setText(f"Workspace / {PAGES[page]}")
-        self.back_to_conversation.setVisible(page != "runs")
+        self.breadcrumb.setText(PAGES[page])
+        if page == "results":
+            self.results_scope.setText(self.sessions.current.title)
+        self._update_back_row()
+        self._place_activity()
         if page == "runs":
             self.sessions.return_to_conversation()
         for key, button in self._nav_buttons.items():
             button.setProperty("selected", key == page)
-            button.setIcon(line_icon(self._nav_icon(key), "#6658d7" if key == page else "#7b8296"))
+            button.setIcon(line_icon(self._nav_icon(key), "ink" if key == page else "mute"))
             button.style().unpolish(button)
             button.style().polish(button)
         for key, action in self._menu_actions.items():

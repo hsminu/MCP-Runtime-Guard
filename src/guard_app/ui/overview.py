@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QProgressBar,
     QScrollArea,
     QSizePolicy,
@@ -16,7 +17,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .icons import line_icon
 from .models import (
     AttentionItem,
     FlowBucket,
@@ -33,10 +33,10 @@ from .presentation import (
     MISSING,
     PAGES,
     REASONS,
-    REGISTRY_STATUSES,
+    REGISTRY_NAMES,
     REQUEST_STATUSES,
     SESSION_STATUSES,
-    TIERS,
+    TIER_NAMES,
     TRANSPORTS,
     fixed,
     format_kst,
@@ -52,17 +52,18 @@ def _clear(layout: QVBoxLayout | QGridLayout) -> None:
             widget.deleteLater()
 
 
-def _section_header(title: str, subtitle: str) -> QWidget:
+def _section_header(title: str, subtitle: str = "") -> QWidget:
     header = QWidget()
     layout = QVBoxLayout(header)
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(3)
+    layout.setSpacing(4)
     layout.addWidget(plain_label(title, name="sectionTitle"))
-    layout.addWidget(plain_label(subtitle, name="secondary"))
+    if subtitle:
+        layout.addWidget(plain_label(subtitle, name="secondary"))
     return header
 
 
-def _flex_label(text: str, *, name: str | None = None) -> QWidget:
+def _flex_label(text: str, *, name: str | None = None) -> QLabel:
     label = plain_label(text, name=name)
     label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     label.setMinimumWidth(0)
@@ -75,40 +76,37 @@ def _field(title: str, value: str) -> QWidget:
     row.setObjectName("infoField")
     layout = QVBoxLayout(row)
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(1)
+    layout.setSpacing(2)
     layout.addWidget(plain_label(title, name="secondary"))
     layout.addWidget(_flex_label(value))
     return row
 
 
-class MetricCard(QFrame):
+class MetricRow(QFrame):
+    """One line of the overview's status list: what, how many, and what it counts.
+
+    A list of rows instead of icon cards with a big number (the dashboard
+    template that reads as generated)."""
+
     navigate_requested = Signal(str, str)
 
     def __init__(self, title: str, page: str, note: str) -> None:
         super().__init__()
-        self.setObjectName("metricCard")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setObjectName("metricRow")
         self._note = note
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 16)
-        layout.setSpacing(12)
-        heading = QHBoxLayout()
-        heading.addWidget(plain_label(title, name="cardTitle"), 1)
-        badge = plain_label(name="metricIcon")
-        badge.setFixedSize(34, 34)
-        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge.setPixmap(line_icon(page, "#7566d5").pixmap(QSize(18, 18)))
-        heading.addWidget(badge)
-        layout.addLayout(heading)
-        self.value = plain_label("—", name="metricValue")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 8, 12, 8)
+        layout.setSpacing(16)
+        layout.addWidget(plain_label(title, name="cardTitle", wrap=False))
+        self.value = plain_label("—", name="metricValue", wrap=False)
         layout.addWidget(self.value)
-        self.caption = plain_label("조회 기능 미연결", name="secondary")
-        layout.addWidget(self.caption)
-        link = KeyboardActionButton(f"{page_label(page)} 보기 →")
+        self.caption = _flex_label("조회 기능 미연결", name="secondary")
+        layout.addWidget(self.caption, 1)
+        link = KeyboardActionButton("보기")
         link.setObjectName("linkButton")
         link.setAccessibleName(f"{title}: {page_label(page)} 보기")
         link.clicked.connect(lambda: self.navigate_requested.emit(page, ""))
-        layout.addWidget(link, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(link)
 
     def set_count(
         self,
@@ -148,8 +146,8 @@ class ServerCard(QFrame):
         )
         layout.addWidget(_flex_label(public_display_text(server.server_id), name="mono"))
         layout.addWidget(SecurityLabel(server.max_label))
-        layout.addWidget(_field("신뢰 경계 · tier", fixed(TIERS, server.tier)))
-        layout.addWidget(_field("등록 상태", fixed(REGISTRY_STATUSES, server.registry_status)))
+        layout.addWidget(_field("신뢰 경계", fixed(TIER_NAMES, server.tier)))
+        layout.addWidget(_field("등록 상태", fixed(REGISTRY_NAMES, server.registry_status)))
         layout.addWidget(_field("세션 상태", fixed(SESSION_STATUSES, server.session_status)))
         layout.addWidget(_field("연결 방식", fixed(TRANSPORTS, server.transport)))
         link = KeyboardActionButton("서버 상세 보기 →")
@@ -167,7 +165,7 @@ class AttentionCard(QFrame):
         super().__init__()
         self.setObjectName("attentionCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(17, 15, 17, 15)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
         layout.addWidget(plain_label(fixed(ATTENTION_KINDS, item.kind), name="cardTitle"))
         layout.addWidget(_field("사유", fixed(REASONS, item.reason_code)))
@@ -200,8 +198,8 @@ class RecentCallCard(QFrame):
         super().__init__()
         self.setObjectName("recentCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(17, 14, 17, 14)
-        layout.setSpacing(6)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
         layout.addWidget(_flex_label(public_display_text(call.tool_name), name="cardTitle"))
         layout.addWidget(
             _field(
@@ -224,8 +222,8 @@ class FlowCard(QFrame):
         super().__init__()
         self.setObjectName("flowCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 8, 14, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
         row = QHBoxLayout()
         row.setSpacing(8)
         start = plain_label(format_kst(bucket.starts_at), name="secondary")
@@ -249,7 +247,6 @@ class OverviewPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("overviewPage")
-        self._metric_columns = 0
         self._server_columns = 0
         self._server_cards: list[ServerCard] = []
         self._server_surface: Surface[tuple[ServerSummary, ...]] = Surface()
@@ -264,13 +261,9 @@ class OverviewPage(QWidget):
         self._snapshot: OverviewSnapshot | None = None
         outer = QVBoxLayout(self)
         self._outer_layout = outer
-        outer.setContentsMargins(26, 28, 26, 42)
-        outer.setSpacing(22)
-        outer.addWidget(plain_label("OVERVIEW", name="eyebrow"))
+        outer.setContentsMargins(24, 24, 24, 40)
+        outer.setSpacing(24)
         outer.addWidget(plain_label("MCP 운영 현황", name="pageTitle"))
-        outer.addWidget(
-            plain_label("연결 상태와 지금 처리가 필요한 요청부터 확인해.", name="secondary")
-        )
         shortcut = QFrame()
         shortcut.setObjectName("attentionCard")
         shortcut_layout = QHBoxLayout(shortcut)
@@ -286,21 +279,26 @@ class OverviewPage(QWidget):
         shortcut_layout.addWidget(self.attention_shortcut)
         outer.addWidget(shortcut)
 
-        self.metrics_grid = QGridLayout()
-        self.metrics_grid.setSpacing(12)
-        self.metric_cards = [
-            MetricCard("활성 MCP 서버", "servers", "Registry ACTIVE로 확정된 서버 수"),
-            MetricCard("승인 대기", "approvals", "현재 유효한 승인 요청 수"),
-            MetricCard("차단된 호출", "logs", "지정한 감사 집계 기간의 차단 호출 수"),
+        self.metric_list = QFrame()
+        self.metric_list.setObjectName("metricList")
+        metric_layout = QVBoxLayout(self.metric_list)
+        metric_layout.setContentsMargins(0, 0, 0, 0)
+        metric_layout.setSpacing(0)
+        self.metric_rows = [
+            MetricRow("활성 MCP 서버", "servers", "Registry ACTIVE로 확정된 서버 수"),
+            MetricRow("승인 대기", "approvals", "현재 유효한 승인 요청 수"),
+            MetricRow("차단된 호출", "logs", "지정한 감사 집계 기간의 차단 호출 수"),
         ]
-        for card in self.metric_cards:
-            card.navigate_requested.connect(self.navigate_requested)
-        outer.addLayout(self.metrics_grid)
+        for row in self.metric_rows:
+            row.navigate_requested.connect(self.navigate_requested)
+            metric_layout.addWidget(row)
+        self.metric_rows[-1].setProperty("last", True)
+        outer.addWidget(self.metric_list)
         self.metrics_state = plain_label("조회 기능 미연결", name="secondary")
         outer.addWidget(self.metrics_state)
 
         outer.addWidget(
-            _section_header("연결된 MCP 서버", "세션 연결과 등록 ACTIVE는 서로 다른 상태야.")
+            _section_header("연결된 MCP 서버", "세션 연결과 등록 ACTIVE는 서로 다른 상태임.")
         )
         self.servers_state = StateMessage()
         outer.addWidget(self.servers_state)
@@ -314,31 +312,29 @@ class OverviewPage(QWidget):
         self.all_servers_button.clicked.connect(lambda: self.navigate_requested.emit("servers", ""))
         outer.addWidget(self.all_servers_button, 0, Qt.AlignmentFlag.AlignLeft)
 
-        self.attention_header = _section_header(
-            "지금 확인할 항목", "백엔드가 확인한 미해결 항목과 이동 대상을 보여줘."
-        )
+        self.attention_header = _section_header("지금 확인할 항목")
         outer.addWidget(self.attention_header)
         self.attention_state = StateMessage()
         outer.addWidget(self.attention_state)
         self.attention_layout = QVBoxLayout()
-        self.attention_layout.setSpacing(10)
+        self.attention_layout.setSpacing(12)
         outer.addLayout(self.attention_layout)
         self.attention_pager = self._make_pager("attention")
         outer.addWidget(self.attention_pager)
 
         outer.addWidget(
-            _section_header("최근 도구 호출", "공개가 허용된 호출 메타데이터만 표시해.")
+            _section_header("최근 도구 호출", "공개가 허용된 호출 메타데이터만 표시함.")
         )
         self.calls_state = StateMessage()
         outer.addWidget(self.calls_state)
         self.calls_layout = QVBoxLayout()
-        self.calls_layout.setSpacing(10)
+        self.calls_layout.setSpacing(12)
         outer.addLayout(self.calls_layout)
         self.calls_pager = self._make_pager("calls")
         outer.addWidget(self.calls_pager)
 
         outer.addWidget(
-            _section_header("호출 흐름", "참고용 집계 · 백엔드 시계열이 제공될 때만 표시해.")
+            _section_header("호출 흐름", "참고용 집계 · 백엔드 시계열이 제공될 때만 표시함.")
         )
         self.flow_state = StateMessage()
         outer.addWidget(self.flow_state)
@@ -499,8 +495,8 @@ class OverviewPage(QWidget):
         ready = surface.state in (LoadState.READY, LoadState.STALE) and surface.value is not None
         totals = surface.value if ready and surface.value is not None else OverviewTotals()
         unavailable = StateMessage._MESSAGES.get(surface.state, "상태 확인 필요")
-        self.metric_cards[0].set_count(totals.active_servers, ready=ready, unavailable=unavailable)
-        self.metric_cards[1].set_count(
+        self.metric_rows[0].set_count(totals.active_servers, ready=ready, unavailable=unavailable)
+        self.metric_rows[1].set_count(
             totals.pending_approvals, ready=ready, unavailable=unavailable
         )
         period = MISSING
@@ -513,7 +509,7 @@ class OverviewPage(QWidget):
                 and totals.blocked_period_start <= totals.blocked_period_end
             ):
                 period = f"{start} ~ {end}"
-        self.metric_cards[2].set_count(
+        self.metric_rows[2].set_count(
             totals.blocked_calls,
             ready=ready,
             detail=f"집계 기간: {period}" if ready else None,
@@ -563,7 +559,7 @@ class OverviewPage(QWidget):
         self.servers_state.setVisible(show_message)
         if show_message:
             if ready and not self._server_cards and surface.state == LoadState.READY:
-                self.servers_state.set_message("연결된 MCP 서버가 없어")
+                self.servers_state.set_message("연결된 MCP 서버가 없음")
             else:
                 self.servers_state.set_state(surface.state, as_of=surface.as_of)
 
@@ -592,7 +588,7 @@ class OverviewPage(QWidget):
         self.attention_shortcut.setEnabled(ready)
         self.attention_state.setVisible(not ready or not items or surface.state == LoadState.STALE)
         if not items and ready and surface.state == LoadState.READY:
-            self.attention_state.set_message("지금 확인할 미해결 항목이 없어")
+            self.attention_state.set_message("지금 확인할 미해결 항목이 없음")
         else:
             self.attention_state.set_state(surface.state, as_of=surface.as_of)
 
@@ -620,7 +616,7 @@ class OverviewPage(QWidget):
         for bucket in buckets[:24]:
             self.flow_layout.addWidget(FlowCard(bucket, maximum))
         if len(buckets) > 24:
-            self.flow_layout.addWidget(plain_label("최근 24개 구간만 표시해.", name="secondary"))
+            self.flow_layout.addWidget(plain_label("최근 24개 구간만 표시함.", name="secondary"))
         self.flow_state.setVisible(not ready or not buckets or surface.state == LoadState.STALE)
         self.flow_state.set_state(surface.state, as_of=surface.as_of)
 
@@ -629,7 +625,7 @@ class OverviewPage(QWidget):
         self._reflow()
 
     def _server_preview_limit(self) -> int:
-        margin = 12 if self.width() < 500 else 26
+        margin = 12 if self.width() < 500 else 24
         content_width = self.width() - 2 * margin
         return 4 if content_width >= 1180 else 2 if content_width >= 610 else 1
 
@@ -641,17 +637,12 @@ class OverviewPage(QWidget):
             self._render_servers(self._server_surface)
             server_rebuilt = True
             self._schedule_card_focus_restore(focused)
-        margin = 12 if compact else 26
+        margin = 12 if compact else 24
         self._outer_layout.setContentsMargins(
-            margin, 20 if compact else 28, margin, 32 if compact else 42
+            margin, 20 if compact else 24, margin, 32 if compact else 40
         )
         width = self.width() - 2 * margin
-        metric_columns = 3 if width >= 900 else 2 if width >= 610 else 1
         server_columns = 4 if width >= 1180 else 2 if width >= 610 else 1
-        if force or metric_columns != self._metric_columns:
-            self._metric_columns = metric_columns
-            for index, card in enumerate(self.metric_cards):
-                self.metrics_grid.addWidget(card, index // metric_columns, index % metric_columns)
         if force or server_rebuilt or server_columns != self._server_columns:
             self._server_columns = server_columns
             for index, server_card in enumerate(self._server_cards):

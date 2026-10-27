@@ -36,7 +36,7 @@ from .presentation import (
     RUN_RESULTS,
     task_label_text,
 )
-from .task_status import FINAL_STATUSES, status_detail, status_title
+from .task_status import FINAL_STATUSES, status_code, status_detail, status_title
 from .widgets import KeyboardActionButton, plain_label
 
 _STOP_NAMES = {ControlAction.CANCEL: "작업 취소", ControlAction.EMERGENCY_HALT: "긴급 차단"}
@@ -45,17 +45,17 @@ _RUN = "run"
 _STATE_MESSAGES = {
     BridgeState.STARTING: LIFECYCLE_MESSAGES["STARTING"],
     BridgeState.READY: LIFECYCLE_MESSAGES["READY"],
-    BridgeState.FAILED: "백엔드 오류로 멈췄어 · 더 실행할 수 없어.",
+    BridgeState.FAILED: "백엔드 오류로 멈춤 · 더 실행할 수 없음.",
     BridgeState.CLOSING: LIFECYCLE_MESSAGES["CLOSING"],
     BridgeState.CLOSED: LIFECYCLE_MESSAGES["CLOSED"],
 }
 _NO_TASK_SUMMARY: dict[BridgeState | None, str] = {
-    None: "백엔드 시작 중 · 아직 실행할 수 없어",
-    BridgeState.STARTING: "백엔드 시작 중 · 아직 실행할 수 없어",
-    BridgeState.READY: "백엔드 준비 완료 · 표시할 Task가 없어 실행할 수 없어",
-    BridgeState.FAILED: "백엔드 시작 실패 · 실행할 수 없어",
-    BridgeState.CLOSING: "백엔드 종료 중 · 실행할 수 없어",
-    BridgeState.CLOSED: "백엔드 종료됨 · 실행할 수 없어",
+    None: "백엔드 시작 중 · 아직 실행할 수 없음",
+    BridgeState.STARTING: "백엔드 시작 중 · 아직 실행할 수 없음",
+    BridgeState.READY: "백엔드 준비 완료 · 표시할 Task가 없어 실행할 수 없음",
+    BridgeState.FAILED: "백엔드 시작 실패 · 실행할 수 없음",
+    BridgeState.CLOSING: "백엔드 종료 중 · 실행할 수 없음",
+    BridgeState.CLOSED: "백엔드 종료됨 · 실행할 수 없음",
 }
 
 
@@ -83,13 +83,15 @@ class RuntimePanel(QWidget):
         self._scope: tuple[str, int] | None = None
         self._snapshots: dict[tuple[str, int], TaskProjection] = {}
         layout = QVBoxLayout(self)
+        self._sections = layout
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(16)
+        layout.setSpacing(0)
+        # Flat sections divided by hairlines, not boxed cards (no card in a card).
         session = QFrame()
         session.setObjectName("runtimeCard")
         session_layout = QVBoxLayout(session)
-        session_layout.setContentsMargins(20, 18, 20, 18)
-        session_layout.setSpacing(14)
+        session_layout.setContentsMargins(0, 16, 0, 16)
+        session_layout.setSpacing(12)
         session_layout.addWidget(plain_label("실행 컨트롤", name="cardTitle"))
         self.summary = plain_label(_NO_TASK_SUMMARY[None], name="secondary")
         self.summary.setMinimumWidth(0)
@@ -106,11 +108,11 @@ class RuntimePanel(QWidget):
         approval = QFrame()
         approval.setObjectName("approvalCard")
         approval_layout = QVBoxLayout(approval)
-        approval_layout.setContentsMargins(20, 18, 20, 18)
+        approval_layout.setContentsMargins(0, 16, 0, 16)
         approval_layout.setSpacing(12)
         approval_layout.addWidget(plain_label("승인 검토", name="cardTitle"))
         approval_layout.addWidget(
-            plain_label("요청의 수신처와 전체 인자를 확인한 뒤 승인해.", name="secondary")
+            plain_label("요청의 수신처와 전체 인자를 확인한 뒤 승인하세요.", name="secondary")
         )
         self.review_button = KeyboardActionButton("승인 사본 확인")
         self.review_button.set_visual(icon="eye", variant="soft")
@@ -133,17 +135,18 @@ class RuntimePanel(QWidget):
         self.detail.setAccessibleName("승인 사본 상세")
         self.detail.setReadOnly(True)
         self.detail.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.detail.setMinimumHeight(150)
         self.detail.setPlaceholderText(
-            "승인 요청이 도착하면 ‘승인 사본 확인’을 눌러 내용을 확인해."
+            "승인 요청이 도착하면 ‘승인 사본 확인’을 눌러 내용을 확인하세요."
         )
         approval_layout.addWidget(self.detail)
+        self._fit_detail()
         layout.addWidget(approval)
 
         stop = QFrame()
         stop.setObjectName("stopCard")
+        self._stop_section = stop
         self._stop_actions = QGridLayout(stop)
-        self._stop_actions.setContentsMargins(20, 14, 20, 14)
+        self._stop_actions.setContentsMargins(0, 16, 0, 0)
         self._stop_actions.setSpacing(8)
         self._stop_label = plain_label("작업 제어", name="secondary")
         layout.addWidget(stop)
@@ -199,6 +202,13 @@ class RuntimePanel(QWidget):
             self.cancel_button,
             self.halt_button,
         )
+
+    def pin_stop_section(self) -> QFrame:
+        """Hand the stop controls to a host that pins them under its scroll
+        area, so cancel and emergency halt are never scrolled out of view."""
+        self._sections.removeWidget(self._stop_section)
+        self._stop_actions.setContentsMargins(24, 12, 24, 12)
+        return self._stop_section
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -286,25 +296,32 @@ class RuntimePanel(QWidget):
         self.state_changed.emit()
         self.selected_snapshot_changed.emit(self.current)
 
+    def _show_message(self, text: str) -> None:
+        # An empty status line takes no room in the flat section.
+        self.message.setText(text)
+        self.message.setVisible(bool(text))
+
     def set_scope(self, scope: tuple[str, int] | None) -> None:
         """Approval copies and controls are bound to the selected session."""
         self._scope_enabled = True
         if scope != self._scope:
             self._clear_review()
-            self.message.setText(
-                self._messages.get(scope, "선택한 세션의 상태를 표시해.")
+            self._show_message(
+                self._messages.get(scope, "")
                 if scope is not None
-                else "새 세션 · 시작을 기다리는 중이야."
+                else "새 세션 · 시작을 기다리는 중임."
             )
         self._scope = scope
         self.current = self._snapshots.get(scope) if scope is not None else None
         if self.current is not None:
             self._render_snapshot(self.current)
         else:
-            self.summary.setText("새 세션 · Codex 연결을 확인한 뒤 세션을 시작해.")
+            self.summary.setText("새 세션 · Codex 연결을 확인한 뒤 세션을 시작하세요.")
         self._refresh()
 
-    def send_message(self, task_id: str, epoch: int, text: str, command_id: str) -> None:
+    def send_message(
+        self, task_id: str, epoch: int, text: str, command_id: str, effort: str | None = None
+    ) -> None:
         current = self.current
         if (
             current is None
@@ -319,21 +336,30 @@ class RuntimePanel(QWidget):
         self._clear_review()
         self._commands[command_id] = "message"
         self._command_scopes[command_id] = (task_id, epoch)
-        self.message.setText("메시지 요청됨 · 백엔드 결과 대기")
+        self._show_message("메시지 요청됨 · 백엔드 결과 대기")
         self._messages[(task_id, epoch)] = self.message.text()
         self._refresh()
-        self.bridge.request_message(task_id, epoch, text, command_id=command_id)
+        self.bridge.request_message(task_id, epoch, text, command_id=command_id, effort=effort)
 
     def _clear_review(self) -> None:
         self._review_command = None
         self._reviewed = None
         self.detail.clear()
+        self._fit_detail()
+
+    def _fit_detail(self) -> None:
+        """Empty, the copy box is a two-line hint so the stop controls below
+        stay in view; a loaded copy gets room to read and scrolls inside.
+        It is never hidden: focus parks here when a button is disabled."""
+        self.detail.ensurePolished()
+        lines = 12 if self.detail.toPlainText() else 2
+        self.detail.setFixedHeight(lines * self.detail.fontMetrics().lineSpacing() + 24)
 
     def _run(self) -> None:
         if not self.run_button.isEnabled() or self.current is None:
             return
         self._clear_review()
-        self.message.setText("실행 요청됨 · 백엔드 결과 대기")
+        self._show_message("실행 요청됨 · 백엔드 결과 대기")
         command_id = uuid4().hex
         self._commands[command_id] = _RUN
         self._command_scopes[command_id] = (self.current.task_id, self.current.epoch)
@@ -354,7 +380,7 @@ class RuntimePanel(QWidget):
         if target is None:
             return
         self._clear_review()
-        self.message.setText("제어 요청됨 · 적용 여부 확인 중")
+        self._show_message("제어 요청됨 · 적용 여부 확인 중")
         command_id = uuid4().hex
         self._commands[command_id] = action
         self._command_scopes[command_id] = (self.current.task_id, self.current.epoch)
@@ -369,9 +395,9 @@ class RuntimePanel(QWidget):
         if not self._ready:
             self._clear_review()
         text = LIFECYCLE_MESSAGES.get(event.code) or _STATE_MESSAGES.get(
-            event.state, "백엔드 상태를 확인하지 못했어 · 아직 실행할 수 없어."
+            event.state, "백엔드 상태를 확인하지 못함 · 아직 실행할 수 없음."
         )
-        self.message.setText(f"{text}\n내부 코드: {event.code}")
+        self._show_message(f"{text}\n내부 코드: {event.code}")
         if self.current is None:
             # Without a Task snapshot the summary is the only status line, so it
             # must follow the backend state instead of staying at "starting".
@@ -389,23 +415,25 @@ class RuntimePanel(QWidget):
 
     def _render_snapshot(self, snapshot: TaskProjection) -> None:
         lines = [
-            f"Task: {snapshot.task_id} · {status_title(snapshot.status)}",
+            # The results page is the session's detail, so the enum stays here.
+            f"Task: {snapshot.task_id} · {status_title(snapshot.status)} "
+            f"({status_code(snapshot.status)})",
             task_label_text(snapshot.label, snapshot.unclassified),
-            f"AGT: {snapshot.agt_mode} · 모델: {snapshot.model_mode}",
+            f"모델: {snapshot.model_mode}",
             f"호스트 dispatch: {_count(snapshot.host_dispatch)} "
             f"· 수신 부작용: {_count(snapshot.receiver_effect)}",
         ]
         if snapshot.status in FINAL_STATUSES:
             lines.append(status_detail(snapshot.status))
         elif not snapshot.model_ready:
-            lines.append("모델 연결 미완료 · 현재 세션에서는 메시지를 보낼 수 없어.")
+            lines.append("모델 연결 미완료 · 현재 세션에서는 메시지를 보낼 수 없음.")
         elif snapshot.runner_state in ("model_error", "guard_error", "stopped"):
-            lines.append("Runner가 멈췄어 · 자동 재전송하지 않아. 새 세션에서 다시 시작해.")
+            lines.append("Runner가 멈춤 · 자동 재전송하지 않음. 새 세션에서 다시 시작하세요.")
         elif snapshot.status is TaskStatus.RUNNING and not snapshot.can_advance:
             # RUNNING with a disabled run button must not look like a stuck UI.
             lines.append(
-                "다음 사용자 지시를 기다리는 중이라 실행할 모델 단계가 없어. "
-                "여기서 끝내려면 '작업 취소'를 눌러."
+                "다음 사용자 지시를 기다리는 중이라 실행할 모델 단계가 없음. "
+                "여기서 끝내려면 '작업 취소'를 누르세요."
             )
         self.summary.setText("\n".join(lines))
 
@@ -427,6 +455,7 @@ class RuntimePanel(QWidget):
                 + review.arguments_bytes.decode("utf-8")
             )
         )
+        self._fit_detail()
         self._reviewed = review.approval_id
         self._refresh()
 
@@ -452,17 +481,17 @@ class RuntimePanel(QWidget):
         elif event.stage is CommandStage.REJECTED:
             if selected:
                 self._clear_review()
-            text = "요청이 처리되지 않았어 · 백엔드 상태를 확인한 뒤 다시 시도해."
+            text = "요청이 처리되지 않음 · 백엔드 상태를 확인한 뒤 다시 시도하세요."
         else:
             if selected:
                 self._clear_review()
-            text = "적용 여부를 확인하지 못했어 · 위 Task 상태를 확인해."
+            text = "적용 여부를 확인하지 못함 · 위 Task 상태를 확인하세요."
         # Internal codes stay available for support, never as the message itself.
         message = f"{text}\n내부 코드: {event.code}"
         if scope is not None:
             self._messages[scope] = message
         if selected:
-            self.message.setText(message)
+            self._show_message(message)
         self._refresh()
 
     def _result_text(
@@ -470,11 +499,11 @@ class RuntimePanel(QWidget):
     ) -> str:
         current = snapshot or self.current
         if code == "MESSAGE_UNAVAILABLE":
-            return "현재 Task가 메시지를 받을 수 없어. 백엔드 상태를 확인해."
+            return "현재 Task가 메시지를 받을 수 없음. 백엔드 상태를 확인하세요."
         if code == "SESSION_STOP_RETURNED":
             if current is not None and current.status is TaskStatus.HALTED:
-                return "작업 정지를 확인했어. 새 세션에서 다시 시작해."
-            return "정지 적용 여부를 확인하지 못했어. Task 상태를 확인해."
+                return "작업 정지를 확인함. 새 세션에서 다시 시작하세요."
+            return "정지 적용 여부를 확인하지 못함. Task 상태를 확인하세요."
         if code == "RUNNER_UNAVAILABLE":
             return RUN_RESULTS[code]
         name = _STOP_NAMES.get(action) if isinstance(action, ControlAction) else None
@@ -487,9 +516,9 @@ class RuntimePanel(QWidget):
             )
             if code.startswith("CONTROL_") and stopped:
                 return (
-                    f"{name} 완료 · Task를 정지해 이후 호출은 실행되지 않아. "
-                    "이미 전송된 쓰기는 수신됐을 수 있어."
+                    f"{name} 완료 · Task를 정지해 이후 호출은 실행되지 않음. "
+                    "이미 전송된 쓰기는 수신됐을 수 있음."
                 )
-            return f"{name} 적용을 확인하지 못했어 · 위 Task 상태를 확인해."
+            return f"{name} 적용을 확인하지 못함 · 위 Task 상태를 확인하세요."
         results = RUN_RESULTS if action in (_RUN, "message") else APPROVAL_RESULTS
-        return results.get(code, "백엔드 응답을 해석하지 못했어 · 위 Task 상태를 확인해.")
+        return results.get(code, "백엔드 응답을 해석하지 못함 · 위 Task 상태를 확인하세요.")

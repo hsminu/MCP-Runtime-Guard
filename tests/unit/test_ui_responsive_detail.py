@@ -216,6 +216,7 @@ def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None
     long_id = "synthetic-" + "x" * 100
     window = GuardWindow()
     window.resize(320, 400)
+    window.navigate("overview")
     window.set_overview_snapshot(
         OverviewSnapshot(
             servers=Surface(

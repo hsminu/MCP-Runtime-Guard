@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import ClassVar
 
 import shiboken6
-from PySide6.QtCore import QPointF, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QTableWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 from .icons import line_icon
 from .models import LoadState
 from .presentation import LABELS, format_kst
+from .style import TOKENS
 
 
 def plain_label(text: str = "", *, name: str | None = None, wrap: bool = True) -> QLabel:
@@ -35,6 +37,12 @@ def plain_label(text: str = "", *, name: str | None = None, wrap: bool = True) -
     if name:
         label.setObjectName(name)
     return label
+
+
+def table_row_height(table: QTableWidget, lines: int) -> int:
+    """A row fits its lines of text plus the item padding, and no more."""
+    table.ensurePolished()
+    return lines * table.fontMetrics().lineSpacing() + 14
 
 
 def size_detail_for_viewport(dialog: QDialog, width: int, height: int) -> None:
@@ -60,11 +68,64 @@ class SelectionBox(QComboBox):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#7b8296" if self.isEnabled() else "#b0b6c4"), 1.5))
+        painter.setPen(QPen(QColor(TOKENS["mute"] if self.isEnabled() else TOKENS["subtle"]), 1.5))
         x = 18 if self.layoutDirection() == Qt.LayoutDirection.RightToLeft else self.width() - 18
         y = self.height() / 2
         painter.drawLine(QPointF(x - 3, y - 1.5), QPointF(x, y + 1.5))
         painter.drawLine(QPointF(x, y + 1.5), QPointF(x + 3, y - 1.5))
+        painter.end()
+
+
+class IconMark(QLabel):
+    """A fixed icon painted over the label's styled box, in the current theme."""
+
+    def __init__(self, icon: str, role: str, box: int, size: int, *, name: str) -> None:
+        super().__init__()
+        self.setObjectName(name)
+        self.setFixedSize(box, box)
+        self._icon = line_icon(icon, role)
+        self._size = size
+
+    def set_icon(self, icon: str, role: str) -> None:
+        self._icon = line_icon(icon, role)
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        side = self._size
+        corner = QPoint((self.width() - side) // 2, (self.height() - side) // 2)
+        self._icon.paint(painter, QRect(corner, QSize(side, side)))
+        painter.end()
+
+
+class StatusPill(QLabel):
+    """A status in words inside a tinted pill, led by a dot in the same tone.
+
+    Tones: live (running), attn (needs a person), deny (stopped or blocked),
+    ok, neutral. The words always carry the meaning; color only repeats it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("statusPill")
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self.set_status("", "neutral")
+
+    def set_status(self, text: str, tone: str) -> None:
+        self.setText(text)
+        if self.property("tone") != tone:
+            self.setProperty("tone", tone)
+            self.style().unpolish(self)
+            self.style().polish(self)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self.palette().color(self.foregroundRole()))
+        painter.drawEllipse(QPointF(10, self.height() / 2), 3, 3)
         painter.end()
 
 
@@ -78,10 +139,8 @@ class KeyboardActionButton(QPushButton):
 
     def set_visual(self, *, icon: str, variant: str = "default") -> None:
         self.setProperty("variant", variant)
-        color = {"primary": "#ffffff", "soft": "#6658d7", "danger": "#b74455"}.get(
-            variant, "#70798c"
-        )
-        self.setIcon(line_icon(icon, color))
+        roles = {"primary": "on_ink", "soft": "ink", "danger": "danger"}
+        self.setIcon(line_icon(icon, roles.get(variant, "body")))
         self.style().unpolish(self)
         self.style().polish(self)
 
@@ -103,13 +162,17 @@ class KeyboardActionButton(QPushButton):
 class SecurityLabel(QFrame):
     """Maximum receivable label. It is distinct from tier and registry state."""
 
-    def __init__(self, label: str | None = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, label: str | None = None, parent: QWidget | None = None, *, show_code: bool = False
+    ) -> None:
         super().__init__(parent)
+        # Summaries show the Korean word; details also print the enum name.
+        self._show_code = show_code
         self.setObjectName("securityBadge")
         self.setMinimumHeight(78)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(3)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
         self.caption = plain_label("보안 등급 · 최대 수신", name="secondary")
         self.value = plain_label(name="securityValue")
         layout.addWidget(self.caption)
@@ -118,7 +181,8 @@ class SecurityLabel(QFrame):
 
     def set_label(self, label: str | None) -> None:
         korean, english, tone = LABELS.get(label or "", ("미지정", "미제공", "unknown"))
-        self.value.setText(f"{korean} · {english}")
+        self.value.setText(f"{korean} · {english}" if self._show_code else korean)
+        self.value.setToolTip("" if self._show_code or label not in LABELS else english)
         self.value.setAccessibleName(f"보안 등급 최대 수신: {korean}, {english}")
         for widget in (self, self.value):
             widget.setProperty("labelLevel", tone)
@@ -134,14 +198,14 @@ class StateMessage(QFrame):
         LoadState.LOADING: "불러오는 중…",
         LoadState.ERROR: "불러오지 못함 · 새로고침 필요",
         LoadState.STALE: "이전 조회 결과 · 다시 확인 필요",
-        LoadState.READY: "표시할 항목이 없어",
+        LoadState.READY: "표시할 항목이 없음",
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("placeholderCard")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setContentsMargins(16, 12, 16, 12)
         self.message = plain_label(name="stateMessage")
         layout.addWidget(self.message)
         self.set_state(LoadState.UNAVAILABLE)
@@ -172,7 +236,7 @@ class PlainDetailDialog(QDialog):
         self._return_focus: QWidget | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 20)
-        layout.setSpacing(14)
+        layout.setSpacing(16)
         self.heading = plain_label(name="pageTitle")
         self.body = QPlainTextEdit()
         self.body.setReadOnly(True)

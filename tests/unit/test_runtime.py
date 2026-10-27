@@ -53,7 +53,7 @@ def test_human_review_approve_and_shutdown_use_real_mcp(agt_mode, mcp_transport)
         bridge.start()
         wait_until(app, panel.run_button.isEnabled)
         assert panel.current.agt_mode == agt_mode
-        assert f"AGT: {agt_mode}" in panel.summary.text()
+        assert "AGT" not in panel.summary.text()
         panel.run_button.click()
         assert not panel.run_button.isEnabled()
         wait_until(app, panel.review_button.isEnabled)
@@ -94,15 +94,15 @@ def test_agt_denial_explains_result_and_disabled_run_button():
         panel.run_button.click()
         wait_until(app, lambda: not panel._busy)
         message = panel.message.text()
-        assert message.startswith("호출이 차단됐어")
+        assert message.startswith("호출이 차단됨")
         assert message.endswith("내부 코드: RUN_DENIED_QUERY_REQUIRED")
         # R11: the shipped app never feeds the call log page, so do not send
         # the operator there for the reason.
         assert "호출 로그에서" not in message
-        assert "아직 이 화면에 연결되지 않았어" in message
+        assert "아직 이 화면에 연결되지 않음" in message
         assert panel.current.status is TaskStatus.RUNNING and panel.current.receiver_effect == 0
         assert not panel.run_button.isEnabled() and panel.cancel_button.isEnabled()
-        assert "진행 중 · RUNNING" in panel.summary.text()
+        assert "진행 중 (RUNNING)" in panel.summary.text()
         assert "다음 사용자 지시를 기다리는 중" in panel.summary.text()
     finally:
         bridge.close()
@@ -144,7 +144,7 @@ def test_stop_without_confirmed_halt_is_not_reported_as_success():
     panel = RuntimePanel(bridge)
     panel.set_snapshot(TaskProjection("task", 1, TaskStatus.RUNNING, can_advance=True))
     text = panel._result_text(ControlAction.EMERGENCY_HALT, "CONTROL_DENIED_QUERY_REQUIRED")
-    assert text.startswith("긴급 차단 적용을 확인하지 못했어")
+    assert text.startswith("긴급 차단 적용을 확인하지 못함")
     assert "다음 사용자 지시" not in panel.summary.text()  # can_advance: no idle hint
     bridge.close()
     panel.close()
@@ -153,9 +153,9 @@ def test_stop_without_confirmed_halt_is_not_reported_as_success():
 @pytest.mark.parametrize(
     ("action", "code", "start", "fragment"),
     [
-        ("run", "RUN_GUARD_ERROR_QUERY_REQUIRED", "Guard 내부 오류로", "이어서 실행할 수 없어"),
-        ("run", "RUN_WITHHELD_QUERY_REQUIRED", "도구 결과를 공개하지 않았어", "다시 조회된 표시"),
-        ("run", "RUN_STOPPED_QUERY_REQUIRED", "실행이 정지됐어", "새 Task"),
+        ("run", "RUN_GUARD_ERROR_QUERY_REQUIRED", "Guard 내부 오류로", "이어서 실행할 수 없음"),
+        ("run", "RUN_WITHHELD_QUERY_REQUIRED", "도구 결과를 공개하지 않음", "다시 조회된 표시"),
+        ("run", "RUN_STOPPED_QUERY_REQUIRED", "실행이 정지됨", "새 Task"),
         (
             ControlAction.APPROVE,
             "CONTROL_GUARD_ERROR_QUERY_REQUIRED",
@@ -187,7 +187,7 @@ def test_runner_status_codes_have_korean_operator_text(action, code, start, frag
     assert "관리자에게" not in text
     if code == "RUN_WITHHELD_QUERY_REQUIRED":
         assert "계속 실행 중" not in text
-        assert "정지됐어" not in text
+        assert "정지됨" not in text
     assert code not in text  # the code stays a secondary line only
     panel._commands["command"] = action
     panel._command(
@@ -297,8 +297,8 @@ def test_lifecycle_messages_are_current_korean_with_code_secondary():
     bridge.start()
     wait_until(app, lambda: bridge.thread_done)
     app.processEvents()
-    assert panel.summary.text() == "백엔드 시작 실패 · 실행할 수 없어"
-    assert panel.message.text().startswith("백엔드를 시작하지 못했어")
+    assert panel.summary.text() == "백엔드 시작 실패 · 실행할 수 없음"
+    assert panel.message.text().startswith("백엔드를 시작하지 못함")
     assert panel.message.text().endswith("내부 코드: STARTUP_FAILED")
     assert "RAW_MARKER" not in panel.message.text()
     assert not any(button.isEnabled() for button in panel.buttons)

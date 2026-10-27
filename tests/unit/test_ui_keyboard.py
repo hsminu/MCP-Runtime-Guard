@@ -65,7 +65,7 @@ def test_small_window_keeps_navigation_and_runtime_status_available(
         app.processEvents()
         assert window._page == "approvals"
         assert window.width() == 320
-        assert window.breadcrumb.text() == "Workspace / 승인 대기"
+        assert window.breadcrumb.text() == "승인 대기"
 
         window.resize(1100, 700)
         app.processEvents()
@@ -119,12 +119,12 @@ def test_overview_metric_enter_navigates_to_server_page(app: QApplication) -> No
     window = GuardWindow()
     window.show()
     app.processEvents()
-    link = window.overview.metric_cards[0].findChild(QPushButton)
+    link = window.overview.metric_rows[0].findChild(QPushButton)
     assert link is not None
     link.setFocus()
     QTest.keyClick(link, Qt.Key.Key_Return)
     assert window._page == "servers"
-    assert window.breadcrumb.text() == "Workspace / MCP 서버"
+    assert window.breadcrumb.text() == "MCP 서버"
     window.close()
 
 
@@ -270,7 +270,7 @@ def test_keyboard_filter_preserves_visible_selection_and_clears_missing_row(
     assert page.table.rowCount() == 0
     assert page._selected_id() is None
     assert not page.detail_button.isEnabled()
-    assert "일치하는 서버가 없어" in page.state_message.message.text()
+    assert "일치하는 서버가 없음" in page.state_message.message.text()
 
 
 def test_plain_detail_escape_returns_focus_to_opener(app: QApplication) -> None:

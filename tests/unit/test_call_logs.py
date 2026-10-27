@@ -43,7 +43,7 @@ def test_list_distinguishes_unavailable_loading_error_and_empty(app) -> None:
     page.set_calls(Surface(LoadState.ERROR))
     assert "불러오지 못함" in page.state_message.message.text()
     page.set_calls(Surface(LoadState.READY, ()))
-    assert "조회된 호출이 없어" in page.state_message.message.text()
+    assert "조회된 호출이 없음" in page.state_message.message.text()
     assert not page.csv_button.isEnabled()
 
     page.set_calls(Surface(LoadState.READY))

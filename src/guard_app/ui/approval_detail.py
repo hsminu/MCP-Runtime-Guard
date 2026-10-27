@@ -167,11 +167,11 @@ class ApprovalDetailDialog(QDialog):
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(24, 24, 24, 20)
-        self._layout.setSpacing(10)
+        self._layout.setSpacing(12)
         self._layout.addWidget(plain_label("승인 대상 상세", name="pageTitle"))
         explanation = (
-            "비가시 문자와 혼동 가능한 문자는 코드포인트로 표시해. "
-            "표시만 바뀌며 승인 사본은 수정되지 않아."
+            "비가시 문자와 혼동 가능한 문자는 코드포인트로 표시함. "
+            "표시만 바뀌며 승인 사본은 수정되지 않음."
         )
         self.description = plain_label(explanation)
         self._layout.addWidget(self.description)
@@ -219,11 +219,11 @@ class ApprovalDetailDialog(QDialog):
         self.description.setVisible(not compact)
         self._layout.setContentsMargins(
             12 if compact else 24,
-            10 if compact else 24,
+            8 if compact else 24,
             12 if compact else 24,
-            10 if compact else 20,
+            8 if compact else 20,
         )
-        self._layout.setSpacing(6 if compact else 10)
+        self._layout.setSpacing(8 if compact else 12)
 
     def show_value(
         self, value: ApprovalDetailValue, *, return_focus: QWidget | None = None

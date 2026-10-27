@@ -21,19 +21,19 @@ from guard_app.services.bridge import CODEX_MODEL_ID, AccountView
 
 from .widgets import KeyboardActionButton, plain_label
 
-UNAVAILABLE = "Codex 실행 기능이 아직 준비 중이라 지금은 로그인하거나 실행할 수 없어."
+UNAVAILABLE = "Codex 실행 기능이 아직 준비 중이라 지금은 로그인하거나 실행할 수 없음."
 _STATES = {
-    "UNKNOWN": "로그인 상태를 아직 확인하지 않았어.",
-    "SIGNED_OUT": "로그인되어 있지 않아.",
-    "API_KEY": "API 키로 로그인되어 있어.",
-    "CHATGPT": "ChatGPT 계정으로 로그인되어 있어.",
-    "OTHER": "다른 방식으로 로그인되어 있어.",
-    "PENDING_DEVICE": "아래 주소에서 코드를 입력해 로그인을 마쳐. 끝나면 상태가 바뀌어.",
-    "LOGIN_NOT_COMPLETED": "로그인이 완료되지 않았어. 다시 시도해.",
-    "FAILED": "Codex 계정 요청을 처리하지 못했어. 잠시 뒤 다시 확인해.",
+    "UNKNOWN": "로그인 상태를 아직 확인하지 않음.",
+    "SIGNED_OUT": "로그인되어 있지 않음.",
+    "API_KEY": "API 키로 로그인되어 있음.",
+    "CHATGPT": "ChatGPT 계정으로 로그인되어 있음.",
+    "OTHER": "다른 방식으로 로그인되어 있음.",
+    "PENDING_DEVICE": "아래 주소에서 코드를 입력해 로그인을 마치세요. 끝나면 상태가 바뀜.",
+    "LOGIN_NOT_COMPLETED": "로그인이 완료되지 않음. 다시 시도하세요.",
+    "FAILED": "Codex 계정 요청을 처리하지 못함. 잠시 뒤 다시 확인하세요.",
     "UNAVAILABLE": UNAVAILABLE,
 }
-API_KEY_SENT = "API 키로 로그인을 요청했어. 결과를 기다리는 중이야."
+API_KEY_SENT = "API 키로 로그인을 요청함. 결과를 기다리는 중임."
 
 # Hands one key to the bridge's Codex login command; never stores it.
 type ApiKeySender = Callable[[str], object]
@@ -61,8 +61,8 @@ class CodexLoginInfo(QWidget):
         layout.addWidget(plain_label(f"사용 모델: {CODEX_MODEL_ID}", name="secondary"))
         layout.addWidget(
             plain_label(
-                "ChatGPT 기기 코드와 API 키는 모두 Codex 안에서 로그인하는 방식이야. "
-                "자격증명은 Codex가 Windows 자격증명 관리자에 직접 저장해.",
+                "ChatGPT 기기 코드와 API 키는 모두 Codex 안에서 로그인하는 방식임. "
+                "자격증명은 Codex가 Windows 자격증명 관리자에 직접 저장함.",
                 name="secondary",
             )
         )
@@ -100,7 +100,9 @@ class CodexLoginInfo(QWidget):
         key_row.addWidget(self.api_key_input, 1)
         key_row.addWidget(self.api_key_button)
         layout.addLayout(key_row)
-        layout.addWidget(plain_label("Scanner는 아래에서 별도 API 키를 설정해.", name="secondary"))
+        layout.addWidget(
+            plain_label("Scanner는 아래에서 별도 API 키를 설정하세요.", name="secondary")
+        )
         self.set_view(self._view)
 
     @property
@@ -117,9 +119,9 @@ class CodexLoginInfo(QWidget):
         self._view = view
         text = _STATES.get(view.state, _STATES["FAILED"])
         if view.state == "CHATGPT" and view.plan:
-            text = f"ChatGPT 계정으로 로그인되어 있어 · 요금제 {view.plan}"
+            text = f"ChatGPT 계정으로 로그인되어 있음 · 요금제 {view.plan}"
         if view.state == "API_KEY" and self._sent_suffix:
-            text = f"API 키로 로그인되어 있어 · 끝 4자리 {self._sent_suffix}"
+            text = f"API 키로 로그인되어 있음 · 끝 4자리 {self._sent_suffix}"
         elif view.state != "API_KEY":
             self._sent_suffix = ""
         self.status.setText(text)

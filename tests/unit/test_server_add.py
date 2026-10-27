@@ -221,7 +221,7 @@ def test_duplicate_local_click_emits_once_without_claiming_registration(
     assert "unshown-value" not in previews[0].text
     assert form.validated_draft is first_draft
     assert not form.prepare_button.isEnabled()
-    assert "Registry에 등록되지 않았어" in form.status.text()
+    assert "Registry에 등록되지 않음" in form.status.text()
 
     with pytest.raises(FrozenInstanceError):
         previews[0].text = "changed"  # type: ignore[misc]
@@ -407,7 +407,7 @@ def test_b_valid_server_ids_remain_accepted_after_existing_ui_checks(
     form.prepare_button.click()
     assert form.validated_draft is not None
     assert form.validated_draft.server_id == server_id
-    assert "Registry에 등록되지 않았어" in form.status.text()
+    assert "Registry에 등록되지 않음" in form.status.text()
 
 
 def test_editing_server_id_clears_prepared_draft_and_updates_errors_immediately(
@@ -423,7 +423,7 @@ def test_editing_server_id_clears_prepared_draft_and_updates_errors_immediately(
     assert "입력 오류" in form.preview.toPlainText()
 
     form.server_id.setText("")
-    assert form._errors["server_id"].text() == "서버 ID를 입력해."
+    assert form._errors["server_id"].text() == "서버 ID를 입력하세요."
     form.server_id.setText("docs_read")
     assert form._errors["server_id"].text() == ""
     assert form._errors["server_id"].isHidden()

@@ -39,19 +39,19 @@ def app():
 def test_missing_counts_and_failed_query_never_look_like_zero(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
-    assert window.overview.metric_cards[0].value.text() == "미제공"
+    assert window.overview.metric_rows[0].value.text() == "미제공"
     assert "조회 기능 미연결" in window.overview.metrics_state.text()
 
     window.set_overview_snapshot(OverviewSnapshot(totals=Surface(state=LoadState.ERROR)))
-    assert window.overview.metric_cards[0].value.text() == "미제공"
+    assert window.overview.metric_rows[0].value.text() == "미제공"
     assert "불러오지 못함" in window.overview.metrics_state.text()
 
     window.set_overview_snapshot(
         OverviewSnapshot(totals=Surface(state=LoadState.READY, value=OverviewTotals(0, 0, 0)))
     )
-    assert window.overview.metric_cards[0].value.text() == "0건"
-    assert window.overview.metric_cards[1].value.text() == "0건"
-    assert window.overview.metric_cards[2].value.text() == "0건"
+    assert window.overview.metric_rows[0].value.text() == "0건"
+    assert window.overview.metric_rows[1].value.text() == "0건"
+    assert window.overview.metric_rows[2].value.text() == "0건"
 
 
 def test_overview_order_and_server_preview_adapt_to_window_width(app) -> None:
@@ -85,7 +85,7 @@ def test_overview_order_and_server_preview_adapt_to_window_width(app) -> None:
             < layout.indexOf(window.overview.calls_state)
             < layout.indexOf(window.overview.flow_state)
         )
-        assert window.overview._metric_columns == 1
+        assert all(row.isVisibleTo(window.overview) for row in window.overview.metric_rows)
         assert window.overview._server_columns == 1
         assert len(window.overview._server_cards) == 1
         assert "12개 중 1개" in window.overview.server_preview_note.text()
@@ -305,11 +305,9 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
 def test_runtime_mode_is_unconfigured_until_trusted_bootstrap_sets_it(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
-    assert window.runtime_identity.text() == "AGT: 미설정 · 모델: 미설정"
-    window.set_runtime_identity(
-        RuntimeIdentity(agt_mode=RuntimeMode.MOCK, model_mode=RuntimeMode.UNCONFIGURED)
-    )
-    assert window.runtime_identity.text() == "AGT: mock · 모델: 미설정"
+    assert window.runtime_identity.text() == "모델: 미설정"
+    window.set_runtime_identity(RuntimeIdentity(model_mode=RuntimeMode.MOCK))
+    assert window.runtime_identity.text() == "모델: mock"
 
 
 def test_runs_page_only_displays_backend_status_without_controls(app) -> None:
@@ -328,8 +326,8 @@ def test_server_add_navigation_is_local_draft_only(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
     window.navigate("server_add")
-    assert window.breadcrumb.text() == "Workspace / MCP 추가 초안"
-    assert "Registry 등록은 아직 연결되지 않았어" in window.server_add_form.status.text()
+    assert window.breadcrumb.text() == "MCP 추가 초안"
+    assert "Registry 등록은 아직 연결되지 않음" in window.server_add_form.status.text()
     assert window.server_add_form.validated_draft is None
 
 
@@ -363,14 +361,14 @@ def test_connected_server_is_not_inferred_from_active_registration(app) -> None:
             ),
         )
     )
-    assert window.overview.metric_cards[0].value.text() == "1건"
+    assert window.overview.metric_rows[0].value.text() == "1건"
     assert len(window.overview._server_cards) == 1
     card = window.overview._server_cards[0]
     texts = [label.text() for label in card.findChildren(type(window.overview.metrics_state))]
-    assert "미지정 · 미제공" in texts
-    assert "PENDING · 등록 검토 중" in texts
+    assert "미지정" in texts
+    assert "등록 검토 중" in texts
     assert "연결됨" in texts
-    assert "일반 외부 · general_external" in texts
+    assert "일반 외부" in texts
 
 
 def test_attention_deduplicates_and_never_enables_missing_target(app) -> None:
@@ -409,9 +407,9 @@ def test_navigation_only_emits_a_read_only_target(app) -> None:
     window.navigate("overview")
     destinations: list[tuple[str, str]] = []
     window.navigation_requested.connect(lambda page, key: destinations.append((page, key)))
-    window.overview.metric_cards[1].findChild(QPushButton).click()
+    window.overview.metric_rows[1].findChild(QPushButton).click()
     assert destinations == [("approvals", "")]
-    assert window.breadcrumb.text() == "Workspace / 승인 대기"
+    assert window.breadcrumb.text() == "승인 대기"
 
 
 def test_sidebar_navigation_accepts_return_key(app) -> None:
@@ -457,8 +455,10 @@ def test_registry_list_uses_its_own_public_snapshot_and_filters(app) -> None:
 
     window.set_server_snapshot(Surface(LoadState.READY, (public, pending)))
     assert window.server_page.table.rowCount() == 2
-    assert window.server_page.table.item(0, 3).text() == "공개 · PUBLIC"
-    assert window.server_page.table.item(1, 4).text() == "PENDING · 등록 검토 중"
+    assert window.server_page.table.item(0, 3).text() == "공개"
+    assert window.server_page.table.item(0, 3).toolTip() == "PUBLIC"
+    assert window.server_page.table.item(1, 4).text() == "등록 검토 중"
+    assert window.server_page.table.item(1, 4).toolTip() == "PENDING"
     assert window.server_page.table.item(1, 5).text() == "연결 안 됨"
     assert window.server_page.table.item(0, 0).toolTip() == ""
 
@@ -466,7 +466,7 @@ def test_registry_list_uses_its_own_public_snapshot_and_filters(app) -> None:
     assert window.server_page.table.rowCount() == 1
     window.server_page.transport_filter.setCurrentIndex(1)
     assert window.server_page.table.rowCount() == 0
-    assert "일치하는 서버가 없어" in window.server_page.state_message.message.text()
+    assert "일치하는 서버가 없음" in window.server_page.state_message.message.text()
     window.server_page.transport_filter.setCurrentIndex(0)
     window.navigate("servers", "pending-send")
     assert window.server_page._selected_id() == "pending-send"
