@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | ACCESS-01·AGT-04의 ports/domain 3인 합의 | A·B·C | B2.9, B2.10 |
 | A 브랜치 병합(A 소유 파일의 AGT·ModelClient 사용) | A | B1.7, B2.11 |
-| SEQ·REC B 결정안의 공동 합의·C 단일 소유/백업·writer/ACK 검토 | A·C | B6.8, B6.13 |
+| SEQ·REC B 결정안 A 동의(#37), C 회신 대기(단일 소유/백업·writer/ACK) | C | B6.8, B6.13 |
 | B6-01–06 계약 회신 | A·C | B1.5, B1.6, B6.9–B6.12, B6.16 |
 | safe_path | C | B3.3 |
 | Registry 영속화 B 제안 완료·C 검토·C4.10 연결 대기(B6-06) | A·C | B6.18 |
@@ -112,7 +112,7 @@
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.15 규칙 버전 감사(AGT-02)
 - [ ] B6.16 A 시작 게이트·조회 요구와 C 인수 기준을 대조해 API 합의 기록 — 막힘: A·C 회신
-- [x] B6.17 SEQ·REC B 결정안(A 회신의 조건·질문 답변) · [기록](archive/b/B6.17-seq-rec-decisions.md)
+- [x] B6.17 SEQ·REC B 결정안·A 동의(#37), C 회신 대기·합의 전 제안 · [기록](archive/b/B6.17-seq-rec-decisions.md)
 - [ ] B6.18 RegistryStore 계약 합의·C4.10 사본 교체/승인 무효화 연결 — 막힘: A·C 검토·C 연결
 - [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) 원자 조건·독립 검증 — 막힘: 3인 합의·A/C 연결
 
