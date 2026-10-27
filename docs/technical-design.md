@@ -1232,6 +1232,8 @@ servers:
   - id: local_docs
     transport: stdio
     command: C:/Users/<사용자>/AppData/Local/MCPRuntimeGuard/venv/Scripts/python.exe   # 절대 경로
+    command_sha256: 3f2a9c…e81b                 # 등록 때 사용자가 확인한 실행 파일 지문(EXE-01)
+    command_size: 12897280
     args: ["-m", "fixtures.local_docs.server"]
     env_allow: ["LANG"]                         # 전달할 환경변수 화이트리스트
     tier: internal
@@ -1246,6 +1248,26 @@ servers:
     tools:
       - { name: post_issue, kind: send, destination_arg: destination_id }
 ```
+
+서버 레코드의 실행 값은 등록할 때와 연결할 때마다 C가 검증한다(2026-10-27 결정).
+
+- **stdio 실행 파일 고정(EXE-01)**
+  - **등록:** C가 `command` 파일을 쓰기 금지 핸들로 열어 크기와 SHA-256을 계산한다. 등록 화면(A)이 경로·크기·지문을 보여 주고, 사용자가 확인하면 그 값을 서버 레코드의 `command_sha256`·`command_size`로 저장한다(B 설정 형식).
+  - **연결:** 연결할 때마다 C launcher(`security/launcher.py`, 13.1절)가 같은 값을 대조한다. 다르면 그 서버를 띄우지 않고 다시 확인하라고 안내한다.
+  - **다시 확인:** 설정 저장이므로 `policy_version`이 바뀌고, 정책 변경처럼 진행 중인 Task가 멈춘다.
+  - **인터프리터형 서버**(`python.exe -m …`, `node.exe …`): 지문은 인터프리터만 덮는다. 스크립트·패키지가 바뀌는 것은 잡지 못하는 한계이고, 약점 대장에 기록한다. 도구 정의가 바뀌는 것은 도구 지문이 잡는다.
+  - **C가 검증하는 것**
+    - `command`: 절대 경로의 `.exe`, 존재, 링크·junction 아님
+    - `args`: NUL 없음, 길이 상한
+    - `env_allow`: 이름 형식
+  - **실행 환경:** 서버는 앱 폴더 아래 서버별 폴더를 작업 폴더로 쓰고, stderr는 그 폴더의 격리 파일로 보낸다. 환경은 시스템 기본 변수와 `env_allow`에 적힌 이름만 넘긴다. 앱이 끝나면 Job Object로 함께 끝난다.
+  - **격리:** OS 격리는 하지 않는다(codex.exe와 같은 판단, C-CODEX-04).
+- **HTTP 서버 URL(URL-01)**
+  - https가 원칙이다. http는 루프백 IP 리터럴(`127.0.0.0/8`, `::1`)에만 허용하고, `localhost` 이름은 거부한다.
+  - 사용자 정보(`user:pass@`)와 fragment는 거부한다.
+  - 호스트는 IDNA로 정규화해 저장한다. 끝 점, 퍼센트 인코딩된 호스트, 숫자 IP 변형(`0x7f.1`, `2130706433` 등)은 거부한다. 기본 포트는 생략형으로 맞춘다.
+  - 리다이렉트·프록시·주변 인증은 transport가 쓰지 않는다(9장).
+- **검증 실패:** 그 서버만 연결하지 않는다. 앱과 다른 서버는 계속 동작하고, 화면에는 고정 문구만 보인다.
 
 도구 지문은 `tools/list` 결과의 Tool 객체 전체(모든 필드)를 키 정렬·공백 없는 UTF-8 JSON으로 직렬화해 SHA-256을 취한 값이다. 배열 순서가 바뀌어도 변경으로 본다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다. float는 거부하지 않고 정해진 표기로 처리한다(2026-10-15 결정). 승인 사본의 `canonical_json`(8.1절)과는 다른 함수이며, RFC 8785(JCS)로 정규화하고 B의 `digest.py`에 둔다. Registry·Scanner는 그 함수를 쓴다(FP-01). 계산 입력은 A transport가 SDK로 다시 만든 정의 dict(`model_dump(mode="json", by_alias=True, exclude_unset=True)`)이고, 등록과 연결 직후 대조가 같은 변환을 거친다. 원본 수신 JSON은 쓰지 않는다. SDK 버전은 lock으로 고정하며, 버전을 올려 변환이 달라지면 모든 서버가 재등록 대기가 된다(fail-closed, 2026-10-26). Registry는 DB의 ACTIVE 상태만 믿지 않고 연결할 때마다 실제 지문을 등록 지문과 대조한다. 연결 뒤 서버가 `notifications/tools/list_changed`를 보내면, 연결 직후 대조가 끝난 뒤에 온 알림에 한해 그 서버를 이번 실행 동안 PENDING으로 취급한다(새 호출 DENY, 대기 승인은 재평가에서 무효). 대조가 끝나기 전에 온 알림은 그 대조가 최신 목록을 보므로 차단하지 않는다. 다음 연결 때 다시 대조한다. 이 알림은 보안 경계가 아니며 정의 변조 방어는 연결 시 대조(I10)가 맡는다. 알림 내용은 화면·모델·로그로 내보내지 않고 고정 코드만 남긴다(LIST-01).
 
@@ -1736,16 +1758,30 @@ def safe_path(root: Path, user_path: str) -> Path:
 ```python
 # security/endpoints.py
 def normalize_endpoint(url: str) -> Endpoint:
+    """URL-01(2026-10-27): https 원칙, http는 루프백 IP 리터럴만(10.1절)."""
     parts = urlsplit(url)
     if parts.scheme not in ("https", "http"):
         raise EndpointRejected("scheme")
     if parts.username or parts.password or "@" in parts.netloc:
         raise EndpointRejected("userinfo")
-    host = (parts.hostname or "").rstrip(".")
+    if parts.fragment:
+        raise EndpointRejected("fragment")
+    host = parts.hostname or ""
+    if not host or host.endswith(".") or "%" in parts.netloc:
+        raise EndpointRejected("host")              # 끝 점·퍼센트 인코딩 호스트는 정규화하지 않고 거부
     try:
-        host_ascii = host.encode("idna").decode("ascii").lower()
-    except UnicodeError as e:
-        raise EndpointRejected("idna") from e
+        literal = ipaddress.ip_address(host)        # 표준 점 십진 IPv4·IPv6 리터럴만
+    except ValueError:
+        literal = None
+        if NUMERIC_HOST.fullmatch(host):            # 0x7f.1, 2130706433, 017.0.0.1 같은 변형
+            raise EndpointRejected("numeric host")
+        try:
+            host = host.encode("idna").decode("ascii").lower()
+        except UnicodeError as e:
+            raise EndpointRejected("idna") from e
+    if parts.scheme == "http" and (literal is None or not literal.is_loopback):
+        raise EndpointRejected("plain http")        # localhost 이름도 여기서 거부된다
+    host_ascii = host if literal is None else literal.compressed
     port = parts.port or (443 if parts.scheme == "https" else 80)
     if "%2e" in parts.path.lower() or "%2f" in parts.path.lower():
         raise EndpointRejected("encoded traversal")
