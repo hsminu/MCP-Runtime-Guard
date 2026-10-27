@@ -7,6 +7,9 @@ T22/T43 A part). The real codex.exe is C's evidence, not exercised here.
 
 A102: the product claims the single-instance lock before its DB opens and does
 not start without it (REC-01, C2.13 part).
+
+A106: that DB is fixed in the app folder (C2.17), and the demo, which takes no
+lock, cannot open it or anything else in that folder.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import os
 import shutil
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -36,6 +40,7 @@ from guard_app.security.codex_home import (
 )
 from guard_app.security.launcher import LaunchError
 from guard_app.security.paths import AppPathError, prepare_app_folders
+from guard_app.services import session_runtime
 from guard_app.services.bridge import SessionOptions
 from guard_app.services.codex_preparation import (
     CodexPreparationError,
@@ -314,10 +319,11 @@ def test_main_does_not_start_while_another_instance_holds_the_lock(
     monkeypatch, capsys, tmp_path
 ) -> None:
     """A102: no DB, backend or window without the single-instance lock."""
-    root, db = tmp_path / "app", tmp_path / "product.db"
+    root = tmp_path / "app"
+    db = root / "data" / "guard.sqlite3"
     monkeypatch.setattr(paths, "app_root", lambda: root)
     monkeypatch.setattr(entry, "BackendBridge", no_bridge)
-    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db)])
+    monkeypatch.setattr(sys, "argv", ["guard-app"])
     first = prepare_app_folders(root)
     try:
         assert entry.main() == 1
@@ -342,7 +348,7 @@ def test_main_keeps_the_lock_until_the_process_ends_when_cleanup_is_unconfirmed(
     """A110 (B6.17 8.1, #37): with cleanup unconfirmed the process ends at once
     while it still holds the lock, so a second instance cannot open the same DB
     meanwhile. With cleanup confirmed main releases the lock and returns."""
-    root, db = tmp_path / "app", tmp_path / "product.db"
+    root = tmp_path / "app"
     claimed: list[CodexProcessPreparation] = []
     claim = CodexProcessPreparation.claim
 
@@ -362,7 +368,7 @@ def test_main_keeps_the_lock_until_the_process_ends_when_cleanup_is_unconfirmed(
     monkeypatch.setattr(CodexProcessPreparation, "claim", recording_claim)
     monkeypatch.setattr(entry, "_run", ran)
     monkeypatch.setattr(entry.os, "_exit", ended)
-    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db)])
+    monkeypatch.setattr(sys, "argv", ["guard-app"])
     try:
         if confirmed:
             assert entry.main() == 0
@@ -381,21 +387,29 @@ def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
     monkeypatch, tmp_path
 ) -> None:
     """A102: the lock is held when the backend is built, before its bootstrap
-    opens the DB, and main releases it on the way out."""
-    root, db = tmp_path / "app", tmp_path / "product.db"
+    opens the DB, and main releases it on the way out. A106: that bootstrap
+    opens the product DB fixed in the claimed app folder (C2.17)."""
+    root = tmp_path / "app"
+    db = root / "data" / "guard.sqlite3"
     seen: list[bool] = []
+    opened: list[str] = []
 
     class StoppedError(Exception):
         pass
 
-    def bridge(bootstrap: object) -> None:
+    def bridge(bootstrap: Callable[[], object]) -> None:
         assert_lock_held(root)
         seen.append(db.exists())
+        bootstrap()
         raise StoppedError
+
+    def recording_bootstrap(db_path: str, **kwargs: object) -> None:
+        opened.append(db_path)
 
     monkeypatch.setattr(paths, "app_root", lambda: root)
     monkeypatch.setattr(entry, "BackendBridge", bridge)
-    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db)])
+    monkeypatch.setattr(session_runtime, "bootstrap_product", recording_bootstrap)
+    monkeypatch.setattr(sys, "argv", ["guard-app"])
     app = QApplication.instance() or QApplication([])
     assert isinstance(app, QApplication)
     quit_on_close = app.quitOnLastWindowClosed()
@@ -405,4 +419,88 @@ def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
     finally:
         app.setQuitOnLastWindowClosed(quit_on_close)
     assert seen == [False]
+    assert opened == [str(db)]
     prepare_app_folders(root).close()
+
+
+def test_db_file_is_the_product_db_in_the_claimed_folder(tmp_path, pin) -> None:
+    """A106 (C2.17, REC-01): no DB path before the lock, then the fixed one."""
+    owner = preparation(tmp_path, pin, claim=False)
+    with pytest.raises(CodexPreparationError, match="^CODEX_FOLDERS_UNCLAIMED$"):
+        _ = owner.db_file
+    owner.claim()
+    try:
+        assert owner.db_file == tmp_path / "app" / "data" / "guard.sqlite3"
+        assert owner.db_file.parent.is_dir()
+    finally:
+        owner.close()
+    with pytest.raises(CodexPreparationError, match="^CODEX_FOLDERS_UNCLAIMED$"):
+        _ = owner.db_file
+
+
+def _junction(target: Path, link: Path) -> None:
+    import _winapi
+
+    _winapi.CreateJunction(str(target), str(link))
+
+
+@pytest.mark.parametrize("kind", ["product", "other", "case", "junction", "hardlink"])
+def test_demo_refuses_a_db_in_the_product_app_folder(monkeypatch, capsys, tmp_path, kind) -> None:
+    """A106 (C2.17, REC-01): the demo does not take the app lock, so it must not
+    open the product DB, by any name, or anything else in the app folder (I9:
+    no path in the message)."""
+    root = tmp_path / "app"
+    prepare_app_folders(root).close()
+    product = root / "data" / "guard.sqlite3"
+    product.write_bytes(b"")
+    target = {
+        "product": product,
+        "other": root / "demo.db",
+        "case": Path(str(product).upper()),
+        # A new file through a junction: only resolving the path finds the folder.
+        "junction": tmp_path / "alias" / "demo.db",
+        "hardlink": tmp_path / "hardlink.db",
+    }[kind]
+    if kind == "junction":
+        _junction(root / "data", tmp_path / "alias")
+    if kind == "hardlink":
+        os.link(product, target)
+    monkeypatch.setattr(paths, "app_root", lambda: root)
+    monkeypatch.setattr(entry, "BackendBridge", no_bridge)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "guard-app",
+            "--demo",
+            "--agt-mode",
+            "mock",
+            "--store",
+            "sqlite",
+            "--db-path",
+            str(target),
+        ],
+    )
+    with pytest.raises(SystemExit) as caught:
+        entry.main()
+    assert caught.value.code == 2
+    output = capsys.readouterr()
+    assert "시연 DB는 제품 앱 폴더 밖이라고 확인된 경로만" in output.err
+    assert str(tmp_path) not in output.err + output.out
+    assert product.read_bytes() == b""
+
+
+def test_demo_db_outside_the_app_folder_is_allowed(monkeypatch, tmp_path) -> None:
+    """A106: a separate demo file stays usable; an unknown app folder refuses."""
+    root = tmp_path / "app"
+    prepare_app_folders(root).close()
+    (root / "data" / "guard.sqlite3").write_bytes(b"")
+    monkeypatch.setattr(paths, "app_root", lambda: root)
+    assert entry._outside_app_folder(str(tmp_path / "demo.db"))
+    assert entry._outside_app_folder(str(tmp_path / "app-demo" / "demo.db"))
+
+    def unavailable() -> Path:
+        raise AppPathError("APP_ROOT_UNAVAILABLE")
+
+    monkeypatch.setattr(paths, "app_root", unavailable)
+    assert not entry._outside_app_folder(str(tmp_path / "demo.db"))

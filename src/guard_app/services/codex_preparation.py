@@ -2,7 +2,8 @@
 
 The order is the one C2.13 lists for A. `claim` runs `prepare_app_folders()`
 (single-instance lock, stale Task folders removed) before the app opens its DB,
-and the app does not start without it (A102). Session startup then runs
+and the app does not start without it (A102). That DB is `db_file`, fixed in the
+app folder (C2.17, A106). Session startup then runs
 `write_codex_home`; per Task a new folder, then `CodexLauncher.launch`;
 `confirm_exit` is `LaunchedProcess.close()`; the folder is removed only after
 that returned True. The lock is held until `close`, also when the Codex part
@@ -131,6 +132,18 @@ class CodexProcessPreparation:
         if self._folders is not None:
             raise CodexPreparationError("CODEX_FOLDERS_CLAIMED")
         self._folders = prepare_app_folders(self._root)
+
+    @property
+    def db_file(self) -> Path:
+        """The product DB, fixed in the claimed app folder (C2.17, A106).
+
+        The lock `claim` took is its single owner (REC-01), so there is no path
+        before the claim. C's `AppFolders.db_path()` (#37) will also check that
+        the DB files are not links; switch to it then.
+        """
+        if self._folders is None:
+            raise CodexPreparationError("CODEX_FOLDERS_UNCLAIMED")
+        return self._folders.paths.db_file
 
     def close(self) -> None:
         """Release the single-instance lock. Safe to call more than once."""

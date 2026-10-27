@@ -806,12 +806,17 @@ def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeyp
 
 
 @pytest.mark.parametrize(
-    "flag", [["--scenario", "ask"], ["--agt-mode", "mock"], ["--store", "memory"]]
+    "flag",
+    [["--scenario", "ask"], ["--agt-mode", "mock"], ["--store", "memory"], ["--db-path", "{db}"]],
 )
 def test_cli_product_mode_refuses_demo_only_options(monkeypatch, capsys, tmp_path, flag):
-    """제품 실행에서 시연 전용 옵션을 조용히 무시하지 않는다."""
+    """제품 실행에서 시연 전용 옵션을 조용히 무시하지 않는다.
+
+    A106: 제품 DB는 앱 폴더의 고정 경로라 `--db-path`도 시연 전용이다(C2.17, REC-01).
+    """
     db = tmp_path / "product.db"
-    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db), *flag])
+    argv = [arg.format(db=db) for arg in flag]
+    monkeypatch.setattr(sys, "argv", ["guard-app", *argv])
     with pytest.raises(SystemExit) as caught:
         main()
     assert caught.value.code == 2
@@ -822,21 +827,20 @@ def test_cli_product_mode_refuses_demo_only_options(monkeypatch, capsys, tmp_pat
 @pytest.mark.parametrize(
     "args",
     [
-        ["--db-path", "{db}", "--codex-exe", "codex.exe"],
+        ["--codex-exe", "codex.exe"],
         ["--demo", "--agt-mode", "mock", "--codex-exe", "{exe}"],
     ],
     ids=["relative", "demo"],
 )
 def test_cli_codex_exe_is_an_absolute_product_path(monkeypatch, capsys, tmp_path, args):
     """A101: each developer may point at a local codex.exe, only in product mode."""
-    db, exe = tmp_path / "product.db", tmp_path / "codex.exe"
-    argv = [arg.format(db=db, exe=exe) for arg in args]
+    exe = tmp_path / "codex.exe"
+    argv = [arg.format(exe=exe) for arg in args]
     monkeypatch.setattr(sys, "argv", ["guard-app", *argv])
     with pytest.raises(SystemExit) as caught:
         main()
     assert caught.value.code == 2
     assert "--codex-exe는 제품 실행에서" in capsys.readouterr().err
-    assert not db.exists()
 
 
 @pytest.mark.parametrize(
@@ -848,9 +852,7 @@ def test_cli_codex_exe_is_an_absolute_product_path(monkeypatch, capsys, tmp_path
     ],
     ids=["running", "folder-code", "not-a-code"],
 )
-def test_cli_product_does_not_start_without_the_app_lock(
-    monkeypatch, capsys, tmp_path, code, shown
-):
+def test_cli_product_does_not_start_without_the_app_lock(monkeypatch, capsys, code, shown):
     """A102: a refused claim ends with exit 1 before the DB, the backend and the window."""
     import guard_app.__main__ as entry
     from guard_app.security.paths import AppPathError
@@ -862,15 +864,13 @@ def test_cli_product_does_not_start_without_the_app_lock(
     def no_bridge(*args, **kwargs):
         raise AssertionError("the backend must not start")
 
-    db = tmp_path / "product.db"
     monkeypatch.setattr(CodexProcessPreparation, "claim", refuse)
     monkeypatch.setattr(entry, "BackendBridge", no_bridge)
-    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db)])
+    monkeypatch.setattr(sys, "argv", ["guard-app"])
     assert main() == 1
     error = capsys.readouterr().err
     assert shown in error
     assert "someone" not in error
-    assert not db.exists()
 
 
 def test_cli_demo_without_examples_package_fails_without_traceback(monkeypatch, capsys):

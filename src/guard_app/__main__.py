@@ -40,7 +40,11 @@ def main() -> int:
     parser.add_argument("--scenario", choices=("ask", "allow", "deny"))
     parser.add_argument("--mcp-transport", choices=("stdio", "http"))
     parser.add_argument("--store", choices=("memory", "sqlite"))
-    parser.add_argument("--db-path", metavar="PATH", help="기존 부모 디렉터리의 SQLite 파일")
+    parser.add_argument(
+        "--db-path",
+        metavar="PATH",
+        help="시연 SQLite 파일(기존 부모 디렉터리, 앱 폴더 밖). 제품은 앱 폴더의 고정 DB를 쓴다",
+    )
     parser.add_argument(
         "--codex-exe",
         metavar="PATH",
@@ -54,7 +58,15 @@ def main() -> int:
         help="합성 도구의 AGT 허용·차단 시연 정책",
     )
     args = parser.parse_args()
-    demo_only = (args.scenario, args.mcp_transport, args.store, args.agt_mode, args.agt_policy)
+    # A106: product mode opens only the fixed DB in the app folder (C2.17).
+    demo_only = (
+        args.scenario,
+        args.mcp_transport,
+        args.store,
+        args.db_path,
+        args.agt_mode,
+        args.agt_policy,
+    )
     if not args.demo and any(value is not None for value in demo_only):
         parser.error("시연 전용 옵션은 --demo와 함께만 쓸 수 있다")
     if args.demo:
@@ -70,8 +82,8 @@ def main() -> int:
         parser.error("합성 시연에는 --agt-mode real 또는 mock을 지정해야 한다")
     if args.demo and (args.store == "sqlite") != (args.db_path is not None):
         parser.error("저장소 종류와 DB 경로 설정이 일치하지 않는다")
-    if not args.demo and args.db_path is None:
-        parser.error("제품 실행에는 기존 부모 폴더 안의 --db-path SQLite 경로를 지정해야 한다")
+    if args.demo and args.db_path is not None and not _outside_app_folder(args.db_path):
+        parser.error("시연 DB는 제품 앱 폴더 밖이라고 확인된 경로만 쓸 수 있다")
     if args.codex_exe is not None and (args.demo or not args.codex_exe.is_absolute()):
         parser.error("--codex-exe는 제품 실행에서 codex.exe의 절대 경로로만 쓸 수 있다")
 
@@ -114,6 +126,30 @@ def _end_unconfirmed() -> NoReturn:
     os._exit(EXIT_CLEANUP_UNCONFIRMED)
 
 
+def _outside_app_folder(db_path: str) -> bool:
+    """A106: whether a demo DB is confirmed to be outside the product app folder.
+
+    The product DB is fixed in that folder (C2.17) and its single owner is the
+    app lock (REC-01), which the demo does not take. Links and junctions are
+    resolved, and a hard link to the product DB counts as the product DB. A path
+    that cannot be checked counts as inside.
+    """
+    from guard_app.security.paths import AppPathError, AppPaths, app_root
+
+    if sys.platform != "win32":
+        return True  # the app folder, like product mode, exists only on Windows
+    try:
+        product = AppPaths(app_root())
+        target = Path(db_path).resolve()
+        if target.is_relative_to(product.root.resolve()):
+            return False
+        return not (
+            target.exists() and product.db_file.exists() and target.samefile(product.db_file)
+        )
+    except (AppPathError, OSError, ValueError):
+        return False
+
+
 def _claim_refusal(error: Exception) -> str:
     """Fixed text for a refused claim. C2.13 codes carry no paths; other text is not shown."""
     code = error.args[0] if error.args else None
@@ -150,8 +186,10 @@ def _run(args: argparse.Namespace, codex: CodexProcessPreparation | None) -> tup
         from guard_app.services.session_runtime import bootstrap_product
 
         # A101: C's app folders and launcher behind each Task's Codex session.
+        # A106: the DB is the one fixed in the folder `codex` claimed (C2.17).
         preparation = codex.preparation()
-        bridge = BackendBridge(lambda: bootstrap_product(args.db_path, preparation=preparation))
+        db_file = str(codex.db_file)
+        bridge = BackendBridge(lambda: bootstrap_product(db_file, preparation=preparation))
 
     close_limit_s = bridge.shutdown_timeout + CLOSE_OBSERVATION_S
     closing_since: list[float] = []

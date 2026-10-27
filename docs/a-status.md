@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-27 · main `58afdd4` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-27 · main `c2da9e0` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -12,10 +12,9 @@
 | `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22 |
 | 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
 | 동기 `AccessChecker` 포트(ACCESS-01, B2.9)·AGT 코드 제거(B2.11)·계약 합의 | B·A·C | A02·A06, A41, A44, A53 |
-| L2(C6.14)·T43/T46·수신 상한 독립 인수(C5.8)·MCP 서버 실행 파일 해시 출처(C2.6)·ScanReport·Scanner 자격증명(C2.10). launcher·앱 폴더(C2.12·C2.13)는 [PR #35](https://github.com/hsminu/MCP-Runtime-Guard/pull/35) 병합 대기 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
+| L2(C6.14, C 브랜치에 있고 main 반영 전)·T43/T46·수신 상한 독립 인수(C5.8)·MCP 서버 실행 파일 해시 출처(C2.6)·ScanReport·Scanner 자격증명(C2.10). launcher·앱 폴더·제품 DB 위치(C2.12·C2.13·C2.17)는 [PR #35](https://github.com/hsminu/MCP-Runtime-Guard/pull/35)로 main에 병합됨 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
 | CFG-01 설정 파일: B 변환 함수([PR #36](https://github.com/hsminu/MCP-Runtime-Guard/pull/36) 병합 대기)·C 파일 연산(C2.14)·경로·실행 파일 검증 ([#33](https://github.com/hsminu/MCP-Runtime-Guard/issues/33)) | B·C | A24–A27, A49 |
 | Profile 저장 연결(C2.14)·Registry 활성화(C4.10). B `activate_server`는 #32로 main 반영 | C | A81 |
-| `main` 병합 순서: A 브랜치에 C 브랜치(#35)가 병합돼 있음 | C·사용자 | A68 main 반영, A98–A105 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | B의 AGT 제거 PR(같은 파일) | B | A44 |
 
@@ -86,7 +85,7 @@
 - [x] A68 Guard 호출·FIFO 세션 연결(A 내부 Pending 대기) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A68 NOTIFY-01·STOP-01로 교체, 사람 정지의 Store 직접 쓰기 제거(PR #29 B 리뷰 5) · [기록](archive/a/A68-notify-stop-integration.md)
 - [x] A68 승인 결과 문구를 `final_model_message`로 교체(#32 로컬 병합 위) · [기록](archive/a/A68-final-model-message.md)
-- [ ] A68 교체분 main 반영(A 브랜치에는 푸시함) — 막힘: #35 병합 뒤 A main PR
+- [ ] A68 교체분 main 반영(A 브랜치에는 푸시함) — 다음: A 브랜치 main PR(#35는 main에 병합됨, A 브랜치에 main 병합 완료)
 - [x] A80 세션 관리자 승인 대기 감시 상한을 Profile의 `approval_ttl_seconds`에서 계산 · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A88 L3 감시·`request_user_input` 빈 응답·고정 문구표 연결·인증/한도 오류 정지(토큰 갱신 충돌은 `unauthorized` 경로로 그 Task만 정지) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A87 `dynamicTools` 이름 규칙 위반 도구 제외·보고 · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)
@@ -138,7 +137,8 @@
 - [x] A105 새 Task 행을 정책 잠금 안에서 그때의 policy_version으로 씀(B3.12의 Task 생성 직렬화) · [기록](archive/a/A105-task-creation-policy-lock.md)
 - [ ] A105 서버 활성화도 같은 잠금으로 묶음 — 막힘: C Registry 활성화(C4.10)
 - [x] A117 겹친 서버 접근 변경이 앞 변경이 저장한 문서에서 시작함(정책 잠금 안에서 문서를 읽음, A112 발견) · [기록](archive/a/A117-overlapping-policy-changes.md)
-- [ ] A106 제품 DB를 앱 폴더 고정 경로로 옮기고 `--demo`가 그 경로를 열지 못하게 함 — 막힘: C `AppPaths` DB 경로(#35 B 리뷰 1번)
+- [x] A106 제품 DB를 앱 폴더 고정 경로(`data\guard.sqlite3`, C2.17)로 옮기고 `--db-path`는 시연 전용으로, `--demo`는 앱 폴더 안을 열지 못하게 함(#35 B 리뷰 1번) · [기록](archive/a/A106-product-db-path.md)
+- [ ] A106 C `AppFolders.db_path()`(DB·`-wal`·`-shm` 링크 확인)로 교체 — 막힘: C 다음 PR(#37 C 회신)
 - [ ] A81·A91 실제 Profile 저장·서버 목록 활성화 흐름 — 막힘: #36 병합·C2.14·C Registry 활성화(C4.10)
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
