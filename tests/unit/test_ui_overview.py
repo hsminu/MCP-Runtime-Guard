@@ -305,11 +305,9 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
 def test_runtime_mode_is_unconfigured_until_trusted_bootstrap_sets_it(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
-    assert window.runtime_identity.text() == "AGT: 미설정 · 모델: 미설정"
-    window.set_runtime_identity(
-        RuntimeIdentity(agt_mode=RuntimeMode.MOCK, model_mode=RuntimeMode.UNCONFIGURED)
-    )
-    assert window.runtime_identity.text() == "AGT: mock · 모델: 미설정"
+    assert window.runtime_identity.text() == "모델: 미설정"
+    window.set_runtime_identity(RuntimeIdentity(model_mode=RuntimeMode.CODEX))
+    assert window.runtime_identity.text() == "모델: Codex"
 
 
 def test_runs_page_only_displays_backend_status_without_controls(app) -> None:

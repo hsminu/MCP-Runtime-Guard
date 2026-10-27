@@ -59,7 +59,7 @@ A_ADAPTERS = frozenset(
         "mcp_transport",
     }
 )
-# B and C modules, and the AGT adapters B removes (B2.11). Not checked here.
+# B and C modules are not checked here.
 OTHER_SERVICES = frozenset(
     {
         "approvals",
@@ -71,7 +71,7 @@ OTHER_SERVICES = frozenset(
         "state_checks",
     }
 )
-OTHER_ADAPTERS = frozenset({"agt", "agt_real", "cisco", "cisco_aggregation", "cisco_llm"})
+OTHER_ADAPTERS = frozenset({"cisco", "cisco_aggregation", "cisco_llm"})
 
 FORBIDDEN_IMPORTS = frozenset(
     {

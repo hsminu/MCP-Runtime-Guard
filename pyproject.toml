@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "MCP Runtime Guard application and security core"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "agent-governance-toolkit-core==5.0.0",
   "mcp==1.29.0",
   "httpx==0.28.1",
   "pydantic==2.14.0",
@@ -61,8 +60,6 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "RET", "BLE", "S", "ASYNC",
 # 통합 시점에 이미 있던 위반만 파일별로 면제한다. 새 파일과 B 파일에는 적용하지 않는다.
 # 담당자가 해당 파일을 고치면 항목을 지운다. 범위는 docs/archive/integration-a-b.md 참고.
 "examples/**" = ["E501", "I001", "PT018", "S101"]
-"tests/unit/test_agt.py" = ["PT018"]
-"tests/unit/test_agt_real.py" = ["ASYNC110", "B007", "I001", "PT006", "PT012", "PT018"]
 "tests/unit/test_bridge.py" = ["ASYNC110", "PT007", "PT018"]
 "tests/unit/test_call_logs.py" = ["PT018"]
 "tests/unit/test_mcp_http.py" = ["I001", "PT006", "PT011", "PT017", "PT018"]
@@ -94,11 +91,8 @@ follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 # A+B 통합 기준선(2026-10-14): 미타입 함수를 허용하되 본문의 타입 오류는 검사한다.
-# A 모듈은 2026-10-18(A43)에 strict로 옮겼다. 남은 것은 AGT 제거 대상(B2.11)과
-# Scanner 어댑터(C)다.
+# A 모듈은 2026-10-18(A43)에 strict로 옮겼다. 남은 것은 Scanner 어댑터(C)다.
 module = [
-  "guard_app.adapters.agt",
-  "guard_app.adapters.agt_real",
   "guard_app.adapters.cisco",
   "guard_app.adapters.cisco_aggregation",
   "guard_app.adapters.cisco_llm",

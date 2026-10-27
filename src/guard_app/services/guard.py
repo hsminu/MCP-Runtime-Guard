@@ -693,7 +693,7 @@ class GuardService:
             raise ResolutionError(Reason.POLICY_CHANGED)
         registration_status = self._registry.status(req.tool.server_id)
         fingerprint = self._registry.fingerprint(req.tool)
-        # AGT에 원문을 전달하기 전 로컬 전제조건과 경계 거부를 판정한다.
+        # 접근 판정 전 로컬 전제조건과 경계 거부를 판정한다.
         if fingerprint is None:
             raise ResolutionError(Reason.TOOL_FINGERPRINT_CHANGED)
         preliminary = evaluate(

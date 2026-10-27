@@ -18,16 +18,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
-from guard_app.adapters.agt import RuleBasedMockAccessChecker
-from guard_app.adapters.agt_real import AgentGovernanceAccessChecker
+from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.mcp_transport import (
     McpTransport,
     StdioServerParameters,
     http_stream_factory,
     stdio_stream_factory,
 )
+from guard_app.core.access_rules import AccessRules
 from guard_app.domain.contracts import ModelTurn
-from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus, ToolKind, TrustTier
+from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus, TrustTier
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import Boundary, ProposedCall, TaskState
 from guard_app.services.bridge import BackendBindings, BackendCleanupError, TaskProjection
@@ -62,16 +62,15 @@ class SyntheticModel:
 async def bootstrap(
     scenario="ask",
     *,
-    agt_mode: str,
-    agt_policy="allow-tools",
+    access_policy="allow-tools",
     mcp_transport="stdio",
     store_kind: str = "memory",
     db_path: str | os.PathLike[str] | None = None,
 ) -> BackendBindings:
-    if scenario not in {"ask", "allow", "deny"} or agt_mode not in {"real", "mock"}:
+    if scenario not in {"ask", "allow", "deny"}:
         raise ValueError("합성 실행 모드가 유효하지 않다")
-    if agt_policy not in {"allow-tools", "deny-send", "deny-all"}:
-        raise ValueError("합성 AGT 정책이 유효하지 않다")
+    if access_policy not in {"allow-tools", "deny-send", "deny-all"}:
+        raise ValueError("합성 접근 정책이 유효하지 않다")
     if mcp_transport not in {"stdio", "http"}:
         raise ValueError("합성 MCP 전송 방식이 유효하지 않다")
     if store_kind not in {"memory", "sqlite"}:
@@ -106,23 +105,13 @@ async def bootstrap(
         else:
             store = _Store(state)
         # Fixed, synthetic metadata rules; no arbitrary policy expressions/files.
-        rules = {
-            ("docs", "read", ToolKind.READ): agt_policy != "deny-all",
-            ("docs", "send", ToolKind.SEND): agt_policy == "allow-tools",
-        }
+        allowed = []
+        if access_policy != "deny-all":
+            allowed.append(("docs", "read"))
+        if access_policy == "allow-tools":
+            allowed.append(("docs", "send"))
+        access = AccessRulesChecker(AccessRules(allow=allowed))
         access_timeout = 2.0
-        if agt_mode == "real":
-            access = AgentGovernanceAccessChecker(
-                rules,
-                rule_version=f"synthetic-v1-{agt_policy}",
-                evaluation_timeout_s=access_timeout / 2,
-            )
-            lifetime.push_async_callback(access.close)
-            await access.start()
-        else:
-            access = RuleBasedMockAccessChecker(
-                {(server, tool): allowed for (server, tool, _kind), allowed in rules.items()}
-            )
         call_timeout = 5.0
         if mcp_transport == "http":
             spike = await lifetime.enter_async_context(http_spike())
@@ -241,7 +230,6 @@ async def bootstrap(
                 pending,
                 host_dispatch=len(dispatches),
                 receiver_effect=counts["receiver_effect"],
-                agt_mode=access.mode,
                 model_mode="mock",
                 can_advance=runner.can_advance,
                 label=current.high_watermark,

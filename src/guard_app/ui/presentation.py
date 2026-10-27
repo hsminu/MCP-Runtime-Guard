@@ -57,8 +57,8 @@ REASONS = {
     "TASK_NOT_RUNNING": "Task 실행 상태가 아님",
     "POLICY_CHANGED": "정책 변경으로 재평가 필요",
     "STATE_MISSING": "신뢰 상태를 확인할 수 없음",
-    "AGT_DENY": "AGT 접근 거절",
-    "AGT_ERROR": "AGT 결과 확인 실패",
+    "AGT_DENY": "접근 규칙 거절",
+    "AGT_ERROR": "접근 규칙 확인 실패",
     "INTERNAL_ERROR": "내부 처리 오류",
     "UNSUPPORTED_CONTENT": "지원하지 않는 응답 형식",
     "STATE_COMMIT_FAILED": "보안 상태 저장 실패",
@@ -78,7 +78,7 @@ RUN_RESULTS = {
     "RUN_PENDING_QUERY_REQUIRED": "승인이 필요한 호출이 있어 · '승인 사본 "
     "확인' 후 승인하거나 거절해.",
     "RUN_DENIED_QUERY_REQUIRED": (
-        "호출이 차단됐어 · Guard 정책 또는 AGT가 허용하지 않아 실행하지 않았어. "
+        "호출이 차단됐어 · Guard 정책 또는 접근 규칙이 허용하지 않아 실행하지 않았어. "
         "차단 사유 조회는 아직 이 화면에 연결되지 않았어."
     ),
     "RUN_HALTED_QUERY_REQUIRED": "Task가 정지됐어 · 이어서 실행할 수 없어.",
