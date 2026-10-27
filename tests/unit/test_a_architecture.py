@@ -67,6 +67,7 @@ OTHER_SERVICES = frozenset(
         "catalog_schema",
         "catalog_sources",
         "guard",
+        "registry",
         "response_gate",
         "state_checks",
     }
