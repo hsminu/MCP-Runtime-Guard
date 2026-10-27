@@ -29,7 +29,7 @@
 - 현행 모듈 소유권·리뷰는 `docs/team-workflow.md`를 따른다. 확정 결정은 `docs/contracts.md`의 사용자 결정에 있고 개발문서에도 반영되어 있다. 둘이 어긋나면 사용자 결정을 따르고 사용자에게 알린다.
 - B가 `domain/*`와 `ports.py`를 정의한다. 계약 변경은 A·B·C 합의가 필요하다. 실제 기록된 동의나 사용자의 명시적 결정이 이미 있으면 반복해서 확인하지 않는다.
 - 다른 담당의 구현을 복제하거나 담당 밖의 API를 임의로 확정하지 않는다. 필요한 변경은 계약 문서와 리뷰에 반영한다.
-- AGT는 제거한다(2026-10-15 결정). 기존 AGT 코드 제거와 접근 규칙 판정(`core`의 순수 함수)은 B, `AccessChecker` 연결은 A가 구현하고, C가 차단 계수로 검증한다. AGT 제거 중 A 소유 파일을 고친 부분은 A가 리뷰한다. 범위는 `docs/contracts.md`의 결정을 따른다.
+- AGT는 제거했다(2026-10-15 결정, B2.11). 접근 규칙 판정(`core`의 순수 함수)은 B, 동기 `AccessChecker`(ACCESS-01) 연결은 A가 구현하고, C가 차단 계수로 검증한다. 접근 거절·오류 사유는 `ACCESS_DENY`·`ACCESS_ERROR`이고 `AGT_*`를 새로 만들지 않는다(AGT-04). AGT 정리 중 A 소유 파일을 고친 부분은 A가 리뷰한다. 범위는 `docs/contracts.md`의 결정을 따른다.
 - 실제 모델은 Codex 하네스로 쓴다. 모델 호출은 Codex 세션 관리자(`services/runner.py`)만 하고, Codex에는 Guard 도구만 등록한다. 세부는 개발문서 10.4절이다.
 - `security/failclosed.py`, `security/digest.py`, `storage/*`는 B 소유다. 나머지 위험 연산 모듈·Registry·Scanner·정적 강제 규칙은 C 소유다. SQL 실행은 지정 저장소 모듈로 제한하며, B의 SQLite 구현과 C의 강제 규칙을 함께 리뷰한다.
 

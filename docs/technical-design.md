@@ -665,7 +665,7 @@ def evaluate(inp: PolicyInput) -> PolicyDecision:
 
     reasons = tuple(v.reason for v in verdicts if v.decision == final)
     if access == final and final is Decision.DENY:
-        reasons += (Reason.ACCESS_ERROR if inp.access.error else Reason.ACCESS_DENY,)   # 이름은 AGT-04에서 확정
+        reasons += (Reason.ACCESS_ERROR if inp.access.error else Reason.ACCESS_DENY,)   # AGT-04(2026-10-28)
     return PolicyDecision(decision=final, reasons=reasons, verdicts=tuple(verdicts),
                           policy_version=inp.policy_version,
                           security_version=inp.state.security_version)
@@ -749,7 +749,7 @@ def effective_label(state: TaskState, mode: str) -> Label:
 | `TASK_NOT_RUNNING` | DENY | 정지·결과불명·종료 상태 |
 | `POLICY_CHANGED` | DENY | Task 생성 이후 정책 변경 |
 | `STATE_MISSING` | DENY | 상태 로드 실패 |
-| `ACCESS_DENY` / `ACCESS_ERROR` | DENY | 접근 규칙 거절 / 오류. 이름은 AGT-04에서 확정 |
+| `ACCESS_DENY` / `ACCESS_ERROR` | DENY | 접근 규칙 거절 / 오류(AGT-04, 2026-10-28). 옛 기록의 `AGT_DENY`·`AGT_ERROR`는 저장소가 읽을 때 이 코드로 해석한다 |
 | `INTERNAL_ERROR` | DENY | fail-closed 래퍼가 잡은 예외 |
 
 dispatch 이후와 승인 단계의 코드는 판정이 아니라 처리 결과를 나타낸다.
@@ -1343,7 +1343,7 @@ class AccessChecker(Protocol):                  # ports.py, B 소유
 - **범위 밖:** 인자 내용 검사, 호출 횟수 제한, 조건식, 원격 정책, 서명 규칙.
 - **합성:** Guard는 접근 규칙 결과를 거부권으로만 쓴다(5.2절). 거절·오류는 DENY다.
 - **허용 목록 채우기:** 사용자가 서버를 활성화할 때 등록 화면(A)이 도구 목록과 도구별 허용 체크박스를 보여준다. 종류(READ/SEND)가 정해진 도구는 처음에 모두 체크되어 있고, 사용자가 확인하면 B의 정책 변경 명령이 허용·거부 규칙을 설정에 저장한다. 규칙은 `policy_version`에 들어가므로 바꾸면 실행 중인 Task가 정지한다(6.6절). 화면에 이를 알린다(2026-10-18).
-- **포트 형태(ACCESS-01):** `AccessChecker`는 동기 포트다. 판정기 안에서 I/O를 하지 않는다. Guard의 AGT용 대기 장치(시간 제한·동시 수·정리·미완료 추적)는 제거한다. 판정기 예외는 `fail_closed`로 DENY, 형식 불명은 `error=True`다. 규칙 설정의 `policy_version`은 설정 로딩 담당 B가 계산한다. `ports.py` 변경이라 3인 합의로 확정한다.
+- **포트 형태(ACCESS-01):** `AccessChecker`는 동기 포트다. 판정기 안에서 I/O를 하지 않는다. Guard의 AGT용 대기 장치(시간 제한·동시 수·정리·미완료 추적)는 제거한다. 판정기 예외는 `fail_closed`로 DENY, 형식 불명은 `error=True`다. 규칙 설정의 `policy_version`은 설정 로딩 담당 B가 계산한다. `ports.py` 변경이라 3인 합의로 확정했다(#20·#47).
 
 | 담당 | 작업 |
 | --- | --- |
