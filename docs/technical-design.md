@@ -585,15 +585,15 @@ destinations:
   - { id: my-notes,        tier: internal,          max_label: INTERNAL }
 ```
 
-URL 형태 목적지로 확장할 때는 `security.normalize_endpoint()`로 정규화한 결과를 비교한다. 정규화에서 처리해야 할 함정은 다음과 같다.
+URL 형태 목적지로 확장할 때는 `security.normalize_endpoint()`로 정규화한 결과를 비교한다. 규칙은 서버 URL과 같은 URL-01(10.1절)이다. 정규화에서 처리해야 할 함정은 다음과 같다.
 
 | 입력 | 함정 | 처리 |
 | --- | --- | --- |
 | `https://my-nas.home@evil.example/` | userinfo 뒤의 실제 host는 `evil.example` | userinfo가 있으면 거부 |
-| `HTTPS://My-NAS.Home.:443/` | 대소문자, 끝 점, 기본 포트 | scheme·host 소문자, 끝 점 제거, 기본 포트 생략 |
+| `HTTPS://My-NAS.Home.:443/` | 대소문자, 끝 점, 기본 포트 | scheme·host 소문자, 기본 포트 생략. 끝 점은 거부 |
 | `https://my-nаs.home/` (키릴 а) | 동형 문자 | IDNA 변환 후 ASCII host만 허용, punycode 비교 |
-| `https://my-nas.home/repo/../other` | 경로 탈출 | 경로 정규화 후 세그먼트 접두어 비교, 인코딩된 `%2e%2e` 거부 |
-| `http://10.0.0.5/` | 사설 IP를 내 것으로 간주 | IP·DNS 결과로 신뢰 판단 금지. 등록 여부만 본다 |
+| `https://my-nas.home/repo/../other` | 경로 탈출 | `.`·`..`·`%`가 있으면 거부하고, 남은 경로 세그먼트로 접두어 비교 |
+| `https://10.0.0.5/` | 사설 IP를 내 것으로 간주 | IP·DNS 결과로 신뢰 판단 금지. 등록 여부만 본다(http는 루프백 IP 리터럴만 허용) |
 
 이름에 `internal`, `my`, `private`가 들어 있다고 사용자 본인의 대상으로 판단하지 않는다. 판단 근거는 오직 등록 레코드다.
 
@@ -665,7 +665,7 @@ def evaluate(inp: PolicyInput) -> PolicyDecision:
 
     reasons = tuple(v.reason for v in verdicts if v.decision == final)
     if access == final and final is Decision.DENY:
-        reasons += (Reason.ACCESS_ERROR if inp.access.error else Reason.ACCESS_DENY,)   # 이름은 AGT-04에서 확정
+        reasons += (Reason.ACCESS_ERROR if inp.access.error else Reason.ACCESS_DENY,)   # AGT-04(2026-10-28)
     return PolicyDecision(decision=final, reasons=reasons, verdicts=tuple(verdicts),
                           policy_version=inp.policy_version,
                           security_version=inp.state.security_version)
@@ -749,7 +749,7 @@ def effective_label(state: TaskState, mode: str) -> Label:
 | `TASK_NOT_RUNNING` | DENY | 정지·결과불명·종료 상태 |
 | `POLICY_CHANGED` | DENY | Task 생성 이후 정책 변경 |
 | `STATE_MISSING` | DENY | 상태 로드 실패 |
-| `ACCESS_DENY` / `ACCESS_ERROR` | DENY | 접근 규칙 거절 / 오류. 이름은 AGT-04에서 확정 |
+| `ACCESS_DENY` / `ACCESS_ERROR` | DENY | 접근 규칙 거절 / 오류(AGT-04, 2026-10-28). 옛 기록의 `AGT_DENY`·`AGT_ERROR`는 저장소가 읽을 때 이 코드로 해석한다 |
 | `INTERNAL_ERROR` | DENY | fail-closed 래퍼가 잡은 예외 |
 
 dispatch 이후와 승인 단계의 코드는 판정이 아니라 처리 결과를 나타낸다.
@@ -1232,6 +1232,8 @@ servers:
   - id: local_docs
     transport: stdio
     command: C:/Users/<사용자>/AppData/Local/MCPRuntimeGuard/venv/Scripts/python.exe   # 절대 경로
+    command_sha256: 3f2a9c…e81b                 # 등록 때 사용자가 확인한 실행 파일 지문(EXE-01)
+    command_size: 12897280
     args: ["-m", "fixtures.local_docs.server"]
     env_allow: ["LANG"]                         # 전달할 환경변수 화이트리스트
     tier: internal
@@ -1246,6 +1248,29 @@ servers:
     tools:
       - { name: post_issue, kind: send, destination_arg: destination_id }
 ```
+
+서버 레코드의 실행 값은 등록할 때와 연결할 때마다 C가 검증한다(2026-10-27 결정).
+
+- **stdio 실행 파일 고정(EXE-01)**
+  - **등록:** C가 `command` 파일을 쓰기 금지 핸들로 열어 크기와 SHA-256을 계산한다. 등록 화면(A)이 경로·크기·지문을 보여 주고, 사용자가 확인하면 그 값을 서버 레코드의 `command_sha256`·`command_size`로 저장한다(B 설정 형식).
+  - **연결:** 연결할 때마다 C launcher(`security/launcher.py`, 13.1절)가 같은 값을 대조한다. 다르면 그 서버를 띄우지 않고 다시 확인하라고 안내한다.
+  - **다시 확인:** 설정 저장이므로 `policy_version`이 바뀌고, 정책 변경처럼 진행 중인 Task가 멈춘다.
+  - **인터프리터형 서버**(`python.exe -m …`, `node.exe …`): 지문은 인터프리터만 덮는다. 스크립트·패키지가 바뀌는 것은 잡지 못하는 한계이고, 약점 대장에 기록한다. 도구 정의가 바뀌는 것은 도구 지문이 잡는다.
+  - **C가 검증하는 것**
+    - `command`: 절대 경로의 `.exe`, 존재, 링크·junction 아님
+    - `args`: NUL 없음, 길이 상한
+    - `env_allow`: 이름 형식
+  - **실행 환경:** 서버는 앱 폴더 아래 서버별 폴더를 작업 폴더로 쓰고, stderr는 그 폴더의 격리 파일로 보낸다. 환경은 시스템 기본 변수와 `env_allow`에 적힌 이름만 넘긴다. 앱이 끝나면 Job Object로 함께 끝난다.
+  - **격리:** OS 격리는 하지 않는다(codex.exe와 같은 판단, C-CODEX-04).
+- **HTTP 서버 URL(URL-01)**
+  - https가 원칙이다. http는 루프백 IP 리터럴(`127.0.0.0/8`, `::1`)에만 허용하고, `localhost` 이름은 거부한다.
+  - 사용자 정보(`user:pass@`)·쿼리·fragment는 거부한다.
+  - 호스트는 IDNA 2008(UTS #46, `idna` 패키지)로 정규화해 저장한다. 파이썬 내장 `idna` 코덱은 IDNA 2003이라 `faß.de`를 다른 도메인 `fass.de`로 바꾸므로 쓰지 않는다. 끝 점, 퍼센트 인코딩된 호스트, 숫자 IP 변형(`0x7f.1`, `2130706433` 등)은 거부한다. 기본 포트는 생략형으로 맞춘다.
+  - 특수 주소는 https에서도 거부한다.
+    - 미지정, `0.0.0.0/8`, 멀티캐스트, 링크 로컬(`169.254.x.x` 메타데이터 포함, `fe80::/10`), IPv4 예약(`240.0.0.0/4`)
+    - IPv4를 담은 IPv6(`::ffff:a.b.c.d`, `::a.b.c.d`). `::ffff:127.0.0.1`은 루프백 검사를 통과할 수 있다.
+  - 리다이렉트·프록시·주변 인증은 transport가 쓰지 않는다(9장).
+- **검증 실패:** 그 서버만 연결하지 않는다. 앱과 다른 서버는 계속 동작하고, 화면에는 고정 문구만 보인다.
 
 도구 지문은 `tools/list` 결과의 Tool 객체 전체(모든 필드)를 키 정렬·공백 없는 UTF-8 JSON으로 직렬화해 SHA-256을 취한 값이다. 배열 순서가 바뀌어도 변경으로 본다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다. float는 거부하지 않고 정해진 표기로 처리한다(2026-10-15 결정). 승인 사본의 `canonical_json`(8.1절)과는 다른 함수이며, RFC 8785(JCS)로 정규화하고 B의 `digest.py`에 둔다. Registry·Scanner는 그 함수를 쓴다(FP-01). 계산 입력은 A transport가 SDK로 다시 만든 정의 dict(`model_dump(mode="json", by_alias=True, exclude_unset=True)`)이고, 등록과 연결 직후 대조가 같은 변환을 거친다. 원본 수신 JSON은 쓰지 않는다. SDK 버전은 lock으로 고정하며, 버전을 올려 변환이 달라지면 모든 서버가 재등록 대기가 된다(fail-closed, 2026-10-26). Registry는 DB의 ACTIVE 상태만 믿지 않고 연결할 때마다 실제 지문을 등록 지문과 대조한다. 연결 뒤 서버가 `notifications/tools/list_changed`를 보내면, 연결 직후 대조가 끝난 뒤에 온 알림에 한해 그 서버를 이번 실행 동안 PENDING으로 취급한다(새 호출 DENY, 대기 승인은 재평가에서 무효). 대조가 끝나기 전에 온 알림은 그 대조가 최신 목록을 보므로 차단하지 않는다. 다음 연결 때 다시 대조한다. 이 알림은 보안 경계가 아니며 정의 변조 방어는 연결 시 대조(I10)가 맡는다. 알림 내용은 화면·모델·로그로 내보내지 않고 고정 코드만 남긴다(LIST-01).
 
@@ -1318,7 +1343,7 @@ class AccessChecker(Protocol):                  # ports.py, B 소유
 - **범위 밖:** 인자 내용 검사, 호출 횟수 제한, 조건식, 원격 정책, 서명 규칙.
 - **합성:** Guard는 접근 규칙 결과를 거부권으로만 쓴다(5.2절). 거절·오류는 DENY다.
 - **허용 목록 채우기:** 사용자가 서버를 활성화할 때 등록 화면(A)이 도구 목록과 도구별 허용 체크박스를 보여준다. 종류(READ/SEND)가 정해진 도구는 처음에 모두 체크되어 있고, 사용자가 확인하면 B의 정책 변경 명령이 허용·거부 규칙을 설정에 저장한다. 규칙은 `policy_version`에 들어가므로 바꾸면 실행 중인 Task가 정지한다(6.6절). 화면에 이를 알린다(2026-10-18).
-- **포트 형태(ACCESS-01):** `AccessChecker`는 동기 포트다. 판정기 안에서 I/O를 하지 않는다. Guard의 AGT용 대기 장치(시간 제한·동시 수·정리·미완료 추적)는 제거한다. 판정기 예외는 `fail_closed`로 DENY, 형식 불명은 `error=True`다. 규칙 설정의 `policy_version`은 설정 로딩 담당 B가 계산한다. `ports.py` 변경이라 3인 합의로 확정한다.
+- **포트 형태(ACCESS-01):** `AccessChecker`는 동기 포트다. 판정기 안에서 I/O를 하지 않는다. Guard의 AGT용 대기 장치(시간 제한·동시 수·정리·미완료 추적)는 제거한다. 판정기 예외는 `fail_closed`로 DENY, 형식 불명은 `error=True`다. 규칙 설정의 `policy_version`은 설정 로딩 담당 B가 계산한다. `ports.py` 변경이라 3인 합의로 확정했다(#20·#47).
 
 | 담당 | 작업 |
 | --- | --- |
@@ -1733,26 +1758,7 @@ def safe_path(root: Path, user_path: str) -> Path:
 
 검사와 열기 사이의 경쟁(TOCTOU)은 이 함수만으로 완전히 없앨 수 없다. 파일 서버 루트는 사용자 전용 권한 폴더로 두고, Windows에는 `O_NOFOLLOW`가 없으므로 열기 직전 재검사와 결과 `resource_id` 대조(T33)로 보완한다.
 
-```python
-# security/endpoints.py
-def normalize_endpoint(url: str) -> Endpoint:
-    parts = urlsplit(url)
-    if parts.scheme not in ("https", "http"):
-        raise EndpointRejected("scheme")
-    if parts.username or parts.password or "@" in parts.netloc:
-        raise EndpointRejected("userinfo")
-    host = (parts.hostname or "").rstrip(".")
-    try:
-        host_ascii = host.encode("idna").decode("ascii").lower()
-    except UnicodeError as e:
-        raise EndpointRejected("idna") from e
-    port = parts.port or (443 if parts.scheme == "https" else 80)
-    if "%2e" in parts.path.lower() or "%2f" in parts.path.lower():
-        raise EndpointRejected("encoded traversal")
-    path = posixpath.normpath(parts.path or "/")
-    return Endpoint(scheme=parts.scheme, host=host_ascii, port=port,
-                    path_parts=tuple(p for p in path.split("/") if p))
-```
+URL 검사는 참고 코드를 두지 않는다. 규칙은 10.1절(URL-01)이고 구현은 `security/endpoints.py`(C2.5)다. 등록 화면은 `normalize_endpoint`로 정규형을 만들어 저장하고, 설정 로더와 transport는 `canonical_endpoint`로 정규형만 받는다. `urlsplit`은 탭·줄바꿈을 조용히 지우고 파이썬 내장 `idna` 코덱은 IDNA 2003이라, URL을 직접 나누고 IDNA 2008(`idna` 패키지)을 쓴다.
 
 ```python
 # security/failclosed.py

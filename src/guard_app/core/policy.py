@@ -28,7 +28,7 @@ def effective_label(state: TaskState, mode: str = "accumulate") -> Label:
 
 
 def evaluate(inp: PolicyInput) -> PolicyDecision:
-    """I2·I6: 시간·I/O 없이 판정하고 AGT 거부권으로만 결과를 강화한다."""
+    """I2·I6: 시간·I/O 없이 판정하고 접근 규칙의 거부권으로만 결과를 강화한다."""
     preconditions = _preconditions(inp)
     if preconditions:
         return _deny(inp, preconditions)

@@ -3,7 +3,7 @@
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
 `main`에는 보안 코어(B), transport·Runner·Qt 앱(A), Cisco Scanner 어댑터(C)가 들어 있고 **합성 자료로 처음부터 끝까지 실행**할 수 있다.
-실제 stdio·로컬 HTTP MCP 서버와 로컬 AGT 판정을 연결했고, AGT는 명시적으로 real/mock을 선택한다.
+실제 stdio·로컬 HTTP MCP 서버와 자체 접근 규칙 판정을 연결했다.
 Store는 기본 메모리 대역 또는 SQLiteStore를 선택하고, Registry는 단위 대역이며 모델은 mock이다. Scanner는 아직 앱에 연결하지 않았다.
 SQLite는 새 Task 실행만 연결했다. 시작 복구·launcher/endpoint 검증·실제 모델·독립 인수는 남아 있다. 담당별 남은 일은 현황 문서에 있다.
 
@@ -14,14 +14,12 @@ uv가 `.python-version`의 3.12를 설치한다.
 
 ```powershell
 uv sync --locked
-uv run python -m guard_app --demo --agt-mode real
-uv run python -m guard_app --demo --agt-mode real --mcp-transport http
-uv run python -m guard_app --demo --agt-mode real --scenario deny
-uv run python -m guard_app --demo --agt-mode real --agt-policy deny-send
-uv run python -m guard_app --demo --agt-mode mock
-uv run python -m guard_app --demo --agt-mode mock --store sqlite --db-path <파일>
-uv run python -m examples.verify_stdio_spike --agt-mode real
-uv run python -m examples.verify_http_spike --agt-mode real
+uv run python -m guard_app --demo
+uv run python -m guard_app --demo --mcp-transport http
+uv run python -m guard_app --demo --scenario deny
+uv run python -m guard_app --demo --store sqlite --db-path <파일>
+uv run python -m examples.verify_stdio_spike
+uv run python -m examples.verify_http_spike
 uv run pytest -q
 ```
 
@@ -39,11 +37,11 @@ SQLite의 부모 디렉터리는 미리 있어야 한다. 같은 DB에 새 Task�
 현재 CLI는 임의 외부 서버 URL·인증정보를 받지 않는다. 제품 endpoint 검증·등록 연결은
 C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/archive/tasks/a-http-integration.md)을 따른다.
 
-`--agt-mode`는 필수다. real은 `agent-governance-toolkit-core==5.0.0`의 로컬
-`PolicyEngine`으로 판정하며, 시작 실패·판정 오류·시간초과 시 차단한다.
-자동 mock 전환은 없다. `--agt-policy deny-send`는 SEND만, `deny-all`은 READ부터 막는다.
-실행 탭과 창 제목에 확인된 AGT 모드를 표시한다. AGT 허용은 Guard의 ASK·DENY를 완화하지 않는다.
-[배포판 선정](docs/archive/tasks/a-agt-selection.md)과 [실제 연결·검증 범위](docs/archive/tasks/a-agt-integration.md)를 참고한다.
+접근 규칙은 신뢰 설정의 서버·도구 정확 일치 허용/거부 목록을 사용한다. 기본은 거부이고 거부가 우선이다.
+접근 허용은 사람 승인을 대체하거나 Guard의 ASK·DENY를 완화하지 않는다.
+시연은 합성 도구를 모두 허용하는 고정 규칙을 쓰며, CLI의 거부 정책 선택은 제공하지 않는다.
+거부 규칙(SEND만 거부, 전부 거부)의 전송·수신 계수는 `verify_stdio_spike`·`verify_http_spike`가 함께 확인한다.
+외부 판정기 AGT는 2026-10-15 결정으로 제거했다. 이전 선정·연결 기록은 [docs/archive/tasks](docs/archive/tasks/)에 있다.
 
 환경은 `uv.lock` 하나로 관리하고 `requirements.lock`은 거기서 생성한다.
 CI(Windows)는 locked 설치 → `requirements.lock` 일치 → Ruff → 포맷 → mypy → 단위 테스트 순서로 돈다.
@@ -69,7 +67,7 @@ Ruff·포맷·mypy의 A 기준선과 명령은 `pyproject.toml` 주석과 [A+B �
 
 | 담당 | 작업 브랜치 | 주요 책임 | 현황 문서 |
 | --- | --- | --- | --- |
-| A · 애플리케이션 | `feat/a-application` | MCP transport, AGT 연결, 모델·Runner, Qt↔asyncio bridge, GUI | [A 현황](docs/a-status.md) |
+| A · 애플리케이션 | `feat/a-application` | MCP transport, 접근 규칙 연결, 모델·Runner, Qt↔asyncio bridge, GUI | [A 현황](docs/a-status.md) |
 | B · 보안 코어·SQLite | `feat/b-security-core` | domain·ports, 정책·등급 병합, Catalog, GuardService, 승인·응답 게이트, SQLite·스키마·복구·저장소 단위 테스트 | [B 현황](docs/b-status.md) |
 | C · 보안 기반·검증 | `feat/c-security-platform` | 위험 연산 모듈, 서버 등록·Scanner, 저장소 리뷰·독립 검증, fixture·계수, 통합·공격·실험, CI | [C 현황](docs/c-status.md) |
 
@@ -83,7 +81,7 @@ Ruff·포맷·mypy의 A 기준선과 명령은 `pyproject.toml` 주석과 [A+B �
 - 기본 추적 방식: Task별 high-watermark를 유지하는 `accumulate`.
 - `Unclassified`는 별도 플래그다. 출처를 확정하지 못하면 작업을 정지하며, 기존 작업에서 해제하지 않는다.
 - `stdio`·Streamable HTTP는 접속 방식이다. 내부·외부 신뢰는 사용자가 등록한 정보로 결정한다.
-- AGT는 거부권만 가진다. AGT 허용이 Guard의 `ASK`·`DENY`를 완화하거나 사람 승인을 대체하지 않는다.
+- 접근 규칙은 거부권만 가진다. 접근 규칙 허용이 Guard의 `ASK`·`DENY`를 완화하거나 사람 승인을 대체하지 않는다.
 
 ## 호출 흐름
 
@@ -91,7 +89,7 @@ Ruff·포맷·mypy의 A 기준선과 명령은 `pyproject.toml` 주석과 [A+B �
 flowchart LR
     Runner[Model / Runner] --> Guard[GuardService.submit]
     Guard --> Catalog[Catalog / 등록 정보]
-    Catalog --> Policy[정책 / AGT 합성]
+    Catalog --> Policy[정책 / 접근 규칙 합성]
     Policy --> Deny[DENY: 실행 없음]
     Policy --> Ask[ASK: 사람 승인]
     Policy --> Allow[ALLOW: 실행 예약]
@@ -115,7 +113,7 @@ flowchart LR
 | INTERNAL | ALLOW | ASK | ASK |
 | CONFIDENTIAL | ALLOW | DENY | DENY |
 
-모든 호출은 서버 경계를 검사하고, `SEND`는 목적지 경계도 검사한다. 서버·목적지·AGT 결과 중 가장 엄격한 판정이 최종 판정이다. 외부 경계의 `max_label`은 `INTERNAL` 이하만 허용하므로 기밀 자료의 외부 전송은 승인으로 우회할 수 없다. CONFIDENTIAL 자료를 사용자 본인의 대상으로 보낼 때도 그 대상이 받을 수 있게 등록되어 있어야 한다.
+모든 호출은 서버 경계를 검사하고, `SEND`는 목적지 경계도 검사한다. 서버·목적지·접근 규칙 결과 중 가장 엄격한 판정이 최종 판정이다. 외부 경계의 `max_label`은 `INTERNAL` 이하만 허용하므로 기밀 자료의 외부 전송은 승인으로 우회할 수 없다. CONFIDENTIAL 자료를 사용자 본인의 대상으로 보낼 때도 그 대상이 받을 수 있게 등록되어 있어야 한다.
 
 `ASK`는 요청 사본의 해시가 일치하고, 현재 상태로 재평가를 통과하며, 승인 1건을 원자적으로 소비했을 때 최대 1회 실행한다. 쓰기 호출의 결과가 불명이면 `UNKNOWN_OUTCOME`으로 작업을 잠그고 자동 재전송하지 않는다.
 
@@ -126,7 +124,7 @@ flowchart LR
 | `domain`, `ports` | 신뢰 출처가 분리된 불변 모델과 모듈 간 계약 | B, A·C 공동 리뷰 |
 | `core` | 외부 I/O 없는 정책 판정·등급 병합·결정표 | B |
 | `services` | Guard·승인·응답 게이트(B), Runner·bridge(A), registry(C) | 역할별 분담 |
-| `adapters` | MCP·AGT·모델(A), Cisco Scanner(C) | 역할별 분담 |
+| `adapters` | MCP·접근 규칙 연결·모델(A), Cisco Scanner(C) | 역할별 분담 |
 | `security` | 위험 연산(C), 예외 판정 변환·승인 해시(B) | 역할별 분담 |
 | `storage` | SQLite·스키마·복구·원자적 트랜잭션·단위 테스트 | B 구현, C 리뷰·독립 검증 |
 | `ui` | 실행·승인·서버 검사·감사 화면 | A |
@@ -153,7 +151,7 @@ flowchart LR
 
 ## 개발 환경과 진행 순서
 
-설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. 앱·보안 코어·AGT·Scanner 의존성은 `pyproject.toml`·`uv.lock`에 고정했다. 공통 조합의 합의 기록은 ENV-01로 남아 있다.
+설계 기준은 Python 3.12, MCP Python SDK 1.x, Pydantic, PySide6, SQLite, pytest다. 앱·보안 코어·Scanner 의존성은 `pyproject.toml`·`uv.lock`에 고정했다. 공통 조합의 합의 기록은 ENV-01로 남아 있다.
 
 1. 세 사람이 공통 문서와 각자의 현황 문서를 읽는다.
 2. B가 모델·포트·명령·이벤트 계약을 제안하고 A·C와 확정한다.

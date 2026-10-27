@@ -191,13 +191,17 @@ def test_guard_policy_mismatch_halt_is_returned_without_new_user_turn() -> None:
     async def unused_failure_audit(event: object) -> None:
         raise AssertionError("policy mismatch is an expected denial")
 
+    class UnusedAccessChecker:
+        def check_access(self, req: object, ctx: object) -> None:
+            raise AssertionError("policy mismatch must deny before access evaluation")
+
     store = HaltingStore(state)
     guard = GuardService(
         store,
         object(),
         FakeCatalog(),
         object(),
-        object(),
+        UnusedAccessChecker(),
         profile_id=state.profile_id,
         policy_version="policy-2",
         operator_id="operator-1",

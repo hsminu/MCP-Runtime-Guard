@@ -72,7 +72,7 @@
 | `storage/*` · SQLite·스키마·마이그레이션·감사 저장·영속 순번·시작 복구 | B | C |
 | `services/registry.py`, `adapters/cisco.py` | C | B |
 | `adapters/mcp_transport/` | A | B |
-| `core` 접근 규칙 함수, 기존 AGT 코드 제거 | B | C. AGT 제거 중 A 소유 파일을 고친 부분은 A |
+| `core` 접근 규칙 함수, AGT 잔여 정리(AGT-04 사유 코드) | B | C. AGT 정리 중 A 소유 파일을 고친 부분은 A |
 | `AccessChecker` 연결 | A | B |
 | `services/runner.py` (Codex 세션 관리자) | A | B·C |
 | Codex L1 설정·모델 정보 파일·설치 스크립트·L2 시작 시험 | C | A |
