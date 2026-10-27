@@ -108,7 +108,7 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 | `storage/*` | B | C | C는 트랜잭션·원자성·복구를 독립 검증 |
 | `services/registry.py` | C | B | 등록 상태 전이, 검사 결과 판정 규칙 |
 | `adapters/cisco.py` | C | B | |
-| `adapters/mcp_transport.py` | A | B | |
+| `adapters/mcp_transport/` | A | B | |
 | `core` 접근 규칙 함수 | B | C | 10.3절. A는 Guard에 연결 |
 | `services/runner.py` (Codex 세션 관리자) | A | B, C | 10.4절. L1 설정·모델 정보·L2는 C |
 | `services/bridge.py`, `ui/*`, `__main__.py` | A | C | |
@@ -287,7 +287,7 @@ mcp-runtime-guard/
       bridge.py                〔A〕 Qt ↔ asyncio 명령·이벤트 다리
     ports.py                   〔B〕 Transport, AccessChecker, Scanner, Store
     adapters/
-      mcp_transport.py         〔A〕 MCP SDK 연결, 세션 소유 worker
+      mcp_transport/           〔A〕 MCP SDK 연결, 세션 소유 worker (패키지)
       cisco.py                 〔C〕 Scanner 어댑터
     security/                  위험 연산의 유일한 구현 위치
       paths.py                 〔C〕 safe_path
@@ -1116,7 +1116,7 @@ COMMIT;
 MCP 세션은 비동기 컨텍스트 매니저 안에서만 유효하고, 진입·사용·종료가 같은 task에서 이뤄져야 안전하다. 서버마다 장수 task 하나가 세션을 소유하고, 나머지는 명령 큐로만 요청한다.
 
 ```python
-# adapters/mcp_transport.py (골격, SDK 1.x 기준. 시그니처는 고정 버전에서 확인)
+# adapters/mcp_transport/ (골격, SDK 1.x 기준. 시그니처는 고정 버전에서 확인)
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
@@ -1810,7 +1810,7 @@ rules:
           except:
             ...
     paths:
-      exclude: [src/guard_app/security/failclosed.py, src/guard_app/adapters/mcp_transport.py]
+      exclude: [src/guard_app/security/failclosed.py, src/guard_app/adapters/mcp_transport/worker.py]
 
   - id: no-unsafe-deserialize
     languages: [python]
