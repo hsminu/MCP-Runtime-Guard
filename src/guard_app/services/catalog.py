@@ -38,6 +38,8 @@ from guard_app.services.catalog_sources import (
 )
 
 __all__ = [
+    "SETTINGS_MAX_BYTES",
+    "SETTINGS_MAX_DEPTH",
     "Catalog",
     "CatalogConfigError",
     "GuardSettings",
@@ -56,6 +58,9 @@ __all__ = [
 ]
 
 type ResourceResolver = Callable[[ToolSpec, str], str]
+
+SETTINGS_MAX_BYTES = 1_048_576
+SETTINGS_MAX_DEPTH = 64
 
 
 _SETTINGS_ERROR_CODES = frozenset(
@@ -85,7 +90,7 @@ class SettingsFileError(ValueError):
 
 
 def parse_settings_bytes(
-    data: bytes, *, max_bytes: int = 1_048_576, max_depth: int = 64
+    data: bytes, *, max_bytes: int = SETTINGS_MAX_BYTES, max_depth: int = SETTINGS_MAX_DEPTH
 ) -> dict[str, object]:
     """CFG-01 v1 봉투를 벗긴 독립 JSON 사본. 파일·경로·Registry에 접근하지 않는다.
 
@@ -94,6 +99,8 @@ def parse_settings_bytes(
     중복 키·비유한 수·surrogate·JCS 안전 범위 밖 정수는 거부한다.
     Profile 필드 검증과 policy_version 계산은 load_profile_settings가 맡는다.
     상한은 신뢰된 호출자만 정하며, 인터프리터의 재귀 한계도 넘을 수 없다.
+    C의 크기 제한 읽기는 SETTINGS_MAX_BYTES + 1바이트까지만 읽어 넘긴다.
+    기본 상한을 두 곳에 따로 적지 않고 공개 SETTINGS_MAX_* 상수를 공유한다.
     """
     _settings_limits(max_bytes, max_depth)
     if type(data) is not bytes:
@@ -132,7 +139,10 @@ def parse_settings_bytes(
 
 
 def serialize_settings_bytes(
-    settings: Mapping[str, object], *, max_bytes: int = 1_048_576, max_depth: int = 64
+    settings: Mapping[str, object],
+    *,
+    max_bytes: int = SETTINGS_MAX_BYTES,
+    max_depth: int = SETTINGS_MAX_DEPTH,
 ) -> bytes:
     """독립 JSON 사본을 v1 봉투로 직렬화한다. 입력 보정·변경·파일 접근은 없다.
 

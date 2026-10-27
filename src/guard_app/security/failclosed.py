@@ -38,6 +38,8 @@ async def after_dispatch[T](
     콜백 실패는 이 after_dispatch 경계에서 즉시 on_containment_error로 넘겨
     전역 정지를 요청한다. 그 처리의 실패도 원래 취소를 대체하지 않는다.
     예외 원문은 기록하지 않으며 콜백을 재시도하지 않는다.
+    격리 중 취소와 취소 콜백 실패가 겹치면 on_containment_error가 두 번 불릴 수
+    있으므로 on_containment_error는 멱등이어야 한다.
     콜백이 없는 기존 호출의 결과 변환 의미는 유지한다.
     """
     try:
