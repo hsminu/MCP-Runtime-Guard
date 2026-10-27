@@ -50,7 +50,7 @@ from guard_app.domain.models import (
 from guard_app.domain.reasons import Reason
 from guard_app.ports import AccessChecker, PendingResult, Registry, SessionAudit, Store, Transport
 from guard_app.security.digest import json_digest
-from guard_app.security.failclosed import _AccessCheckCancelled, after_dispatch, fail_closed
+from guard_app.security.failclosed import after_dispatch, fail_closed
 from guard_app.services.approvals import ApprovalService, HumanControl, _ApprovalTaskMismatchError
 from guard_app.services.catalog import Catalog, LoadedProfile, PreparedPolicyChange
 from guard_app.services.response_gate import ResponseGate
@@ -689,20 +689,16 @@ class GuardService:
         )
         if preliminary.decision is Decision.DENY:
             return preliminary
-        try:
-            raw_access: object = self._access_checker.check_access(
-                req, TrustedContext(state=state, operator_id=self._operator_id)
-            )
-            if type(raw_access) is AccessResult:
-                access = raw_access
-            else:
-                # 비동기 구현이 잘못 전달한 코루틴은 실행하지 않고 닫는다.
-                if inspect.iscoroutine(raw_access):
-                    raw_access.close()
-                access = AccessResult(allowed=False, reason="", error=True)
-        except asyncio.CancelledError:
-            # 판정·잘못된 코루틴 정리의 취소는 격리 후 전파한다. 일반 예외는 그대로 경계로 간다.
-            raise _AccessCheckCancelled() from None
+        raw_access: object = self._access_checker.check_access(
+            req, TrustedContext(state=state, operator_id=self._operator_id)
+        )
+        if type(raw_access) is AccessResult:
+            access = raw_access
+        else:
+            # 비동기 구현이 잘못 전달한 코루틴은 실행하지 않고 닫는다.
+            if inspect.iscoroutine(raw_access):
+                raw_access.close()
+            access = AccessResult(allowed=False, reason="", error=True)
         self._check_stop(req.task_id, epoch=req.epoch)
         # 동기 판정 뒤에도 주입된 Registry의 최신 상태와 지문을 다시 확인한다.
         fingerprint = self._registry.fingerprint(req.tool)

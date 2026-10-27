@@ -200,7 +200,7 @@ def test_checker_exception_is_denied_and_audit_keeps_only_exception_type(caplog)
     asyncio.run(scenario())
 
 
-def test_checker_cancel_is_contained_once_then_propagated_without_message():
+def test_checker_cancel_is_contained_once_as_denied_without_message(caplog):
     async def scenario():
         h = _Harness()
 
@@ -208,22 +208,26 @@ def test_checker_cancel_is_contained_once_then_propagated_without_message():
             raise asyncio.CancelledError("PRIVATE_CHECKER_CANCELLATION")
 
         checker = _install(h, fail)
-        with pytest.raises(asyncio.CancelledError) as caught:
-            await h.guard.submit("task", _call())
-        assert "PRIVATE_CHECKER_CANCELLATION" not in str(caught.value)
+        outcome = await h.guard.submit("task", _call())
+        assert isinstance(outcome, Denied)
+        assert outcome.reasons == (Reason.INTERNAL_ERROR,)
+        assert "PRIVATE_CHECKER_CANCELLATION" not in repr(outcome)
         assert len(checker.calls) == 1
         assert h.transport.calls == []
+        assert not any(entry[0] == "reserve" for entry in h.store.trace)
         assert h.store.states["task"].status is TaskStatus.HALTED
         assert len(h.audit) == 1
         assert h.audit[0].exception_type == "CancelledError"
-        assert "PRIVATE_CHECKER_CANCELLATION" not in repr(h.audit)
+        assert h.audit[0].phase == "before_dispatch"
+        assert h.audit[0].reason is Reason.INTERNAL_ERROR
+        assert "PRIVATE_CHECKER_CANCELLATION" not in repr(h.audit) + caplog.text
         assert not h.guard._global_halt
         await h.guard.aclose()
 
     asyncio.run(scenario())
 
 
-def test_checker_cancel_during_approval_recheck_notifies_before_propagating(monkeypatch):
+def test_checker_cancel_during_approval_recheck_denies_and_notifies_once(monkeypatch, caplog):
     async def scenario():
         h = _Harness(label=Label.INTERNAL)
         checker = _install(h, lambda: AccessResult(allowed=True, reason="", error=False))
@@ -245,9 +249,10 @@ def test_checker_cancel_during_approval_recheck_notifies_before_propagating(monk
             raise asyncio.CancelledError("PRIVATE_APPROVAL_CANCELLATION")
 
         checker.produce = fail
-        with pytest.raises(asyncio.CancelledError) as caught:
-            await h.guard.human_control("operator").approve(pending.approval_id)
-        assert "PRIVATE_APPROVAL_CANCELLATION" not in str(caught.value)
+        outcome = await h.guard.human_control("operator").approve(pending.approval_id)
+        assert isinstance(outcome, Denied)
+        assert outcome.reasons == (Reason.INTERNAL_ERROR,)
+        assert "PRIVATE_APPROVAL_CANCELLATION" not in repr(outcome)
         final = await asyncio.wait_for(handle.wait(), 1)
         assert isinstance(final.outcome, Denied)
         assert final.outcome.reasons == (Reason.INTERNAL_ERROR,)
@@ -258,20 +263,23 @@ def test_checker_cancel_during_approval_recheck_notifies_before_propagating(monk
         assert h.store.states["task"].status is TaskStatus.HALTED
         assert h.store.approvals[pending.approval_id].status is ApprovalStatus.INVALIDATED
         assert h.store.consume_count == 0
+        assert not any(entry[0] == "reserve" for entry in h.store.trace)
         assert not h.guard._approvals._memory_snapshots
         assert not h.guard._approvals._expiry_tasks
         assert len(checker.calls) == 2
         assert h.transport.calls == []
         assert len(h.audit) == 1
         assert h.audit[0].exception_type == "CancelledError"
-        assert "PRIVATE_APPROVAL_CANCELLATION" not in repr(h.audit)
+        assert h.audit[0].phase == "before_dispatch"
+        assert h.audit[0].reason is Reason.INTERNAL_ERROR
+        assert "PRIVATE_APPROVAL_CANCELLATION" not in repr(h.audit) + caplog.text
         assert not h.guard._global_halt
         await h.guard.aclose()
 
     asyncio.run(scenario())
 
 
-def test_checker_cancel_with_failed_audit_halts_globally_before_propagating():
+def test_checker_cancel_with_failed_audit_halts_globally_and_denies():
     async def scenario():
         h = _Harness()
         h.audit_error = RuntimeError("PRIVATE_AUDIT_FAILURE")
@@ -280,9 +288,10 @@ def test_checker_cancel_with_failed_audit_halts_globally_before_propagating():
             raise asyncio.CancelledError("PRIVATE_CHECKER_CANCELLATION")
 
         _install(h, fail)
-        with pytest.raises(asyncio.CancelledError) as caught:
-            await h.guard.submit("task", _call())
-        assert "PRIVATE_" not in str(caught.value)
+        outcome = await h.guard.submit("task", _call())
+        assert isinstance(outcome, Denied)
+        assert outcome.reasons == (Reason.INTERNAL_ERROR,)
+        assert "PRIVATE_" not in repr(outcome)
         assert h.guard._global_halt
         assert h.transport.calls == []
         assert h.store.states["task"].status is TaskStatus.HALTED
@@ -291,7 +300,7 @@ def test_checker_cancel_with_failed_audit_halts_globally_before_propagating():
     asyncio.run(scenario())
 
 
-def test_checker_cancel_with_failed_approval_notification_halts_globally(monkeypatch):
+def test_checker_cancel_with_failed_approval_invalidation_halts_globally(monkeypatch):
     async def scenario():
         h = _Harness(label=Label.INTERNAL)
         checker = _install(h, lambda: AccessResult(allowed=True, reason="", error=False))
@@ -302,19 +311,19 @@ def test_checker_cancel_with_failed_approval_notification_halts_globally(monkeyp
         def fail_checker():
             raise asyncio.CancelledError("PRIVATE_CHECKER_CANCELLATION")
 
-        def fail_notification(task_id, reason):
-            raise RuntimeError("PRIVATE_NOTIFICATION_FAILURE")
+        async def fail_invalidation(*args, **kwargs):
+            raise RuntimeError("PRIVATE_INVALIDATION_FAILURE")
 
         checker.produce = fail_checker
         with monkeypatch.context() as patch:
-            patch.setattr(h.guard._approvals, "_publish_task_invalidations", fail_notification)
-            with pytest.raises(asyncio.CancelledError) as caught:
-                await h.guard.human_control("operator").approve(pending.approval_id)
-        assert "PRIVATE_" not in str(caught.value)
+            patch.setattr(h.guard._approvals, "invalidate_task", fail_invalidation)
+            outcome = await h.guard.human_control("operator").approve(pending.approval_id)
+        assert isinstance(outcome, Denied)
+        assert outcome.reasons == (Reason.INTERNAL_ERROR,)
+        assert "PRIVATE_" not in repr(outcome)
         assert h.guard._global_halt
         assert h.transport.calls == []
         assert h.store.consume_count == 0
-        assert h.store.states["task"].status is TaskStatus.HALTED
         assert not h.guard._task_lock("task").locked()
         final = await asyncio.wait_for(handle.wait(), 1)
         assert isinstance(final.outcome, Denied)
@@ -381,7 +390,7 @@ def test_coroutine_return_is_closed_and_never_warns():
     asyncio.run(scenario())
 
 
-def test_cancel_during_coroutine_close_is_contained_and_propagated():
+def test_cancel_during_coroutine_close_is_contained_as_denied():
     async def scenario():
         h = _Harness()
         created = []
@@ -399,12 +408,14 @@ def test_cancel_during_coroutine_close_is_contained_and_propagated():
             return coroutine
 
         checker = _install(h, return_started_coroutine)
-        with pytest.raises(asyncio.CancelledError) as caught:
-            await h.guard.submit("task", _call())
-        assert "PRIVATE_CLOSE_CANCELLATION" not in str(caught.value)
+        outcome = await h.guard.submit("task", _call())
+        assert isinstance(outcome, Denied)
+        assert outcome.reasons == (Reason.INTERNAL_ERROR,)
+        assert "PRIVATE_CLOSE_CANCELLATION" not in repr(outcome)
         assert inspect.getcoroutinestate(created[0]) == inspect.CORO_CLOSED
         assert len(checker.calls) == 1
         assert h.transport.calls == []
+        assert not any(entry[0] == "reserve" for entry in h.store.trace)
         assert h.store.states["task"].status is TaskStatus.HALTED
         assert len(h.audit) == 1
         assert h.audit[0].exception_type == "CancelledError"
@@ -466,6 +477,26 @@ def test_direct_evaluation_does_not_swallow_base_exceptions(exception):
             await h.guard._evaluate_request(req, state, phase="submit")
         assert len(checker.calls) == 1
         assert h.transport.calls == []
+        await h.guard.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("exception", [KeyboardInterrupt, SystemExit])
+def test_checker_other_base_exceptions_propagate_from_submit(exception, caplog):
+    async def scenario():
+        h = _Harness()
+
+        def fail():
+            raise exception("PRIVATE_BASE_EXCEPTION")
+
+        checker = _install(h, fail)
+        with pytest.raises(exception):
+            await h.guard.submit("task", _call())
+        assert len(checker.calls) == 1
+        assert h.transport.calls == []
+        assert not any(entry[0] == "reserve" for entry in h.store.trace)
+        assert "PRIVATE_BASE_EXCEPTION" not in repr(h.audit) + caplog.text
         await h.guard.aclose()
 
     asyncio.run(scenario())

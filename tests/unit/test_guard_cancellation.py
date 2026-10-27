@@ -97,9 +97,9 @@ def test_access_checker_cancelled_error_is_also_task_local():
         h = _Harness(source_label=Label.PUBLIC)
         healthy(h)
         h.access.error = asyncio.CancelledError("PRIVATE_checker")
-        with pytest.raises(asyncio.CancelledError):
-            await h.guard.submit("task", _call())
-        assert_cancelled_task(h)
+        outcome = await h.guard.submit("task", _call())
+        assert_cancelled_denial(h, outcome)
+        assert "PRIVATE_checker" not in repr(outcome) + repr(h.audit)
         h.access.error = None
         assert isinstance(await h.guard.submit("healthy", _call()), Released)
 
@@ -209,8 +209,8 @@ def test_cancellation_during_stop_recording_still_halts_globally(stage):
         work = asyncio.create_task(h.guard.submit("task", _call()))
         await entered.wait()
         work.cancel("PRIVATE_containment_cancel")
-        with pytest.raises(asyncio.CancelledError) as caught:
-            await asyncio.wait_for(work, 1)
+        outcome = await asyncio.wait_for(work, 1)
+        assert isinstance(outcome, Denied)
         assert h.guard._global_halt
         assert h.store.states["task"].status is (
             TaskStatus.RUNNING if stage == "status" else TaskStatus.HALTED
@@ -218,7 +218,7 @@ def test_cancellation_during_stop_recording_still_halts_globally(stage):
         h.access.error = None
         assert isinstance(await h.guard.submit("healthy", _call()), Denied)
         assert h.transport.calls == []
-        assert "PRIVATE_" not in repr(caught.value) + repr(h.audit)
+        assert "PRIVATE_" not in repr(outcome) + repr(h.audit)
 
     asyncio.run(scenario())
 
@@ -396,8 +396,7 @@ def test_sqlite_cancelled_task_halt_and_audit_survive_restart(tmp_path, cancel_s
                     raise asyncio.CancelledError("PRIVATE_checker_cancellation")
 
                 h.access.check_access = check_access
-                with pytest.raises(asyncio.CancelledError):
-                    await h.guard.submit("task", _call())
+                assert isinstance(await h.guard.submit("task", _call()), Denied)
                 h.access.check_access = original_checker
             assert (await store.load_task("task")).status is TaskStatus.HALTED
             assert not h.guard._global_halt

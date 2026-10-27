@@ -9,6 +9,7 @@ import pytest
 
 from guard_app.domain.contracts import Denied, OutcomeUnknown, Pending, Released, Withheld
 from guard_app.domain.enums import Label, RequestStatus, TaskStatus
+from guard_app.domain.reasons import Reason
 from guard_app.services.approvals import PendingResultError
 
 from .test_guard import _call, _Harness
@@ -191,8 +192,9 @@ def test_checker_cancellation_halts_only_its_task():
         h = _Harness()
         h.store.states["healthy"] = h.store.states["task"].model_copy(update={"task_id": "healthy"})
         h.access.error = asyncio.CancelledError()
-        with pytest.raises(asyncio.CancelledError):
-            await h.guard.submit("task", _call())
+        result = await h.guard.submit("task", _call())
+        assert isinstance(result, Denied)
+        assert result.reasons == (Reason.INTERNAL_ERROR,)
         assert not h.guard._global_halt
         assert h.store.states["task"].status is TaskStatus.HALTED
         assert h.transport.calls == []
