@@ -138,104 +138,13 @@ Guard는 이 차이를 만드는 두 가지 정보를 호출 시점에 결합한
 
 ### 1.1 구성요소
 
-```mermaid
-flowchart TB
-    subgraph UI["GUI (Qt 메인 스레드)"]
-        RunTab[작업 실행]
-        ApprTab[요청·승인]
-        SrvTab[서버·검사]
-        LogTab[기록·정책]
-    end
-
-    subgraph Core["백엔드 (asyncio 전용 스레드)"]
-        Runner[Runner<br/>Codex 세션 관리자]
-        Guard[GuardService<br/>유일한 실행 입구]
-        Catalog[Catalog<br/>출처·목적지·서버 해석]
-        Policy[policy.evaluate<br/>순수 함수]
-        Taint[taint 병합]
-        Appr[ApprovalService]
-        Gate[ResponseGate]
-        Store[(SQLite)]
-        Access[접근 규칙<br/>core 순수 함수]
-        Scan[Cisco Adapter]
-        TW[Transport Worker<br/>세션 소유]
-    end
-
-    subgraph MCP["MCP 서버"]
-        Local[Local Document MCP<br/>stdio]
-        Remote[Remote Send MCP<br/>Streamable HTTP]
-    end
-
-    Codex[codex app-server<br/>고정 버전, Task마다 실행]
-    Model[(모델 제공자)]
-
-    RunTab -- 명령 큐 --> Runner
-    Runner -- stdio JSON-RPC<br/>turn/start·interrupt --> Codex
-    Codex -- item/tool/call --> Runner
-    Codex --> Model
-    ApprTab -- 제어 큐 --> Appr
-    Runner -- ProposedCall --> Guard
-    Guard --> Catalog
-    Guard --> Access
-    Guard --> Policy
-    Guard --> Appr
-    Guard --> TW
-    TW --> Local
-    TW --> Remote
-    TW -- 원시 결과 --> Gate
-    Gate --> Taint
-    Taint --> Store
-    Gate -- 공개 가능한 결과 --> Runner
-    Guard -- 이벤트 --> UI
-    SrvTab -- 등록·검사 명령 --> Scan
-    Scan --> Store
-```
+![구성요소](diagrams/system-components.excalidraw.svg)
 
 모델 호출과 대화 루프는 Codex(`codex app-server`)가 맡고, 우리는 그 앞에 세션 관리자를 둔다. 세션 관리자는 Codex에 Guard 도구만 등록하고, 모델의 도구 호출(`item/tool/call`)을 `ProposedCall`로 바꿔 Guard에 넘긴다. Codex 자체 도구는 끄고 시작할 때마다 시험으로 확인한다(10.4절). 사용자 화면은 우리 GUI 하나다. Codex TUI는 Guard 도구 등록과 감시를 건너뛰는 별도 클라이언트라서 쓰지 않는다.
 
 ### 1.2 호출 수명주기
 
-```mermaid
-sequenceDiagram
-    participant M as Codex/세션 관리자
-    participant G as GuardService
-    participant C as Catalog
-    participant A as 접근 규칙
-    participant P as policy.evaluate
-    participant S as Store
-    participant T as TransportWorker
-    participant R as ResponseGate
-
-    M->>G: submit(ProposedCall)
-    G->>G: 스키마·인자 검증 (실패 → DENY)
-    G->>C: resolve(server, tool, args)
-    C-->>G: ResolvedRequest (경계·목적지·도구 지문)
-    G->>S: load TaskState (없음 → DENY)
-    G->>A: check_access(request, ctx)
-    A-->>G: AccessResult
-    G->>P: evaluate(PolicyInput)
-    P-->>G: PolicyDecision
-    G->>S: audit(DECIDED)
-    alt DENY
-        G-->>M: Denied(reason)
-    else ASK
-        G->>S: snapshot + approval(PENDING)
-        G-->>M: Pending(approval_id)
-        Note over G: 사람 전용 제어 채널에서 승인 시<br/>재평가 → 원자적 소비 → dispatch
-    else ALLOW
-        G->>S: request DISPATCHING (예약)
-        G->>T: call_tool(...)
-        T-->>R: RawResult
-        R->>R: 형식·크기 검사, 격리
-        alt READ
-            R->>C: classify(result) → Label | UNCLASSIFIED
-            R->>S: TX: taint 병합 + security_version++ + audit
-        else SEND
-            R->>S: TX: 요청 상태 + audit (등급 병합 없음)
-        end
-        R-->>M: ReleasedResult
-    end
-```
+![호출 수명주기](diagrams/call-lifecycle.excalidraw.svg)
 
 핵심은 마지막 단계의 순서다. **결과 수신 → 격리 → 분류 → 상태 커밋 → 공개.** 커밋이 실패하면 결과는 버려지고 Task는 정지한다(I5, I6).
 
@@ -954,19 +863,7 @@ ASK 대기 중에는 lock을 잡고 기다리지 않는다. 대신 Task 상태�
 
 ### 7.3 Task 상태 전이
 
-```mermaid
-stateDiagram-v2
-    [*] --> READY
-    READY --> RUNNING: 실행
-    RUNNING --> WAITING_APPROVAL: ASK
-    WAITING_APPROVAL --> RUNNING: 승인 소비 / 거절 / 만료
-    RUNNING --> HALTED: 미분류 · 상태 커밋 실패 · 정책 변경 · dispatch 후 예외(READ)
-    WAITING_APPROVAL --> HALTED: 정책 변경 · 긴급 차단
-    RUNNING --> UNKNOWN_OUTCOME: 쓰기 결과 불명 · dispatch 후 예외(SEND)
-    RUNNING --> CLOSED: 사용자 종료
-    HALTED --> CLOSED
-    UNKNOWN_OUTCOME --> CLOSED: 사람이 수신측 확인 후 종료
-```
+![Task 상태 전이](diagrams/task-state.excalidraw.svg)
 
 HALTED와 UNKNOWN_OUTCOME에서 RUNNING으로 돌아가는 화살표는 없다. 복구는 새 Task로만 한다. 승인 소비 시점에 상태가 RUNNING으로 돌아가지만, 소비부터 응답 커밋까지 Task lock이 유지되므로 다른 호출이 그 사이에 판정되지 않는다.
 
@@ -1009,17 +906,7 @@ def digest(b: bytes) -> str:
 
 ### 8.2 승인 상태 전이
 
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING: ASK 판정
-    PENDING --> APPROVED: 사람 승인
-    PENDING --> REJECTED: 사람 거절
-    PENDING --> EXPIRED: 5분 경과 · 재시작
-    PENDING --> CANCELLED: 작업 취소 · 정책 변경 · 긴급 차단
-    APPROVED --> CONSUMED: 재평가 통과 + 원자적 소비
-    APPROVED --> INVALIDATED: 재평가 불일치 (사본·버전·판정 변경)
-    APPROVED --> EXPIRED: 소비 전 만료
-```
+![승인 상태 전이](diagrams/approval-state.excalidraw.svg)
 
 모든 전이는 단방향이다. CONSUMED·REJECTED·EXPIRED·CANCELLED·INVALIDATED는 종착 상태다.
 
@@ -1251,16 +1138,7 @@ servers:
 
 등록 상태 전이:
 
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING: 신규 등록
-    PENDING --> PENDING: 검사 진행 중
-    PENDING --> ACTIVE: 사용자 확인 (검사 경고는 표시만)
-    ACTIVE --> PENDING: 도구 지문 변경 · 재검토 요청
-    ACTIVE --> BLOCKED: 사용자 차단
-    PENDING --> BLOCKED: 사용자 차단
-    BLOCKED --> PENDING: 사용자 재검토 요청
-```
+![서버 등록 상태 전이](diagrams/server-registration-state.excalidraw.svg)
 
 검사 결과만으로 ACTIVE가 되거나 막히지 않는다. 사용자가 경고를 보고 확인해야 ACTIVE가 된다. 반대로 ACTIVE에서 지문이 바뀌면 사람 개입 없이 즉시 PENDING으로 내려간다. 올라가는 건 느리고, 내려가는 건 즉시다.
 
