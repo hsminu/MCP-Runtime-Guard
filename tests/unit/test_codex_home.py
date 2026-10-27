@@ -4,15 +4,20 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import tomllib
 
 import pytest
 
+from guard_app.security import codex_home
 from guard_app.security.codex_home import (
     CODEX_CONFIG_DIR,
+    CODEX_SECRETS_DIR,
     HOME_FILES,
     LOCK_FILE,
     CodexConfigError,
+    clear_codex_credentials,
+    keyring_account,
     load_codex_pins,
     verify_codex_home,
     write_codex_home,
@@ -74,6 +79,9 @@ def test_l1_config_disables_decided_features_and_external_paths():
     assert config["check_for_update_on_startup"] is False
     assert config["project_doc_max_bytes"] == 0
     assert config["project_root_markers"] == []
+    # 2026-10-27 결정: 쓸 수 없는 셸·권한 상승 안내와 날짜·시간대를 모델에 보내지 않는다.
+    assert config["include_permissions_instructions"] is False
+    assert config["include_environment_context"] is False
     assert config["skills"] == {"include_instructions": False, "bundled": {"enabled": False}}
     assert config["analytics"] == {"enabled": False}
     assert config["feedback"] == {"enabled": False}
@@ -212,6 +220,114 @@ def test_verify_rejects_unknown_or_wrong_kind_entries(tmp_path, name, kind):
 
     with pytest.raises(CodexConfigError, match="^CODEX_HOME_UNEXPECTED_ENTRY$"):
         verify_codex_home(home, digest)
+
+
+def _login_secrets(home):
+    secrets = home / CODEX_SECRETS_DIR
+    secrets.mkdir()
+    (secrets / "codex_auth.age").write_bytes(b"age-encryption.org/v1 sealed token")
+    (secrets / "gateway_oauth.age").write_bytes(b"age sealed")
+    (secrets / ".codex_auth.age.tmp-4242-1730000000000000000").write_bytes(b"partial")
+    return secrets
+
+
+def test_verify_accepts_login_secrets_without_hashing_them(tmp_path):
+    # 2026-10-27 결정: keyring 모드에서도 Codex는 토큰 암호문을 CODEX_HOME/secrets에 둔다.
+    home = _home(tmp_path)
+    digest = write_codex_home(home)
+    secrets = _login_secrets(home)
+
+    verify_codex_home(home, digest)
+    # 토큰 갱신으로 내용이 바뀌어도 묶음 해시와 시작 확인은 그대로다.
+    (secrets / "codex_auth.age").write_bytes(b"age-encryption.org/v1 refreshed token")
+    verify_codex_home(home, digest)
+    # 앱을 다시 시작해도 로그인 암호문을 지우거나 덮어쓰지 않는다.
+    assert write_codex_home(home) == digest
+    assert (secrets / "codex_auth.age").read_bytes() == b"age-encryption.org/v1 refreshed token"
+
+
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("AGENTS.md", "file"),
+        ("codex_auth.json", "file"),
+        ("codex_auth.age", "dir"),
+        (".codex_auth.age.tmp-x-1", "file"),
+        ("nested", "dir"),
+    ],
+)
+def test_verify_rejects_other_entries_in_secrets(tmp_path, name, kind):
+    home = _home(tmp_path)
+    digest = write_codex_home(home)
+    secrets = home / CODEX_SECRETS_DIR
+    secrets.mkdir()
+    if kind == "dir":
+        (secrets / name).mkdir()
+    else:
+        (secrets / name).write_text("x")
+
+    with pytest.raises(CodexConfigError, match="^CODEX_HOME_UNEXPECTED_ENTRY$"):
+        verify_codex_home(home, digest)
+
+
+def test_secrets_that_is_a_file_is_refused(tmp_path):
+    home = _home(tmp_path)
+    digest = write_codex_home(home)
+    (home / CODEX_SECRETS_DIR).write_bytes(b"x")
+
+    with pytest.raises(CodexConfigError, match="^CODEX_HOME_UNEXPECTED_ENTRY$"):
+        verify_codex_home(home, digest)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Codex keyring 항목은 Windows 자격증명이다")
+def test_keyring_account_matches_codex_canonical_path_rule(tmp_path):
+    home = _home(tmp_path)
+    canonical = codex_home._final_path(home)
+
+    # Rust `canonicalize`와 같은 `\\?\` 형태다.
+    assert canonical.startswith("\\\\?\\")
+    assert canonical.casefold().endswith(str(home).casefold().split(":", 1)[1])
+    account = keyring_account(home)
+    assert account == "secrets|" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Codex keyring 항목은 Windows 자격증명이다")
+def test_clear_credentials_removes_sealed_files_and_both_keyring_targets(tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    digest = write_codex_home(home)
+    secrets = _login_secrets(home)
+    deleted = []
+    monkeypatch.setattr(codex_home, "_delete_credential", deleted.append)
+
+    clear_codex_credentials(home)
+
+    assert list(secrets.iterdir()) == []
+    account = keyring_account(home)
+    assert deleted == [f"{account}.codex", f"{account}|gateway-oauth.codex"]
+    verify_codex_home(home, digest)
+    # 다시 불러도(이미 지운 상태) 실패하지 않는다.
+    clear_codex_credentials(home)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Codex keyring 항목은 Windows 자격증명이다")
+def test_clear_credentials_refuses_unknown_secret_entries_and_deletes_nothing(
+    tmp_path, monkeypatch
+):
+    home = _home(tmp_path)
+    secrets = _login_secrets(home)
+    (secrets / "unknown.bin").write_bytes(b"x")
+    deleted = []
+    monkeypatch.setattr(codex_home, "_delete_credential", deleted.append)
+
+    with pytest.raises(CodexConfigError, match="^CODEX_HOME_UNEXPECTED_ENTRY$"):
+        clear_codex_credentials(home)
+    assert (secrets / "codex_auth.age").exists()
+    assert deleted == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Codex keyring 항목은 Windows 자격증명이다")
+def test_deleting_an_absent_credential_counts_as_done():
+    codex_home._delete_credential("mcp-runtime-guard-test|absent-0f3c9a.codex")
 
 
 def test_write_refuses_home_with_unexpected_entry_and_writes_nothing(tmp_path):
