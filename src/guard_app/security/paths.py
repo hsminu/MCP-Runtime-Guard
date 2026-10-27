@@ -26,6 +26,7 @@ APP_DIR_NAME = "MCPRuntimeGuard"
 APP_LOCK_FILE = "app.lock"
 SETTINGS_FILE = "settings.json"
 MANAGED_DIRS = ("codex", "codex_home", "tasks", "config")
+SYSTEM_SID = "S-1-5-18"
 _TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 _RESERVED_NAMES = frozenset(
@@ -133,6 +134,9 @@ if sys.platform == "win32":
     )
     _ConvertSidToStringSidW = _api(
         _advapi32, "ConvertSidToStringSidW", _BOOL, _PVOID, ctypes.POINTER(wintypes.LPWSTR)
+    )
+    _ConvertStringSidToSidW = _api(
+        _advapi32, "ConvertStringSidToSidW", _BOOL, wintypes.LPCWSTR, ctypes.POINTER(_PVOID)
     )
     _ConvertStringSecurityDescriptorToSecurityDescriptorW = _api(
         _advapi32,
@@ -414,21 +418,53 @@ def _security_sddl(path: Path, information: int) -> str:
             _LocalFree(ctypes.cast(text, _PVOID))
 
 
+def _canonical_sid(text: str) -> str:
+    """SDDL의 SID 표기를 `S-1-…` 문자열로 바꾼다.
+
+    SDDL 변환은 잘 알려진 계정을 약어로 쓴다(SYSTEM은 `SY`, 내장 Administrator(RID 500)는
+    `LA`). 문자열 그대로 비교하면 같은 계정도 다르게 보이므로, 비교 전에 항상 이 형태로 맞춘다.
+    """
+    sid = _PVOID()
+    if not text or not _ConvertStringSidToSidW(text, ctypes.byref(sid)) or sid.value is None:
+        raise AppPathError("APP_FOLDER_PERMISSION_FAILED")
+    try:
+        out = wintypes.LPWSTR()
+        if not _ConvertSidToStringSidW(sid, ctypes.byref(out)):
+            raise AppPathError("APP_FOLDER_PERMISSION_FAILED")
+        try:
+            value = out.value or ""
+        finally:
+            _LocalFree(ctypes.cast(out, _PVOID))
+    finally:
+        _LocalFree(sid)
+    if not value.startswith("S-1-"):
+        raise AppPathError("APP_FOLDER_PERMISSION_FAILED")
+    return value
+
+
 def _owner_sid(path: Path) -> str:
     sddl = _security_sddl(path, _OWNER_SECURITY_INFORMATION)
     if not sddl.startswith("O:"):
         raise AppPathError("APP_FOLDER_PERMISSION_FAILED")
-    return sddl[2:]
+    return _canonical_sid(sddl[2:])
 
 
 def _dacl_entries(path: Path) -> tuple[str, list[tuple[str, str, str, str]]]:
-    """DACL 머리 표지(`P`=상속 차단)와 ACE 목록(종류·상속 표지·권한·SID)."""
+    """DACL 머리 표지(`P`=상속 차단)와 ACE 목록(종류·상속 표지·권한·`S-1-…` SID).
+
+    정규식으로 읽지 못한 ACE(조건부 ACE 등)가 하나라도 있으면 나머지만 보고 판단하지 않는다.
+    """
     sddl = _security_sddl(path, _DACL_SECURITY_INFORMATION)
     if not sddl.startswith("D:"):
         raise AppPathError("APP_FOLDER_PERMISSION_FAILED")
     body = sddl[2:]
     head = body.split("(", 1)[0]
-    entries = [(kind, flags, rights, sid) for kind, flags, rights, _, _, sid in _ACE.findall(body)]
+    if _ACE.sub("", body) != head:
+        raise AppPathError("APP_FOLDER_PERMISSION_FAILED")
+    entries = [
+        (kind, flags, rights, _canonical_sid(sid))
+        for kind, flags, rights, _, _, sid in _ACE.findall(body)
+    ]
     return head, entries
 
 
@@ -437,7 +473,9 @@ def _is_private(path: Path, user: str, *, protected: bool) -> bool:
     head, entries = _dacl_entries(path)
     if protected and "P" not in head:
         return False
-    if not entries or any(kind != "A" or sid not in (user, "SY") for kind, _, _, sid in entries):
+    if not entries or any(
+        kind != "A" or sid not in (user, SYSTEM_SID) for kind, _, _, sid in entries
+    ):
         return False
     return any(sid == user and rights == "FA" for _, _, rights, sid in entries)
 

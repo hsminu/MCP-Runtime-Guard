@@ -29,7 +29,34 @@ def folders(tmp_path):
 
 def _private(path, user, *, protected):
     head, entries = paths._dacl_entries(path)
-    return ("P" in head) is protected and {sid for _, _, _, sid in entries} == {user, "SY"}
+    return ("P" in head) is protected and {sid for _, _, _, sid in entries} == {
+        user,
+        paths.SYSTEM_SID,
+    }
+
+
+def _own(*folders):
+    """테스트가 미리 만든 폴더의 소유자를 현재 사용자로 적는다.
+
+    관리자 권한으로 실행하면(CI 러너) `mkdir`로 만든 폴더의 기본 소유자는 Administrators라서,
+    "이전 실행이 남긴 앱 폴더"를 흉내 내려면 소유자를 명시해야 한다. `SetNamedSecurityInfoW`는
+    소유자만 바꿔도 상속 ACE를 다시 계산해 DACL을 바꾸므로, DACL을 건드리지 않는
+    `SetFileSecurityW`를 쓰고 이미 현재 사용자면 아무것도 하지 않는다.
+    """
+    user = paths._current_user_sid()
+    set_file_security = ctypes.WinDLL("advapi32", use_last_error=True).SetFileSecurityW
+    set_file_security.restype = ctypes.c_int
+    set_file_security.argtypes = (ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_void_p)
+    descriptor = ctypes.c_void_p()
+    assert paths._ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        f"O:{user}", 1, ctypes.byref(descriptor), None
+    )
+    try:
+        for folder in folders:
+            if paths._owner_sid(folder) != user:
+                assert set_file_security(str(folder), 0x1, descriptor)
+    finally:
+        paths._LocalFree(descriptor)
 
 
 def _apply_dacl(path, sddl):
@@ -85,6 +112,7 @@ def test_files_in_task_folder_inherit_only_user_and_system(folders, user):
 def test_existing_root_with_wider_permissions_is_tightened(tmp_path, user):
     root = tmp_path / "app"
     (root / "config").mkdir(parents=True)
+    _own(root, root / "config")
     (root / "config" / "old.json").write_text("{}", encoding="utf-8")
     # Everyone(WD) 읽기와 상속 허용 상태로 둔다.
     _apply_dacl(root, f"D:(A;OICI;FA;;;{user})(A;OICI;FR;;;WD)(A;OICI;FA;;;BA)")
@@ -114,6 +142,7 @@ def test_stale_task_folders_are_removed_without_following_links(tmp_path):
     tasks = root / "tasks"
     old = tasks / "session-old"
     old.mkdir(parents=True)
+    _own(root, tasks)
     (old / "logs_2.sqlite-wal").write_bytes(b"raw tool result")
     readonly = old / "readonly.txt"
     readonly.write_text("x", encoding="ascii")
@@ -137,6 +166,7 @@ def test_stale_task_folder_that_cannot_be_removed_refuses_start(tmp_path):
     root = tmp_path / "app"
     old = root / "tasks" / "session-old"
     old.mkdir(parents=True)
+    _own(root, root / "tasks")
     held = old / "logs_2.sqlite"
     held.write_bytes(b"raw")
     with held.open("rb"), pytest.raises(AppPathError) as raised:
@@ -177,6 +207,7 @@ def test_root_owned_by_another_user_is_refused(tmp_path, monkeypatch):
 def test_managed_folder_that_is_a_link_is_refused(tmp_path):
     root = tmp_path / "app"
     root.mkdir()
+    _own(root)
     target = tmp_path / "elsewhere"
     target.mkdir()
     _junction(target, root / "codex_home")
@@ -274,6 +305,42 @@ def test_errors_do_not_carry_paths(tmp_path):
     with pytest.raises(AppPathError) as raised:
         prepare_app_folders(marker)
     assert "marker" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("alias", "sid"), [("SY", "S-1-5-18"), ("BA", "S-1-5-32-544"), ("WD", "S-1-1-0")]
+)
+def test_sddl_aliases_are_compared_as_full_sids(alias, sid):
+    assert paths._canonical_sid(alias) == sid
+    assert paths._canonical_sid(sid) == sid
+
+
+def test_builtin_administrator_alias_counts_as_the_user(monkeypatch, tmp_path):
+    """내장 Administrator(RID 500)의 SID는 SDDL에서 `LA`로 나온다(CI 러너)."""
+    administrator = paths._canonical_sid("LA")
+    assert administrator.endswith("-500")
+    sddl = {
+        paths._DACL_SECURITY_INFORMATION: "D:P(A;OICI;FA;;;LA)(A;OICI;FA;;;SY)",
+        paths._OWNER_SECURITY_INFORMATION: "O:LA",
+    }
+    monkeypatch.setattr(paths, "_security_sddl", lambda path, information: sddl[information])
+    assert paths._owner_sid(tmp_path) == administrator
+    assert paths._is_private(tmp_path, administrator, protected=True)
+    assert not paths._is_private(tmp_path, "S-1-5-21-1-2-3-1001", protected=True)
+
+
+@pytest.mark.parametrize(
+    "dacl",
+    [
+        'D:P(A;OICI;FA;;;{user})(XA;;FA;;;WD;(WIN://SYSAPPID Contains "x"))',
+        "D:P(A;OICI;FA;;;{user})(A;OICI;FA;;;SY)garbage",
+    ],
+)
+def test_unread_ace_text_is_not_ignored(monkeypatch, tmp_path, user, dacl):
+    monkeypatch.setattr(paths, "_security_sddl", lambda path, information: dacl.format(user=user))
+    with pytest.raises(AppPathError) as raised:
+        paths._is_private(tmp_path, user, protected=True)
+    assert str(raised.value) == "APP_FOLDER_PERMISSION_FAILED"
 
 
 @pytest.mark.asyncio

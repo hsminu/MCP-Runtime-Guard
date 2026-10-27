@@ -4,6 +4,11 @@
 쓴다. Task 시작 때는 CODEX_HOME의 같은 파일을 다시 대조하고, 최상위에 허용 항목만 있는지 본다
 (C6.19, C-CODEX-06). CODEX_HOME 경로·권한(C2.13)과 codex.exe 실행 때의 해시 대조(C2.12
 launcher)는 별도다. 경로 기본값은 소스 checkout 기준이며 설치판 위치는 C6.20이다.
+
+로그인 자격증명(2026-10-27 결정, C2.15): Codex 0.162.1은 keyring 모드에서도 토큰을
+`secrets/*.age` 암호문으로 CODEX_HOME에 두고 그 암호만 Windows 자격증명 관리자에 둔다
+(`codex-rs/secrets/src/local.rs`·`lib.rs`). `secrets/`는 알려진 파일만 허용하고 해시 대조에서
+뺀다. 로그아웃 뒤에는 `clear_codex_credentials`가 암호문과 자격증명 항목을 지운다.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +29,16 @@ HOME_FILES = ("config.toml", "model_catalog.json")
 # 있어(AGENTS.md·AGENTS.override.md·rules·prompts·skills 등) 시작을 거부한다.
 CODEX_OWNED_FILES = ("installation_id", ".sandbox_migration")
 CODEX_OWNED_DIRS = ("tmp",)
+# 로그인 암호문 폴더(2026-10-27 결정). 안쪽은 아래 이름의 일반 파일만 받는다.
+CODEX_SECRETS_DIR = "secrets"
+CODEX_SECRET_FILES = ("codex_auth.age", "local.age", "mcp_oauth.age", "gateway_oauth.age")
+# Codex가 암호문을 바꿀 때 먼저 쓰고 이름을 바꾸는 임시 파일: `.<이름>.tmp-<pid>-<nonce>`
+# (`codex-rs/secrets/src/local.rs`). 동시 실행 중이거나 쓰다 끊긴 경우에 보인다.
+_SECRET_TEMP = re.compile(r"\.(?:codex_auth|local|mcp_oauth|gateway_oauth)\.age\.tmp-[0-9]+-[0-9]+")
+# keyring 계정 `secrets|<h16>`(gateway는 `|gateway-oauth`)과 서비스 `codex`. Windows 자격증명의
+# 대상 이름은 `<계정>.<서비스>`다(`codex-rs/secrets/src/lib.rs` `compute_keyring_account`).
+_KEYRING_SERVICE = "codex"
+_KEYRING_SUFFIXES = ("", "|gateway-oauth")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _INTEGRITY = re.compile(r"sha512-[A-Za-z0-9+/]{86}==")
 _REGISTRY = "https://registry.npmjs.org/"
@@ -185,9 +201,138 @@ def _check_entries(home: Path) -> None:
                 entry.name in CODEX_OWNED_DIRS and entry.is_dir()
             ):
                 continue
+            if entry.name == CODEX_SECRETS_DIR and entry.is_dir():
+                _secret_entries(entry)
+                continue
             raise CodexConfigError("CODEX_HOME_UNEXPECTED_ENTRY")
     except OSError:
         raise CodexConfigError("CODEX_HOME_UNEXPECTED_ENTRY") from None
+
+
+def _secret_entries(secrets: Path) -> list[Path]:
+    """`secrets/` 안이 알려진 암호문·임시 파일뿐인지 보고 그 목록을 돌려준다. 내용은 읽지 않는다."""
+    found: list[Path] = []
+    for entry in secrets.iterdir():
+        if (
+            entry.is_symlink()
+            or entry.is_junction()
+            or not entry.is_file()
+            or not (entry.name in CODEX_SECRET_FILES or _SECRET_TEMP.fullmatch(entry.name))
+        ):
+            raise CodexConfigError("CODEX_HOME_UNEXPECTED_ENTRY")
+        found.append(entry)
+    return found
+
+
+def clear_codex_credentials(codex_home: Path) -> None:
+    """로그아웃 뒤 A가 부른다(2026-10-27 결정, C2.15). 암호문 파일과 자격증명 관리자 항목을 지운다.
+
+    `account/logout`은 `secrets/codex_auth.age`를 지우지 않고 keyring 항목도 남긴다(A108 관찰).
+    `secrets/` 안에 모르는 항목이 있으면 아무것도 지우지 않고 실패한다. keyring 항목이 이미
+    없으면 성공으로 본다. Codex 프로세스가 끝난 뒤에 부른다.
+    """
+    if sys.platform != "win32":
+        raise CodexConfigError("CODEX_CREDENTIAL_UNSUPPORTED")
+    home = _checked_home(codex_home)
+    account = keyring_account(home)
+    secrets = home / CODEX_SECRETS_DIR
+    try:
+        if secrets.is_symlink() or secrets.is_junction():
+            raise CodexConfigError("CODEX_HOME_UNEXPECTED_ENTRY")
+        entries = _secret_entries(secrets) if secrets.exists() else []
+        for entry in entries:
+            entry.unlink()
+    except OSError:
+        raise CodexConfigError("CODEX_CREDENTIAL_DELETE_FAILED") from None
+    for suffix in _KEYRING_SUFFIXES:
+        _delete_credential(f"{account}{suffix}.{_KEYRING_SERVICE}")
+
+
+def keyring_account(codex_home: Path) -> str:
+    """Codex와 같은 방식의 keyring 계정 이름: `secrets|` + SHA-256(정규 경로)의 앞 16자.
+
+    Rust `canonicalize`는 Windows에서 `\\\\?\\C:\\…` 형태를 돌려준다. 같은 값을 얻으려고
+    `GetFinalPathNameByHandleW`(정규화 이름·DOS 볼륨 이름)를 쓴다.
+    """
+    canonical = _final_path(_checked_home(codex_home))
+    return "secrets|" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    _INVALID_HANDLE = ctypes.c_void_p(-1).value
+    _FILE_READ_ATTRIBUTES = 0x0080
+    _FILE_SHARE_ALL = 0x00000007
+    _OPEN_EXISTING = 3
+    _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    _CRED_TYPE_GENERIC = 1
+    _ERROR_NOT_FOUND = 1168
+
+    _CreateFileW = _kernel32.CreateFileW
+    _CreateFileW.restype = wintypes.HANDLE
+    _CreateFileW.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    _GetFinalPathNameByHandleW = _kernel32.GetFinalPathNameByHandleW
+    _GetFinalPathNameByHandleW.restype = wintypes.DWORD
+    _GetFinalPathNameByHandleW.argtypes = (
+        wintypes.HANDLE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    )
+    _CloseHandle = _kernel32.CloseHandle
+    _CloseHandle.restype = wintypes.BOOL
+    _CloseHandle.argtypes = (wintypes.HANDLE,)
+    _CredDeleteW = _advapi32.CredDeleteW
+    _CredDeleteW.restype = wintypes.BOOL
+    _CredDeleteW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD)
+
+
+def _final_path(path: Path) -> str:
+    if sys.platform != "win32":
+        raise CodexConfigError("CODEX_CREDENTIAL_UNSUPPORTED")
+    handle = _CreateFileW(
+        str(path),
+        _FILE_READ_ATTRIBUTES,
+        _FILE_SHARE_ALL,
+        None,
+        _OPEN_EXISTING,
+        _FILE_FLAG_BACKUP_SEMANTICS,
+        None,
+    )
+    if handle is None or handle == _INVALID_HANDLE:
+        raise CodexConfigError("CODEX_HOME_INVALID")
+    try:
+        size = 512
+        while True:
+            buffer = ctypes.create_unicode_buffer(size)
+            length = _GetFinalPathNameByHandleW(handle, buffer, size, 0)
+            if length == 0:
+                raise CodexConfigError("CODEX_HOME_INVALID")
+            if length < size:
+                return buffer.value
+            size = length + 1
+    finally:
+        _CloseHandle(handle)
+
+
+def _delete_credential(target: str) -> None:
+    if (
+        not _CredDeleteW(target, _CRED_TYPE_GENERIC, 0)
+        and ctypes.get_last_error() != _ERROR_NOT_FOUND
+    ):
+        raise CodexConfigError("CODEX_CREDENTIAL_DELETE_FAILED")
 
 
 def _verified_digest(home: Path, pins: CodexPins) -> str:

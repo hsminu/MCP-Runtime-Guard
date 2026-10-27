@@ -13,7 +13,7 @@
     "sha256": "dd13bdb162a184fa04039488b234a8258ef9b76f84e926c505d5742b19249a6a"
   },
   "codex_home": {
-    "config.toml": "246c91050d87e7695e9c767f5d1bd9ff3d9049463c93f83455f07d15ecc5bbdf",
+    "config.toml": "b314c116f107468980c6acbeafd959b9b56f7308485787b9cc81525dd4ca75c6",
     "model_catalog.json": "ab36eb06b1fa3c5e675fec92c74af126ba04d5017b1423b287ad926b33c3aded"
   },
   "allowed_models": ["gpt-6.1-sol"]
