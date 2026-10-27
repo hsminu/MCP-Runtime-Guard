@@ -3,12 +3,15 @@
 import json
 from collections import UserDict
 from copy import deepcopy
+from inspect import signature
 from types import MappingProxyType
 
 import pytest
 
 from guard_app.services import catalog as catalog_module
 from guard_app.services.catalog import (
+    SETTINGS_MAX_BYTES,
+    SETTINGS_MAX_DEPTH,
     CatalogConfigError,
     SettingsFileError,
     load_profile_settings,
@@ -18,7 +21,7 @@ from guard_app.services.catalog import (
 )
 from tests.unit.test_profile_loading import _document, _Registry
 
-LIMIT = 1_048_576
+LIMIT = SETTINGS_MAX_BYTES
 BOM = b"\xef\xbb\xbf"
 PRIVATE = "PRIVATE_SETTINGS_CONTENT"
 
@@ -40,6 +43,22 @@ def _at_depth(depth):
         + b"]" * (depth - 2)
         + b"}}"
     )
+
+
+@pytest.mark.parametrize("operation", [parse_settings_bytes, serialize_settings_bytes])
+def test_public_limits_are_the_function_defaults_and_exports(operation):
+    assert SETTINGS_MAX_BYTES == 1_048_576
+    assert SETTINGS_MAX_DEPTH == 64
+    parameters = signature(operation).parameters
+    assert parameters["max_bytes"].default == SETTINGS_MAX_BYTES
+    assert parameters["max_depth"].default == SETTINGS_MAX_DEPTH
+    assert {"SETTINGS_MAX_BYTES", "SETTINGS_MAX_DEPTH"} <= set(catalog_module.__all__)
+
+
+def test_c_limited_read_sentinel_byte_is_rejected():
+    payload = b" " * (SETTINGS_MAX_BYTES + 1)
+    with pytest.raises(SettingsFileError, match="^SETTINGS_TOO_LARGE$"):
+        parse_settings_bytes(payload)
 
 
 def test_prepared_document_round_trip_preserves_policy_version_and_input():

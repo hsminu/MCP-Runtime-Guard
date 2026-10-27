@@ -156,5 +156,6 @@ def test_cancel_callback_failure_halts_and_preserves_original_cancellation(
     assert caught.value.__suppress_context__
     assert halted
     assert events.count("notify") == 1
+    assert len(events) == (3 if containment_cancel else 2)
     assert events[-1] == callback_error.__name__
     assert "PRIVATE" not in repr(caught.value) + repr(events) + caplog.text
