@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 
-from guard_app.adapters.mcp_transport import _SDK_LOG_SCOPE, _install_sdk_log_containment
+from guard_app.adapters.mcp_transport.sdk_logging import SDK_LOG_SCOPE, install_sdk_log_containment
 
 
 @dataclass
@@ -48,9 +48,9 @@ async def serve_loopback(app):
         )
         # The in-process synthetic server also emits session IDs at INFO. Its
         # task and TCP handlers inherit the same quarantine as SDK client tasks.
-        _install_sdk_log_containment()
+        install_sdk_log_containment()
         server_context = copy_context()
-        server_context.run(_SDK_LOG_SCOPE.set, True)
+        server_context.run(SDK_LOG_SCOPE.set, True)
         task = asyncio.create_task(
             server.serve(sockets=[listener]), name="a-http-spike", context=server_context
         )
@@ -75,9 +75,9 @@ async def serve_loopback(app):
 @asynccontextmanager
 async def http_spike(*, json_response=True, stateless=False):
     spike = HttpSpike()
-    _install_sdk_log_containment()
+    install_sdk_log_containment()
     setup_context = copy_context()
-    setup_context.run(_SDK_LOG_SCOPE.set, True)
+    setup_context.run(SDK_LOG_SCOPE.set, True)
     server = setup_context.run(
         FastMCP,
         "A synthetic HTTP spike",

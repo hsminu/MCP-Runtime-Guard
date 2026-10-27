@@ -15,8 +15,8 @@ import httpx
 import pytest
 
 from examples.http_spike_server import http_spike, serve_loopback
-from guard_app.adapters import mcp_transport
-from guard_app.adapters.mcp_transport import McpTransport, http_stream_factory
+from guard_app.adapters.mcp_transport import McpTransport, http_stream_factory, streams
+from guard_app.adapters.mcp_transport import worker as server_worker
 from guard_app.domain.contracts import Denied, OutcomeUnknown, Released, Withheld
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import DispatchError
@@ -224,8 +224,8 @@ async def test_client_and_stream_lifetime_settings_and_request_guards(monkeypatc
         seen.append(http_client)
         yield (None, None, None)
 
-    monkeypatch.setattr(mcp_transport.httpx, "AsyncHTTPTransport", capture_transport)
-    monkeypatch.setattr(mcp_transport, "streamable_http_client", fake_stream)
+    monkeypatch.setattr(streams.httpx, "AsyncHTTPTransport", capture_transport)
+    monkeypatch.setattr(streams, "streamable_http_client", fake_stream)
     async with http_stream_factory("https://example.test/mcp")():
         pass
     assert seen[0]["retries"] == 0 and not seen[0]["trust_env"] and seen[0]["verify"]
@@ -237,7 +237,7 @@ def test_httpcore_is_imported_with_the_transport_module():
     # A46: httpx would otherwise import httpcore on the loop at the first connection.
     import sys
 
-    assert mcp_transport.httpcore is sys.modules["httpcore"]
+    assert streams.httpcore is sys.modules["httpcore"]
 
 
 @pytest.mark.asyncio
@@ -264,9 +264,9 @@ async def test_tls_context_is_built_off_the_event_loop_and_still_verifies(monkey
     async def fake_stream(endpoint, *, http_client, terminate_on_close):
         yield (None, None, None)
 
-    monkeypatch.setattr(mcp_transport.httpx, "create_ssl_context", capture_context)
-    monkeypatch.setattr(mcp_transport.httpx, "AsyncHTTPTransport", capture_transport)
-    monkeypatch.setattr(mcp_transport, "streamable_http_client", fake_stream)
+    monkeypatch.setattr(streams.httpx, "create_ssl_context", capture_context)
+    monkeypatch.setattr(streams.httpx, "AsyncHTTPTransport", capture_transport)
+    monkeypatch.setattr(streams, "streamable_http_client", fake_stream)
     async with http_stream_factory("https://example.test/mcp")():
         pass
 
@@ -500,7 +500,7 @@ async def test_json_tool_slower_than_io_timeout_succeeds_and_worker_stays_ready(
         worker = transport._workers["docs"]
         try:
             assert (await transport.call(_request("docs", seq=1))).payload is not None
-            assert worker._state is mcp_transport._State.READY
+            assert worker._state is server_worker._State.READY
             probe.delay = 0.0
             assert (await transport.call(_request("docs", seq=2))).payload is not None
         finally:
@@ -530,7 +530,7 @@ async def test_json_tool_slower_than_call_timeout_times_out_and_worker_stays_usa
             # The late JSON response arrives for an abandoned request ID.
             await asyncio.wait_for(probe.responded.wait(), 2)
             await asyncio.sleep(0.05)
-            assert worker._state is mcp_transport._State.READY
+            assert worker._state is server_worker._State.READY
             probe.delay = 0.0
             assert (await transport.call(_request("docs", seq=2))).payload is not None
         finally:

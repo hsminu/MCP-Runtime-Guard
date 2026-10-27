@@ -17,11 +17,13 @@ from guard_app.adapters.mcp_ingress import IngressError, IngressGate, PipeFrameR
 from guard_app.adapters.mcp_transport import (
     McpTransport,
     ToolListLimits,
-    _sdk_session_factory,
-    _UnvalidatedClientSession,
     collect_tool_definitions,
     http_stream_factory,
     validated_stdio_stream_factory,
+)
+from guard_app.adapters.mcp_transport.sdk_session import (
+    _UnvalidatedClientSession,
+    sdk_session_factory,
 )
 from guard_app.domain.errors import DispatchError
 
@@ -382,7 +384,7 @@ async def test_two_real_sdk_collections_get_independent_budgets() -> None:
     peer = _Peer(lambda request_id, _number: _page(request_id))
     factory = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
     size = len(_page(1))
-    async with _sdk_session_factory(factory)() as session:
+    async with sdk_session_factory(factory)() as session:
         await session.initialize()
         limits = ToolListLimits(max_page_bytes=size, max_total_bytes=size)
         assert (await collect_tool_definitions(session, limits)).complete
@@ -395,7 +397,7 @@ async def test_concurrent_ping_cannot_steal_listing_response_budget_association(
     peer = _Peer(lambda request_id, number: _page(request_id, cursor="x" if number == 1 else None))
     factory = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
     total = len(_page(2, cursor="x")) + len(_page(3)) - 1
-    async with _sdk_session_factory(factory)() as session:
+    async with sdk_session_factory(factory)() as session:
         await session.initialize()
         listing, _ping = await asyncio.gather(
             collect_tool_definitions(session, ToolListLimits(max_total_bytes=total)),
@@ -414,7 +416,7 @@ async def test_real_sdk_session_reports_only_that_the_tool_list_changed() -> Non
     peer = _Peer(lambda request_id, _number: _page(request_id))
     factory = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
     seen: list[str] = []
-    async with _sdk_session_factory(factory, lambda: seen.append("changed"))() as session:
+    async with sdk_session_factory(factory, lambda: seen.append("changed"))() as session:
         await session.initialize()
         for method in (
             "notifications/resources/list_changed",
@@ -525,7 +527,7 @@ async def test_abandoned_sdk_listing_invalidates_connection(cancel: bool) -> Non
         await peer.write(frame)
 
     factory = validated_stdio_stream_factory(peer.read, write, peer.drain)
-    async with _sdk_session_factory(factory)() as session:
+    async with sdk_session_factory(factory)() as session:
         await session.initialize()
         limits = ToolListLimits(page_timeout_s=0.02)
         task = asyncio.create_task(collect_tool_definitions(session, limits))

@@ -3,8 +3,9 @@
 A's own guard while it refactors its code. Project-wide static enforcement
 (import-linter, Semgrep, CI) stays C's (C6.3); these checks read only A modules.
 
-- I1/T08: the MCP transport is built only inside Guard assembly; the UI reaches
-  the backend only through the bridge.
+- I1/T08: the MCP transport is built only inside Guard assembly, and the `mcp`
+  SDK is imported only inside the transport package (technical design 2.2); the
+  UI reaches the backend only through the bridge.
 - 13.1: risky operations (processes, files, SQL, sockets) go through C's and B's
   designated modules, never A's.
 - AGENTS 2026-10-18: broad exception handling only at the designated boundary.
@@ -87,15 +88,30 @@ FORBIDDEN_IMPORTS = frozenset(
 )
 FORBIDDEN_CALLS = frozenset({"eval", "exec", "compile", "__import__"})
 # Where a broad handler is allowed: (module, class, function).
-BROAD_EXCEPT_ALLOWED = frozenset({("adapters.mcp_transport", "ServerWorker", "_execute")})
+BROAD_EXCEPT_ALLOWED = frozenset({("adapters.mcp_transport.worker", "ServerWorker", "_execute")})
 RICH_TEXT_NAMES = frozenset({"setHtml", "insertHtml", "RichText", "QTextBrowser", "QWebEngineView"})
 
 
+# A's MCP package (A113). The `mcp` SDK is imported only inside it.
+TRANSPORT = "adapters.mcp_transport"
+
+
+def _module_name(path: Path) -> str:
+    parts = path.relative_to(SRC).with_suffix("").parts
+    return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+
 def _modules(package: str, names: frozenset[str] | None = None) -> list[tuple[str, Path]]:
-    folder = SRC / package
+    """Modules directly in `package`; with `names`, only those (a package counts by name)."""
+    folder = SRC.joinpath(*package.split("."))
     found = sorted(path for path in folder.glob("*.py") if path.stem != "__init__")
+    found += sorted(
+        path / "__init__.py" for path in folder.iterdir() if (path / "__init__.py").exists()
+    )
     return [
-        (f"{package}.{path.stem}", path) for path in found if names is None or path.stem in names
+        (_module_name(path), path)
+        for path in found
+        if names is None or _module_name(path).rsplit(".", 1)[1] in names
     ]
 
 
@@ -105,12 +121,17 @@ def a_modules() -> list[tuple[str, Path]]:
         *_modules("ui"),
         *_modules("services", A_SERVICES),
         *_modules("adapters", A_ADAPTERS),
+        *_modules(TRANSPORT),
     ]
 
 
-def _imports(tree: ast.AST, module: str) -> set[str]:
+def _in_transport(module: str) -> bool:
+    return module == TRANSPORT or module.startswith(f"{TRANSPORT}.")
+
+
+def _imports(tree: ast.AST, module: str, *, is_package: bool = False) -> set[str]:
     """Imported module names; `from a import b` also counts as `a.b` (b may be a module)."""
-    package = module.rsplit(".", 1)[0] if "." in module else ""
+    package = module if is_package else module.rsplit(".", 1)[0] if "." in module else ""
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -149,7 +170,11 @@ def test_every_service_and_adapter_module_is_classified() -> None:
 
 @pytest.mark.parametrize(("module", "path"), A_MODULES, ids=A_IDS)
 def test_layer_imports(module: str, path: Path) -> None:
-    imports = {name for name in _imports(_tree(path), module) if name.startswith("guard_app")}
+    imports = {
+        name
+        for name in _imports(_tree(path), module, is_package=path.stem == "__init__")
+        if name.startswith("guard_app")
+    }
     if module.startswith("ui."):
         allowed = ("guard_app.ui", "guard_app.services.bridge", "guard_app.domain")
         assert all(name.startswith(allowed) for name in imports), sorted(imports)
@@ -161,28 +186,48 @@ def test_layer_imports(module: str, path: Path) -> None:
         )
 
 
+def _source_imports() -> dict[str, set[str]]:
+    return {
+        _module_name(path): _imports(
+            _tree(path), _module_name(path), is_package=path.stem == "__init__"
+        )
+        for path in SRC.rglob("*.py")
+    }
+
+
 def test_only_guard_assembly_builds_the_mcp_transport() -> None:
-    """I1/T08: no other source module can reach the transport around Guard."""
-    importers = set()
-    for path in SRC.rglob("*.py"):
-        module = ".".join(path.relative_to(SRC).with_suffix("").parts)
-        if any(
-            name.startswith("guard_app.adapters.mcp_transport")
-            for name in _imports(_tree(path), module)
-        ):
-            importers.add(module)
+    """I1/T08: outside its own package, no source module can reach the transport."""
+    importers = {
+        module
+        for module, names in _source_imports().items()
+        if not _in_transport(module)
+        and any(_in_transport(name.removeprefix("guard_app.")) for name in names)
+    }
     assert importers == {"services.product_assembly"}
+
+
+def test_only_the_transport_package_imports_the_mcp_sdk() -> None:
+    """Technical design 2.2 (I1): no raw MCP client path outside the transport."""
+    importers = {
+        module
+        for module, names in _source_imports().items()
+        if any(name == "mcp" or name.startswith("mcp.") for name in names)
+    }
+    assert importers  # the transport itself uses the SDK
+    assert all(_in_transport(module) for module in importers), sorted(importers)
 
 
 @pytest.mark.parametrize(("module", "path"), A_MODULES, ids=A_IDS)
 def test_no_risky_operation_or_output_channel(module: str, path: Path) -> None:
     tree = _tree(path)
-    roots = {name.split(".")[0] for name in _imports(tree, module)}
+    roots = {
+        name.split(".")[0] for name in _imports(tree, module, is_package=path.stem == "__init__")
+    }
     assert not roots & FORBIDDEN_IMPORTS, sorted(roots & FORBIDDEN_IMPORTS)
     if module != "__main__":
         assert "os" not in roots  # the entry point's os._exit only (A110)
     if "logging" in roots:
-        assert module == "adapters.mcp_transport"  # installs the redacting record factory
+        assert module == f"{TRANSPORT}.sdk_logging"  # installs the redacting record factory
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             assert node.func.id not in FORBIDDEN_CALLS, node.func.id
