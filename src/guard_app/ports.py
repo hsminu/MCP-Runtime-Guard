@@ -105,7 +105,8 @@ class AccessChecker(Protocol):
 
     판정기에서 I/O·대기·스레드·하위 프로세스를 사용하지 않는다. 일반 예외는 Guard의
     fail_closed 경계에서 DENY가 되며, AccessResult가 아닌 값은 error=True DENY다.
-    CancelledError는 정지·감사 등 격리를 수행한 뒤 전파한다.
+    판정기가 던진 CancelledError도 예약 전 실패로 보아 그 Task만 정지하고 DENY로 끝내며
+    전파하지 않는다.
     오류 원문을 reason에 넣지 않는다. ALLOW는 거부권을 행사하지 않을 뿐 사람
     승인을 대체하거나 Guard의 ASK·DENY를 완화하지 않는다(8.5·10.3절).
     """
