@@ -28,7 +28,7 @@
   - 정리가 확인되면 `main`이 0을 돌려주고 잠금이 풀린다.
   - 수정 전 코드에서 둘 다 실패한다.
 - `test_bridge.py`: 정상 종료 뒤에는 `cleanup_unconfirmed`가 False이고, 정리 실패 뒤에는 True다. 두 경우 모두 `wait_done`이 True다.
-- 전체 검사(A 브랜치, Windows 11, Python 3.12.15): 단위·contract 4,485개 통과, 1개 생략(기존 경고 5개). Ruff·포맷·mypy(85개 파일) 통과.
+- 전체 검사(A 브랜치): 단위·contract 4,485개 통과, 1개 생략(기존 경고 5개). Ruff·포맷·mypy(85개 파일) 통과.
 
 ## 남은 한계
 

@@ -75,7 +75,7 @@
 - [x] A110 앱을 닫을 때 정리가 확인되지 않으면 단일 실행 잠금을 쥔 채 프로세스 종료(B6.17 8.1, #37) · [기록](archive/a/A110-unconfirmed-exit-keeps-lock.md)
 - [ ] A19·A20 실제 codex.exe 세션 — 막힘: L2(C6.14)·Profile 설정 파일(CFG-01, B 변환·C 파일 연산)·로그인 뒤 CODEX_HOME `secrets` 허용(C6.19, A108 발견 1)
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
-- [x] A108 실제 ChatGPT 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부·기기 코드 차단 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
+- [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
 - [ ] A109 기기 코드 로그인이 막힌 계정 처리(화면 안내 또는 브라우저 로그인 지원) — 막힘: 사용자 결정(A108 발견 2)
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
