@@ -143,5 +143,68 @@
    ]
   ]
  },
- "regression_shell_not_exposed": "L1 shell_tool·unified_exec=true + 모델 정보 shell_type=unified_exec에서도 셸 도구가 나오지 않았다. environments=[]가 환경 의존 도구를 뺀다(core/src/tools/spec_plan.rs 1156·1226행)."
+ "regression_shell_not_exposed": "L1 shell_tool·unified_exec=true + 모델 정보 shell_type=unified_exec에서도 셸 도구가 나오지 않았다. environments=[]가 환경 의존 도구를 뺀다(core/src/tools/spec_plan.rs 1156·1226행).",
+ "network_during_l2": {
+  "note": "#41 B 리뷰 2번. 읽을 수 없는 요청을 판정에 넣은 뒤의 실제 L2 5회. 별도 스레드가 codex.exe PID의 TCP(IPv4·IPv6) 연결 표를 쉬지 않고 찍고 UDP 바인딩은 20회마다 찍음. 기준선은 가짜 모델로 가는 루프백 연결. 표본 사이에 열고 닫힌 연결은 놓칠 수 있음. 로그인하지 않은 CODEX_HOME",
+  "runs": 5,
+  "passed": 5,
+  "unreadable_requests": [
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "codex_processes": [
+   1,
+   1,
+   1,
+   1,
+   1
+  ],
+  "tcp_table_samples": [
+   1417,
+   1444,
+   1442,
+   1271,
+   1229
+  ],
+  "sample_interval_ms": [
+   0.72,
+   0.73,
+   0.73,
+   0.76,
+   0.9
+  ],
+  "loopback_remote_ports_seen": [
+   1,
+   1,
+   1,
+   1,
+   1
+  ],
+  "tcp_outside_loopback": [
+   [],
+   [],
+   [],
+   [],
+   []
+  ],
+  "udp_binding_samples": [
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "seconds": [
+   3.13,
+   1.44,
+   1.43,
+   1.35,
+   1.5
+  ],
+  "logged_in": false,
+  "root_deleted": true
+ }
 }

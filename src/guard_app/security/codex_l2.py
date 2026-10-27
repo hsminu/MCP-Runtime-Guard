@@ -136,6 +136,7 @@ class L2Observation:
     model_requests: list[dict[str, Any]] = field(default_factory=list)
     other_requests: list[str] = field(default_factory=list)
     unauthorized_requests: int = 0
+    unreadable_requests: int = 0
     exit_confirmed: bool = False
     folder_removed: bool = False
     errors: list[str] = field(default_factory=list)
@@ -371,6 +372,14 @@ async def _reply(
     await writer.drain()
 
 
+def _record_model_traffic(observation: L2Observation, model: MockModel) -> None:
+    """가짜 모델이 받은 모든 요청을 관찰로 옮긴다. 읽지 못해 거부한 요청도 판정에 들어간다."""
+    observation.model_requests = list(model.requests)
+    observation.other_requests = list(model.other_requests)
+    observation.unauthorized_requests = model.unauthorized
+    observation.unreadable_requests = model.unreadable
+
+
 class _Rpc:
     """codex app-server stdio JSON-RPC(줄 단위, `jsonrpc` 필드 없음)의 L2용 최소 구동부."""
 
@@ -559,9 +568,7 @@ async def observe_l2(
         observation.errors.append(str(error))
     finally:
         await model.close()
-        observation.model_requests = list(model.requests)
-        observation.other_requests = list(model.other_requests)
-        observation.unauthorized_requests = model.unauthorized
+        _record_model_traffic(observation, model)
         if process is None or observation.exit_confirmed:
             try:
                 await asyncio.to_thread(folders.remove_task_folder, folder)
@@ -659,7 +666,11 @@ def evaluate(
         fail("L2_PROBE_CALLS_UNEXPECTED")
     if observation.turn_status != "completed":
         fail("L2_TURN_NOT_COMPLETED")
-    if observation.other_requests or observation.unauthorized_requests:
+    if (
+        observation.other_requests
+        or observation.unauthorized_requests
+        or observation.unreadable_requests
+    ):
         fail("L2_MODEL_TRAFFIC_UNEXPECTED")
     if not observation.exit_confirmed:
         fail("L2_EXIT_UNCONFIRMED")

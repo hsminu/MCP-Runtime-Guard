@@ -347,6 +347,10 @@ MUTATIONS = {
         lambda o: setattr(o, "unauthorized_requests", 1),
         "L2_MODEL_TRAFFIC_UNEXPECTED",
     ),
+    "unreadable": (
+        lambda o: setattr(o, "unreadable_requests", 1),
+        "L2_MODEL_TRAFFIC_UNEXPECTED",
+    ),
     "one_request": (lambda o: o.model_requests.pop(), "L2_MODEL_REQUEST_MISSING"),
     "exit_unconfirmed": (lambda o: setattr(o, "exit_confirmed", False), "L2_EXIT_UNCONFIRMED"),
     "folder_left": (lambda o: setattr(o, "folder_removed", False), "L2_FOLDER_NOT_REMOVED"),
@@ -459,6 +463,25 @@ async def test_mock_model_refuses_wrong_token_other_paths_and_chunked_bodies():
         assert model.unreadable == 1
     finally:
         await model.close()
+
+
+@pytest.mark.asyncio
+async def test_extra_unreadable_request_fails_an_otherwise_good_run():
+    """#41 B 리뷰 1번: 정상 요청 두 개 말고 읽을 수 없는 요청이 하나 더 오면 L2가 실패한다."""
+    model = MockModel(TOKEN)
+    port = await model.start()
+    try:
+        chunked = _post("/v1/responses", b"{}", extra=b"Transfer-Encoding: chunked\r\n")
+        assert (await _http(port, chunked))[0] == 400
+    finally:
+        await model.close()
+    observation = good()
+    expected_requests = list(observation.model_requests)
+    model.requests.extend(expected_requests)
+    codex_l2._record_model_traffic(observation, model)
+    assert observation.model_requests == expected_requests
+    assert observation.unreadable_requests == 1
+    assert _judge(observation) == ("L2_MODEL_TRAFFIC_UNEXPECTED",)
 
 
 PYTHON = Path(sys.base_prefix) / "python.exe"
