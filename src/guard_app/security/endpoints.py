@@ -7,9 +7,9 @@
 - **scheme:** https가 원칙이다. http는 루프백 IP 리터럴(`127.0.0.0/8`, `[::1]`)에만 허용하고
   `localhost` 같은 이름은 받지 않는다.
 - **거부:** 사용자 정보, 쿼리, fragment, 끝 점, `%`(퍼센트 인코딩 호스트·경로, IPv6 zone),
-  숫자 IP 변형(`0x7f.1`, `2130706433`, `127.1`, `0177.0.0.1`), IPv4를 담은 IPv6
-  (`::ffff:a.b.c.d`, `::a.b.c.d`), 미지정·멀티캐스트·링크 로컬(169.254.x.x 메타데이터 포함)·
-  예약 주소, 경로의 `.`·`..`·빈 세그먼트.
+  호스트의 보이지 않는 문자(서식 문자, UTS #46이 지우는 문자), 숫자 IP 변형(`0x7f.1`,
+  `2130706433`, `127.1`, `0177.0.0.1`), IPv4를 담은 IPv6(매핑·호환·SIIT·NAT64·6to4·Teredo),
+  미지정·멀티캐스트·링크 로컬(169.254.x.x 메타데이터 포함)·예약 주소, 경로의 `.`·`..`·빈 세그먼트.
 - **정규화:** scheme·호스트 소문자, 이름은 IDNA 2008(UTS #46, `idna` 패키지)의 A-label, IPv6는
   압축형, 기본 포트(80·443) 생략, 빈 경로는 `/`.
 
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import unicodedata
 from dataclasses import dataclass
 
 import idna
@@ -55,7 +56,19 @@ _LDH_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 # RFC 3986 경로 문자에서 `%`를 뺐다. 인코딩 우회와 이중 디코딩을 따로 따지지 않기 위해서다.
 _PATH = re.compile(r"/[A-Za-z0-9\-._~!$&'()*+,;=:@/]*")
 _THIS_NETWORK = ipaddress.IPv4Network("0.0.0.0/8")
-_IPV4_COMPATIBLE = ipaddress.IPv6Network("::/96")
+# IPv4를 담는 IPv6 형태. 안의 IPv4로 특수 주소·루프백 검사를 우회하지 못하게 모두 막는다.
+_IPV4_EMBEDDING = tuple(
+    ipaddress.IPv6Network(network)
+    for network in (
+        "::/96",  # 호환(::a.b.c.d). ::1은 따로 허용
+        "::ffff:0:0/96",  # 매핑
+        "::ffff:0:0:0/96",  # 변환(SIIT)
+        "64:ff9b::/96",  # NAT64
+        "64:ff9b:1::/48",  # NAT64 로컬
+        "2002::/16",  # 6to4
+        "2001::/32",  # Teredo
+    )
+)
 _IPV6_LOOPBACK = ipaddress.IPv6Address("::1")
 
 
@@ -149,6 +162,9 @@ def _host(text: str) -> ipaddress.IPv4Address | str:
         if not _IPV4.fullmatch(text):
             raise EndpointError("URL_HOST")
         return ipaddress.IPv4Address(text)
+    # idna.encode는 UTS #46이 무시하는 문자(U+00AD, U+200B 등)를 조용히 지운다.
+    if any(_invisible(char) for char in text if not char.isascii()):
+        raise EndpointError("URL_HOST")
     try:
         name = idna.encode(text, uts46=True).decode("ascii")
     except UnicodeError:
@@ -163,6 +179,16 @@ def _host(text: str) -> ipaddress.IPv4Address | str:
     ):
         raise EndpointError("URL_HOST")
     return name
+
+
+def _invisible(char: str) -> bool:
+    if unicodedata.category(char) == "Cf":
+        return True
+    try:
+        return idna.uts46_remap(char, std3_rules=False, transitional=False) == ""
+    except idna.IDNAError:
+        # 금지 문자다. 뒤의 idna.encode가 URL_IDNA로 거부한다.
+        return False
 
 
 def _ends_in_number(host: str) -> bool:
@@ -188,7 +214,5 @@ def _check_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> No
         if address.is_reserved or address in _THIS_NETWORK:
             raise EndpointError("URL_ADDRESS_FORBIDDEN")
     # IPv6의 is_reserved는 ::1을 포함하는 ::/8이라 쓰지 않는다. IPv4를 담은 형태만 막는다.
-    elif address.ipv4_mapped is not None or (
-        address in _IPV4_COMPATIBLE and address != _IPV6_LOOPBACK
-    ):
+    elif address != _IPV6_LOOPBACK and any(address in network for network in _IPV4_EMBEDDING):
         raise EndpointError("URL_ADDRESS_FORBIDDEN")

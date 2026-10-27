@@ -4,6 +4,7 @@ import socket
 from urllib.parse import urlsplit
 
 import httpx
+import idna
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -27,6 +28,7 @@ CANONICAL = [
     "https://192.168.0.10:8443/mcp",
     "https://[2001:db8::1]/mcp",
     "https://[2001:db8::1]:8443/mcp",
+    "https://[2003::1]/mcp",
     "https://xn--fa-hia.de/mcp",
     "https://a-b.example/x;y=1,z@w:~!$&'()*+-._",
     "http://127.0.0.1:8765/mcp",
@@ -103,6 +105,21 @@ REJECTED = [
     ("https://[zz::1]/", "URL_HOST"),
     ("https://[127.0.0.1]/", "URL_HOST"),
     ("https://[::1]x/", "URL_HOST"),
+    # 보이지 않는 문자. idna.encode는 UTS #46이 무시하는 문자를 지워 example.com을 만든다.
+    ("https://exa\u200bmple.com/", "URL_HOST"),
+    ("https://exa\u00admple.com/", "URL_HOST"),
+    ("https://exa\u2060mple.com/", "URL_HOST"),
+    ("https://exa\ufeffmple.com/", "URL_HOST"),
+    ("https://exa\u034fmple.com/", "URL_HOST"),
+    ("https://exa\ufe0fmple.com/", "URL_HOST"),
+    ("https://exa\u180emple.com/", "URL_HOST"),
+    ("https://exa\u3164mple.com/", "URL_HOST"),
+    ("https://exa\U000e0101mple.com/", "URL_HOST"),
+    ("https://faß\u200b.de/", "URL_HOST"),
+    # 서식 문자(Cf)는 지워지지 않아도 거부한다.
+    ("https://exa\u200cmple.com/", "URL_HOST"),
+    ("https://exa\u200dmple.com/", "URL_HOST"),
+    ("https://exa\u202emple.com/", "URL_HOST"),
     # 이름(IDNA 2008)
     ("https://ex!ample.com/", "URL_IDNA"),
     ("https://a_b.example.com/", "URL_IDNA"),
@@ -153,6 +170,12 @@ REJECTED = [
     ("https://[::ffff:169.254.169.254]/", "URL_ADDRESS_FORBIDDEN"),
     ("http://[::ffff:127.0.0.1]/", "URL_ADDRESS_FORBIDDEN"),
     ("http://[::127.0.0.1]/", "URL_ADDRESS_FORBIDDEN"),
+    ("http://[::ffff:0:7f00:1]/", "URL_ADDRESS_FORBIDDEN"),
+    ("https://[::ffff:0:a9fe:a9fe]/", "URL_ADDRESS_FORBIDDEN"),
+    ("https://[64:ff9b::a9fe:a9fe]/", "URL_ADDRESS_FORBIDDEN"),
+    ("https://[64:ff9b:1::a9fe:a9fe]/", "URL_ADDRESS_FORBIDDEN"),
+    ("https://[2002:a9fe:a9fe::1]/", "URL_ADDRESS_FORBIDDEN"),
+    ("https://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/", "URL_ADDRESS_FORBIDDEN"),
     ("http://0.0.0.0:8765/mcp", "URL_ADDRESS_FORBIDDEN"),
     # http는 루프백 IP 리터럴만
     ("http://localhost/mcp", "URL_HTTP_NOT_LOOPBACK"),
@@ -205,6 +228,23 @@ def test_errors_do_not_chain_the_input():
     assert str(error) == "URL_IDNA"
     assert error.__cause__ is None
     assert error.__suppress_context__
+
+
+def test_no_character_is_silently_dropped_from_the_host():
+    """idna.encode가 호스트에서 지우는 문자는 모두 URL_HOST다. 전체 코드 포인트를 훑는다."""
+    dropped = []
+    for code_point in range(0x80, 0x110000):
+        if 0xD800 <= code_point <= 0xDFFF:
+            continue
+        char = chr(code_point)
+        try:
+            if idna.encode(f"a{char}b.example", uts46=True) == b"ab.example":
+                dropped.append(char)
+        except UnicodeError:
+            pass
+    assert {"\u00ad", "\u200b", "\ufeff"} <= set(dropped)
+    for char in dropped:
+        assert str(_rejected(f"https://a{char}b.example/")) == "URL_HOST"
 
 
 def test_fields_are_the_parsed_parts():
