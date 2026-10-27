@@ -185,6 +185,6 @@
   - 남은 것: B 리뷰, 개발문서·team-workflow의 파일 경로 갱신(main PR 제안)
 - [x] A118 A113에서 찾은 mcp_transport 테스트 빈틈 9개 중 7개를 테스트로 메움(나머지 2개는 관찰 불가) · [기록](archive/a/A118-mcp-transport-test-gaps.md)
 - [x] A114 3단계: Codex 계층(`codex_session`·`jsonrpc_client`·`codex_stream`·`guard_relay`) 정리 · [기록](archive/a/A114-codex-layer-cleanup.md)
-  - 남은 것: 원래 있던 테스트 빈틈 4개와 멈춤 1개(turn 종료가 send를 깨우지 않으면 테스트가 끝나지 않음)
+- [x] A119 A114에서 찾은 Codex 세션 테스트 빈틈 4개와 멈춤 1개를 메움 · [기록](archive/a/A119-codex-session-test-gaps.md)
 - [ ] A115 4단계: `BackendBridge` 안쪽 분리(C 리뷰) — 막힘: B AGT 제거(B2.11, 같은 파일)
 - [ ] A116 5단계: UI 화면 조립·`__main__` 정리(C 리뷰) — 막힘: B AGT 제거(B2.11, 같은 파일)

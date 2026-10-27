@@ -170,7 +170,7 @@ def test_turn_answer_and_streamed_deltas() -> None:
         fake, partial = FakeAppServer(), []
         session = await started(fake, FakeGuard(), partial=partial)
         try:
-            assert await session.send("hello") == "echo:hello"
+            assert await asyncio.wait_for(session.send("hello"), 2) == "echo:hello"
             assert partial == ["echo:hello"]
             assert fake.methods().count("turn/start") == 1
         finally:
@@ -203,7 +203,7 @@ def test_released_call_uses_trusted_task_and_returns_text_and_structured_json() 
         )
         session = await started(fake, guard)
         try:
-            assert await session.send("read it") == "done"
+            assert await asyncio.wait_for(session.send("read it"), 2) == "done"
             [(task_id, call, epoch)] = guard.calls
             assert (task_id, epoch) == ("task-trusted", 4)
             assert call.tool_ref == "docs__read"
@@ -257,7 +257,7 @@ def test_missing_namespace_is_denied_without_guard() -> None:
         )
         session = await started(fake, guard)
         try:
-            await session.send("go")
+            await asyncio.wait_for(session.send("go"), 2)
             assert guard.calls == []
             result = reply_result(fake)
             assert result["success"] is False
@@ -288,7 +288,7 @@ def test_denied_answer_shows_only_public_reason_codes(reasons, text) -> None:
         fake = FakeAppServer(_tool_script({"call_id": "c1", "tool": "read", "arguments": {}}))
         session = await started(fake, guard)
         try:
-            await session.send("go")
+            await asyncio.wait_for(session.send("go"), 2)
             result = reply_result(fake)
             assert result["success"] is False
             assert [item["text"] for item in result["contentItems"]] == [text]
@@ -471,7 +471,7 @@ def test_two_calls_in_one_turn_reach_guard_one_at_a_time_in_order() -> None:
         fake = FakeAppServer(script)
         session = await started(fake, guard)
         try:
-            assert await session.send("go") == "both"
+            assert await asyncio.wait_for(session.send("go"), 2) == "both"
             assert [call.model_call_id for _t, call, _e in guard.calls] == ["c1", "c2"]
             assert guard.max_active == 1
             assert [r["result"]["contentItems"][0]["text"] for r in replies] == ["one", "two"]
@@ -556,7 +556,7 @@ def test_request_user_input_gets_an_empty_answer_and_is_only_counted() -> None:
         asked: list[None] = []
         session.set_user_input_handler(lambda: asked.append(None))
         try:
-            assert await session.send("go") == "continued"
+            assert await asyncio.wait_for(session.send("go"), 2) == "continued"
             assert reply_result(fake) == {"answers": {}}
             assert session.observations.user_input_requests == 1
             assert len(asked) == 1  # STOP-01 audit hook; no question text is passed
@@ -708,7 +708,7 @@ def test_l3_item_after_the_turn_reports_the_stop_once_through_the_handler() -> N
         session = await started(FakeAppServer(script), FakeGuard())
         session.set_stop_handler(stops.append)
         try:
-            assert await session.send("go") == "done"
+            assert await asyncio.wait_for(session.send("go"), 2) == "done"
             assert stops == []
             after.set()
             await wait_for_condition(lambda: stops)
@@ -846,6 +846,102 @@ def test_streamed_answer_at_the_cap_is_kept() -> None:
             assert len(answer) == MAX_ANSWER_CHARS
             assert session.stop_code is None
             assert partial[-1] == "b"
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_finished_messages_over_the_cap_together_are_refused() -> None:
+    """The assembled answer is bounded too, not only the streamed deltas (I9)."""
+
+    async def run() -> None:
+        async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+            for number, letter in enumerate("ab"):
+                item = {"type": "agentMessage", "id": f"msg-{number}", "text": letter * 40_000}
+                server.notify(
+                    "item/completed", {"item": item, "threadId": THREAD_ID, "turnId": turn_id}
+                )
+            server.complete(turn_id)
+
+        session = await started(FakeAppServer(script), FakeGuard())
+        try:
+            with pytest.raises(CodexSessionError) as refused:
+                await asyncio.wait_for(session.send("go"), 2)
+            assert refused.value.code == "CODEX_ANSWER_TOO_LARGE"
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_streamed_pieces_of_another_turn_are_never_shown() -> None:
+    """Only the turn send() waits for is streamed; a foreign turn's delta stays out (A90)."""
+
+    async def run() -> None:
+        async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+            server.delta("turn-other", "foreign")
+            server.delta(turn_id, "own")
+            server.complete(turn_id)
+
+        partial: list[str] = []
+        session = await started(FakeAppServer(script), FakeGuard(), partial=partial)
+        try:
+            assert await asyncio.wait_for(session.send("go"), 2) == "own"
+            assert partial == ["own"]
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_interrupted_turn_has_its_own_code() -> None:
+    async def run() -> None:
+        async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+            server.complete(turn_id, "interrupted")
+
+        session = await started(FakeAppServer(script), FakeGuard())
+        try:
+            with pytest.raises(CodexSessionError) as interrupted:
+                await asyncio.wait_for(session.send("go"), 2)
+            assert interrupted.value.code == "CODEX_TURN_INTERRUPTED"
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+class EmptyIdAppServer(FakeAppServer):
+    """Answers one method with an empty `id` where Codex returns its thread or turn."""
+
+    def __init__(self, method: str) -> None:
+        super().__init__()
+        self.empty_method = method
+
+    def _request(self, message: dict[str, object]) -> None:
+        if message["method"] == self.empty_method:
+            key = "thread" if self.empty_method == "thread/start" else "turn"
+            self.emit({"id": message["id"], "result": {key: {"id": ""}}})
+            return
+        super()._request(message)
+
+
+def test_empty_thread_id_fails_the_start() -> None:
+    async def run() -> None:
+        with pytest.raises(CodexSessionError) as failed:
+            await asyncio.wait_for(started(EmptyIdAppServer("thread/start"), FakeGuard()), 2)
+        assert failed.value.code == "CODEX_START_FAILED"
+
+    asyncio.run(run())
+
+
+def test_empty_turn_id_fails_the_turn_instead_of_waiting_for_it() -> None:
+    async def run() -> None:
+        session = await started(EmptyIdAppServer("turn/start"), FakeGuard())
+        try:
+            with pytest.raises(CodexSessionError) as failed:
+                await asyncio.wait_for(session.send("go"), 2)
+            assert failed.value.code == "CODEX_TURN_FAILED"
         finally:
             await session.aclose()
 
