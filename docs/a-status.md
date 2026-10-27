@@ -175,3 +175,12 @@
 - [x] A62 HTTP ResourceWarning 재현·스트림 생성 위치 추적 · [기록](archive/a/A62-http-stream-warning-investigation.md)
 - [x] A46 첫 연결의 `httpcore` 최초 import 정지를 모듈 import로 이동 · [기록](archive/a/A46-httpcore-preload.md)
 - [ ] A46 이전 a-status의 "C 측정 210–280ms" 재측정 — 막힘: C 환경(출처 기록 미확인)
+
+## 리팩터링(동작 유지)
+
+- [x] A111 0단계: A 모듈 계층·시큐어 코딩 규칙 테스트와 기준선 측정 · [기록](archive/a/A111-refactor-baseline-and-rules.md)
+- [ ] A112 1단계: `SessionRuntime` 책임 분리(생성·정리·정책 변경·시작 게이트)
+- [ ] A113 2단계: `mcp_transport` 모듈 분리(B 리뷰)
+- [ ] A114 3단계: Codex 계층(`codex_session`·`jsonrpc_client`·`codex_stream`·`guard_relay`) 정리
+- [ ] A115 4단계: `BackendBridge` 안쪽 분리(C 리뷰) — 막힘: B AGT 제거(B2.11, 같은 파일)
+- [ ] A116 5단계: UI 화면 조립·`__main__` 정리(C 리뷰) — 막힘: B AGT 제거(B2.11, 같은 파일)
