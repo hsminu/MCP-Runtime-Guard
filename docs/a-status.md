@@ -179,7 +179,8 @@
 ## 리팩터링(동작 유지)
 
 - [x] A111 0단계: A 모듈 계층·시큐어 코딩 규칙 테스트와 기준선 측정 · [기록](archive/a/A111-refactor-baseline-and-rules.md)
-- [ ] A112 1단계: `SessionRuntime` 책임 분리(생성·정리·정책 변경·시작 게이트)
+- [x] A112 1단계: `SessionRuntime` 책임 분리(생성·정리·정책 변경·시작 게이트) · [기록](archive/a/A112-session-runtime-split.md)
+  - 남은 것: 정책 변경 두 개가 겹치면 앞의 변경이 사라질 수 있다(lock 전에 문서를 읽음). 동작 변경이라 따로 고친다.
 - [ ] A113 2단계: `mcp_transport` 모듈 분리(B 리뷰)
 - [ ] A114 3단계: Codex 계층(`codex_session`·`jsonrpc_client`·`codex_stream`·`guard_relay`) 정리
 - [ ] A115 4단계: `BackendBridge` 안쪽 분리(C 리뷰) — 막힘: B AGT 제거(B2.11, 같은 파일)

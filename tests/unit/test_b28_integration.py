@@ -17,7 +17,8 @@ from guard_app.domain.reasons import Reason
 from guard_app.security.digest import tool_fingerprint
 from guard_app.services.bridge import SessionOptions
 from guard_app.services.guard import GuardService, PolicyChangeError, SystemControlError
-from guard_app.services.session_runtime import SessionRuntimeError, bootstrap_product, stop_reason
+from guard_app.services.session_runtime import SessionRuntimeError, bootstrap_product
+from guard_app.services.session_stops import stop_reason
 
 from .fake_codex_app_server import THREAD_ID, FakeAppServer
 from .test_codex_product_flow import TaskEvents, preparation, read_then_answer
@@ -119,9 +120,10 @@ def test_failed_system_stop_is_never_shown_as_applied(tmp_path) -> None:
     """B: when stop_task fails Guard stays halted; the Task must not look stopped cleanly."""
 
     async def run():
-        runtime, sessions = make_runtime(tmp_path, session_type=StoppableSession)
         system = FailingSystem()
-        runtime._system = system
+        runtime, sessions = make_runtime(
+            tmp_path, session_type=StoppableSession, system_control=system
+        )
         changed = asyncio.Event()
         seen = []
 
@@ -336,7 +338,7 @@ def test_session_created_during_a_policy_change_takes_the_new_policy(tmp_path) -
         held["creation"] = asyncio.ensure_future(runtime.create_session(SessionOptions()))
         held["saving"] = True
         waits = {
-            asyncio.ensure_future(runtime._policy_lock.contended.wait()),
+            asyncio.ensure_future(runtime._policy.lock.contended.wait()),
             asyncio.ensure_future(held["written"].wait()),
         }
         try:
@@ -353,7 +355,8 @@ def test_session_created_during_a_policy_change_takes_the_new_policy(tmp_path) -
             assert bindings.policy_access is not None
             assert bindings.snapshot is not None
             runtime = bindings.create_session.__self__  # type: ignore[attr-defined]
-            runtime._policy_lock = WatchedLock()
+            # The one internal seam left: only the lock shows the creation waits on it.
+            runtime._policy.lock = WatchedLock()
             held.update(runtime=runtime, written=asyncio.Event(), saving=False)
             create_task = runtime.store.create_task
 
@@ -438,8 +441,15 @@ def test_closing_the_assembly_ends_transport_then_closes_guard(tmp_path) -> None
     assert order == ["transport", "guard"]
 
 
-def test_human_stop_with_guard_leaves_the_store_to_guard(tmp_path) -> None:
-    """PR #29 B review 5: after the bridge's human cancel, A writes no HALTED itself."""
+@pytest.mark.parametrize(
+    "guard_stopped_first", [True, False], ids=["bridge-order", "guard-pending"]
+)
+def test_human_stop_with_guard_leaves_the_store_to_guard(tmp_path, guard_stopped_first) -> None:
+    """PR #29 B review 5: after the bridge's human cancel, A writes no HALTED itself.
+
+    Nor before Guard's stop has landed (it may wait for the Task lock behind an
+    in-flight submit): the row stays Guard's to write.
+    """
     from guard_app.services.bridge import ControlAction
 
     db_path = tmp_path / "human.db"
@@ -458,15 +468,18 @@ def test_human_stop_with_guard_leaves_the_store_to_guard(tmp_path) -> None:
             assert bindings.human_control is not None
             assert bindings.snapshot is not None
             runtime = bindings.stop_session.__self__  # type: ignore[attr-defined]
-            writes: list[str] = []
-
-            async def no_direct_write(task_id):
-                writes.append(task_id)
-
-            runtime._halt_store_task = no_direct_write
             created = await bindings.create_session(SessionOptions())
-            # The bridge's order: Guard's human channel first, then the session.
-            await bindings.human_control.cancel(created.task_id)
+            if guard_stopped_first:
+                # The bridge's order: Guard's human channel first, then the session.
+                await bindings.human_control.cancel(created.task_id)
+            writes: list[str] = []
+            set_task_status = runtime.store.set_task_status
+
+            async def recording_status(task_id, *args, **kwargs):
+                writes.append(task_id)
+                return await set_task_status(task_id, *args, **kwargs)
+
+            runtime.store.set_task_status = recording_status
             await bindings.stop_session(created.task_id, created.epoch, ControlAction.CANCEL)
             after = await bindings.snapshot(created.task_id)
             return created.task_id, after, writes
@@ -476,6 +489,6 @@ def test_human_stop_with_guard_leaves_the_store_to_guard(tmp_path) -> None:
 
     task_id, after, writes = asyncio.run(run())
     assert writes == []
-    assert after.status is TaskStatus.HALTED
+    assert after.status is (TaskStatus.HALTED if guard_stopped_first else TaskStatus.RUNNING)
     assert not after.can_accept_message
     assert all(event != "SESSION_STOPPED" for event, _ in audit_rows(db_path, task_id))

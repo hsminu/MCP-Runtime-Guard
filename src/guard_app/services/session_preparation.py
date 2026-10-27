@@ -6,9 +6,9 @@ transfers ownership of its opaque handle; before returning a receipt (including
 on failure/cancellation), the preparation callback owns partial-resource cleanup.
 ``confirm_exit`` must confirm absence/termination of this receipt's process even
 when session creation failed without returning a session. No confirmation means
-no folder deletion. It is bounded by ``CONFIRM_EXIT_TIMEOUT_S``, not the shorter
-cleanup bound, so the launcher's own grace and kill waits fit (C2.12).
-``cleanup_task`` is bounded by ``TASK_CLEANUP_TIMEOUT_S`` because the folder is
+no folder deletion. It is bounded by ``CleanupLimits.confirm_exit_s``, not the
+shorter session bound, so the launcher's own grace and kill waits fit (C2.12).
+``cleanup_task`` is bounded by ``CleanupLimits.task_folder_s`` because the folder is
 deleted in a worker thread (A103). Opaque handles must be unique across live
 Task resources.
 """

@@ -20,7 +20,7 @@ skip). Errors carry fixed codes only, never paths.
 Removing a Task folder after its session runs in a worker thread (A103, PR #35
 B review): the folder holds the Codex log DB, and deleting it on the backend
 loop would stall every other Task. SessionRuntime bounds this step with
-`TASK_CLEANUP_TIMEOUT_S`, not its short cleanup bound, so a slow but successful
+`CleanupLimits.task_folder_s`, not its short session bound, so a slow but successful
 delete is not reported unconfirmed. Creating a folder, and removing the nearly
 empty one a refused launch leaves, stay on the loop.
 """

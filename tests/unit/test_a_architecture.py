@@ -36,8 +36,13 @@ A_SERVICES = frozenset(
         "policy_view",
         "product_assembly",
         "runner",
+        "session_admission",
+        "session_cleanup",
+        "session_policy",
         "session_preparation",
         "session_runtime",
+        "session_startup",
+        "session_stops",
         "task_tool_calls",
     }
 )
