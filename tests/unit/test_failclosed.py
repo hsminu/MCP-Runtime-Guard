@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from guard_app.security.failclosed import after_dispatch, fail_closed
+from guard_app.security.failclosed import _AccessCheckCancelled, after_dispatch, fail_closed
 
 
 @pytest.mark.parametrize("boundary", [fail_closed, after_dispatch])
@@ -88,6 +88,56 @@ def test_fail_closed_without_final_handler_does_not_swallow_audit_failure() -> N
 
     with pytest.raises(RuntimeError):
         asyncio.run(fail_closed(operation, on_error))
+
+
+@pytest.mark.parametrize("fallback_raises", [False, True])
+def test_access_cancel_survives_notification_and_fallback_failures(fallback_raises: bool) -> None:
+    events: list[str] = []
+
+    async def operation() -> str:
+        raise _AccessCheckCancelled()
+
+    async def on_error(error: BaseException) -> str:
+        events.append(type(error).__name__)
+        return "contained"
+
+    def notification(result: str) -> None:
+        events.append(result)
+        raise RuntimeError("PRIVATE_NOTIFICATION")
+
+    def fallback(error: BaseException) -> str:
+        events.append("global_halt")
+        if fallback_raises:
+            raise RuntimeError("PRIVATE_FALLBACK")
+        return "halted"
+
+    async def scenario() -> None:
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await fail_closed(operation, on_error, fallback, on_access_cancelled=notification)
+        assert "PRIVATE_" not in repr(caught.value)
+
+    asyncio.run(scenario())
+    assert events == ["CancelledError", "contained", "global_halt"]
+
+
+@pytest.mark.parametrize("exception", [KeyboardInterrupt, SystemExit])
+def test_access_cancel_fallback_does_not_swallow_other_base_exceptions(
+    exception: type[BaseException],
+) -> None:
+    async def operation() -> str:
+        raise _AccessCheckCancelled()
+
+    async def on_error(error: BaseException) -> str:
+        raise ValueError("PRIVATE_AUDIT")
+
+    def fallback(error: BaseException) -> str:
+        raise exception()
+
+    async def scenario() -> None:
+        with pytest.raises(exception):
+            await fail_closed(operation, on_error, fallback)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("boundary", [fail_closed, after_dispatch])

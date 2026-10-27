@@ -30,7 +30,7 @@ from guard_app.domain.models import AccessResult, Boundary, ProposedCall, TaskSt
 from guard_app.domain.reasons import Reason
 from guard_app.services.catalog import Catalog
 from guard_app.services.catalog_sources import SourceRule
-from guard_app.services.guard import GuardConfigError, GuardService
+from guard_app.services.guard import GuardService
 
 NOW = datetime(2026, 10, 11, tzinfo=UTC)
 
@@ -230,17 +230,11 @@ class _Access:
         self.calls = []
         self.result = AccessResult(allowed=True, reason="", error=False)
         self.error = None
-        self.delay = 0
-        self.hook = None
 
-    async def check_access(self, req, ctx):
+    def check_access(self, req, ctx):
         self.calls.append((req, ctx))
         if self.error is not None:
             raise self.error
-        if self.delay:
-            await asyncio.sleep(self.delay)
-        if self.hook is not None:
-            self.hook()
         return self.result
 
 
@@ -604,9 +598,15 @@ def test_cancellation_after_reservation_is_never_denied(name):
 def test_cancellation_before_reservation_does_not_dispatch():
     async def scenario():
         h = _Harness()
-        h.access.error = asyncio.CancelledError()
+
+        async def cancelled_sequence(task_id):
+            raise asyncio.CancelledError()
+
+        # Cancellation still can occur at an actual asynchronous boundary.
+        h.guard._next_call_seq = cancelled_sequence
         assert isinstance(await h.guard.submit("task", _call()), Denied)
         assert not h.transport.calls
+        assert not h.access.calls
 
     asyncio.run(scenario())
 
@@ -639,29 +639,44 @@ def test_non_running_task_never_dispatches(status):
     asyncio.run(scenario())
 
 
-def test_agt_timeout_and_deny_do_not_dispatch():
+def test_access_error_and_deny_do_not_dispatch():
     async def scenario():
-        h = _Harness(access_timeout_seconds=0.001)
-        h.access.delay = 1
+        h = _Harness()
+        h.access.result = AccessResult(allowed=False, reason="", error=True)
         result = await h.guard.submit("task", _call())
         assert isinstance(result, Denied)
         assert Reason.AGT_ERROR in result.reasons
         assert not h.transport.calls
-        h.access.delay = 0
         h.access.result = AccessResult(allowed=False, reason="RAW", error=False)
         result = await h.guard.submit("task", _call())
         assert isinstance(result, Denied)
         assert Reason.AGT_DENY in result.reasons
+        assert not h.transport.calls
 
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("fingerprint", [None, "b" * 64])
-def test_registry_change_during_agt_blocks(fingerprint):
+def test_registry_change_during_sequence_wait_blocks_before_access(fingerprint):
     async def scenario():
         h = _Harness()
-        h.access.hook = lambda: setattr(h.registry, "current_fingerprint", fingerprint)
-        assert isinstance(await h.guard.submit("task", _call()), Denied)
+        entered, release = asyncio.Event(), asyncio.Event()
+        original_sequence = h.guard._next_call_seq
+
+        async def blocked_sequence(task_id):
+            entered.set()
+            await release.wait()
+            return await original_sequence(task_id)
+
+        h.guard._next_call_seq = blocked_sequence
+        running = asyncio.create_task(h.guard.submit("task", _call()))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        h.registry.current_fingerprint = fingerprint
+        release.set()
+        result = await asyncio.wait_for(running, timeout=1)
+        assert isinstance(result, Denied)
+        assert result.reasons == (Reason.TOOL_FINGERPRINT_CHANGED,)
+        assert not h.access.calls
         assert not h.transport.calls
 
     asyncio.run(scenario())
@@ -938,9 +953,3 @@ def test_consume_ack_after_expiry_never_calls_transport(clock, name):
         )
 
     asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), True])
-def test_bad_access_timeout_rejected(value):
-    with pytest.raises(GuardConfigError):
-        _Harness(access_timeout_seconds=value)

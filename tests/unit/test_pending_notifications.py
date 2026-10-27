@@ -652,14 +652,14 @@ def test_cancelling_timer_waiting_on_approval_lock_does_not_halt_valid_execution
     async def scenario():
         h, clock, value, handle = await _setup()
         entered, release = asyncio.Event(), asyncio.Event()
-        original = h.access.check_access
+        original = h.store.get_approval
 
-        async def blocked(req, context):
+        async def blocked(approval_id):
             entered.set()
             await release.wait()
-            return await original(req, context)
+            return await original(approval_id)
 
-        h.access.check_access = blocked
+        h.store.get_approval = blocked
         approval = asyncio.create_task(h.guard.human_control("operator").approve(value.approval_id))
         await entered.wait()
         clock.advance(utc=300)

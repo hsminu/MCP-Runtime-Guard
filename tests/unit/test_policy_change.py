@@ -56,7 +56,7 @@ class _Access:
         self.rules = rules
         self.calls = []
 
-    async def check_access(self, req, context):
+    def check_access(self, req, context):
         self.calls.append(
             (req.tool.tool_name, context.state.profile_id, context.state.policy_version)
         )
@@ -370,7 +370,7 @@ def test_submit_waits_for_atomic_publish_and_late_old_tasks_are_rescanned(late_t
 
 
 @pytest.mark.parametrize("phase", ["submit", "approval"])
-def test_access_recheck_interrupted_by_policy_change_never_uses_mixed_configuration(phase):
+def test_policy_change_during_pre_access_wait_never_uses_mixed_configuration(phase):
     async def scenario():
         h = _PolicyHarness(label=Label.INTERNAL if phase == "approval" else Label.PUBLIC)
         pending = None
@@ -379,32 +379,53 @@ def test_access_recheck_interrupted_by_policy_change_never_uses_mixed_configurat
             handle = h.guard.pending_result(pending.request_id)
         entered, release = asyncio.Event(), asyncio.Event()
         old_checker = h.access
-        original = old_checker.check_access
+        old_calls = list(old_checker.calls)
+        original_sequence = h.guard._next_call_seq
+        original_transition = h.store.transition_approval
+        if phase == "submit":
 
-        async def blocked(req, context):
-            entered.set()
-            await release.wait()
-            return await original(req, context)
+            async def blocked_sequence(task_id):
+                entered.set()
+                await release.wait()
+                return await original_sequence(task_id)
 
-        old_checker.check_access = blocked
+            h.guard._next_call_seq = blocked_sequence
+        else:
+
+            async def blocked_transition(approval_id, status, **kwargs):
+                record = await original_transition(approval_id, status, **kwargs)
+                if status is ApprovalStatus.APPROVED:
+                    entered.set()
+                    await release.wait()
+                return record
+
+            h.store.transition_approval = blocked_transition
         work = asyncio.create_task(
             h.guard.submit("task", _call("read"))
             if phase == "submit"
             else h.guard.human_control("operator").approve(pending.approval_id)
         )
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=1)
         change = h.prepare()
-        result = await h.apply(change)
-        denied = await work
+        applying = asyncio.create_task(h.apply(change))
+        await _turns()
+        assert h.guard._stop_requests["task"].reason is Reason.POLICY_CHANGED
+        assert h.guard._stop_requests["task"].is_set()
+        assert not applying.done()
+        release.set()
+        denied = await asyncio.wait_for(work, timeout=1)
+        result = await asyncio.wait_for(applying, timeout=1)
         assert isinstance(denied, Denied)
         assert denied.reasons == (Reason.POLICY_CHANGED,)
         assert result.stopped_task_count >= 1
+        assert old_checker.calls == old_calls
         assert h.transport.calls == []
         if phase == "approval":
             final = await handle.wait()
             assert final.cause == "invalidated"
             assert final.outcome.reasons == (Reason.POLICY_CHANGED,)
             assert result.invalidated_approval_count == 1
+        h.guard._next_call_seq = original_sequence
         h.add_task("fresh", loaded=change.loaded_profile)
         assert isinstance(await h.guard.submit("fresh", _call("read")), Released)
         await h.guard.aclose()

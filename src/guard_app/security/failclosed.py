@@ -8,14 +8,43 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 
+class _AccessCheckCancelled(asyncio.CancelledError):
+    """동기 판정기의 취소만 기존 격리 뒤 바깥에 전달하기 위한 내부 표식."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.contained = False
+
+
 async def fail_closed[T](
     operation: Callable[[], Awaitable[T]],
     on_error: Callable[[BaseException], Awaitable[T]],
     on_containment_error: Callable[[BaseException], T] | None = None,
+    *,
+    on_access_cancelled: Callable[[T], None] | None = None,
 ) -> T:
     """예약 전 실패를 변환한다. 감사 실패 시 공급된 global-halt 경계를 사용한다."""
     try:
         return await operation()
+    except _AccessCheckCancelled as error:
+        if error.contained:
+            raise
+        error.contained = True
+        try:
+            # 감사에는 예외 원문이나 내부 표식 대신 고정 취소 유형만 전달한다.
+            result = await on_error(asyncio.CancelledError())
+            if on_access_cancelled is not None:
+                on_access_cancelled(result)
+        except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001
+            if on_containment_error is None:
+                raise
+            try:
+                on_containment_error(containment_error)
+            except (Exception, asyncio.CancelledError):  # noqa: BLE001
+                # 격리 실패를 전역 정지로 넘긴 뒤에도 판정기의 취소는 삼키지 않는다.
+                raise error from None
+            raise error from None
+        raise
     except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
         if on_containment_error is None:
             return await on_error(error)

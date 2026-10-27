@@ -1066,7 +1066,7 @@ class ApprovalService:
             or any(0xD800 <= ord(char) <= 0xDFFF for char in task_id)
         ):
             return Denied(request_id=None, reasons=(Reason.STATE_MISSING,))
-        # 접근 규칙 재평가가 lock을 쥐고 있어도 인증된 정지 의도를 먼저 기록한다.
+        # 접근 규칙 재평가 전후에도 인증된 정지 의도를 먼저 기록한다.
         self._host.request_stop(task_id)
 
         async def operation() -> Denied:
@@ -1240,18 +1240,24 @@ class ApprovalService:
                     )
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
 
+        def finish(result: T | Denied) -> None:
+            if (
+                isinstance(result, Denied)
+                and approval_id is not None
+                and approval_id not in self._memory_snapshots
+                and approval_id not in self._inflight_tasks
+            ):
+                self._complete(approval_id, result)
+            if isinstance(result, Denied) and task_id is not None:
+                self._publish_task_invalidations(task_id, result.reasons[0])
+
         result: T | Denied = await fail_closed(
-            operation, on_error=on_error, on_containment_error=on_containment_error
+            operation,
+            on_error=on_error,
+            on_containment_error=on_containment_error,
+            on_access_cancelled=finish,
         )
-        if (
-            isinstance(result, Denied)
-            and approval_id is not None
-            and approval_id not in self._memory_snapshots
-            and approval_id not in self._inflight_tasks
-        ):
-            self._complete(approval_id, result)
-        if isinstance(result, Denied) and task_id is not None:
-            self._publish_task_invalidations(task_id, result.reasons[0])
+        finish(result)
         return result
 
     async def _acquire_task_lock(self, task_id: str) -> asyncio.Lock | Denied:

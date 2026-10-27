@@ -111,7 +111,6 @@ async def bootstrap(
         if access_policy == "allow-tools":
             allowed.append(("docs", "send"))
         access = AccessRulesChecker(AccessRules(allow=allowed))
-        access_timeout = 2.0
         call_timeout = 5.0
         if mcp_transport == "http":
             spike = await lifetime.enter_async_context(http_spike())
@@ -197,7 +196,6 @@ async def bootstrap(
             next_call_seq=sequence,
             failure_audit=audit,
             monotonic=time.monotonic,
-            access_timeout_seconds=access_timeout,
         )
         runner = TaskRunner(
             state,
