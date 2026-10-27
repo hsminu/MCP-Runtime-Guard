@@ -418,6 +418,19 @@ class BackendBridge(QObject):
     def thread_done(self) -> bool:
         return self._thread_done.is_set()
 
+    @property
+    def cleanup_unconfirmed(self) -> bool:
+        with self._state_lock:
+            return self._cleanup_unconfirmed
+
+    @property
+    def shutdown_timeout(self) -> float:
+        return self._shutdown_timeout
+
+    def wait_done(self, timeout_s: float) -> bool:
+        """After the Qt loop has ended: wait at most `timeout_s` for the backend thread."""
+        return self._thread_done.wait(max(0.0, timeout_s))
+
     def start(self) -> None:
         self._require_qt_thread()
         with self._state_lock:

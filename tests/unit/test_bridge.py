@@ -884,6 +884,8 @@ def test_late_bootstrap_close_error_is_fixed_unconfirmed_code(app) -> None:
     bridge.close()
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLEANUP_UNCONFIRMED")
+    assert bridge.wait_done(0.0)
+    assert bridge.cleanup_unconfirmed
 
 
 def test_completed_bootstrap_bindings_have_single_close_owner(app) -> None:
@@ -905,6 +907,9 @@ def test_completed_bootstrap_bindings_have_single_close_owner(app) -> None:
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLOSED")
     assert bridge._bindings is None
+    # A110: main reads these after the Qt loop to decide whether to keep the lock.
+    assert bridge.wait_done(0.0)
+    assert not bridge.cleanup_unconfirmed
     bridge.close()
     assert cleanup_calls == 1
 

@@ -17,7 +17,7 @@ from typing import Protocol
 from guard_app.adapters.codex_protocol import initialize_params
 from guard_app.adapters.codex_stream import CodexStreamChannel
 from guard_app.adapters.jsonrpc_client import JsonRpcClient, JsonRpcError, JsonRpcRemoteError
-from guard_app.services.codex_session import CodexPipes
+from guard_app.services.codex_session import REMOTE_CONTROL_STATUS, CodexPipes
 
 _PLAN_MAX = 40
 
@@ -68,7 +68,10 @@ class CodexAccountClient:
         self._client.start()
         self._started = True
         await self._call("initialize", initialize_params(self._version))
-        await self._client.notify("initialized")
+        try:
+            await self._client.notify("initialized")
+        except JsonRpcError:
+            raise AccountError() from None
 
     async def read(self) -> AccountView:
         result = await self._call("account/read", {"refreshToken": False})
@@ -146,6 +149,13 @@ class CodexAccountClient:
             raise AccountError() from None
 
     def _notification(self, method: str, params: object) -> None:
+        if method == REMOTE_CONTROL_STATUS:
+            if type(params) is not dict or params.get("status") != "disabled":
+                # C-CODEX-07: never keep talking to an app-server a remote
+                # client may drive. Every later call fails; the launcher's owner
+                # still closes the process.
+                self._channel.close()
+            return
         if method != "account/login/completed" or type(params) is not dict:
             return
         login_id = params.get("loginId")

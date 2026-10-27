@@ -42,7 +42,6 @@ def codex_session_factory(
     *,
     limits: SessionLimits | None = None,
 ) -> Callable[[TaskState, SessionOptions, TaskResources], Awaitable[CodexSession]]:
-    plan = build_dynamic_tools(assembled.tool_views)
     bounded = replace(limits or SessionLimits(), call_watchdog_s=watchdog_seconds(assembled))
     version = app_version()
 
@@ -52,6 +51,8 @@ def codex_session_factory(
         pipes = resources.handle
         if not isinstance(pipes, CodexPipes):
             raise SessionStartError("CODEX_SESSION_INVALID")
+        # Per session: a server whose tool list changed this run is left out (LIST-01).
+        plan = build_dynamic_tools(assembled.offered_tool_views())
         relay = GuardToolRelay(
             TrustedTask(state.task_id, state.epoch),
             assembled.guard,

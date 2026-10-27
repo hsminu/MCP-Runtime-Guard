@@ -32,9 +32,11 @@ from .test_product_assembly import (
     READ_DEFINITION,
     READ_SETTINGS,
     SEND_DEFINITION,
+    SEND_SETTINGS,
     Peer,
     Registry,
     document,
+    eventually,
     inputs,
     spec,
 )
@@ -152,6 +154,54 @@ def test_fingerprint_mismatch_leaves_codex_without_tools(tmp_path) -> None:
     asyncio.run(run())
 
 
+def test_tools_list_changed_denies_calls_and_new_sessions_do_not_list_the_server(
+    tmp_path,
+) -> None:
+    """LIST-01: Codex cannot drop tools from a running thread, so the session
+    started before the notice keeps listing them but every call is denied. A
+    session started after it does not list them."""
+
+    async def run():
+        peer = Peer([READ_DEFINITION])
+        servers: list[FakeAppServer] = []
+        bindings = await bootstrap_product(
+            str(tmp_path / "changed.db"),
+            preparation=preparation(servers, read_then_answer),
+            product=inputs(peer, Registry(tool_fingerprint(READ_DEFINITION)), document()),
+        )
+        try:
+            assert bindings.create_session is not None
+            assert bindings.snapshot is not None
+            first = await bindings.create_session(SessionOptions())
+            assert first.tools_available
+            snapshot = bindings.snapshot
+
+            async def tools_gone() -> bool:
+                return not (await snapshot(first.task_id)).tools_available
+
+            peer.notify_tools_changed()
+            await eventually(tools_gone)
+            runner = bindings.runner_for_task(first.task_id)
+            runner.add_user_message("summarize the public document")
+            update = await asyncio.wait_for(runner.advance(), 5)
+            second = await bindings.create_session(SessionOptions())
+            return update, second, peer, servers
+        finally:
+            assert bindings.close is not None
+            await bindings.close()
+
+    update, second, peer, [before, after] = asyncio.run(run())
+    assert before.thread_params is not None
+    [namespace] = before.thread_params["dynamicTools"]
+    assert [tool["name"] for tool in namespace["tools"]] == ["read"]
+    assert update.status == "complete"
+    assert before.last_reply["result"]["success"] is False  # type: ignore[attr-defined]
+    assert peer.calls == []
+    assert not second.tools_available
+    assert after.thread_params is not None
+    assert after.thread_params["dynamicTools"] == []
+
+
 class TaskEvents:
     """The bridge's `task_events` callback: Task ids republished outside a command."""
 
@@ -168,9 +218,6 @@ class TaskEvents:
             while len(self.seen) < count:
                 self._changed.clear()
                 await self._changed.wait()
-
-
-SEND_SETTINGS = {"name": "send", "kind": "send", "destination_arg": "to"}
 
 
 def test_ask_call_waits_with_its_approval_id_and_approval_completes_the_turn(tmp_path) -> None:

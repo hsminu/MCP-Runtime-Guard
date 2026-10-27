@@ -28,11 +28,8 @@ from guard_app.domain.contracts import (
 from guard_app.domain.enums import Label
 from guard_app.domain.reasons import Reason
 from guard_app.services.codex_prompt import BASE_INSTRUCTIONS
-from guard_app.services.codex_session import (
-    MAX_ANSWER_CHARS,
-    CodexAppServerSession,
-    SessionLimits,
-)
+from guard_app.services.codex_session import CodexAppServerSession, SessionLimits
+from guard_app.services.codex_turns import MAX_ANSWER_CHARS
 from guard_app.services.guard_relay import ApprovalOutcomes, GuardToolRelay, TrustedTask
 from guard_app.services.runner import CodexAuthenticationError, CodexSessionError
 
@@ -173,7 +170,7 @@ def test_turn_answer_and_streamed_deltas() -> None:
         fake, partial = FakeAppServer(), []
         session = await started(fake, FakeGuard(), partial=partial)
         try:
-            assert await session.send("hello") == "echo:hello"
+            assert await asyncio.wait_for(session.send("hello"), 2) == "echo:hello"
             assert partial == ["echo:hello"]
             assert fake.methods().count("turn/start") == 1
         finally:
@@ -206,7 +203,7 @@ def test_released_call_uses_trusted_task_and_returns_text_and_structured_json() 
         )
         session = await started(fake, guard)
         try:
-            assert await session.send("read it") == "done"
+            assert await asyncio.wait_for(session.send("read it"), 2) == "done"
             [(task_id, call, epoch)] = guard.calls
             assert (task_id, epoch) == ("task-trusted", 4)
             assert call.tool_ref == "docs__read"
@@ -260,7 +257,7 @@ def test_missing_namespace_is_denied_without_guard() -> None:
         )
         session = await started(fake, guard)
         try:
-            await session.send("go")
+            await asyncio.wait_for(session.send("go"), 2)
             assert guard.calls == []
             result = reply_result(fake)
             assert result["success"] is False
@@ -291,7 +288,7 @@ def test_denied_answer_shows_only_public_reason_codes(reasons, text) -> None:
         fake = FakeAppServer(_tool_script({"call_id": "c1", "tool": "read", "arguments": {}}))
         session = await started(fake, guard)
         try:
-            await session.send("go")
+            await asyncio.wait_for(session.send("go"), 2)
             result = reply_result(fake)
             assert result["success"] is False
             assert [item["text"] for item in result["contentItems"]] == [text]
@@ -396,6 +393,15 @@ def test_pending_answers_only_from_guards_final_result(cause, outcome, success, 
         pending_final("shutdown"),
         pending_final("rejected", task_id="other-task"),
         pending_final("rejected", epoch=TASK.epoch + 1),
+        # Bypasses PendingFinal validation: B's final_model_message refuses it.
+        PendingFinal.model_construct(
+            task_id=TASK.task_id,
+            epoch=TASK.epoch,
+            request_id="request-1",
+            approval_id="ap-1",
+            cause="rejected",
+            outcome=released("PRIVATE"),
+        ),
         None,
     ],
 )
@@ -465,7 +471,7 @@ def test_two_calls_in_one_turn_reach_guard_one_at_a_time_in_order() -> None:
         fake = FakeAppServer(script)
         session = await started(fake, guard)
         try:
-            assert await session.send("go") == "both"
+            assert await asyncio.wait_for(session.send("go"), 2) == "both"
             assert [call.model_call_id for _t, call, _e in guard.calls] == ["c1", "c2"]
             assert guard.max_active == 1
             assert [r["result"]["contentItems"][0]["text"] for r in replies] == ["one", "two"]
@@ -550,7 +556,7 @@ def test_request_user_input_gets_an_empty_answer_and_is_only_counted() -> None:
         asked: list[None] = []
         session.set_user_input_handler(lambda: asked.append(None))
         try:
-            assert await session.send("go") == "continued"
+            assert await asyncio.wait_for(session.send("go"), 2) == "continued"
             assert reply_result(fake) == {"answers": {}}
             assert session.observations.user_input_requests == 1
             assert len(asked) == 1  # STOP-01 audit hook; no question text is passed
@@ -702,7 +708,7 @@ def test_l3_item_after_the_turn_reports_the_stop_once_through_the_handler() -> N
         session = await started(FakeAppServer(script), FakeGuard())
         session.set_stop_handler(stops.append)
         try:
-            assert await session.send("go") == "done"
+            assert await asyncio.wait_for(session.send("go"), 2) == "done"
             assert stops == []
             after.set()
             await wait_for_condition(lambda: stops)
@@ -840,6 +846,102 @@ def test_streamed_answer_at_the_cap_is_kept() -> None:
             assert len(answer) == MAX_ANSWER_CHARS
             assert session.stop_code is None
             assert partial[-1] == "b"
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_finished_messages_over_the_cap_together_are_refused() -> None:
+    """The assembled answer is bounded too, not only the streamed deltas (I9)."""
+
+    async def run() -> None:
+        async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+            for number, letter in enumerate("ab"):
+                item = {"type": "agentMessage", "id": f"msg-{number}", "text": letter * 40_000}
+                server.notify(
+                    "item/completed", {"item": item, "threadId": THREAD_ID, "turnId": turn_id}
+                )
+            server.complete(turn_id)
+
+        session = await started(FakeAppServer(script), FakeGuard())
+        try:
+            with pytest.raises(CodexSessionError) as refused:
+                await asyncio.wait_for(session.send("go"), 2)
+            assert refused.value.code == "CODEX_ANSWER_TOO_LARGE"
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_streamed_pieces_of_another_turn_are_never_shown() -> None:
+    """Only the turn send() waits for is streamed; a foreign turn's delta stays out (A90)."""
+
+    async def run() -> None:
+        async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+            server.delta("turn-other", "foreign")
+            server.delta(turn_id, "own")
+            server.complete(turn_id)
+
+        partial: list[str] = []
+        session = await started(FakeAppServer(script), FakeGuard(), partial=partial)
+        try:
+            assert await asyncio.wait_for(session.send("go"), 2) == "own"
+            assert partial == ["own"]
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_interrupted_turn_has_its_own_code() -> None:
+    async def run() -> None:
+        async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+            server.complete(turn_id, "interrupted")
+
+        session = await started(FakeAppServer(script), FakeGuard())
+        try:
+            with pytest.raises(CodexSessionError) as interrupted:
+                await asyncio.wait_for(session.send("go"), 2)
+            assert interrupted.value.code == "CODEX_TURN_INTERRUPTED"
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+class EmptyIdAppServer(FakeAppServer):
+    """Answers one method with an empty `id` where Codex returns its thread or turn."""
+
+    def __init__(self, method: str) -> None:
+        super().__init__()
+        self.empty_method = method
+
+    def _request(self, message: dict[str, object]) -> None:
+        if message["method"] == self.empty_method:
+            key = "thread" if self.empty_method == "thread/start" else "turn"
+            self.emit({"id": message["id"], "result": {key: {"id": ""}}})
+            return
+        super()._request(message)
+
+
+def test_empty_thread_id_fails_the_start() -> None:
+    async def run() -> None:
+        with pytest.raises(CodexSessionError) as failed:
+            await asyncio.wait_for(started(EmptyIdAppServer("thread/start"), FakeGuard()), 2)
+        assert failed.value.code == "CODEX_START_FAILED"
+
+    asyncio.run(run())
+
+
+def test_empty_turn_id_fails_the_turn_instead_of_waiting_for_it() -> None:
+    async def run() -> None:
+        session = await started(EmptyIdAppServer("turn/start"), FakeGuard())
+        try:
+            with pytest.raises(CodexSessionError) as failed:
+                await asyncio.wait_for(session.send("go"), 2)
+            assert failed.value.code == "CODEX_TURN_FAILED"
         finally:
             await session.aclose()
 
@@ -1001,6 +1103,114 @@ def test_streamed_pieces_break_between_answer_items_and_the_handler_can_be_set_l
             # The answer itself keeps the raw deltas; only the shown pieces get breaks.
             assert await asyncio.wait_for(session.send("go"), 2) == "first partsecond"
             assert partial == ["first ", "part", "\n\nsecond"]
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+# C-CODEX-07 (PR #35 A review): remote control must stay disabled (T22 L3 part, I11).
+
+
+def unstarted(fake: FakeAppServer) -> CodexAppServerSession:
+    relay = GuardToolRelay(TASK, FakeGuard(), ApprovalOutcomes())
+    return CodexAppServerSession(
+        fake,
+        task=TASK,
+        plan=build_dynamic_tools(views("docs__read")),
+        relay=relay.relay,
+        model="gpt-6.1-sol",
+        base_instructions=BASE_INSTRUCTIONS,
+        version="0.1.0",
+    )
+
+
+def test_disabled_remote_control_is_allowed_and_never_requested() -> None:
+    async def run() -> None:
+        fake = FakeAppServer()
+        session = await started(fake, FakeGuard())
+        try:
+            assert await asyncio.wait_for(session.send("hello"), 2) == "echo:hello"
+            assert session.stop_code is None
+            assert not any(method.startswith("remoteControl/") for method in fake.methods())
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("status", ["connecting", "connected", "errored", None, 1])
+def test_remote_control_reported_while_starting_rejects_the_start(status) -> None:
+    async def run() -> None:
+        fake = FakeAppServer(remote_control=status)
+        session = unstarted(fake)
+        try:
+            with pytest.raises(CodexSessionError) as stopped:
+                await asyncio.wait_for(session.start(), 2)
+            assert stopped.value.code == "CODEX_L3_VIOLATION"
+            assert "turn/start" not in fake.methods()
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"status": "connected"}, {"status": "errored"}, {"status": None}, {}, "disabled"],
+)
+def test_remote_control_leaving_disabled_during_a_turn_stops_the_task(params) -> None:
+    async def run() -> None:
+        async def script(server: FakeAppServer, _turn_id: str, _text: str) -> None:
+            server.emit({"method": "remoteControl/status/changed", "params": params})
+            await asyncio.Event().wait()
+
+        session = await started(FakeAppServer(script), FakeGuard())
+        try:
+            with pytest.raises(CodexSessionError) as stopped:
+                await asyncio.wait_for(session.send("go"), 2)
+            assert stopped.value.code == "CODEX_L3_VIOLATION"
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_remote_control_enabled_between_turns_reports_the_stop_once() -> None:
+    async def run() -> None:
+        fake = FakeAppServer()
+        session = await started(fake, FakeGuard())
+        stops: list[str] = []
+        session.set_stop_handler(stops.append)
+        try:
+            assert await asyncio.wait_for(session.send("go"), 2) == "echo:go"
+            fake.remote_control_status("connected")
+            fake.remote_control_status("connected")
+            await wait_for_condition(lambda: stops)
+            await asyncio.sleep(0.02)
+            assert stops == ["CODEX_L3_VIOLATION"]
+            with pytest.raises(CodexSessionError):
+                await session.send("again")
+            assert fake.methods().count("turn/start") == 1
+        finally:
+            await session.aclose()
+
+    asyncio.run(run())
+
+
+def test_stop_before_the_owner_registers_is_reported_on_registration() -> None:
+    # The runtime registers its handler only after Store writes that follow start().
+    async def run() -> None:
+        fake = FakeAppServer()
+        session = await started(fake, FakeGuard())
+        try:
+            fake.remote_control_status("connected")
+            await wait_for_condition(lambda: session.stop_code is not None)
+            stops: list[str] = []
+            session.set_stop_handler(stops.append)
+            assert stops == ["CODEX_L3_VIOLATION"]
+            session.set_stop_handler(stops.append)
+            assert stops == ["CODEX_L3_VIOLATION"]
         finally:
             await session.aclose()
 

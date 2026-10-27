@@ -6,10 +6,13 @@ import asyncio
 import gzip
 import json
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
+import anyio
 import httpx
 import pytest
+from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage
 
 from guard_app.adapters import mcp_http_ingress, mcp_ingress
@@ -17,11 +20,13 @@ from guard_app.adapters.mcp_ingress import IngressError, IngressGate, PipeFrameR
 from guard_app.adapters.mcp_transport import (
     McpTransport,
     ToolListLimits,
-    _sdk_session_factory,
-    _UnvalidatedClientSession,
     collect_tool_definitions,
     http_stream_factory,
     validated_stdio_stream_factory,
+)
+from guard_app.adapters.mcp_transport.sdk_session import (
+    _UnvalidatedClientSession,
+    sdk_session_factory,
 )
 from guard_app.domain.errors import DispatchError
 
@@ -378,11 +383,80 @@ async def test_actual_sdk_session_without_ingress_refuses_list_without_dispatch(
 
 
 @pytest.mark.asyncio
+async def test_real_sdk_session_without_a_gate_is_never_ready_for_calls() -> None:
+    """Legacy SDK-spawned stdio has no raw ingress gate, so it cannot collect.
+
+    The listing reports that, and the worker must not advertise the session
+    READY either: Registry gets the fixed reason and the Guard gets no server.
+    """
+    peer = _Peer(lambda request_id, _number: _page(request_id))
+    gated = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
+
+    @asynccontextmanager
+    async def without_gate() -> AsyncIterator[tuple[Any, ...]]:
+        async with gated() as (read_stream, write_stream, _gate):
+            yield read_stream, write_stream
+
+    transport = McpTransport({"unit": without_gate}, tool_list_limits=ToolListLimits())
+    with pytest.raises(DispatchError) as failed:
+        await transport.start()
+    assert failed.value.exception_type == "SessionStartFailed"
+    listing = transport.tool_listing("unit")
+    assert listing is not None
+    assert listing.reason == "TOOLS_LIST_INGRESS_REQUIRED"
+    assert peer.list_requests == 0  # tools/list was never sent
+
+
+@pytest.mark.asyncio
+async def test_pipe_write_failure_fails_the_connection_gate_without_its_text() -> None:
+    async def read_bytes(_size: int) -> bytes:
+        await asyncio.Event().wait()  # the peer never answers
+        return b""
+
+    async def write_bytes(_frame: bytes) -> None:
+        raise OSError("private-pipe-detail")
+
+    async def drain() -> None:
+        pass
+
+    factory = validated_stdio_stream_factory(read_bytes, write_bytes, drain)
+    async with factory() as (_read_stream, write_stream, gate):
+        ping = JSONRPCMessage.model_validate({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        await write_stream.send(SessionMessage(ping))
+        await asyncio.wait_for(gate.failed.wait(), 1)
+    assert gate.reason == "TOOLS_LIST_INGRESS_IO_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_malformed_pipe_frame_fails_the_connection_gate_and_reaches_no_reader() -> None:
+    frames = [b"not-json-rpc\n"]
+
+    async def read_bytes(_size: int) -> bytes:
+        if frames:
+            return frames.pop()
+        await asyncio.Event().wait()
+        return b""
+
+    async def write_bytes(_frame: bytes) -> None:
+        pass
+
+    async def drain() -> None:
+        pass
+
+    factory = validated_stdio_stream_factory(read_bytes, write_bytes, drain)
+    async with factory() as (read_stream, _write_stream, gate):
+        await asyncio.wait_for(gate.failed.wait(), 1)
+        with pytest.raises(anyio.EndOfStream):
+            await read_stream.receive()
+    assert gate.reason == "TOOLS_LIST_MALFORMED"
+
+
+@pytest.mark.asyncio
 async def test_two_real_sdk_collections_get_independent_budgets() -> None:
     peer = _Peer(lambda request_id, _number: _page(request_id))
     factory = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
     size = len(_page(1))
-    async with _sdk_session_factory(factory)() as session:
+    async with sdk_session_factory(factory)() as session:
         await session.initialize()
         limits = ToolListLimits(max_page_bytes=size, max_total_bytes=size)
         assert (await collect_tool_definitions(session, limits)).complete
@@ -395,7 +469,7 @@ async def test_concurrent_ping_cannot_steal_listing_response_budget_association(
     peer = _Peer(lambda request_id, number: _page(request_id, cursor="x" if number == 1 else None))
     factory = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
     total = len(_page(2, cursor="x")) + len(_page(3)) - 1
-    async with _sdk_session_factory(factory)() as session:
+    async with sdk_session_factory(factory)() as session:
         await session.initialize()
         listing, _ping = await asyncio.gather(
             collect_tool_definitions(session, ToolListLimits(max_total_bytes=total)),
@@ -405,6 +479,34 @@ async def test_concurrent_ping_cannot_steal_listing_response_budget_association(
         assert not listing.complete
     assert peer.list_requests == 2
     assert peer.ping_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_real_sdk_session_reports_only_that_the_tool_list_changed() -> None:
+    """LIST-01: tools/list_changed reaches the callback as a bare call; params
+    and every other notification stay inside the SDK session."""
+    peer = _Peer(lambda request_id, _number: _page(request_id))
+    factory = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
+    seen: list[str] = []
+    async with sdk_session_factory(factory, lambda: seen.append("changed"))() as session:
+        await session.initialize()
+        for method in (
+            "notifications/resources/list_changed",
+            "notifications/prompts/list_changed",
+            "notifications/tools/list_changed",
+            "notifications/tools/list_changed",
+        ):
+            notice = {"jsonrpc": "2.0", "method": method, "params": {"_meta": {"note": "x"}}}
+            peer.output.extend(json.dumps(notice).encode() + b"\n")
+        peer.available.set()
+        # The ping answer follows the notices, and the SDK handles them in order.
+        await session.send_ping()  # type: ignore[attr-defined]
+    assert seen == ["changed", "changed"]
+
+
+def test_transport_rejects_a_tools_changed_callback_that_is_not_callable() -> None:
+    with pytest.raises(TypeError, match="tools changed callback must be callable"):
+        McpTransport({}, on_tools_changed="not callable")  # type: ignore[arg-type]
 
 
 class _PredictingPeer(_Peer):
@@ -497,7 +599,7 @@ async def test_abandoned_sdk_listing_invalidates_connection(cancel: bool) -> Non
         await peer.write(frame)
 
     factory = validated_stdio_stream_factory(peer.read, write, peer.drain)
-    async with _sdk_session_factory(factory)() as session:
+    async with sdk_session_factory(factory)() as session:
         await session.initialize()
         limits = ToolListLimits(page_timeout_s=0.02)
         task = asyncio.create_task(collect_tool_definitions(session, limits))
