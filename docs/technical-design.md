@@ -585,15 +585,15 @@ destinations:
   - { id: my-notes,        tier: internal,          max_label: INTERNAL }
 ```
 
-URL 형태 목적지로 확장할 때는 `security.normalize_endpoint()`로 정규화한 결과를 비교한다. 정규화에서 처리해야 할 함정은 다음과 같다.
+URL 형태 목적지로 확장할 때는 `security.normalize_endpoint()`로 정규화한 결과를 비교한다. 규칙은 서버 URL과 같은 URL-01(10.1절)이다. 정규화에서 처리해야 할 함정은 다음과 같다.
 
 | 입력 | 함정 | 처리 |
 | --- | --- | --- |
 | `https://my-nas.home@evil.example/` | userinfo 뒤의 실제 host는 `evil.example` | userinfo가 있으면 거부 |
-| `HTTPS://My-NAS.Home.:443/` | 대소문자, 끝 점, 기본 포트 | scheme·host 소문자, 끝 점 제거, 기본 포트 생략 |
+| `HTTPS://My-NAS.Home.:443/` | 대소문자, 끝 점, 기본 포트 | scheme·host 소문자, 기본 포트 생략. 끝 점은 거부 |
 | `https://my-nаs.home/` (키릴 а) | 동형 문자 | IDNA 변환 후 ASCII host만 허용, punycode 비교 |
-| `https://my-nas.home/repo/../other` | 경로 탈출 | 경로 정규화 후 세그먼트 접두어 비교, 인코딩된 `%2e%2e` 거부 |
-| `http://10.0.0.5/` | 사설 IP를 내 것으로 간주 | IP·DNS 결과로 신뢰 판단 금지. 등록 여부만 본다 |
+| `https://my-nas.home/repo/../other` | 경로 탈출 | `.`·`..`·`%`가 있으면 거부하고, 남은 경로 세그먼트로 접두어 비교 |
+| `https://10.0.0.5/` | 사설 IP를 내 것으로 간주 | IP·DNS 결과로 신뢰 판단 금지. 등록 여부만 본다(http는 루프백 IP 리터럴만 허용) |
 
 이름에 `internal`, `my`, `private`가 들어 있다고 사용자 본인의 대상으로 판단하지 않는다. 판단 근거는 오직 등록 레코드다.
 
