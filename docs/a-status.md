@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-27 · main `c2da9e0` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-28 · main `ba750c4` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -16,7 +16,7 @@
 | CFG-01 설정 파일: B 변환 함수([PR #36](https://github.com/hsminu/MCP-Runtime-Guard/pull/36) 병합 대기)·C 파일 연산(C2.14)·경로·실행 파일 검증 ([#33](https://github.com/hsminu/MCP-Runtime-Guard/issues/33)) | B·C | A24–A27, A49 |
 | Profile 저장 연결(C2.14)·Registry 활성화(C4.10). B `activate_server`는 #32로 main 반영 | C | A81 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
-| B의 AGT 제거 PR(같은 파일) | B | A44 |
+| B의 AGT 제거 PR([#47](https://github.com/hsminu/MCP-Runtime-Guard/pull/47), 같은 파일) | B | A44, A123 |
 
 **A가 막고 있는 것**: 없음. B1.7·B2.11·C2.10·C5.8이 기다리던 A 브랜치는 [PR #29](https://github.com/hsminu/MCP-Runtime-Guard/pull/29)로 main에 병합됐다. #36 A 리뷰와 #37 A 회신은 게시했다.
 
@@ -91,6 +91,8 @@
 - [x] A87 `dynamicTools` 이름 규칙 위반 도구 제외·보고 · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)
 - [x] A95 Codex에서 빠진 도구를 이유와 함께 정책 화면에 표시(2026-10-18 결정, PR #31) · [기록](archive/a/A95-codex-excluded-tools.md)
 - [x] A92 contracts 10-17 "도구 이름 제한 없음"과 Codex 이름 규칙 충돌 알림([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6251209139) 2절, 사용자 결정 대기) · [기록](archive/a/A92-contract-replies-and-b72-review.md)
+- [x] A120 대화 입력창에서 고른 추론 수준을 그 턴부터 Codex `turn/start`에 전달(`ultra` 제외) · [기록](archive/a/A120-reasoning-effort.md)
+- [ ] A120 실제 codex.exe에서 추론 수준 반영 확인 — 막힘: L2(C6.14)·CFG-01(A19·A20과 같음)
 - [x] A90 `baseInstructions` 프롬프트 문구·C1.9 관측 지점(`SessionObservations`) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A90 답변 스트리밍의 대화 화면 연결(bridge `conversation_partial`, 부분 답 교체·중단 표시) · [기록](archive/a/A90-answer-streaming.md)
 - [x] A74 Task 폴더 정리 실제 연결(A101, C2.13 `remove_task_folder`) · [기록](archive/a/A101-codex-launcher-preparation.md)
@@ -152,6 +154,12 @@
 - [x] A75 구성·준비 실패와 정리 미확인 안내·Task별 화면 격리 · [기록](archive/a/A75-session-preparation-notices.md)
 - [x] A78 QA High·Medium 수정: 수집 전 예측 응답의 목록 완료 차단, JSON-RPC 취소 시 종료, 끝난 Task 상태 표시, 대화창 화자 위조 차단 · [기록](archive/a/A78-qa-runtime-ui-fixes.md)
 - [x] A79 QA Low 5건 수정: Scanner 키 예외 문구·Withheld 문구·결과 화면 None·거부 코드 안내·정리 겹침 미확인 · [기록](archive/a/A79-qa-low-fixes.md)
+- [x] A121 화면 개편: Orca·Paradev 기준 라이트·다크 색, 세션 작업 공간·사이드바, 색·간격·문구 감사 테스트 · [기록](archive/a/A121-gui-redesign.md)
+- [x] A122 결과 · 실행 활동을 대화 옆 패널(대화 머리 "활동")과 전체 화면(사이드바)으로 나눔 · [기록](archive/a/A122-results-dock.md)
+- [x] A123 화면의 AGT 표시 제거(#47과 같은 변경) · [기록](archive/a/A123-agt-display-removal.md)
+- [ ] A123 `RuntimeIdentity.agt_mode`와 그 생성 코드 정리 — 막힘: #47(B2.11) 병합
+- [x] A124 가짜 조회 데이터로 전 화면을 눌러 보는 시연(`examples/ui_demo.py`) · [기록](archive/a/A124-ui-demo.md)
+- [x] A125 앱 문구를 하세요체(안내)·음슴체(상태)로 통일 · [기록](archive/a/A125-ui-copy-style.md)
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 
