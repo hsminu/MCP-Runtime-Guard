@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -151,9 +152,6 @@ class GuardService:
         approval_ttl_seconds: int = 300,
         taint_mode: str = "accumulate",
         max_result_bytes: int = 262144,
-        access_timeout_seconds: float = 30.0,
-        max_access_checks: int = 4,
-        access_cleanup_timeout_seconds: float = 0.05,
         approval_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         for value in (profile_id, policy_version, operator_id):
@@ -165,20 +163,9 @@ class GuardService:
                 raise GuardConfigError("Guard 식별자가 유효하지 않다")
         if taint_mode not in ("accumulate", "last_read", "none"):
             raise GuardConfigError("Guard 추적 모드가 유효하지 않다")
-        if (
-            type(access_timeout_seconds) not in (int, float)
-            or not math.isfinite(access_timeout_seconds)
-            or access_timeout_seconds <= 0
-        ):
-            raise GuardConfigError("접근 검사 제한 시간이 유효하지 않다")
-        if type(max_access_checks) is not int or max_access_checks <= 0:
-            raise GuardConfigError("접근 검사 동시 실행 상한이 유효하지 않다")
-        if (
-            type(access_cleanup_timeout_seconds) not in (int, float)
-            or not math.isfinite(access_cleanup_timeout_seconds)
-            or access_cleanup_timeout_seconds <= 0
-        ):
-            raise GuardConfigError("접근 검사 정리 제한 시간이 유효하지 않다")
+        check_access = getattr(access_checker, "check_access", None)
+        if not callable(check_access) or inspect.iscoroutinefunction(check_access):
+            raise GuardConfigError("동기 접근 판정기가 유효하지 않다")
         callbacks = (
             request_id_factory,
             approval_id_factory,
@@ -204,12 +191,6 @@ class GuardService:
         self._monotonic = monotonic
         self._mode = taint_mode
         self._max_result_bytes = max_result_bytes
-        self._access_timeout = float(access_timeout_seconds)
-        self._max_access_checks = max_access_checks
-        self._access_cleanup_timeout = float(access_cleanup_timeout_seconds)
-        self._access_checks: set[asyncio.Task[AccessResult]] = set()
-        self._unfinished_access_checks: set[asyncio.Task[AccessResult]] = set()
-        self._access_task_ids: dict[asyncio.Task[AccessResult], str] = {}
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._global_halt = False
         self._stop_requests: dict[str, _TaskStopSignal] = {}
@@ -358,10 +339,12 @@ class GuardService:
         성공 뒤 새 Task는 반환한 profile_id·policy_version으로 생성해야 한다.
         기록 실패는 global halt와 PolicyChangeError이며 성공 ACK를 반환하지 않는다.
         """
+        check_access = getattr(access_checker, "check_access", None)
         if (
             type(change) is not PreparedPolicyChange
             or type(change.loaded_profile) is not LoadedProfile
-            or not callable(getattr(access_checker, "check_access", None))
+            or not callable(check_access)
+            or inspect.iscoroutinefunction(check_access)
             or not callable(task_source)
         ):
             raise PolicyChangeError("정책 적용 입력이 유효하지 않다")
@@ -553,11 +536,7 @@ class GuardService:
 
     def _cleanup_task_resources(self, task_id: str) -> None:
         """I3/I6/I8: 실행 참조가 남거나 정지 저장이 불명이면 신호를 보존한다."""
-        if (
-            self._locks.get(task_id) is not None
-            or task_id in self._access_task_ids.values()
-            or self._approvals._has_task_context(task_id)
-        ):
+        if self._locks.get(task_id) is not None or self._approvals._has_task_context(task_id):
             return
         signal = self._stop_requests.get(task_id)
         if signal is not None and (not signal.is_set() or signal.terminal_epoch is not None):
@@ -693,7 +672,7 @@ class GuardService:
             raise ResolutionError(Reason.POLICY_CHANGED)
         registration_status = self._registry.status(req.tool.server_id)
         fingerprint = self._registry.fingerprint(req.tool)
-        # AGT에 원문을 전달하기 전 로컬 전제조건과 경계 거부를 판정한다.
+        # 접근 판정 전 로컬 전제조건과 경계 거부를 판정한다.
         if fingerprint is None:
             raise ResolutionError(Reason.TOOL_FINGERPRINT_CHANGED)
         preliminary = evaluate(
@@ -710,9 +689,18 @@ class GuardService:
         )
         if preliminary.decision is Decision.DENY:
             return preliminary
-        access = await self._wait_for_access(req, state)
+        raw_access: object = self._access_checker.check_access(
+            req, TrustedContext(state=state, operator_id=self._operator_id)
+        )
+        if type(raw_access) is AccessResult:
+            access = raw_access
+        else:
+            # 비동기 구현이 잘못 전달한 코루틴은 실행하지 않고 닫는다.
+            if inspect.iscoroutine(raw_access):
+                raw_access.close()
+            access = AccessResult(allowed=False, reason="", error=True)
         self._check_stop(req.task_id, epoch=req.epoch)
-        # await 중 등록 상태나 지문이 바뀌어도 현재 값을 다시 검사한다.
+        # 동기 판정 뒤에도 주입된 Registry의 최신 상태와 지문을 다시 확인한다.
         fingerprint = self._registry.fingerprint(req.tool)
         if fingerprint is None:
             raise ResolutionError(Reason.TOOL_FINGERPRINT_CHANGED)
@@ -728,62 +716,6 @@ class GuardService:
                 phase=phase,
             )
         )
-
-    async def _wait_for_access(self, req: ResolvedRequest, state: TaskState) -> AccessResult:
-        # 완료 callback보다 새 호출이 먼저 실행돼도 정상 종료 슬롯은 바로 회수한다.
-        for check in tuple(self._access_checks):
-            if check.done():
-                self._discard_access_result(check)
-        if self._unfinished_access_checks or len(self._access_checks) >= self._max_access_checks:
-            return AccessResult(allowed=False, reason="", error=True)
-
-        stop = self._stop_requests.setdefault(req.task_id, _TaskStopSignal())
-        work = asyncio.create_task(
-            self._access_checker.check_access(
-                req, TrustedContext(state=state, operator_id=self._operator_id)
-            )
-        )
-        self._access_checks.add(work)
-        self._access_task_ids[work] = req.task_id
-        work.add_done_callback(self._discard_access_result)
-        interrupted = asyncio.create_task(stop.wait())
-        system_stop = self._system_stop_requests.setdefault(
-            (req.task_id, req.epoch), _TaskStopSignal()
-        )
-        system_interrupted = asyncio.create_task(system_stop.wait())
-        try:
-            done, _ = await asyncio.wait(
-                {work, interrupted, system_interrupted},
-                timeout=self._access_timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            self._check_stop(req.task_id, epoch=req.epoch)
-            if work not in done:
-                return AccessResult(allowed=False, reason="", error=True)
-            try:
-                return work.result()
-            except TimeoutError:
-                return AccessResult(allowed=False, reason="", error=True)
-        finally:
-            interrupted.cancel()
-            system_interrupted.cancel()
-            if not system_stop.is_set():
-                self._system_stop_requests.pop((req.task_id, req.epoch), None)
-            if not work.done():
-                # 정리 대기도 다시 취소될 수 있다. 실제 완료 전에는 추적/슬롯을 해제하지 않는다.
-                self._unfinished_access_checks.add(work)
-                work.cancel()
-                await asyncio.wait({work}, timeout=self._access_cleanup_timeout)
-
-    def _discard_access_result(self, work: asyncio.Task[AccessResult]) -> None:
-        self._access_checks.discard(work)
-        self._unfinished_access_checks.discard(work)
-        task_id = self._access_task_ids.pop(work, None)
-        if not work.cancelled():
-            # 늦은 값은 실행 권한이 아니다. 예외 원문도 logger로 전달하지 않는다.
-            work.exception()
-        if task_id is not None:
-            self._cleanup_task_resources(task_id)
 
     async def _dispatch_reserved(
         self,

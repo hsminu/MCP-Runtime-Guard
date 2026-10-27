@@ -101,13 +101,17 @@ class Transport(Protocol):
 
 
 class AccessChecker(Protocol):
-    """A 구현. 실행하지 않고 판정만 반환한다(10.3절).
+    """같은 프로세스에서 B의 순수 접근 규칙을 감싸는 동기 판정 포트다.
 
-    거절·오류는 DENY의 입력이다. 형식 불명·예외·시간초과는 error=True로 번역하며
-    원문 오류 메시지를 reason에 넣지 않는다. ALLOW는 사람 승인을 대체하지 않는다.
+    판정기에서 I/O·대기·스레드·하위 프로세스를 사용하지 않는다. 일반 예외는 Guard의
+    fail_closed 경계에서 DENY가 되며, AccessResult가 아닌 값은 error=True DENY다.
+    판정기가 던진 CancelledError도 예약 전 실패로 보아 그 Task만 정지하고 DENY로 끝내며
+    전파하지 않는다.
+    오류 원문을 reason에 넣지 않는다. ALLOW는 거부권을 행사하지 않을 뿐 사람
+    승인을 대체하거나 Guard의 ASK·DENY를 완화하지 않는다(8.5·10.3절).
     """
 
-    async def check_access(self, req: ResolvedRequest, ctx: TrustedContext) -> AccessResult: ...
+    def check_access(self, req: ResolvedRequest, ctx: TrustedContext) -> AccessResult: ...
 
 
 class Scanner(Protocol):

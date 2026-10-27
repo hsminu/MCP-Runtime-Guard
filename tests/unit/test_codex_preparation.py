@@ -473,8 +473,6 @@ def test_demo_refuses_a_db_in_the_product_app_folder(monkeypatch, capsys, tmp_pa
         [
             "guard-app",
             "--demo",
-            "--agt-mode",
-            "mock",
             "--store",
             "sqlite",
             "--db-path",

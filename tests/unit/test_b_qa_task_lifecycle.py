@@ -1,7 +1,7 @@
 """B-QA-09: I3/I5/I6/I8, T11/T20/T36/T37의 Task 수명 단위 회귀.
 
-lock 참조·Store ACK·늦은 AGT 완료를 관찰한다. SQLite는 실제 파일 DB이며,
-Transport/AGT는 메모리 대역이다. MCP wire·수신 부작용·C 독립 인수는 별도다.
+lock 참조·Store ACK·승인 수명을 관찰한다. SQLite는 실제 파일 DB이며,
+Transport/접근 판정기는 메모리 대역이다. MCP wire·수신 부작용·C 독립 인수는 별도다.
 """
 
 import asyncio
@@ -13,7 +13,6 @@ import pytest
 
 from guard_app.domain.contracts import Denied, Pending, Released
 from guard_app.domain.enums import Label, TaskStatus
-from guard_app.domain.models import AccessResult
 from guard_app.domain.reasons import Reason
 from guard_app.storage import SQLiteStore
 from tests.unit.test_guard import _call, _Harness
@@ -162,66 +161,8 @@ def test_queued_submit_and_control_share_the_lock_during_dispatch_and_halt(comma
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("phase", ["submit", "approval"])
-@pytest.mark.parametrize("late_error", [False, True])
-def test_stop_waits_for_late_agt_even_after_halted_commit(phase, late_error):
-    async def scenario():
-        h = _Harness(label=Label.INTERNAL, access_cleanup_timeout_seconds=0.01)
-        control = h.guard.human_control("operator")
-        pending = await h.guard.submit("task", _call("send")) if phase == "approval" else None
-        entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        starts = 0
-
-        async def late_check(req, ctx):
-            nonlocal starts
-            starts += 1
-            entered.set()
-            try:
-                try:
-                    await release.wait()
-                except asyncio.CancelledError:
-                    await release.wait()
-                if late_error:
-                    raise RuntimeError("RAW_LATE_AGT_MARKER")
-                return AccessResult(allowed=True, reason="", error=False)
-            finally:
-                completed.set()
-
-        h.access.check_access = late_check
-        execution = asyncio.create_task(
-            control.approve(pending.approval_id)
-            if pending
-            else h.guard.submit("task", _call("send"))
-        )
-        try:
-            await asyncio.wait_for(entered.wait(), 1)
-            await asyncio.wait_for(control.cancel("task"), 1)
-            assert isinstance(await execution, Denied)
-            await _settle()
-            assert h.store.states["task"].status is TaskStatus.HALTED
-            assert not h.guard._locks
-            assert h.guard._stop_requests["task"].is_set()
-            assert h.guard._unfinished_access_checks
-            assert not completed.is_set()
-            assert isinstance(await h.guard.submit("task", _call()), Denied)
-            assert starts == 1
-            assert not h.transport.calls
-            release.set()
-            await asyncio.wait_for(completed.wait(), 1)
-            await _settle()
-            assert not h.guard._stop_requests
-            assert not h.guard._access_checks
-            assert not h.guard._unfinished_access_checks
-            assert not h.guard._global_halt
-            assert not h.transport.calls
-        finally:
-            release.set()
-
-    asyncio.run(scenario())
-
-
 @pytest.mark.parametrize("command", ["approve", "reject", "expire", "cancel", "emergency_halt"])
-def test_pending_approval_keeps_stop_context_and_releases_it_after_completion(command):
+def test_pending_approval_keeps_approval_context_and_releases_it_after_completion(command):
     async def scenario():
         h = _Harness(label=Label.INTERNAL)
         control = h.guard.human_control("operator")
@@ -229,7 +170,8 @@ def test_pending_approval_keeps_stop_context_and_releases_it_after_completion(co
         assert isinstance(pending, Pending)
         await _settle()
         assert not h.guard._locks
-        assert "task" in h.guard._stop_requests
+        assert h.guard._approvals._has_task_context("task")
+        assert "task" not in h.guard._stop_requests or not h.guard._stop_requests["task"].is_set()
         assert await control.review(pending.approval_id) is not None
         if command == "expire":
             h.now += timedelta(seconds=301)

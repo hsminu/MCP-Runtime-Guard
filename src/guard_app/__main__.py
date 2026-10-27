@@ -51,12 +51,6 @@ def main() -> int:
         type=Path,
         help="고정 버전 codex.exe의 절대 경로(기본: tools/install_codex.py 설치 위치)",
     )
-    parser.add_argument("--agt-mode", choices=("real", "mock"))
-    parser.add_argument(
-        "--agt-policy",
-        choices=("allow-tools", "deny-send", "deny-all"),
-        help="합성 도구의 AGT 허용·차단 시연 정책",
-    )
     args = parser.parse_args()
     # A106: product mode opens only the fixed DB in the app folder (C2.17).
     demo_only = (
@@ -64,8 +58,6 @@ def main() -> int:
         args.mcp_transport,
         args.store,
         args.db_path,
-        args.agt_mode,
-        args.agt_policy,
     )
     if not args.demo and any(value is not None for value in demo_only):
         parser.error("시연 전용 옵션은 --demo와 함께만 쓸 수 있다")
@@ -73,13 +65,10 @@ def main() -> int:
         args.scenario = args.scenario or "ask"
         args.mcp_transport = args.mcp_transport or "stdio"
         args.store = args.store or "memory"
-        args.agt_policy = args.agt_policy or "allow-tools"
         if importlib.util.find_spec("examples") is None:
             parser.error(
                 "합성 시연(--demo)은 소스 checkout에서 python -m guard_app으로만 실행할 수 있다"
             )
-    if args.demo and args.agt_mode is None:
-        parser.error("합성 시연에는 --agt-mode real 또는 mock을 지정해야 한다")
     if args.demo and (args.store == "sqlite") != (args.db_path is not None):
         parser.error("저장소 종류와 DB 경로 설정이 일치하지 않는다")
     if args.demo and args.db_path is not None and not _outside_app_folder(args.db_path):
@@ -175,8 +164,6 @@ def _run(args: argparse.Namespace, codex: CodexProcessPreparation | None) -> tup
         bridge = BackendBridge(
             lambda: bootstrap(
                 args.scenario,
-                agt_mode=args.agt_mode,
-                agt_policy=args.agt_policy,
                 mcp_transport=args.mcp_transport,
                 store_kind=args.store,
                 db_path=args.db_path,

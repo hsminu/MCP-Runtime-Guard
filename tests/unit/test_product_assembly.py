@@ -617,7 +617,7 @@ def test_access_rules_checker_is_deny_by_default_and_binds_the_task() -> None:
     state = TaskState(task_id="task-1", epoch=1, profile_id="unit", policy_version="v")
     context = TrustedContext(state=state, operator_id="op")
     results = {
-        name: asyncio.run(checker.check_access(request("task-1", name), context))
+        name: checker.check_access(request("task-1", name), context)
         for name in ("read", "send", "other")
     }
     assert results["read"].allowed
@@ -626,7 +626,7 @@ def test_access_rules_checker_is_deny_by_default_and_binds_the_task() -> None:
     assert not results["send"].error
     assert not results["other"].allowed
     assert results["other"].reason == "ACCESS_RULE_MISSING"
-    mismatch = asyncio.run(checker.check_access(request("task-2", "read"), context))
+    mismatch = checker.check_access(request("task-2", "read"), context)
     assert not mismatch.allowed
     assert mismatch.error
     with pytest.raises(ValueError, match="valid access rules"):

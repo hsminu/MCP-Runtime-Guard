@@ -384,9 +384,7 @@ class GuardWindow(QMainWindow):
             mode = None
         else:
             try:
-                identity = RuntimeIdentity(
-                    RuntimeMode(snapshot.agt_mode), RuntimeMode(snapshot.model_mode)
-                )
+                identity = RuntimeIdentity(model_mode=RuntimeMode(snapshot.model_mode))
             except ValueError:
                 identity = RuntimeIdentity()
             mode = snapshot.model_mode
@@ -491,7 +489,7 @@ class GuardWindow(QMainWindow):
         self.log_page.set_detail(request, snapshot)
 
     def set_runtime_identity(self, identity: RuntimeIdentity) -> None:
-        """Show only modes explicitly confirmed by trusted app bootstrap."""
+        """Show only the model mode explicitly confirmed by trusted app bootstrap."""
 
         labels = {
             RuntimeMode.UNCONFIGURED: "미설정",
@@ -499,10 +497,7 @@ class GuardWindow(QMainWindow):
             RuntimeMode.REAL: "real",
             RuntimeMode.CODEX: "Codex",
         }
-        self.runtime_identity.setText(
-            f"AGT: {labels.get(identity.agt_mode, '미확인')} · "
-            f"모델: {labels.get(identity.model_mode, '미확인')}"
-        )
+        self.runtime_identity.setText(f"모델: {labels.get(identity.model_mode, '미확인')}")
 
     def set_task_status(self, status: TaskStatus | None) -> None:
         """Render a backend-confirmed status; no Task control is inferred here."""

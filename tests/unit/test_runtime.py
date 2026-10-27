@@ -41,19 +41,18 @@ def wait_until(app, predicate, timeout=8):
     raise AssertionError("Qt/backend condition not reached")
 
 
-@pytest.mark.parametrize("agt_mode", ["real", "mock"])
 @pytest.mark.parametrize("mcp_transport", ["stdio", "http"])
-def test_human_review_approve_and_shutdown_use_real_mcp(agt_mode, mcp_transport):
+def test_human_review_approve_and_shutdown_use_real_mcp(mcp_transport):
     """T18 표시 연결 부분, I1/I3: 실제 승인 사본 표시·승인·SEND 수명 확인."""
     app = QApplication.instance() or QApplication([])
-    bridge = BackendBridge(lambda: bootstrap(agt_mode=agt_mode, mcp_transport=mcp_transport))
+    bridge = BackendBridge(lambda: bootstrap(mcp_transport=mcp_transport))
     panel = RuntimePanel(bridge)
     panel.show()
     try:
         bridge.start()
         wait_until(app, panel.run_button.isEnabled)
-        assert panel.current.agt_mode == agt_mode
-        assert f"AGT: {agt_mode}" in panel.summary.text()
+        assert panel.current.model_mode == "mock"
+        assert "모델: mock" in panel.summary.text()
         panel.run_button.click()
         assert not panel.run_button.isEnabled()
         wait_until(app, panel.review_button.isEnabled)
@@ -82,11 +81,11 @@ def test_human_review_approve_and_shutdown_use_real_mcp(agt_mode, mcp_transport)
     assert not bridge.backend_alive
 
 
-def test_agt_denial_explains_result_and_disabled_run_button():
+def test_access_denial_explains_result_and_disabled_run_button():
     # QA 2026-10-13: only RUN_DENIED_QUERY_REQUIRED was shown, with a RUNNING
     # Task and a disabled run button left unexplained.
     app = QApplication.instance() or QApplication([])
-    bridge = BackendBridge(lambda: bootstrap(agt_mode="real", agt_policy="deny-send"))
+    bridge = BackendBridge(lambda: bootstrap(access_policy="deny-send"))
     panel = RuntimePanel(bridge)
     try:
         bridge.start()
@@ -116,7 +115,7 @@ def test_agt_denial_explains_result_and_disabled_run_button():
 def test_successful_stop_reads_as_success(button, name):
     # QA 2026-10-13: a successful emergency halt showed CONTROL_DENIED_... only.
     app = QApplication.instance() or QApplication([])
-    bridge = BackendBridge(lambda: bootstrap(agt_mode="real"))
+    bridge = BackendBridge(lambda: bootstrap())
     panel = RuntimePanel(bridge)
     try:
         bridge.start()
@@ -222,7 +221,7 @@ def test_double_enter_on_safe_action_never_cancels_or_halts(target):
     # QA 2026-10-13 Q06: disabling the focused button moved focus to 작업 취소,
     # so a second Enter irreversibly stopped the Task.
     app = QApplication.instance() or QApplication([])
-    bridge = BackendBridge(lambda: bootstrap(agt_mode="mock"))
+    bridge = BackendBridge(lambda: bootstrap())
     sent: list[ControlAction] = []
     request_control = bridge.request_control
 
@@ -274,7 +273,7 @@ def test_lifecycle_messages_are_current_korean_with_code_secondary():
     # QA 2026-10-13 R10: READY still read "백엔드: STARTING"; a failed start kept
     # the "시작 중" summary.
     app = QApplication.instance() or QApplication([])
-    bridge = BackendBridge(lambda: bootstrap(agt_mode="mock"))
+    bridge = BackendBridge(lambda: bootstrap())
     panel = RuntimePanel(bridge)
     try:
         assert panel.summary.text().startswith("백엔드 시작 중")
@@ -352,7 +351,7 @@ def test_restart_gate_failure_disables_every_runtime_action(code):
     from guard_app.ui.presentation import LIFECYCLE_MESSAGES
 
     app = QApplication.instance() or QApplication([])
-    bridge = BackendBridge(lambda: bootstrap(agt_mode="mock"))
+    bridge = BackendBridge(lambda: bootstrap())
     panel = RuntimePanel(bridge)
     panel.set_snapshot(TaskProjection("task", 1, TaskStatus.WAITING_APPROVAL, "approval"))
     panel._ready = True

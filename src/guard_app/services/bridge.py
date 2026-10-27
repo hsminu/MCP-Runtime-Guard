@@ -184,7 +184,6 @@ class TaskProjection:
     approval_id: str | None = None
     host_dispatch: int | None = None
     receiver_effect: int | None = None
-    agt_mode: str = "unconfigured"
     model_mode: str = "unconfigured"
     can_advance: bool = False
     can_accept_message: bool = False

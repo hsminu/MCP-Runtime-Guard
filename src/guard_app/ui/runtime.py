@@ -391,7 +391,7 @@ class RuntimePanel(QWidget):
         lines = [
             f"Task: {snapshot.task_id} · {status_title(snapshot.status)}",
             task_label_text(snapshot.label, snapshot.unclassified),
-            f"AGT: {snapshot.agt_mode} · 모델: {snapshot.model_mode}",
+            f"모델: {snapshot.model_mode}",
             f"호스트 dispatch: {_count(snapshot.host_dispatch)} "
             f"· 수신 부작용: {_count(snapshot.receiver_effect)}",
         ]
