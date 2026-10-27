@@ -329,6 +329,54 @@ def test_main_does_not_start_while_another_instance_holds_the_lock(
     assert not db.exists()
 
 
+class _ProcessEndedError(Exception):
+    def __init__(self, code: int) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_main_keeps_the_lock_until_the_process_ends_when_cleanup_is_unconfirmed(
+    monkeypatch, capsys, tmp_path, confirmed
+) -> None:
+    """A110 (B6.17 8.1, #37): with cleanup unconfirmed the process ends at once
+    while it still holds the lock, so a second instance cannot open the same DB
+    meanwhile. With cleanup confirmed main releases the lock and returns."""
+    root, db = tmp_path / "app", tmp_path / "product.db"
+    claimed: list[CodexProcessPreparation] = []
+    claim = CodexProcessPreparation.claim
+
+    def recording_claim(self: CodexProcessPreparation) -> None:
+        claim(self)
+        claimed.append(self)
+
+    def ran(_args: object, codex: object) -> tuple[int, bool]:
+        assert_lock_held(root)
+        return 0, confirmed
+
+    def ended(code: int) -> None:
+        assert_lock_held(root)  # never released before the process ends
+        raise _ProcessEndedError(code)
+
+    monkeypatch.setattr(paths, "app_root", lambda: root)
+    monkeypatch.setattr(CodexProcessPreparation, "claim", recording_claim)
+    monkeypatch.setattr(entry, "_run", ran)
+    monkeypatch.setattr(entry.os, "_exit", ended)
+    monkeypatch.setattr(sys, "argv", ["guard-app", "--db-path", str(db)])
+    try:
+        if confirmed:
+            assert entry.main() == 0
+            prepare_app_folders(root).close()  # the lock was released
+        else:
+            with pytest.raises(_ProcessEndedError) as stopped:
+                entry.main()
+            assert stopped.value.code == entry.EXIT_CLEANUP_UNCONFIRMED
+            assert "정리 완료를 확인하지 못한 채" in capsys.readouterr().err
+    finally:
+        for owner in claimed:
+            owner.close()
+
+
 def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
     monkeypatch, tmp_path
 ) -> None:

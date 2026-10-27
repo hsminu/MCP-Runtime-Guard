@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import re
 import sys
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCloseEvent
@@ -21,6 +23,10 @@ if TYPE_CHECKING:
     from guard_app.services.codex_preparation import CodexProcessPreparation
 
 _APP_CODE = re.compile(r"APP_[A-Z_]{1,60}")
+# B6.17 8.1 (#37): after closing, watch the backend this long past the bridge's
+# own shutdown bound before giving up on a confirmed cleanup (A110).
+CLOSE_OBSERVATION_S = 5.0
+EXIT_CLEANUP_UNCONFIRMED = 3
 
 
 def main() -> int:
@@ -82,12 +88,30 @@ def main() -> int:
         except AppPathError as error:
             print(_claim_refusal(error), file=sys.stderr)
             return 1
+    confirmed: bool | None = None  # None: _run raised before the backend reported
     try:
-        return _run(args, codex)
+        code, confirmed = _run(args, codex)
     finally:
-        # The backend has closed its sessions; release the single-instance lock.
-        if codex is not None:
+        # Release the single-instance lock unless the backend left cleanup
+        # unconfirmed: then the process ends while it still holds the lock.
+        if codex is not None and confirmed is not False:
             codex.close()
+    if not confirmed:
+        _end_unconfirmed()
+    return code
+
+
+def _end_unconfirmed() -> NoReturn:
+    """B6.17 8.1: cleanup was not confirmed, so end the process now (A110).
+
+    The single-instance lock is not released first; the OS releases its handle
+    when the process ends, and C2.12's Job objects end any Codex left. A normal
+    exit would join a stuck backend or worker thread with the window gone.
+    """
+    print("정리 완료를 확인하지 못한 채 앱을 종료한다", file=sys.stderr)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(EXIT_CLEANUP_UNCONFIRMED)
 
 
 def _claim_refusal(error: Exception) -> str:
@@ -100,8 +124,11 @@ def _claim_refusal(error: Exception) -> str:
     return "앱 폴더를 준비하지 못해 시작하지 않는다"
 
 
-def _run(args: argparse.Namespace, codex: CodexProcessPreparation | None) -> int:
-    """Window, bridge and Qt loop. Product mode passes its claimed `codex`."""
+def _run(args: argparse.Namespace, codex: CodexProcessPreparation | None) -> tuple[int, bool]:
+    """Window, bridge and Qt loop. Product mode passes its claimed `codex`.
+
+    Returns the Qt exit code and whether the backend confirmed its cleanup.
+    """
     store_title = "SQLite Store" if not args.demo or args.store == "sqlite" else "메모리 Store"
     existing = QApplication.instance()
     app = existing if isinstance(existing, QApplication) else QApplication(sys.argv[:1])
@@ -126,12 +153,24 @@ def _run(args: argparse.Namespace, codex: CodexProcessPreparation | None) -> int
         preparation = codex.preparation()
         bridge = BackendBridge(lambda: bootstrap_product(args.db_path, preparation=preparation))
 
+    close_limit_s = bridge.shutdown_timeout + CLOSE_OBSERVATION_S
+    closing_since: list[float] = []
+
     class ApplicationWindow(GuardWindow):
         def closeEvent(self, event: QCloseEvent) -> None:
             self.clear_session_content()
+            if not closing_since:
+                closing_since.append(time.monotonic())
             bridge.close()
             self.hide()
             event.ignore()
+
+    def quit_when_closed() -> None:
+        if window.isVisible():
+            return
+        overdue = bool(closing_since) and time.monotonic() - closing_since[0] > close_limit_s
+        if bridge.thread_done or overdue:
+            app.quit()
 
     window = ApplicationWindow()
     panel = RuntimePanel(bridge)
@@ -142,14 +181,16 @@ def _run(args: argparse.Namespace, codex: CodexProcessPreparation | None) -> int
     window.navigate("runs")
     timer = QTimer()
     timer.setInterval(25)
-    timer.timeout.connect(
-        lambda: app.quit() if bridge.thread_done and not window.isVisible() else None
-    )
+    timer.timeout.connect(quit_when_closed)
     timer.start()
     app.aboutToQuit.connect(bridge.close)
     window.show()
     bridge.start()
-    return app.exec()
+    code = app.exec()
+    # A quit from elsewhere (session end) also gets the observation window.
+    waited_s = time.monotonic() - closing_since[0] if closing_since else 0.0
+    done = bridge.wait_done(close_limit_s - waited_s)
+    return code, done and not bridge.cleanup_unconfirmed
 
 
 if __name__ == "__main__":
