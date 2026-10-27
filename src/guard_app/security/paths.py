@@ -6,9 +6,10 @@
 권한을 다시 건다. 제품 DB는 `data\\guard.sqlite3`다. `app.lock`이 같은 사용자의 두 번째
 실행을, 폴더 권한이 다른 사용자를 막아 이 DB의 단일 소유가 된다(REC-01, #35 A·B 합의).
 B는 DB 경로를 `db_path()`로, 이관 전 백업 자리를 `begin_backup()`으로 받는다(C2.19, #37).
+설정 파일 `config\\settings.json`의 읽기·교체는 `settings_io`가 맡는다(C2.14).
 
 `prepare_app_folders`는 앱 시작 때 한 번 부른다. 단일 실행 잠금(`app.lock`)을 잡은 뒤, 이전
-실행이 남긴 Task 폴더와 끝나지 않은 백업 임시 파일을 모두 지운다. Task 폴더에는 Codex 로그 DB가
+실행이 남긴 Task 폴더와 끝나지 않은 백업·설정 임시 파일을 모두 지운다. Task 폴더에는 Codex 로그 DB가
 생기고 그 DB는 도구 결과 원문을 담으므로(C-CODEX-01), Task가 끝나면 `remove_task_folder`로
 지운다. 삭제한 파일의 디스크 복구 가능성은 남는 한계다. 링크·junction은 따라가지 않는다.
 Windows 전용이다.
@@ -41,6 +42,8 @@ _PARTIAL_SUFFIX = ".partial"
 _BACKUP_LABEL = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _BACKUP_LABEL_MAX = 32
 _BACKUP_NAME_TRIES = 9
+# settings_io가 교체 전에 같은 폴더에 쓰는 임시 파일 이름. 앱 시작 때 남은 것을 지운다.
+SETTINGS_TEMP = re.compile(r"settings\.json\.[0-9a-f]{32}\.tmp")
 _TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 _RESERVED_NAMES = frozenset(
@@ -269,6 +272,7 @@ class AppFolders:
         self.paths = paths
         self.stale_removed = stale_removed
         self.stale_backups_removed = 0
+        self.stale_settings_removed = 0
         self._lock: int | None = lock
 
     def db_path(self) -> Path:
@@ -279,7 +283,7 @@ class AppFolders:
         된다). SQLite가 경로로 다시 여는 사이의 틈은 남지만, 끼어들려면 사용자·SYSTEM 전용인
         `data` 폴더에 쓸 수 있어야 한다.
         """
-        self._require_open()
+        self.require_open()
         db = self.paths.db_file
         user = _current_user_sid()
         for path in (db, *(_side_file(db, suffix) for suffix in _SQLITE_SIDE_SUFFIXES)):
@@ -293,7 +297,7 @@ class AppFolders:
         이름이 있으면 `-2`부터 붙인다. B가 그 경로로 SQLite Backup API를 실행하고 연결을 닫아
         확인한 뒤 `publish()` 또는 `discard()`를 부른다.
         """
-        self._require_open()
+        self.require_open()
         if (
             type(label) is not str
             or len(label) > _BACKUP_LABEL_MAX
@@ -318,7 +322,7 @@ class AppFolders:
 
     def create_task_folder(self, task_id: str) -> Path:
         """Task 하나의 빈 폴더를 새로 만든다. 같은 이름이 있으면 다시 쓰지 않는다."""
-        self._require_open()
+        self.require_open()
         folder = self.paths.tasks / _checked_task_id(task_id)
         try:
             folder.mkdir()
@@ -333,7 +337,7 @@ class AppFolders:
 
         Codex 프로세스가 끝난 것을 확인한 뒤에만 부른다(`LaunchedProcess.close`가 True).
         """
-        self._require_open()
+        self.require_open()
         if (
             not isinstance(task_dir, Path)
             or task_dir.parent != self.paths.tasks
@@ -354,7 +358,8 @@ class AppFolders:
         if lock is not None:
             _CloseHandle(lock)
 
-    def _require_open(self) -> None:
+    def require_open(self) -> None:
+        """잠금을 쥔 동안만 앱 폴더를 쓴다. 닫혔으면 `APP_FOLDERS_CLOSED`다."""
         if self._lock is None:
             raise AppPathError("APP_FOLDERS_CLOSED")
 
@@ -375,7 +380,7 @@ class BackupTarget:
         끝나지 않은 것이라 실패한다. 빈 파일도 실패다. 실패하면 임시 파일은 그대로 두고
         `discard`나 다음 시작 정리가 지운다.
         """
-        self._folders._require_open()
+        self._folders.require_open()
         if self._state != "pending":
             raise AppPathError("APP_BACKUP_TARGET_CLOSED")
         try:
@@ -405,7 +410,7 @@ class BackupTarget:
         않는다(B가 `finally`에서 불러도 완성된 백업은 남는다)."""
         if self._state == "published":
             return
-        self._folders._require_open()
+        self._folders.require_open()
         self._state = "discarded"
         failed = False
         sides = (_side_file(self.path, suffix) for suffix in _SQLITE_SIDE_SUFFIXES)
@@ -444,7 +449,8 @@ def prepare_app_folders(root: Path | None = None) -> AppFolders:
 
     `root`는 테스트용이다. 제품은 기본값(`app_root()`)을 쓴다. 다른 인스턴스가 실행 중이면
     `APP_ALREADY_RUNNING`, 남은 Task 폴더를 다 지우지 못하면 `APP_STALE_TASK_CLEANUP_FAILED`,
-    끝나지 않은 백업 임시 파일을 다 지우지 못하면 `APP_STALE_BACKUP_CLEANUP_FAILED`다.
+    끝나지 않은 백업 임시 파일을 다 지우지 못하면 `APP_STALE_BACKUP_CLEANUP_FAILED`, 설정 임시
+    파일을 다 지우지 못하면 `APP_STALE_SETTINGS_CLEANUP_FAILED`다.
 
     이미 있는 루트는 잠금 전에는 링크·소유자만 본다. DACL을 다시 걸면 하위 항목 전체에 전파되므로,
     잠금을 잡은 인스턴스만 한다(#35 B 리뷰 2번). 그래서 두 번째 실행은 첫 인스턴스의 파일을
@@ -465,6 +471,7 @@ def prepare_app_folders(root: Path | None = None) -> AppFolders:
             _ensure_private_dir(base / name, user, "APP_FOLDER")
         folders.stale_removed = _clear_task_folders(folders.paths.tasks)
         folders.stale_backups_removed = _clear_partial_backups(folders.paths.backups)
+        folders.stale_settings_removed = _clear_settings_temporaries(folders.paths.config)
     except AppPathError:
         folders.close()
         raise
@@ -695,6 +702,27 @@ def _clear_partial_backups(backups: Path) -> int:
     if not all(_remove_entry(entry) for entry in entries):
         raise AppPathError("APP_STALE_BACKUP_CLEANUP_FAILED")
     return len(entries)
+
+
+def _clear_settings_temporaries(config: Path) -> int:
+    """설정 교체 도중 끊겨 남은 임시 파일만 지운다. `settings.json`과 그 밖의 파일은 남긴다."""
+    try:
+        entries = [entry for entry in config.iterdir() if SETTINGS_TEMP.fullmatch(entry.name)]
+    except OSError:
+        raise AppPathError("APP_STALE_SETTINGS_CLEANUP_FAILED") from None
+    if not all(_remove_entry(entry) for entry in entries):
+        raise AppPathError("APP_STALE_SETTINGS_CLEANUP_FAILED")
+    return len(entries)
+
+
+def is_private_file(path: Path) -> bool:
+    """파일의 DACL이 허용 ACE만 갖고 그 대상이 현재 사용자·SYSTEM뿐인지 본다(상속 ACE 포함).
+
+    읽지 못한 ACE가 있거나 보안 정보를 읽을 수 없으면 `APP_FOLDER_PERMISSION_FAILED`다.
+    """
+    if sys.platform != "win32":
+        raise AppPathError("APP_PATHS_UNSUPPORTED")
+    return _is_private(path, _current_user_sid(), protected=False)
 
 
 def _remove_entry(entry: Path) -> bool:
