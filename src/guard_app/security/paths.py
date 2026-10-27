@@ -1,8 +1,10 @@
 """앱 폴더 경로·권한과 Task 폴더 수명(C2.13, I9·T43). 오류에 경로를 싣지 않는다.
 
 앱 폴더는 `%LOCALAPPDATA%\\MCPRuntimeGuard`다. 루트와 관리 폴더(`codex`·`codex_home`·`tasks`·
-`config`)에는 현재 사용자와 SYSTEM만 접근하는 보호된 DACL을 걸고, 그 안의 파일은 이 권한을
-물려받는다. 이미 있는 폴더는 소유자가 현재 사용자일 때만 쓰고 권한을 다시 건다.
+`config`·`data`·`data\\backups`)에는 현재 사용자와 SYSTEM만 접근하는 보호된 DACL을
+걸고, 그 안의 파일은 이 권한을 물려받는다. 이미 있는 폴더는 소유자가 현재 사용자일 때만 쓰고
+권한을 다시 건다. 제품 DB는 `data\\guard.sqlite3`다. `app.lock`이 같은 사용자의 두 번째
+실행을, 폴더 권한이 다른 사용자를 막아 이 DB의 단일 소유가 된다(REC-01, #35 A·B 합의).
 
 `prepare_app_folders`는 앱 시작 때 한 번 부른다. 단일 실행 잠금(`app.lock`)을 잡은 뒤, 이전
 실행이 남긴 Task 폴더를 모두 지운다. Task 폴더에는 Codex 로그 DB가 생기고 그 DB는 도구 결과
@@ -25,7 +27,9 @@ from typing import Any
 APP_DIR_NAME = "MCPRuntimeGuard"
 APP_LOCK_FILE = "app.lock"
 SETTINGS_FILE = "settings.json"
-MANAGED_DIRS = ("codex", "codex_home", "tasks", "config")
+DATABASE_FILE = "guard.sqlite3"
+# 부모 폴더가 먼저 오게 둔다.
+MANAGED_DIRS = ("codex", "codex_home", "tasks", "config", "data", "data/backups")
 SYSTEM_SID = "S-1-5-18"
 _TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
@@ -225,6 +229,20 @@ class AppPaths:
     @property
     def settings_file(self) -> Path:
         return self.config / SETTINGS_FILE
+
+    @property
+    def data(self) -> Path:
+        return self.root / "data"
+
+    @property
+    def db_file(self) -> Path:
+        """제품 SQLite DB. `-wal`·`-shm`·`-journal`도 같은 폴더에 생겨 같은 권한을 받는다."""
+        return self.data / DATABASE_FILE
+
+    @property
+    def backups(self) -> Path:
+        """DB 이관 전 백업 폴더(B6.17 SEQ-03)."""
+        return self.data / "backups"
 
     def codex_install(self, version: str) -> Path:
         if type(version) is not str or not _VERSION.fullmatch(version):

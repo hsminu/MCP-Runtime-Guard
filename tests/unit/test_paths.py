@@ -109,6 +109,17 @@ def test_files_in_task_folder_inherit_only_user_and_system(folders, user):
     assert _private(task / "logs_2.sqlite", user, protected=False)
 
 
+def test_db_file_lives_in_the_private_data_folder(folders, user):
+    layout = folders.paths
+    assert layout.db_file == layout.root / "data" / "guard.sqlite3"
+    assert layout.backups == layout.root / "data" / "backups"
+    assert layout.backups.is_dir()
+    layout.db_file.write_bytes(b"SQLite format 3")
+    (layout.data / "guard.sqlite3-wal").write_bytes(b"wal")
+    assert _private(layout.db_file, user, protected=False)
+    assert _private(layout.data / "guard.sqlite3-wal", user, protected=False)
+
+
 def test_existing_root_with_wider_permissions_is_tightened(tmp_path, user):
     root = tmp_path / "app"
     (root / "config").mkdir(parents=True)
