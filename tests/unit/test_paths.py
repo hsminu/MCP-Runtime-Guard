@@ -1,10 +1,13 @@
-"""security.paths(C2.13) 단위 테스트. 앱 루트는 임시 폴더로 바꿔 쓴다."""
+"""security.paths(C2.13·C2.18·C2.19) 단위 테스트. 앱 루트는 임시 폴더로 바꿔 쓴다."""
 
 import ctypes
 import hashlib
 import os
+import re
+import sqlite3
 import stat
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -133,8 +136,33 @@ def test_existing_root_with_wider_permissions_is_tightened(tmp_path, user):
         assert _private(root, user, protected=True)
         assert _private(root / "config", user, protected=True)
         assert _private(root / "config" / "old.json", user, protected=False)
+        # 잠금 파일은 넓은 권한 아래에서 만들어진 뒤, 잠금 다음의 재적용으로 바로잡힌다.
+        assert _private(root / paths.APP_LOCK_FILE, user, protected=False)
     finally:
         prepared.close()
+
+
+def test_second_instance_does_not_touch_permissions(tmp_path, monkeypatch):
+    """#35 B 리뷰 2번: 잠금을 못 잡은 실행은 DACL을 다시 걸지(하위 전파) 않는다."""
+    root = tmp_path / "app"
+    first = prepare_app_folders(root)
+    calls = []
+    original = paths._SetNamedSecurityInfoW
+
+    def counting(*args):
+        calls.append(args[0])
+        return original(*args)
+
+    monkeypatch.setattr(paths, "_SetNamedSecurityInfoW", counting)
+    try:
+        with pytest.raises(AppPathError) as raised:
+            prepare_app_folders(root)
+        assert str(raised.value) == "APP_ALREADY_RUNNING"
+        assert calls == []
+    finally:
+        first.close()
+    prepare_app_folders(root).close()
+    assert str(root) in calls
 
 
 def test_second_instance_is_refused_until_first_closes(tmp_path):
@@ -296,6 +324,8 @@ def test_closed_folders_refuse_use(tmp_path):
     for action in (
         lambda: prepared.create_task_folder("session-8"),
         lambda: prepared.remove_task_folder(task),
+        prepared.db_path,
+        lambda: prepared.begin_backup("v2-to-v3"),
     ):
         with pytest.raises(AppPathError) as raised:
             action()
@@ -377,3 +407,224 @@ async def test_task_folder_lifecycle_with_the_launcher(folders):
     assert (task / "logs_2.sqlite").read_bytes() == b"raw"
     folders.remove_task_folder(task)
     assert not task.exists()
+
+
+# C2.19: DB 경로와 이관 전 백업 입구(#37 SEQ-03·REC-01)
+
+
+def _sqlite_db(path, *, version=2):
+    connection = sqlite3.connect(path)
+    try:
+        with connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS t(x)")
+            connection.execute("INSERT INTO t VALUES (1)")
+            connection.execute(f"PRAGMA user_version = {version}")
+    finally:
+        connection.close()
+
+
+def _check(path):
+    connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        quick = connection.execute("PRAGMA quick_check").fetchone()[0]
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        connection.close()
+    return quick, version
+
+
+def _backup_into(source, target):
+    src = sqlite3.connect(source)
+    destination = sqlite3.connect(target)
+    try:
+        src.backup(destination)
+    finally:
+        destination.close()
+        src.close()
+
+
+def test_db_path_accepts_a_new_or_live_wal_database(folders):
+    db = folders.db_path()
+    assert db == folders.paths.db_file
+    assert not db.exists()
+    connection = sqlite3.connect(db)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE t(x)")
+        connection.execute("INSERT INTO t VALUES (1)")
+        connection.commit()
+        assert (db.parent / "guard.sqlite3-wal").exists()
+        assert folders.db_path() == db
+    finally:
+        connection.close()
+    assert folders.db_path() == db
+
+
+@pytest.mark.parametrize("kind", ["directory", "junction", "hardlink", "wide", "symlink"])
+def test_db_path_refuses_files_outside_the_folder_rules(folders, tmp_path, user, kind):
+    db = folders.paths.db_file
+    if kind == "directory":
+        (db.parent / "guard.sqlite3-wal").mkdir()
+    elif kind == "junction":
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        _junction(target, db)
+    elif kind == "hardlink":
+        db.write_bytes(b"SQLite format 3")
+        os.link(db, tmp_path / "second-name.sqlite3")
+    elif kind == "wide":
+        db.write_bytes(b"SQLite format 3")
+        _apply_dacl(db, f"D:(A;;FA;;;{user})(A;;FR;;;WD)")
+    else:
+        target = tmp_path / "elsewhere.sqlite3"
+        target.write_bytes(b"SQLite format 3")
+        try:
+            db.symlink_to(target)
+        except OSError:
+            pytest.skip("심볼릭 링크를 만들 권한이 없다")
+    with pytest.raises(AppPathError) as raised:
+        folders.db_path()
+    assert str(raised.value) == "APP_DB_INVALID"
+
+
+def test_backup_round_trip_with_the_sqlite_backup_api(folders, user):
+    _sqlite_db(folders.paths.db_file, version=2)
+    target = folders.begin_backup("v2-to-v3")
+    assert target.path.parent == folders.paths.backups
+    assert re.fullmatch(r"v2-to-v3-\d{8}T\d{6}Z\.partial", target.path.name)
+    assert target.path.read_bytes() == b""
+    _backup_into(folders.paths.db_file, target.path)
+    assert _check(target.path) == ("ok", 2)
+    final = target.publish()
+    assert final == target.path.with_suffix(".sqlite3")
+    assert not target.path.exists()
+    assert _check(final) == ("ok", 2)
+    assert _private(final, user, protected=False)
+    # publish 뒤의 discard는 완성된 백업을 지우지 않는다.
+    target.discard()
+    assert final.exists()
+    with pytest.raises(AppPathError) as raised:
+        target.publish()
+    assert str(raised.value) == "APP_BACKUP_TARGET_CLOSED"
+
+
+def test_publish_waits_for_the_backup_connection_to_close(folders):
+    _sqlite_db(folders.paths.db_file)
+    target = folders.begin_backup("v2-to-v3")
+    src = sqlite3.connect(folders.paths.db_file)
+    destination = sqlite3.connect(target.path)
+    try:
+        src.backup(destination)
+        with pytest.raises(AppPathError) as raised:
+            target.publish()
+        assert str(raised.value) == "APP_BACKUP_PUBLISH_FAILED"
+    finally:
+        destination.close()
+        src.close()
+    # 실패한 publish는 대상을 닫지 않는다. 연결을 닫은 뒤 다시 부를 수 있다.
+    assert _check(target.publish()) == ("ok", 2)
+
+
+@pytest.mark.parametrize("case", ["empty", "journal-left", "final-exists"])
+def test_publish_refuses_unfinished_or_clashing_backups(folders, case):
+    target = folders.begin_backup("v2-to-v3")
+    final = target.path.with_suffix(".sqlite3")
+    if case != "empty":
+        target.path.write_bytes(b"SQLite format 3 backup")
+    if case == "journal-left":
+        Path(f"{target.path}-journal").write_bytes(b"journal")
+    elif case == "final-exists":
+        final.write_bytes(b"older backup")
+    with pytest.raises(AppPathError) as raised:
+        target.publish()
+    assert str(raised.value) == "APP_BACKUP_PUBLISH_FAILED"
+    assert target.path.exists()
+    if case == "final-exists":
+        assert final.read_bytes() == b"older backup"
+    else:
+        assert not final.exists()
+
+
+def test_discard_removes_the_partial_and_sqlite_side_files(folders):
+    target = folders.begin_backup("v2-to-v3")
+    target.path.write_bytes(b"partial")
+    sides = [Path(f"{target.path}{suffix}") for suffix in ("-journal", "-wal", "-shm")]
+    for side in sides:
+        side.write_bytes(b"x")
+    target.discard()
+    assert not target.path.exists()
+    assert not any(side.exists() for side in sides)
+    target.discard()
+    with pytest.raises(AppPathError) as raised:
+        target.publish()
+    assert str(raised.value) == "APP_BACKUP_TARGET_CLOSED"
+
+
+def test_discard_reports_a_file_still_held_open(folders):
+    target = folders.begin_backup("v2-to-v3")
+    with target.path.open("rb"), pytest.raises(AppPathError) as raised:
+        target.discard()
+    assert str(raised.value) == "APP_BACKUP_DISCARD_FAILED"
+    target.discard()
+    assert not target.path.exists()
+
+
+def test_backup_names_in_the_same_second_do_not_collide(folders, monkeypatch):
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 27, 1, 2, 3, tzinfo=UTC)
+
+    monkeypatch.setattr(paths, "datetime", _Frozen)
+    backups = folders.paths.backups
+    (backups / "v2-to-v3-20261027T010203Z.sqlite3").write_bytes(b"done earlier")
+    names = [folders.begin_backup("v2-to-v3").path.name for _ in range(8)]
+    assert names == [f"v2-to-v3-20261027T010203Z-{n}.partial" for n in range(2, 10)]
+    with pytest.raises(AppPathError) as raised:
+        folders.begin_backup("v2-to-v3")
+    assert str(raised.value) == "APP_BACKUP_CREATE_FAILED"
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["", "V2", "v2_to_v3", "-v2", "v2-", "v2--v3", "a/b", "..", "v2.v3", "x" * 33, 5, None],
+)
+def test_invalid_backup_labels_are_refused(folders, label):
+    with pytest.raises(AppPathError) as raised:
+        folders.begin_backup(label)
+    assert str(raised.value) == "APP_BACKUP_LABEL_INVALID"
+    assert list(folders.paths.backups.iterdir()) == []
+
+
+def test_unfinished_backups_are_removed_at_start_and_finished_ones_kept(tmp_path):
+    root = tmp_path / "app"
+    first = prepare_app_folders(root)
+    target = first.begin_backup("v2-to-v3")
+    Path(f"{target.path}-journal").write_bytes(b"journal")
+    backups = first.paths.backups
+    (backups / "v1-to-v2-20261001T000000Z.sqlite3").write_bytes(b"finished")
+    (backups / "notes.txt").write_text("keep", encoding="ascii")
+    first.close()
+    second = prepare_app_folders(root)
+    try:
+        assert second.stale_backups_removed == 2
+        assert sorted(p.name for p in backups.iterdir()) == [
+            "notes.txt",
+            "v1-to-v2-20261001T000000Z.sqlite3",
+        ]
+    finally:
+        second.close()
+
+
+def test_unfinished_backup_that_cannot_be_removed_refuses_start(tmp_path):
+    root = tmp_path / "app"
+    first = prepare_app_folders(root)
+    target = first.begin_backup("v2-to-v3")
+    first.close()
+    with target.path.open("rb"), pytest.raises(AppPathError) as raised:
+        prepare_app_folders(root)
+    assert str(raised.value) == "APP_STALE_BACKUP_CLEANUP_FAILED"
+    # 실패한 시작은 잠금을 남기지 않는다.
+    retried = prepare_app_folders(root)
+    retried.close()
+    assert not target.path.exists()

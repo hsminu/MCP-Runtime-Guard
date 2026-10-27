@@ -3,10 +3,10 @@
 `launch_process`는 절대 경로의 `.exe`만 인자 리스트와 명시한 환경으로 띄운다. shell을 쓰지
 않고 `.bat`·`.cmd`는 받지 않는다(Windows가 cmd.exe로 인자를 다시 해석한다). 실행 파일은
 쓰기·이름 변경·삭제를 막는 핸들로 연 채 크기·SHA-256을 대조하고, 그 핸들을 프로세스 생성까지
-쥐어 검사한 파일과 실행한 파일이 다를 수 없게 한다. 프로세스는 멈춘 채 만들어 Job Object에 넣은
-뒤 재개한다. Job 핸들이 닫히면(앱 종료 포함) 남은 자식까지 함께 끝나고, `close`는 Job에 남은
-프로세스가 없을 때만 종료를 확인한다. stderr는 지정한 격리 파일로만 보낸다. 해시 없는 실행은
-받지 않는다.
+쥔다. 프로세스는 멈춘 채 만들어 Job Object에 넣고, 실제로 올라간 이미지가 검사한 그 파일인지
+대조한 뒤에만 재개한다(C2.18). Job 핸들이 닫히면(앱 종료 포함) 남은 자식까지 함께 끝나고,
+`close`는 Job에 남은 프로세스가 없을 때만 종료를 확인한다. stderr는 지정한 격리 파일로만
+보낸다. 해시 없는 실행은 받지 않는다.
 
 `CodexLauncher`는 codex.exe 전용 입구다. 실행마다 `codex.lock.json`의 고정값과 CODEX_HOME 묶음
 해시를 대조하고, 허용 목록 환경과 `app-server -c sqlite_home='<Task 폴더>'`만 쓴다. Task 폴더
@@ -44,11 +44,16 @@ CODEX_ENV_ALLOWLIST = (
     "USERPROFILE",
 )
 CODEX_STDERR_FILE = "codex-stderr.log"
+# L2 시작 시험(C6.14) 전용 가짜 모델 제공자. 제품 세션 입구는 이 값을 쓰지 않는다.
+L2_PROVIDER = "guard_l2"
+L2_TOKEN_ENV = "GUARD_L2_TOKEN"  # noqa: S105 - 토큰이 아니라 토큰을 담을 환경변수 이름
+_L2_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _HASH_CHUNK = 1 << 20
 _STREAM_LIMIT = 1 << 16
 _POLL_S = 0.05
+_REAP_S = 2.0
 _TERMINATED_EXIT_CODE = 1
 
 _CREATE_SUSPENDED = 0x00000004
@@ -64,8 +69,16 @@ _JOB_KILL_ON_CLOSE = 0x00002000
 _JOB_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_PROCESS_NAME_NATIVE = 1
 _THREAD_SUSPEND_RESUME = 0x0002
 _TH32CS_SNAPTHREAD = 0x00000004
+_FILE_READ_ATTRIBUTES = 0x0080
+_FILE_SHARE_ALL = 0x00000007
+_FILE_NAME_OPENED_NT = 0x8 | 0x2  # FILE_NAME_OPENED | VOLUME_NAME_NT
+_FILE_ID_INFO = 18
+_NT_PATH_PREFIX = "\\\\?\\GLOBALROOT"
+_MAX_PATH_CHARS = 32768
 
 if sys.platform == "win32":
     import ctypes
@@ -131,6 +144,12 @@ if sys.platform == "win32":
             ("dwFlags", wintypes.DWORD),
         ]
 
+    class _FileIdInfo(ctypes.Structure):
+        _fields_ = [
+            ("VolumeSerialNumber", ctypes.c_uint64),
+            ("FileId", ctypes.c_ubyte * 16),
+        ]
+
     def _api(name: str, restype: object, *argtypes: object) -> Any:
         function = getattr(_kernel32, name)
         function.restype = restype
@@ -171,6 +190,20 @@ if sys.platform == "win32":
     _CreateToolhelp32Snapshot = _api("CreateToolhelp32Snapshot", _HANDLE, _DWORD, _DWORD)
     _Thread32First = _api("Thread32First", _BOOL, _HANDLE, ctypes.POINTER(_ThreadEntry))
     _Thread32Next = _api("Thread32Next", _BOOL, _HANDLE, ctypes.POINTER(_ThreadEntry))
+    _QueryFullProcessImageNameW = _api(
+        "QueryFullProcessImageNameW",
+        _BOOL,
+        _HANDLE,
+        _DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(_DWORD),
+    )
+    _GetFinalPathNameByHandleW = _api(
+        "GetFinalPathNameByHandleW", _DWORD, _HANDLE, wintypes.LPWSTR, _DWORD, _DWORD
+    )
+    _GetFileInformationByHandleEx = _api(
+        "GetFileInformationByHandleEx", _BOOL, _HANDLE, ctypes.c_int, wintypes.LPVOID, _DWORD
+    )
 
 
 class LaunchError(RuntimeError):
@@ -299,6 +332,7 @@ class CodexLauncher:
         self._home_digest = home_digest
         self._source_dir = source_dir
         self.launches = 0
+        self.l2_launches = 0
 
     def spec(self, task_dir: Path) -> LaunchSpec:
         """Task 하나의 실행 명세. Task별 값은 `sqlite_home` 하나다(L2 `config/read` 대조 기준)."""
@@ -328,6 +362,70 @@ class CodexLauncher:
         launched = await launch_process(spec)
         self.launches += 1
         return launched
+
+    @property
+    def home_digest(self) -> str:
+        return self._home_digest
+
+    @property
+    def executable_sha256(self) -> str:
+        return self._sha256
+
+    @property
+    def source_dir(self) -> Path:
+        return self._source_dir
+
+    def l2_spec(self, task_dir: Path, port: int, token: str) -> LaunchSpec:
+        """L2 시작 시험의 실행 명세. 제품 명세에 고정된 가짜 모델 덮어쓰기와 토큰 하나만 더한다.
+
+        실행 파일·CODEX_HOME·환경 허용 목록·`sqlite_home`은 제품 세션과 같다. 바뀌는 값은
+        `127.0.0.1`의 포트와 이번 실행의 토큰뿐이다. `l2_overrides`가 L2의 `config/read`
+        대조 기준이다.
+        """
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise LaunchError("LAUNCH_L2_INVALID")
+        if type(token) is not str or not _L2_TOKEN.fullmatch(token):
+            raise LaunchError("LAUNCH_L2_INVALID")
+        base = self.spec(task_dir)
+        overrides: list[str] = []
+        for key, value in l2_overrides(port).items():
+            text = f'"{value}"' if isinstance(value, str) else str(value).lower()
+            overrides += ["-c", f"{key}={text}"]
+        return LaunchSpec(
+            executable=base.executable,
+            executable_size=base.executable_size,
+            executable_sha256=base.executable_sha256,
+            args=(*base.args, *overrides),
+            env=(*base.env, (L2_TOKEN_ENV, token)),
+            cwd=base.cwd,
+            stderr_path=base.stderr_path,
+        )
+
+    async def launch_l2(self, task_dir: Path, port: int, token: str) -> LaunchedProcess:
+        """L2 시작 시험용 실행. `launches`가 아니라 `l2_launches`로 센다."""
+        spec = self.l2_spec(task_dir, port, token)
+        try:
+            verify_codex_home(self._codex_home, self._home_digest, source_dir=self._source_dir)
+        except CodexConfigError:
+            raise LaunchError("LAUNCH_CODEX_HOME_MISMATCH") from None
+        launched = await launch_process(spec)
+        self.l2_launches += 1
+        return launched
+
+
+def l2_overrides(port: int) -> dict[str, str | int | bool]:
+    """L2가 더하는 `-c` 키와 값. 재시도를 끄고 `127.0.0.1`의 가짜 모델에만 붙는다."""
+    prefix = f"model_providers.{L2_PROVIDER}"
+    return {
+        "model_provider": L2_PROVIDER,
+        f"{prefix}.name": L2_PROVIDER,
+        f"{prefix}.base_url": f"http://127.0.0.1:{port}/v1",
+        f"{prefix}.wire_api": "responses",
+        f"{prefix}.env_key": L2_TOKEN_ENV,
+        f"{prefix}.request_max_retries": 0,
+        f"{prefix}.stream_max_retries": 0,
+        f"{prefix}.supports_websockets": False,
+    }
 
 
 async def launch_process(spec: LaunchSpec) -> LaunchedProcess:
@@ -361,7 +459,10 @@ async def launch_process(spec: LaunchSpec) -> LaunchedProcess:
             )
         except (OSError, ValueError, NotImplementedError):
             raise LaunchError("LAUNCH_FAILED") from None
-        job.adopt(transport.get_pid())
+        pid = transport.get_pid()
+        job.adopt(pid)
+        _check_image(pid, image)
+        _resume_initial_thread(pid)
         process = asyncio.subprocess.Process(transport, protocol, loop)
         result = LaunchedProcess(transport, process, job)
         launched = True
@@ -375,8 +476,24 @@ async def launch_process(spec: LaunchSpec) -> LaunchedProcess:
                 transport.close()
             if job is not None:
                 job.close()
+            if transport is not None:
+                await _reaped(transport)
             with contextlib.suppress(OSError):
                 spec.stderr_path.unlink(missing_ok=True)
+
+
+async def _reaped(transport: asyncio.SubprocessTransport) -> None:
+    """실패 정리에서 끝낸 프로세스가 실제로 사라질 때까지 잠깐 기다린다.
+
+    프로세스가 남아 있으면 물려받은 stderr 핸들 때문에 stderr 파일을 지울 수 없다. 멈춘 채 끝낸
+    프로세스는 곧바로 사라지므로 상한은 짧게 둔다. 넘으면 파일은 Task 폴더 삭제가 지운다.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _REAP_S
+    while True:
+        if transport.get_returncode() is not None or loop.time() >= deadline:
+            return
+        await asyncio.sleep(_POLL_S / 5)
 
 
 def _check_spec(spec: LaunchSpec) -> None:
@@ -501,6 +618,79 @@ def _open_verified(path: Path, size: int, sha256: str) -> BinaryIO:
     return image
 
 
+def _check_image(pid: int, image: BinaryIO) -> None:
+    """재개 전에, 멈춘 프로세스가 올린 이미지가 검사한 그 파일인지 본다(#35 B 리뷰 1번).
+
+    CreateProcess는 경로 문자열을 다시 해석한다. 검사 핸들이 파일과 상위 폴더의 이름 변경은
+    막지만, 상위 경로에 있는 junction의 대상은 그 사이에 바뀔 수 있다(C2.18 실측). 이미지 이름은
+    junction을 푼 실제 경로라서, 검사 핸들의 경로(NT 형식)와 같아야 하고 그 이름으로 다시 연
+    파일의 ID(볼륨 일련번호·128비트 파일 ID)도 검사 핸들과 같아야 한다.
+
+    ID 대조는 이름으로 다시 열기 때문에 혼자서는 그 자리에 놓은 하드링크에 속을 수 있다. 이름
+    대조가 이를 막는다. 이미지 이름이 검사 핸들의 경로와 같으려면 그 자리에 검사한 파일이 있어야
+    하고, 그 파일은 핸들이 옮기지 못하게 한다. 이 전제를 깨려면 사용자·SYSTEM 전용인
+    `codex\\<버전>`에 쓸 수 있어야 한다(같은 사용자 권한은 위협 모델 밖, #41 B 리뷰 3번).
+    """
+    held = msvcrt.get_osfhandle(image.fileno())
+    name = _image_name(pid)
+    if name != _handle_name(held) or _file_id(held) != _file_id_at(name):
+        raise LaunchError("LAUNCH_EXECUTABLE_MISMATCH")
+
+
+def _image_name(pid: int) -> str:
+    process = _OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not process:
+        raise LaunchError("LAUNCH_IMAGE_UNVERIFIED")
+    try:
+        buffer = ctypes.create_unicode_buffer(_MAX_PATH_CHARS)
+        size = _DWORD(_MAX_PATH_CHARS)
+        if not _QueryFullProcessImageNameW(
+            process, _PROCESS_NAME_NATIVE, buffer, ctypes.byref(size)
+        ):
+            raise LaunchError("LAUNCH_IMAGE_UNVERIFIED")
+    finally:
+        _CloseHandle(process)
+    if not buffer.value.startswith("\\"):
+        raise LaunchError("LAUNCH_IMAGE_UNVERIFIED")
+    return buffer.value
+
+
+def _handle_name(handle: int) -> str:
+    buffer = ctypes.create_unicode_buffer(_MAX_PATH_CHARS)
+    length = _GetFinalPathNameByHandleW(handle, buffer, _MAX_PATH_CHARS, _FILE_NAME_OPENED_NT)
+    if not length or length >= _MAX_PATH_CHARS:
+        raise LaunchError("LAUNCH_IMAGE_UNVERIFIED")
+    return buffer.value
+
+
+def _file_id(handle: int) -> tuple[int, bytes]:
+    info = _FileIdInfo()
+    if not _GetFileInformationByHandleEx(
+        handle, _FILE_ID_INFO, ctypes.byref(info), ctypes.sizeof(info)
+    ):
+        raise LaunchError("LAUNCH_IMAGE_UNVERIFIED")
+    return int(info.VolumeSerialNumber), bytes(info.FileId)
+
+
+def _file_id_at(nt_name: str) -> tuple[int, bytes]:
+    """NT 경로로 속성만 읽는 핸들을 열어 파일 ID를 읽는다. 마지막 구성요소 링크는 따르지 않는다."""
+    handle = _CreateFileW(
+        _NT_PATH_PREFIX + nt_name,
+        _FILE_READ_ATTRIBUTES,
+        _FILE_SHARE_ALL,
+        None,
+        _OPEN_EXISTING,
+        _FILE_FLAG_OPEN_REPARSE_POINT,
+        None,
+    )
+    if handle is None or handle == _INVALID_HANDLE:
+        raise LaunchError("LAUNCH_IMAGE_UNVERIFIED")
+    try:
+        return _file_id(handle)
+    finally:
+        _CloseHandle(handle)
+
+
 class _Job:
     """프로세스와 그 자식을 묶는 Job Object. 핸들을 닫으면 남은 프로세스가 모두 끝난다."""
 
@@ -520,7 +710,7 @@ class _Job:
             raise LaunchError("LAUNCH_JOB_FAILED")
 
     def adopt(self, pid: int) -> None:
-        """멈춘 채 만든 프로세스를 Job에 넣은 뒤에만 그 첫 스레드를 재개한다."""
+        """멈춘 채 만든 프로세스를 Job에 넣는다. 재개는 호출자가 이미지를 대조한 뒤에 한다."""
         process = _OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid)
         if not process:
             raise LaunchError("LAUNCH_JOB_FAILED")
@@ -529,7 +719,6 @@ class _Job:
                 raise LaunchError("LAUNCH_JOB_FAILED")
         finally:
             _CloseHandle(process)
-        _resume_initial_thread(pid)
 
     def active(self) -> int | None:
         if self._handle is None:

@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-27 · main `bc7d8a4` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-27 · main `c2da9e0` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -43,7 +43,8 @@
 - [x] C2.15 로그아웃 정리 함수 `clear_codex_credentials`(`security/codex_home.py`): `secrets/` 암호문과 자격증명 관리자 항목 두 개 삭제, 모르는 항목이 있으면 아무것도 지우지 않음. A가 `account/logout` 성공 뒤 부름 · [기록](archive/c/C2.15-codex-credential-cleanup.md)
 - [x] C2.16 앱 폴더 권한 확인의 SID 비교를 전체 SID로(C2.13 후속): SDDL 약어(`LA` 등) 때문에 CI 러너(내장 Administrator)에서 거부되던 문제 수정, 읽지 못한 ACE는 거부(#35 B 리뷰 3번) · [기록](archive/c/C2.16-sid-alias-compare.md)
 - [x] C2.17 제품 DB 위치 `data\guard.sqlite3`와 백업 폴더 `data\backups`(`AppPaths.db_file`·`backups`). `app.lock`과 앱 폴더 권한으로 DB 단일 소유(REC-01, #35 A·B 합의) · [기록](archive/c/C2.17-product-db-path.md)
-- [ ] C2.18 #35 리뷰 후속: 실행 이미지와 검사한 파일의 파일 ID(볼륨 일련번호·파일 인덱스) 대조(B launcher 1번), 이미 있는 루트의 DACL 재적용을 잠금 뒤로(B paths 2번, 결과 권한은 같음)
+- [x] C2.18 #35 리뷰 후속: 재개 전 실행 이미지와 검사한 파일의 경로·파일 ID 대조(B launcher 1번), 이미 있는 루트의 DACL 재적용을 잠금 뒤로(B paths 2번, 결과 권한은 같음) · [기록](archive/c/C2.18-image-check-and-lock-order.md)
+- [x] C2.19 DB 입구(#37 REC-01·SEQ-03): `AppFolders.db_path()`(DB와 옆 파일이 링크·하드링크·넓은 권한이 아닌지 확인), `begin_backup(label)`→`BackupTarget.publish()`·`discard()`, 앱 시작 때 남은 `.partial` 삭제 · [기록](archive/c/C2.19-db-backup-entry.md)
 
 ## C3 · B SQLite 리뷰와 독립 검증
 
@@ -106,7 +107,7 @@
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록
 - [x] C6.13 Codex 0.162.1 L1 설정·모델 정보 파일·고정값(`config/codex/`)·설치 스크립트, CODEX_HOME에 쓰고 해시를 돌려주는 함수(#21 4번) · [기록](archive/c/C6.13-codex-l1.md)
-- [ ] C6.14 L2 시작 시험(T22): `configRequirements/read`·`config/read` 대조, 가짜 모델 서버로 도구 목록 정확 대조·금지 도구 7종 거부·호출 순차·요청 프롬프트 확인(권한·환경 안내 블록이 빠졌는지 포함, C6.21), `config/read` 대조에서 Task별 `-c sqlite_home` 하나만 허용, 원격 제어 상태 `disabled` 확인(C-CODEX-07), 실패 시 시작 거부, 앱 시작·버전 변경·CI 실행. 스크래치 실험 스크립트를 저장소로. C 구현은 A가 여는 주입형 L2 결과 포트에 채움(#21 3번). A `SessionPreparation`(#29)에 C2.12·C2.13과 함께 연결 · [결정](contracts.md#사용자-결정)
+- [x] C6.14 L2 시작 시험(T22·T39·T40, `security/codex_l2.py`): 같은 codex.exe·CODEX_HOME·환경에 가짜 모델만 바꿔 requirements·설정 층·적용 값·원격 제어·도구 목록·프롬프트 블록·금지 호출 30종 거부·Guard 호출 순차·종료를 판정, `run_l2`가 A 입구에 줄 결과를 돌려줌. 진행 중 종료 0.05–0.11초 측정 · [기록](archive/c/C6.14-codex-l2.md)
 - [ ] C6.15 L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답, 원격 제어 상태가 `disabled`가 아닐 때 정지(C-CODEX-07) 검증 · [결정](contracts.md#사용자-결정)
 - [ ] C6.16 Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.sandbox_migration`·`tmp\arg0` 보조 파일·인증 파일(`secrets/*.age`는 C6.21에서 확인), T43·#21 8번)과 동시 실행 때 경합(T46) 확인. Codex가 TEMP에 쓰는 것을 보고 TEMP·TMP를 Task 폴더 아래로 둘지, `codex-stderr.log` 크기 상한(#35 B launcher 2·3번) · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C6.17 (후속·선택) codex.exe AppContainer 실행 실험(C-CODEX-04)
@@ -114,6 +115,7 @@
 - [x] C6.19 CODEX_HOME 최상위 허용 항목 확인: 지시문 파일(AGENTS.md 등)·허용 밖 항목이 있으면 쓰기·Task 시작 거부(C-CODEX-06) · [기록](archive/c/C6.19-codex-home-allowlist.md)
 - [ ] C6.20 설치판에서 `config/codex/` 위치: 지금 기본값은 소스 checkout 기준. A 패키징과 맞춰 설치 패키지에서도 찾게 함 — 막힘: A 패키징
 - [x] C6.21 CODEX_HOME `secrets/` 허용(알려진 암호문·임시 파일만, 해시 대조 제외, 앱 시작 때 유지)과 L1 `include_permissions_instructions`·`include_environment_context` = false, `codex.lock.json` 갱신(C-CODEX-08) · [기록](archive/c/C6.21-codex-secrets-and-prompt-blocks.md)
+- [ ] C6.22 CI에서 실제 L2: 워크플로에서 `tools/install_codex.py`로 codex.exe를 받고 `GUARD_TEST_CODEX_EXE`로 `test_real_codex_passes_l2`를 켬(C6.14 후속, 공용 CI 파일 변경이라 따로 제안)
 
 ## 인수 기준
 

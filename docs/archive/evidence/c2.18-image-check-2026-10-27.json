@@ -1,0 +1,129 @@
+{
+ "item": "C2.18",
+ "date": "2026-10-27",
+ "environment": {
+  "os": "Windows 11 Pro 10.0.26200",
+  "python": "3.12.10",
+  "filesystem": "NTFS"
+ },
+ "rename_while_verified_handle_held": {
+  "note": "launcher와 같은 핸들(GENERIC_READ, 공유는 읽기만)과 삭제 공유를 더한 핸들 비교. winerror 5=접근 거부, 32=공유 위반",
+  "share_read": {
+   "file": {
+    "renamed": false,
+    "winerror": 32
+   },
+   "parent_folder": {
+    "renamed": false,
+    "winerror": 5
+   },
+   "grandparent_folder": {
+    "renamed": false,
+    "winerror": 5
+   }
+  },
+  "share_read_delete": {
+   "file": {
+    "renamed": true
+   },
+   "parent_folder": {
+    "renamed": false,
+    "winerror": 5
+   },
+   "grandparent_folder": {
+    "renamed": false,
+    "winerror": 5
+   }
+  }
+ },
+ "junction_in_parent_path": {
+  "note": "경로는 작업 폴더 기준 상대 표기. real·evil은 각각 다른 실행 파일 사본",
+  "verified_handle_final_path": "real\\codex.exe",
+  "image_name_when_launched_through_junction": "real\\codex.exe",
+  "junction_retarget_possible_while_handle_held": true,
+  "image_name_after_retarget": "evil\\codex.exe"
+ },
+ "image_name_forms": {
+  "note": "QueryFullProcessImageNameW(PROCESS_NAME_NATIVE)와 GetFinalPathNameByHandleW 형식별 일치. 구현은 nt_opened(VOLUME_NAME_NT|FILE_NAME_OPENED)를 정확히 비교",
+  "8dot3_short_name_differs_from_long": true,
+  "plain_path": {
+   "nt_opened": {
+    "exact": true,
+    "normcase": true
+   },
+   "nt_normalized": {
+    "exact": true,
+    "normcase": true
+   },
+   "dos_opened": {
+    "exact": false,
+    "normcase": false
+   },
+   "dos_normalized": {
+    "exact": false,
+    "normcase": false
+   }
+  },
+  "junction_parent": {
+   "nt_opened": {
+    "exact": true,
+    "normcase": true
+   },
+   "nt_normalized": {
+    "exact": true,
+    "normcase": true
+   },
+   "dos_opened": {
+    "exact": false,
+    "normcase": false
+   },
+   "dos_normalized": {
+    "exact": false,
+    "normcase": false
+   }
+  },
+  "short_name_path": {
+   "nt_opened": {
+    "exact": true,
+    "normcase": true
+   },
+   "nt_normalized": {
+    "exact": false,
+    "normcase": false
+   },
+   "dos_opened": {
+    "exact": false,
+    "normcase": false
+   },
+   "dos_normalized": {
+    "exact": false,
+    "normcase": false
+   }
+  }
+ },
+ "swap_attack": {
+  "note": "해시 대조로 핸들을 쥔 직후, CreateProcess 전에 상위 junction 대상을 다른 Python 설치 폴더로 바꿈. other_executable_ran은 바꿔 넣은 실행 파일이 표지 파일을 만들었는지",
+  "without_image_check": {
+   "launch": "started",
+   "other_executable_ran": true
+  },
+  "with_image_check": {
+   "launch": "LAUNCH_EXECUTABLE_MISMATCH",
+   "other_executable_ran": false,
+   "stderr_left": false
+  }
+ },
+ "mismatch_cleanup": {
+  "note": "파일 ID 불일치를 주입해 실패시킨 실행 10회. 실패 정리(프로세스 종료 확인 뒤 stderr 파일 삭제)까지 걸린 시간",
+  "runs": 10,
+  "stderr_left": 0,
+  "seconds_median": 0.006,
+  "seconds_max": 0.008
+ },
+ "real_codex": {
+  "codex": "0.162.1 (C6.13 설치본)",
+  "test": "tests/unit/test_codex_l2.py::test_real_codex_passes_l2 (GUARD_TEST_CODEX_EXE 지정)",
+  "runs": 3,
+  "passed": 3
+ }
+}

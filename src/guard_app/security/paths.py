@@ -5,11 +5,13 @@
 걸고, 그 안의 파일은 이 권한을 물려받는다. 이미 있는 폴더는 소유자가 현재 사용자일 때만 쓰고
 권한을 다시 건다. 제품 DB는 `data\\guard.sqlite3`다. `app.lock`이 같은 사용자의 두 번째
 실행을, 폴더 권한이 다른 사용자를 막아 이 DB의 단일 소유가 된다(REC-01, #35 A·B 합의).
+B는 DB 경로를 `db_path()`로, 이관 전 백업 자리를 `begin_backup()`으로 받는다(C2.19, #37).
 
 `prepare_app_folders`는 앱 시작 때 한 번 부른다. 단일 실행 잠금(`app.lock`)을 잡은 뒤, 이전
-실행이 남긴 Task 폴더를 모두 지운다. Task 폴더에는 Codex 로그 DB가 생기고 그 DB는 도구 결과
-원문을 담으므로(C-CODEX-01), Task가 끝나면 `remove_task_folder`로 지운다. 삭제한 파일의 디스크
-복구 가능성은 남는 한계다. 링크·junction은 따라가지 않는다. Windows 전용이다.
+실행이 남긴 Task 폴더와 끝나지 않은 백업 임시 파일을 모두 지운다. Task 폴더에는 Codex 로그 DB가
+생기고 그 DB는 도구 결과 원문을 담으므로(C-CODEX-01), Task가 끝나면 `remove_task_folder`로
+지운다. 삭제한 파일의 디스크 복구 가능성은 남는 한계다. 링크·junction은 따라가지 않는다.
+Windows 전용이다.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import stat
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,9 +31,16 @@ APP_DIR_NAME = "MCPRuntimeGuard"
 APP_LOCK_FILE = "app.lock"
 SETTINGS_FILE = "settings.json"
 DATABASE_FILE = "guard.sqlite3"
+BACKUP_SUFFIX = ".sqlite3"
 # 부모 폴더가 먼저 오게 둔다.
 MANAGED_DIRS = ("codex", "codex_home", "tasks", "config", "data", "data/backups")
 SYSTEM_SID = "S-1-5-18"
+# SQLite가 DB 옆에 만드는 파일. 백업 임시 파일에도 같은 이름 규칙으로 생긴다.
+_SQLITE_SIDE_SUFFIXES = ("-journal", "-wal", "-shm")
+_PARTIAL_SUFFIX = ".partial"
+_BACKUP_LABEL = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_BACKUP_LABEL_MAX = 32
+_BACKUP_NAME_TRIES = 9
 _TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 _RESERVED_NAMES = frozenset(
@@ -53,6 +63,7 @@ _FILE_ATTRIBUTE_NORMAL = 0x00000080
 _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _ERROR_SHARING_VIOLATION = 32
 _ERROR_ALREADY_EXISTS = 183
+_MOVEFILE_WRITE_THROUGH = 0x00000008
 
 if sys.platform == "win32":
     import ctypes
@@ -123,6 +134,7 @@ if sys.platform == "win32":
         _DWORD,
         _HANDLE,
     )
+    _MoveFileExW = _api(_kernel32, "MoveFileExW", _BOOL, wintypes.LPCWSTR, wintypes.LPCWSTR, _DWORD)
     _OpenProcessToken = _api(
         _advapi32, "OpenProcessToken", _BOOL, _HANDLE, _DWORD, ctypes.POINTER(_HANDLE)
     )
@@ -256,7 +268,53 @@ class AppFolders:
     def __init__(self, paths: AppPaths, lock: int, stale_removed: int) -> None:
         self.paths = paths
         self.stale_removed = stale_removed
+        self.stale_backups_removed = 0
         self._lock: int | None = lock
+
+    def db_path(self) -> Path:
+        """제품 DB 경로. 이미 있는 DB와 옆 파일이 앱 폴더 권한 안의 일반 파일인지 본 뒤 준다.
+
+        링크·reparse point·폴더, 하드링크가 둘 이상인 파일, 사용자·SYSTEM 밖에 권한이 있는 파일은
+        `APP_DB_INVALID`다. 파일 소유자는 보지 않는다(관리자 권한 실행에서는 Administrators가
+        된다). SQLite가 경로로 다시 여는 사이의 틈은 남지만, 끼어들려면 사용자·SYSTEM 전용인
+        `data` 폴더에 쓸 수 있어야 한다.
+        """
+        self._require_open()
+        db = self.paths.db_file
+        user = _current_user_sid()
+        for path in (db, *(_side_file(db, suffix) for suffix in _SQLITE_SIDE_SUFFIXES)):
+            _check_private_file(path, user)
+        return db
+
+    def begin_backup(self, label: str) -> BackupTarget:
+        """DB 이관 전 백업의 임시 파일을 `backups` 안에 새로 만들어 준다(SEQ-03, #37).
+
+        이름은 `<label>-<UTC 초>`이고, 빈 `.partial` 파일을 배타 생성해 이름을 선점한다. 같은
+        이름이 있으면 `-2`부터 붙인다. B가 그 경로로 SQLite Backup API를 실행하고 연결을 닫아
+        확인한 뒤 `publish()` 또는 `discard()`를 부른다.
+        """
+        self._require_open()
+        if (
+            type(label) is not str
+            or len(label) > _BACKUP_LABEL_MAX
+            or not _BACKUP_LABEL.fullmatch(label)
+        ):
+            raise AppPathError("APP_BACKUP_LABEL_INVALID")
+        stem = f"{label}-{datetime.now(UTC):%Y%m%dT%H%M%SZ}"
+        for attempt in range(1, _BACKUP_NAME_TRIES + 1):
+            name = stem if attempt == 1 else f"{stem}-{attempt}"
+            partial = self.paths.backups / f"{name}{_PARTIAL_SUFFIX}"
+            final = self.paths.backups / f"{name}{BACKUP_SUFFIX}"
+            if os.path.lexists(final):
+                continue
+            try:
+                partial.open("xb").close()
+            except FileExistsError:
+                continue
+            except OSError:
+                raise AppPathError("APP_BACKUP_CREATE_FAILED") from None
+            return BackupTarget(self, partial, final)
+        raise AppPathError("APP_BACKUP_CREATE_FAILED")
 
     def create_task_folder(self, task_id: str) -> Path:
         """Task 하나의 빈 폴더를 새로 만든다. 같은 이름이 있으면 다시 쓰지 않는다."""
@@ -301,6 +359,67 @@ class AppFolders:
             raise AppPathError("APP_FOLDERS_CLOSED")
 
 
+class BackupTarget:
+    """`begin_backup`이 준 백업 임시 파일. `publish`나 `discard` 중 하나로 끝낸다."""
+
+    def __init__(self, folders: AppFolders, path: Path, final: Path) -> None:
+        self.path = path
+        self._folders = folders
+        self._final = final
+        self._state = "pending"
+
+    def publish(self) -> Path:
+        """디스크에 내린 뒤 최종 이름(`.sqlite3`)으로 바꾼다. 같은 이름이 있으면 덮어쓰지 않는다.
+
+        B가 대상 연결을 닫은 뒤에 부른다. SQLite 옆 파일이 남아 있으면 연결이 닫히지 않았거나
+        끝나지 않은 것이라 실패한다. 빈 파일도 실패다. 실패하면 임시 파일은 그대로 두고
+        `discard`나 다음 시작 정리가 지운다.
+        """
+        self._folders._require_open()
+        if self._state != "pending":
+            raise AppPathError("APP_BACKUP_TARGET_CLOSED")
+        try:
+            if any(
+                os.path.lexists(_side_file(self.path, suffix)) for suffix in _SQLITE_SIDE_SUFFIXES
+            ):
+                raise AppPathError("APP_BACKUP_PUBLISH_FAILED")
+            info = os.lstat(self.path)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                or info.st_size == 0
+            ):
+                raise AppPathError("APP_BACKUP_PUBLISH_FAILED")
+            # Windows의 fsync(FlushFileBuffers)는 쓰기 권한 핸들이 있어야 한다.
+            with self.path.open("r+b") as file:
+                os.fsync(file.fileno())
+        except OSError:
+            raise AppPathError("APP_BACKUP_PUBLISH_FAILED") from None
+        if not _MoveFileExW(str(self.path), str(self._final), _MOVEFILE_WRITE_THROUGH):
+            raise AppPathError("APP_BACKUP_PUBLISH_FAILED")
+        self._state = "published"
+        return self._final
+
+    def discard(self) -> None:
+        """임시 파일과 SQLite 옆 파일을 지운다. 여러 번 불러도 되고, publish 뒤에는 아무것도 하지
+        않는다(B가 `finally`에서 불러도 완성된 백업은 남는다)."""
+        if self._state == "published":
+            return
+        self._folders._require_open()
+        self._state = "discarded"
+        failed = False
+        sides = (_side_file(self.path, suffix) for suffix in _SQLITE_SIDE_SUFFIXES)
+        for path in (self.path, *sides):
+            try:
+                _unlink(path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                failed = True
+        if failed:
+            raise AppPathError("APP_BACKUP_DISCARD_FAILED")
+
+
 def app_root() -> Path:
     """`%LOCALAPPDATA%\\MCPRuntimeGuard`. 환경변수가 아니라 Windows 알려진 폴더로 구한다."""
     if sys.platform != "win32":
@@ -324,7 +443,12 @@ def prepare_app_folders(root: Path | None = None) -> AppFolders:
     """앱 시작 때 한 번 부른다. 폴더·권한을 맞추고 잠금을 잡은 뒤 남은 Task 폴더를 지운다.
 
     `root`는 테스트용이다. 제품은 기본값(`app_root()`)을 쓴다. 다른 인스턴스가 실행 중이면
-    `APP_ALREADY_RUNNING`, 남은 Task 폴더를 다 지우지 못하면 `APP_STALE_TASK_CLEANUP_FAILED`다.
+    `APP_ALREADY_RUNNING`, 남은 Task 폴더를 다 지우지 못하면 `APP_STALE_TASK_CLEANUP_FAILED`,
+    끝나지 않은 백업 임시 파일을 다 지우지 못하면 `APP_STALE_BACKUP_CLEANUP_FAILED`다.
+
+    이미 있는 루트는 잠금 전에는 링크·소유자만 본다. DACL을 다시 걸면 하위 항목 전체에 전파되므로,
+    잠금을 잡은 인스턴스만 한다(#35 B 리뷰 2번). 그래서 두 번째 실행은 첫 인스턴스의 파일을
+    건드리지 않고 끝난다.
     """
     if sys.platform != "win32":
         raise AppPathError("APP_PATHS_UNSUPPORTED")
@@ -332,13 +456,15 @@ def prepare_app_folders(root: Path | None = None) -> AppFolders:
     if not isinstance(base, Path) or not base.is_absolute():
         raise AppPathError("APP_ROOT_INVALID")
     user = _current_user_sid()
-    _ensure_private_dir(base, user, "APP_ROOT")
+    _ensure_private_dir(base, user, "APP_ROOT", reapply=False)
     lock = _acquire_lock(base / APP_LOCK_FILE)
     folders = AppFolders(AppPaths(base), lock, 0)
     try:
+        _ensure_private_dir(base, user, "APP_ROOT")
         for name in MANAGED_DIRS:
             _ensure_private_dir(base / name, user, "APP_FOLDER")
         folders.stale_removed = _clear_task_folders(folders.paths.tasks)
+        folders.stale_backups_removed = _clear_partial_backups(folders.paths.backups)
     except AppPathError:
         folders.close()
         raise
@@ -355,8 +481,11 @@ def _checked_task_id(task_id: object) -> str:
     return task_id
 
 
-def _ensure_private_dir(path: Path, user: str, prefix: str) -> None:
-    """없으면 보호된 DACL로 만들고, 있으면 소유자를 확인한 뒤 같은 DACL을 다시 건다."""
+def _ensure_private_dir(path: Path, user: str, prefix: str, *, reapply: bool = True) -> None:
+    """없으면 보호된 DACL로 만들고, 있으면 소유자를 확인한 뒤 같은 DACL을 다시 건다.
+
+    `reapply=False`이면 이미 있는 폴더는 링크·소유자만 보고 DACL은 건드리지 않는다.
+    """
     try:
         if path.is_symlink() or path.is_junction():
             raise AppPathError(f"{prefix}_INVALID")
@@ -376,6 +505,8 @@ def _ensure_private_dir(path: Path, user: str, prefix: str) -> None:
         if exists:
             if _owner_sid(path) != user:
                 raise AppPathError(f"{prefix}_NOT_OWNED")
+            if not reapply:
+                return
             present, dacl, defaulted = _BOOL(), _PVOID(), _BOOL()
             if not _GetSecurityDescriptorDacl(
                 descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)
@@ -545,27 +676,65 @@ def _acquire_lock(path: Path) -> int:
 
 def _clear_task_folders(tasks: Path) -> int:
     """이전 실행이 남긴 `tasks` 아래 항목을 모두 지운다. 링크는 대상이 아니라 링크만 지운다."""
-    removed = 0
     try:
         entries = list(tasks.iterdir())
     except OSError:
         raise AppPathError("APP_STALE_TASK_CLEANUP_FAILED") from None
-    for entry in entries:
-        try:
-            if entry.is_junction() or (entry.is_symlink() and entry.is_dir()):
-                entry.rmdir()
-                ok = True
-            elif entry.is_dir() and not entry.is_symlink():
-                ok = _remove_tree(entry)
-            else:
-                _unlink(entry)
-                ok = True
-        except OSError:
-            ok = False
-        if not ok:
-            raise AppPathError("APP_STALE_TASK_CLEANUP_FAILED")
-        removed += 1
-    return removed
+    if not all(_remove_entry(entry) for entry in entries):
+        raise AppPathError("APP_STALE_TASK_CLEANUP_FAILED")
+    return len(entries)
+
+
+def _clear_partial_backups(backups: Path) -> int:
+    """끝나지 않은 백업(`*.partial`과 그 SQLite 옆 파일)만 지운다. 완성된 백업은 남긴다."""
+    suffixes = (_PARTIAL_SUFFIX, *(_PARTIAL_SUFFIX + side for side in _SQLITE_SIDE_SUFFIXES))
+    try:
+        entries = [entry for entry in backups.iterdir() if entry.name.endswith(suffixes)]
+    except OSError:
+        raise AppPathError("APP_STALE_BACKUP_CLEANUP_FAILED") from None
+    if not all(_remove_entry(entry) for entry in entries):
+        raise AppPathError("APP_STALE_BACKUP_CLEANUP_FAILED")
+    return len(entries)
+
+
+def _remove_entry(entry: Path) -> bool:
+    """폴더 안 항목 하나를 지운다. 링크는 대상이 아니라 링크만 지운다."""
+    try:
+        if entry.is_junction() or (entry.is_symlink() and entry.is_dir()):
+            entry.rmdir()
+            return True
+        if entry.is_dir() and not entry.is_symlink():
+            return _remove_tree(entry)
+        _unlink(entry)
+        return True
+    except OSError:
+        return False
+
+
+def _side_file(path: Path, suffix: str) -> Path:
+    return path.with_name(path.name + suffix)
+
+
+def _check_private_file(path: Path, user: str) -> None:
+    """없으면 통과. 있으면 하드링크가 하나인 일반 파일이고 권한이 사용자·SYSTEM뿐이어야 한다."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise AppPathError("APP_DB_INVALID") from None
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        or info.st_nlink != 1
+    ):
+        raise AppPathError("APP_DB_INVALID")
+    try:
+        private = _is_private(path, user, protected=False)
+    except AppPathError:
+        raise AppPathError("APP_DB_INVALID") from None
+    if not private:
+        raise AppPathError("APP_DB_INVALID")
 
 
 def _remove_tree(folder: Path) -> bool:

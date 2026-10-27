@@ -399,3 +399,59 @@ async def test_codex_launch_runs_pinned_executable_and_counts(tmp_path, pin, cap
     assert launched.returncode == 2
     assert "app-server" in (task / CODEX_STDERR_FILE).read_text(encoding="utf-8", errors="replace")
     assert "app-server" not in capfd.readouterr().err
+
+
+# C2.18: 재개 전에 실제로 올라간 이미지와 검사한 파일 대조(#35 B 리뷰 1번)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["path", "file_id", "unverified"])
+async def test_image_other_than_the_verified_file_is_never_resumed(
+    tmp_path, pin, monkeypatch, fault
+):
+    task = _task(tmp_path)
+    marker = tmp_path / "started"
+    code = f"open({str(marker)!r}, 'w').close()"
+    checked = []
+    original = launcher._check_image
+
+    def recording(pid, image):
+        checked.append(pid)
+        return original(pid, image)
+
+    monkeypatch.setattr(launcher, "_check_image", recording)
+    if fault == "path":
+        # 이미지 경로가 검사한 핸들의 경로와 다름(상위 junction 대상이 바뀐 경우)
+        monkeypatch.setattr(launcher, "_handle_name", lambda handle: "\\Device\\Other\\x.exe")
+    elif fault == "file_id":
+        monkeypatch.setattr(launcher, "_file_id_at", lambda name: (0, bytes(16)))
+    else:
+        monkeypatch.setattr(launcher, "_QueryFullProcessImageNameW", lambda *args: 0)
+    with pytest.raises(LaunchError) as raised:
+        await launch_process(_spec(task, pin, code))
+    expected = "LAUNCH_IMAGE_UNVERIFIED" if fault == "unverified" else "LAUNCH_EXECUTABLE_MISMATCH"
+    assert str(raised.value) == expected
+    assert len(checked) == 1
+    await asyncio.sleep(0.3)
+    assert not _alive(checked[0])
+    assert not marker.exists()
+    assert not (task / "stderr.log").exists()
+
+
+@pytest.mark.asyncio
+async def test_image_check_accepts_a_junction_in_the_parent_path(tmp_path, pin):
+    """이미지 이름은 junction을 푼 실제 경로라서, 검사 핸들의 경로와 같다(C2.18 실측)."""
+    import _winapi
+
+    link = tmp_path / "python-link"
+    _winapi.CreateJunction(str(PYTHON.parent), str(link))
+    try:
+        spec = _spec(_task(tmp_path), pin, ECHO_UNTIL_EOF, executable=link / PYTHON.name)
+        launched = await launch_process(spec)
+        await launched.write_bytes(b"hi\n")
+        assert await _read_line(launched) == b"echo:hi"
+        assert await launched.close() is True
+    finally:
+        # junction만 지운다. 대상(Python 설치 폴더)은 건드리지 않는다.
+        os.rmdir(link)
+    assert PYTHON.exists()
