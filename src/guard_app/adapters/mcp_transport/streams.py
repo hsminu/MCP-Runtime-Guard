@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import ssl
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -15,6 +16,7 @@ from typing import Any, TextIO, cast
 
 import anyio
 import httpx
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 # A46: httpx imports httpcore lazily inside AsyncHTTPTransport(), which stalled
 # the backend loop on the first HTTP connection. Import it with this module
@@ -95,39 +97,11 @@ def validated_stdio_stream_factory(
         reader = PipeFrameReader(read_bytes, gate)
         read_send, read_receive = anyio.create_memory_object_stream[SessionMessage](0)
         write_send, write_receive = anyio.create_memory_object_stream[SessionMessage](0)
-
-        async def receive() -> None:
-            async with read_send:
-                try:
-                    while (frame := await reader.receive()) is not None:
-                        try:
-                            message = JSONRPCMessage.model_validate_json(frame)
-                        except ValueError:
-                            gate.fail("TOOLS_LIST_MALFORMED")
-                        await read_send.send(SessionMessage(message))
-                except (IngressError, anyio.BrokenResourceError, anyio.ClosedResourceError):
-                    return
-
-        async def send() -> None:
-            async with write_receive:
-                try:
-                    async for message in write_receive:
-                        payload = message.message.model_dump_json(by_alias=True, exclude_none=True)
-                        await write_bytes(payload.encode("utf-8") + b"\n")
-                        await drain()
-                except (OSError, EOFError, RuntimeError, anyio.BrokenResourceError):
-                    try:
-                        gate.fail("TOOLS_LIST_INGRESS_IO_FAILED")
-                    except IngressError:
-                        return
-                except anyio.ClosedResourceError:
-                    return
-
         token = SDK_LOG_SCOPE.set(True)
         try:
             async with anyio.create_task_group() as group:
-                group.start_soon(receive)
-                group.start_soon(send)
+                group.start_soon(_receive_frames, reader, gate, read_send)
+                group.start_soon(_send_frames, write_receive, write_bytes, drain, gate)
                 try:
                     yield read_receive, write_send, gate
                 finally:
@@ -138,6 +112,44 @@ def validated_stdio_stream_factory(
             write_send.close()
 
     return connect
+
+
+async def _receive_frames(
+    reader: PipeFrameReader, gate: IngressGate, read_send: MemoryObjectSendStream[SessionMessage]
+) -> None:
+    """Pipe frames to the SDK; a malformed one fails the ingress gate."""
+    async with read_send:
+        try:
+            while (frame := await reader.receive()) is not None:
+                try:
+                    message = JSONRPCMessage.model_validate_json(frame)
+                except ValueError:
+                    gate.fail("TOOLS_LIST_MALFORMED")
+                await read_send.send(SessionMessage(message))
+        except (IngressError, anyio.BrokenResourceError, anyio.ClosedResourceError):
+            return
+
+
+async def _send_frames(
+    write_receive: MemoryObjectReceiveStream[SessionMessage],
+    write_bytes: Callable[[bytes], Awaitable[None]],
+    drain: Callable[[], Awaitable[None]],
+    gate: IngressGate,
+) -> None:
+    """SDK messages to the pipe, one line each; a write failure fails the gate."""
+    async with write_receive:
+        try:
+            async for message in write_receive:
+                payload = message.message.model_dump_json(by_alias=True, exclude_none=True)
+                await write_bytes(payload.encode("utf-8") + b"\n")
+                await drain()
+        except (OSError, EOFError, RuntimeError, anyio.BrokenResourceError):
+            try:
+                gate.fail("TOOLS_LIST_INGRESS_IO_FAILED")
+            except IngressError:
+                return
+        except anyio.ClosedResourceError:
+            return
 
 
 def _valid_http_timeout(value: object) -> bool:
@@ -166,6 +178,36 @@ def http_stream_factory(
     remains the effective call bound. A server silent for longer than this read
     bound still ends the session; later calls then fail closed.
     """
+    url = _endpoint_url(endpoint)
+    if not _valid_http_timeout(io_timeout_s) or not _valid_http_timeout(read_timeout_s):
+        raise ValueError("Invalid HTTP MCP timeout")
+    install_sdk_log_containment()
+    timeout = httpx.Timeout(float(io_timeout_s), read=float(read_timeout_s))
+
+    @asynccontextmanager
+    async def connect() -> AsyncIterator[tuple[Any, ...]]:
+        token = SDK_LOG_SCOPE.set(True)
+        gate = IngressGate()
+        constrain_request = _request_constraint(url, gate)
+        try:
+            # AsyncHTTPTransport(verify=True)는 인증서 묶음을 읽어 SSL 문맥을 동기로 만든다
+            # (A46). 같은 trust_env=False 기본 문맥을 작업 스레드에서 만들어 루프를 막지 않는다.
+            ssl_context = await asyncio.to_thread(httpx.create_ssl_context, trust_env=False)
+            async with (
+                _http_client(gate, ssl_context, timeout, constrain_request) as client,
+                streamable_http_client(
+                    str(url), http_client=client, terminate_on_close=True
+                ) as streams,
+            ):
+                yield (*streams, gate)
+        finally:
+            SDK_LOG_SCOPE.reset(token)
+
+    return HttpStreamFactory(connect, float(read_timeout_s))
+
+
+def _endpoint_url(endpoint: object) -> httpx.URL:
+    """HTTPS, or literal loopback HTTP, with no credentials, query or fragment."""
     if (
         type(endpoint) is not str
         or not 1 <= len(endpoint) <= 2048
@@ -188,61 +230,56 @@ def http_stream_factory(
         or (url.scheme == "http" and url.host not in {"127.0.0.1", "::1"})
     ):
         raise ValueError("Invalid HTTP MCP endpoint")
-    if not _valid_http_timeout(io_timeout_s) or not _valid_http_timeout(read_timeout_s):
-        raise ValueError("Invalid HTTP MCP timeout")
-    install_sdk_log_containment()
+    return url
 
-    @asynccontextmanager
-    async def connect() -> AsyncIterator[tuple[Any, ...]]:
-        token = SDK_LOG_SCOPE.set(True)
-        get_started = False
-        gate = IngressGate()
 
-        async def constrain_request(request: httpx.Request) -> None:
-            nonlocal get_started
-            if gate.reason is not None and request.method != "DELETE":
-                raise httpx.RequestError("MCP_INGRESS_CLOSED")
-            if request.url != url or request.method not in {"POST", "GET", "DELETE"}:
-                raise httpx.RequestError("MCP_ENDPOINT_MISMATCH")
-            if "authorization" in request.headers or "proxy-authorization" in request.headers:
-                raise httpx.RequestError("MCP_AUTH_UNSUPPORTED")
-            # HTTPX stores server cookies. They are not part of this unauthenticated
-            # transport's contract; never turn Set-Cookie into ambient credentials.
-            request.headers.pop("cookie", None)
-            if request.method == "GET":
-                # One notification stream is supported. No automatic GET resume
-                # or reconnect may recover a lost SEND as an apparent success.
-                if get_started or "last-event-id" in request.headers:
-                    raise httpx.RequestError("MCP_RESUME_DISABLED")
-                get_started = True
+def _request_constraint(
+    url: httpx.URL, gate: IngressGate
+) -> Callable[[httpx.Request], Awaitable[None]]:
+    """One connection's request hook: its endpoint only, no credentials, one GET."""
+    get_started = False
 
-        try:
-            # AsyncHTTPTransport(verify=True)는 인증서 묶음을 읽어 SSL 문맥을 동기로 만든다
-            # (A46). 같은 trust_env=False 기본 문맥을 작업 스레드에서 만들어 루프를 막지 않는다.
-            ssl_context = await asyncio.to_thread(httpx.create_ssl_context, trust_env=False)
-            async with (
-                httpx.AsyncClient(
-                    transport=BoundedHttpTransport(
-                        httpx.AsyncHTTPTransport(
-                            retries=0,
-                            trust_env=False,
-                            verify=ssl_context,
-                            limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
-                        ),
-                        gate,
-                    ),
-                    timeout=httpx.Timeout(float(io_timeout_s), read=float(read_timeout_s)),
-                    follow_redirects=False,
-                    trust_env=False,
-                    auth=None,
-                    event_hooks={"request": [constrain_request]},
-                ) as client,
-                streamable_http_client(
-                    str(url), http_client=client, terminate_on_close=True
-                ) as streams,
-            ):
-                yield (*streams, gate)
-        finally:
-            SDK_LOG_SCOPE.reset(token)
+    async def constrain_request(request: httpx.Request) -> None:
+        nonlocal get_started
+        if gate.reason is not None and request.method != "DELETE":
+            raise httpx.RequestError("MCP_INGRESS_CLOSED")
+        if request.url != url or request.method not in {"POST", "GET", "DELETE"}:
+            raise httpx.RequestError("MCP_ENDPOINT_MISMATCH")
+        if "authorization" in request.headers or "proxy-authorization" in request.headers:
+            raise httpx.RequestError("MCP_AUTH_UNSUPPORTED")
+        # HTTPX stores server cookies. They are not part of this unauthenticated
+        # transport's contract; never turn Set-Cookie into ambient credentials.
+        request.headers.pop("cookie", None)
+        if request.method == "GET":
+            # One notification stream is supported. No automatic GET resume
+            # or reconnect may recover a lost SEND as an apparent success.
+            if get_started or "last-event-id" in request.headers:
+                raise httpx.RequestError("MCP_RESUME_DISABLED")
+            get_started = True
 
-    return HttpStreamFactory(connect, float(read_timeout_s))
+    return constrain_request
+
+
+def _http_client(
+    gate: IngressGate,
+    ssl_context: ssl.SSLContext,
+    timeout: httpx.Timeout,
+    constrain_request: Callable[[httpx.Request], Awaitable[None]],
+) -> httpx.AsyncClient:
+    """No retries, proxies, redirects or ambient auth; the ingress gate bounds bodies."""
+    return httpx.AsyncClient(
+        transport=BoundedHttpTransport(
+            httpx.AsyncHTTPTransport(
+                retries=0,
+                trust_env=False,
+                verify=ssl_context,
+                limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            ),
+            gate,
+        ),
+        timeout=timeout,
+        follow_redirects=False,
+        trust_env=False,
+        auth=None,
+        event_hooks={"request": [constrain_request]},
+    )

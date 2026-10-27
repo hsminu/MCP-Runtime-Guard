@@ -77,6 +77,30 @@ DEFAULT_PENDING_COMMANDS = 64
 MAX_CONFIGURED_PENDING_COMMANDS = 1024
 
 
+def require_result_copy_budget(value: object) -> None:
+    if type(value) is not int or value < 1 or value > MAX_CONFIGURED_RESULT_COPY_BYTES:
+        raise ValueError("bounded positive result copy budget required")
+
+
+def require_pending_limit(value: object) -> None:
+    if type(value) is not int or value < 1 or value > MAX_CONFIGURED_PENDING_COMMANDS:
+        raise ValueError("bounded positive pending command limit required")
+
+
+def _consume_task_exception(task: asyncio.Task[None]) -> None:
+    # Task errors have already become fixed DispatchError values for waiters.
+    # Retrieve the raw exception solely to suppress asyncio's default log.
+    if not task.cancelled():
+        task.exception()
+
+
+def _consume_command_failure(future: asyncio.Future[RawResult]) -> None:
+    # A caller can be cancelled after settlement but before awaiting the
+    # sanitized exception. Do not let asyncio log even that abandoned item.
+    if not future.cancelled():
+        future.exception()
+
+
 def _exception_name(exc: Exception) -> str:
     name = type(exc).__name__
     return name if name.isascii() and name.isidentifier() and len(name) <= 64 else "Exception"
@@ -110,18 +134,8 @@ class ServerWorker:
         for timeout in (call_timeout_s, startup_timeout_s, close_timeout_s):
             if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
                 raise ValueError("positive finite worker timeouts required")
-        if (
-            type(max_result_copy_bytes) is not int
-            or max_result_copy_bytes < 1
-            or max_result_copy_bytes > MAX_CONFIGURED_RESULT_COPY_BYTES
-        ):
-            raise ValueError("bounded positive result copy budget required")
-        if (
-            type(max_pending_commands) is not int
-            or max_pending_commands < 1
-            or max_pending_commands > MAX_CONFIGURED_PENDING_COMMANDS
-        ):
-            raise ValueError("bounded positive pending command limit required")
+        require_result_copy_budget(max_result_copy_bytes)
+        require_pending_limit(max_pending_commands)
         self._session_factory = session_factory
         self._on_dispatch = on_dispatch
         self._tool_list_limits = tool_list_limits
@@ -150,7 +164,7 @@ class ServerWorker:
             raise RuntimeError("server worker already started")
         self._state = _State.STARTING
         self._owner = asyncio.create_task(self._run(), name="mcp-server-worker")
-        self._owner.add_done_callback(self._consume_task_exception)
+        self._owner.add_done_callback(_consume_task_exception)
         start_budget = self._startup_timeout_s
         if self._tool_list_limits is not None:
             # Both bounds run from the start in _run. The extra second lets an
@@ -189,7 +203,7 @@ class ServerWorker:
             # never await capacity after the Guard has reserved a request.
             future.cancel()
             raise DispatchError("WorkerQueueFull") from None
-        future.add_done_callback(self._consume_command_failure)
+        future.add_done_callback(_consume_command_failure)
         try:
             return await asyncio.shield(future)
         except asyncio.CancelledError:
@@ -241,27 +255,34 @@ class ServerWorker:
                 self._owner_cancel_expected = True
                 self._owner.cancel()
             raise DispatchError("WorkerCloseTimeout") from None
-        owner_error = outcome[0]
+        failure = self._close_failure(outcome[0])
+        if failure is not None:
+            self._state = _State.FAILED
+            raise DispatchError(failure) from None
+        if self._state is _State.CLOSING:
+            self._state = _State.CLOSED
+
+    @property
+    def _ingress_close_failed(self) -> bool:
+        """The raw ingress could not be closed: the session's teardown is unproven."""
+        gate = self._ingress_gate
+        return gate is not None and gate.reason == "TOOLS_LIST_INGRESS_CLOSE_FAILED"
+
+    def _close_failure(self, owner_error: object) -> str | None:
+        """The fixed failure of a finished owner; None when it closed cleanly."""
         owner_failed = isinstance(owner_error, BaseException) and (
             not isinstance(owner_error, asyncio.CancelledError) or not self._owner_cancel_expected
         )
         teardown_failed = self._session_exit_attempted and not self._session_exited
         teardown_missing = self._session_entered and not self._session_exit_attempted
-        if teardown_failed or teardown_missing or (self._initialized and owner_failed):
+        teardown_unproven = teardown_failed or teardown_missing
+        if teardown_unproven or (self._initialized and owner_failed):
             self._close_failed = True
-        if self._close_failed:
-            self._state = _State.FAILED
-            name = (
-                "SessionCloseFailed"
-                if teardown_failed
-                or teardown_missing
-                or self._ingress_gate is not None
-                and self._ingress_gate.reason == "TOOLS_LIST_INGRESS_CLOSE_FAILED"
-                else "WorkerOwnerFailed"
-            )
-            raise DispatchError(name) from None
-        if self._state is _State.CLOSING:
-            self._state = _State.CLOSED
+        if not self._close_failed:
+            return None
+        if teardown_unproven or self._ingress_close_failed:
+            return "SessionCloseFailed"
+        return "WorkerOwnerFailed"
 
     async def _run(self) -> None:
         tracker: _SessionExitTracker | None = None
@@ -276,68 +297,83 @@ class ServerWorker:
             tracker = _SessionExitTracker(self._session_factory())
             async with asyncio.timeout(init_bound) as init_window:
                 async with tracker as session:
-                    candidate_gate = getattr(session, "listing_ingress", None)
-                    if isinstance(candidate_gate, IngressGate):
-                        self._ingress_gate = candidate_gate
-                    await session.initialize()
-                    init_window.reschedule(None)
-                    self._initialized = True
-                    if limits is not None:
-                        # Before READY, so no Guard call reaches a session whose
-                        # listing is still running. An incomplete listing is a
-                        # warning for Registry/Scanner and does not stop the worker.
-                        self._tool_listing = await collect_tool_definitions(
-                            session, limits, deadline=started + limits.collection_timeout_s
-                        )
-                        gate = getattr(session, "listing_ingress", None)
-                        if (
-                            self._tool_listing.reason == "TOOLS_LIST_INGRESS_REQUIRED"
-                            or isinstance(gate, IngressGate)
-                            and gate.reason is not None
-                        ):
-                            # Preserve the fixed incomplete reason for Registry,
-                            # but never advertise a dead/gateless session READY.
-                            self._state = _State.FAILED
-                            return
+                    if not await self._initialize(session, init_window, started):
+                        return
                     if self._state is _State.STARTING:
                         self._state = _State.READY
                     if self._ingress_gate is not None:
                         ingress_watch = asyncio.create_task(self._watch_ingress())
                     self._ready.set()
-                    while True:
-                        item = await self._queue.get()
-                        if item is _STOP:
-                            break
-                        if not isinstance(item, _Command) or item.future.done():
-                            continue
-                        self._active = item
-                        try:
-                            await self._execute(session, item)
-                        finally:
-                            if not item.future.done():
-                                item.future.set_exception(DispatchError("WorkerInterrupted"))
-                            self._active = None
+                    await self._serve(session)
         finally:
             if ingress_watch is not None:
                 ingress_watch.cancel()
                 await asyncio.gather(ingress_watch, return_exceptions=True)
-            if (
-                self._ingress_gate is not None
-                and self._ingress_gate.reason == "TOOLS_LIST_INGRESS_CLOSE_FAILED"
-            ):
-                self._close_failed = True
-            if tracker is not None:
-                self._session_entered = tracker.entered
-                self._session_exit_attempted = tracker.exit_attempted
-                self._session_exited = tracker.exited
-            self._state = (
-                _State.FAILED
-                if self._unhealthy or self._state in (_State.STARTING, _State.READY)
-                else self._state
-            )
-            self._ready.set()
-            self._reject_queued("WorkerClosed")
-            self._stopped.set()
+            self._settle_owner_exit(tracker)
+
+    async def _initialize(
+        self, session: ToolSession, init_window: asyncio.Timeout, started: float
+    ) -> bool:
+        """initialize, then the startup listing; False when the session must not be used."""
+        candidate_gate = getattr(session, "listing_ingress", None)
+        if isinstance(candidate_gate, IngressGate):
+            self._ingress_gate = candidate_gate
+        await session.initialize()
+        init_window.reschedule(None)
+        self._initialized = True
+        limits = self._tool_list_limits
+        if limits is None:
+            return True
+        # Before READY, so no Guard call reaches a session whose
+        # listing is still running. An incomplete listing is a
+        # warning for Registry/Scanner and does not stop the worker.
+        self._tool_listing = await collect_tool_definitions(
+            session, limits, deadline=started + limits.collection_timeout_s
+        )
+        gate = getattr(session, "listing_ingress", None)
+        if (
+            self._tool_listing.reason == "TOOLS_LIST_INGRESS_REQUIRED"
+            or isinstance(gate, IngressGate)
+            and gate.reason is not None
+        ):
+            # Preserve the fixed incomplete reason for Registry,
+            # but never advertise a dead/gateless session READY.
+            self._state = _State.FAILED
+            return False
+        return True
+
+    async def _serve(self, session: ToolSession) -> None:
+        """Run queued commands one at a time until the stop marker."""
+        while True:
+            item = await self._queue.get()
+            if item is _STOP:
+                return
+            if not isinstance(item, _Command) or item.future.done():
+                continue
+            self._active = item
+            try:
+                await self._execute(session, item)
+            finally:
+                if not item.future.done():
+                    item.future.set_exception(DispatchError("WorkerInterrupted"))
+                self._active = None
+
+    def _settle_owner_exit(self, tracker: _SessionExitTracker | None) -> None:
+        """Record how the session context ended, then release every waiter."""
+        if self._ingress_close_failed:
+            self._close_failed = True
+        if tracker is not None:
+            self._session_entered = tracker.entered
+            self._session_exit_attempted = tracker.exit_attempted
+            self._session_exited = tracker.exited
+        self._state = (
+            _State.FAILED
+            if self._unhealthy or self._state in (_State.STARTING, _State.READY)
+            else self._state
+        )
+        self._ready.set()
+        self._reject_queued("WorkerClosed")
+        self._stopped.set()
 
     def _quiesce_failed_ingress(self) -> None:
         gate = self._ingress_gate
@@ -346,10 +382,7 @@ class ServerWorker:
         if gate.reason == "TOOLS_LIST_INGRESS_CLOSE_FAILED":
             self._close_failed = True
         if self._state is _State.READY:
-            self._unhealthy = True
-            self._state = _State.CLOSING
-            self._reject_queued("WorkerClosed")
-            self._queue.put_nowait(_STOP)
+            self._stop_unhealthy()
 
     async def _watch_ingress(self) -> None:
         gate = self._ingress_gate
@@ -394,10 +427,7 @@ class ServerWorker:
                         ExceptionGroup,
                     ),
                 ):
-                    self._unhealthy = True
-                    self._state = _State.CLOSING
-                    self._reject_queued("WorkerClosed")
-                    self._queue.put_nowait(_STOP)
+                    self._stop_unhealthy()
                 if not cmd.future.done():
                     cmd.future.set_exception(DispatchError(_exception_name(exc)))
                 return
@@ -409,10 +439,7 @@ class ServerWorker:
     def _force_settle_timeout(self, cmd: _Command) -> None:
         if self._active is not cmd:
             return
-        self._unhealthy = True
-        self._state = _State.CLOSING
-        self._reject_queued("WorkerClosed")
-        self._queue.put_nowait(_STOP)
+        self._stop_unhealthy()
         if not cmd.future.done():
             cmd.future.set_exception(DispatchError("TimeoutError"))
         if self._owner is not None:
@@ -446,22 +473,15 @@ class ServerWorker:
             self._queue.put_nowait(item)
         return discarded
 
+    def _stop_unhealthy(self) -> None:
+        """A broken session: refuse new commands, reject queued ones, stop the owner loop."""
+        self._unhealthy = True
+        self._state = _State.CLOSING
+        self._reject_queued("WorkerClosed")
+        self._queue.put_nowait(_STOP)
+
     def _reject_queued(self, name: str) -> None:
         while not self._queue.empty():
             item = self._queue.get_nowait()
             if isinstance(item, _Command) and not item.future.done():
                 item.future.set_exception(DispatchError(name))
-
-    @staticmethod
-    def _consume_task_exception(task: asyncio.Task[None]) -> None:
-        # Task errors have already become fixed DispatchError values for waiters.
-        # Retrieve the raw exception solely to suppress asyncio's default log.
-        if not task.cancelled():
-            task.exception()
-
-    @staticmethod
-    def _consume_command_failure(future: asyncio.Future[RawResult]) -> None:
-        # A caller can be cancelled after settlement but before awaiting the
-        # sanitized exception. Do not let asyncio log even that abandoned item.
-        if not future.cancelled():
-            future.exception()

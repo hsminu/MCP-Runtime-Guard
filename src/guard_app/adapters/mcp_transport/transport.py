@@ -11,10 +11,10 @@ from guard_app.adapters.mcp_transport.streams import HttpStreamFactory, StreamFa
 from guard_app.adapters.mcp_transport.tool_listing import ToolListing, ToolListLimits
 from guard_app.adapters.mcp_transport.worker import (
     DEFAULT_PENDING_COMMANDS,
-    MAX_CONFIGURED_PENDING_COMMANDS,
-    MAX_CONFIGURED_RESULT_COPY_BYTES,
     MAX_RESULT_COPY_BYTES,
     ServerWorker,
+    require_pending_limit,
+    require_result_copy_budget,
 )
 from guard_app.domain.contracts import RawResult
 from guard_app.domain.errors import DispatchError
@@ -54,18 +54,8 @@ class McpTransport:
             raise TypeError("tools changed callback must be callable")
         if any(type(server_id) is not str or not server_id for server_id in server_streams):
             raise ValueError("nonempty server IDs required")
-        if (
-            type(max_result_copy_bytes) is not int
-            or max_result_copy_bytes < 1
-            or max_result_copy_bytes > MAX_CONFIGURED_RESULT_COPY_BYTES
-        ):
-            raise ValueError("bounded positive result copy budget required")
-        if (
-            type(max_pending_commands) is not int
-            or max_pending_commands < 1
-            or max_pending_commands > MAX_CONFIGURED_PENDING_COMMANDS
-        ):
-            raise ValueError("bounded positive pending command limit required")
+        require_result_copy_budget(max_result_copy_bytes)
+        require_pending_limit(max_pending_commands)
         self._workers = {
             server_id: ServerWorker(
                 sdk_session_factory(
@@ -97,33 +87,10 @@ class McpTransport:
         if self._started or self._closed:
             raise RuntimeError("transport already started or closed")
         self._started = True
-        workers = tuple(self._workers.values())
         starting: dict[asyncio.Task[None], int] = {}
-        next_index = 0
         ready = False
         try:
-            while next_index < len(workers) or starting:
-                if self._closed:
-                    raise DispatchError("WorkerClosed")
-                # Keep both live startups and pending asyncio tasks bounded.
-                # Each worker still owns its own session in its owner task.
-                while next_index < len(workers) and len(starting) < _MAX_CONCURRENT_STARTS:
-                    task = asyncio.create_task(workers[next_index].start(), name="mcp-server-start")
-                    starting[task] = next_index
-                    next_index += 1
-                completed, _ = await asyncio.wait(starting, return_when=asyncio.FIRST_COMPLETED)
-                # If several startups settle together, select a failure in
-                # registration order and do not launch the next window first.
-                for task in sorted(completed, key=starting.__getitem__):
-                    del starting[task]
-                    try:
-                        await task
-                    except RuntimeError:
-                        if self._closed:
-                            raise DispatchError("WorkerClosed") from None
-                        raise
-            if self._closed:
-                raise DispatchError("WorkerClosed")
+            await self._start_in_windows(tuple(self._workers.values()), starting)
             ready = True
         finally:
             if not ready:
@@ -132,6 +99,34 @@ class McpTransport:
                 if starting:
                     await asyncio.gather(*starting, return_exceptions=True)
                 await self.close()
+
+    async def _start_in_windows(
+        self, workers: tuple[ServerWorker, ...], starting: dict[asyncio.Task[None], int]
+    ) -> None:
+        """Start every worker, a bounded window at a time; `starting` holds the window."""
+        next_index = 0
+        while next_index < len(workers) or starting:
+            if self._closed:
+                raise DispatchError("WorkerClosed")
+            # Keep both live startups and pending asyncio tasks bounded.
+            # Each worker still owns its own session in its owner task.
+            while next_index < len(workers) and len(starting) < _MAX_CONCURRENT_STARTS:
+                task = asyncio.create_task(workers[next_index].start(), name="mcp-server-start")
+                starting[task] = next_index
+                next_index += 1
+            completed, _ = await asyncio.wait(starting, return_when=asyncio.FIRST_COMPLETED)
+            # If several startups settle together, select a failure in
+            # registration order and do not launch the next window first.
+            for task in sorted(completed, key=starting.__getitem__):
+                del starting[task]
+                try:
+                    await task
+                except RuntimeError:
+                    if self._closed:
+                        raise DispatchError("WorkerClosed") from None
+                    raise
+        if self._closed:
+            raise DispatchError("WorkerClosed")
 
     async def call(self, req: ResolvedRequest) -> RawResult:
         # close() marks the transport closed before awaiting each worker.  A

@@ -164,19 +164,9 @@ async def _collect_tool_definitions(
             for _page in range(limits.max_pages):
                 async with asyncio.timeout(limits.page_timeout_s):
                     page = await session.list_tools(cursor)
-                if not isinstance(page, ListToolsResult):
-                    return _incomplete_listing("TOOLS_LIST_MALFORMED")
-                # Count every listed entry before any de-duplication.
-                if len(tools) + len(page.tools) > limits.max_tools:
-                    return _incomplete_listing("TOOLS_LIST_TOO_MANY_TOOLS")
-                for tool in page.tools:
-                    if tool.name in names:
-                        return _incomplete_listing("TOOLS_LIST_DUPLICATE_NAME")
-                    names.add(tool.name)
-                    definition = tool.model_dump(mode="json", by_alias=True, exclude_unset=True)
-                    if _json_depth_exceeds(definition, limits.max_json_depth):
-                        return _incomplete_listing("TOOL_DEFINITION_TOO_DEEP")
-                    tools.append(FrozenJsonObject(definition))
+                reason = _add_page(page, limits, tools, names)
+                if reason is not None:
+                    return _incomplete_listing(reason)
                 cursor = page.nextCursor
                 if cursor is None:
                     return ToolListing(complete=True, tools=tuple(tools), reason=None)
@@ -193,3 +183,23 @@ async def _collect_tool_definitions(
     except ValueError:
         # Pydantic ValidationError and FrozenJsonObject rejections are ValueError.
         return _incomplete_listing("TOOLS_LIST_MALFORMED")
+
+
+def _add_page(
+    page: object, limits: ToolListLimits, tools: list[FrozenJsonObject], names: set[str]
+) -> str | None:
+    """Add one page's definitions whole; the incomplete reason when it breaks a limit."""
+    if not isinstance(page, ListToolsResult):
+        return "TOOLS_LIST_MALFORMED"
+    # Count every listed entry before any de-duplication.
+    if len(tools) + len(page.tools) > limits.max_tools:
+        return "TOOLS_LIST_TOO_MANY_TOOLS"
+    for tool in page.tools:
+        if tool.name in names:
+            return "TOOLS_LIST_DUPLICATE_NAME"
+        names.add(tool.name)
+        definition = tool.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        if _json_depth_exceeds(definition, limits.max_json_depth):
+            return "TOOL_DEFINITION_TOO_DEEP"
+        tools.append(FrozenJsonObject(definition))
+    return None
