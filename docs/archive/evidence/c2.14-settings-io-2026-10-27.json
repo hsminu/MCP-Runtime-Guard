@@ -1,0 +1,36 @@
+{
+ "item": "C2.14",
+ "date": "2026-10-27",
+ "environment": {
+  "os": "Windows 11 Pro 10.0.26200",
+  "python": "3.12.10",
+  "filesystem": "NTFS"
+ },
+ "replace_and_read_time": {
+  "note": "부모 프로세스에서 약 600KB·640KB 두 내용을 번갈아 50회 교체(임시 파일·fsync·MoveFileExW WRITE_THROUGH), 같은 파일 50회 읽기",
+  "content_bytes": {
+   "A": 600047,
+   "B": 640047
+  },
+  "replace_ms": {
+   "runs": 50,
+   "median": 10.74,
+   "max": 26.32
+  },
+  "read_ms_mean": 1.24
+ },
+ "killed_during_replace": {
+  "note": "자식(기본 python.exe)이 앱 폴더를 잡고 두 내용을 번갈아 교체하는 중 0~150ms 뒤 TerminateProcess. 매번 다음 시작에서 남은 임시 파일 수와 파일 내용을 확인",
+  "runs": 60,
+  "file_after_kill": {
+   "A": 30,
+   "B": 30,
+   "other": 0
+  },
+  "runs_with_temporary_left": 15,
+  "temporaries_left_total": 15,
+  "removed_at_next_start_total": 15,
+  "other_files_left_after_start": 0
+ },
+ "work_deleted": true
+}

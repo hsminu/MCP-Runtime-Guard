@@ -628,3 +628,50 @@ def test_unfinished_backup_that_cannot_be_removed_refuses_start(tmp_path):
     retried = prepare_app_folders(root)
     retried.close()
     assert not target.path.exists()
+
+
+# C2.14: 설정 교체가 끊겨 남은 임시 파일 정리
+
+
+def test_settings_temporaries_are_removed_at_start_and_settings_kept(tmp_path):
+    root = tmp_path / "app"
+    prepare_app_folders(root).close()
+    config = root / "config"
+    (config / "settings.json").write_bytes(b"{}")
+    (config / f"settings.json.{'a' * 32}.tmp").write_bytes(b"half")
+    (config / f"settings.json.{'b' * 32}.tmp").write_bytes(b"half")
+    (config / "settings.json.bak").write_bytes(b"user file")
+    (config / f"settings.json.{'g' * 32}.tmp").write_bytes(b"not ours")
+    prepared = prepare_app_folders(root)
+    try:
+        assert prepared.stale_settings_removed == 2
+        assert sorted(p.name for p in config.iterdir()) == [
+            "settings.json",
+            "settings.json.bak",
+            f"settings.json.{'g' * 32}.tmp",
+        ]
+    finally:
+        prepared.close()
+
+
+def test_settings_temporary_that_cannot_be_removed_refuses_start(tmp_path):
+    root = tmp_path / "app"
+    prepare_app_folders(root).close()
+    held = root / "config" / f"settings.json.{'c' * 32}.tmp"
+    held.write_bytes(b"half")
+    with held.open("rb"), pytest.raises(AppPathError) as raised:
+        prepare_app_folders(root)
+    assert str(raised.value) == "APP_STALE_SETTINGS_CLEANUP_FAILED"
+    retried = prepare_app_folders(root)
+    retried.close()
+    assert not held.exists()
+
+
+def test_is_private_file_reads_inherited_and_explicit_entries(folders, user):
+    inherited = folders.paths.config / "inherited.json"
+    inherited.write_bytes(b"{}")
+    assert paths.is_private_file(inherited)
+    widened = folders.paths.config / "widened.json"
+    widened.write_bytes(b"{}")
+    _apply_dacl(widened, f"D:(A;;FA;;;{user})(A;;FR;;;WD)")
+    assert not paths.is_private_file(widened)

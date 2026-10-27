@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-27 · main `c2da9e0` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-27 · main `a3fc2a1` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -30,8 +30,8 @@
 - [x] C2.2 SDK import의 외부 tokenizer 다운로드 차단(C-CISCO-05) · #6 · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C2.3 safe_path: 빈 값·NUL·역슬래시·절대·상위·symlink·드라이브·UNC·junction 거부
 - [ ] C2.4 검사-열기 TOCTOU 한계와 no-follow 옵션 확인
-- [ ] C2.5 URL 검증: scheme·userinfo·IDNA·끝 점·기본 포트·인코딩 경로
-- [ ] C2.6 launcher: 등록된 절대 경로·인자 리스트·최소 환경, shell·동적 실행 금지. 실행 핵심은 C2.12 `launch_process`. 남은 것은 `servers.yaml` 등록 값 검증과 MCP 서버 실행 파일 해시의 출처
+- [ ] C2.5 URL 검증: scheme·userinfo·IDNA·끝 점·기본 포트·인코딩 경로. 설정 파일의 HTTP 서버 `url`(CFG-01 `ServerSettings.url`) 검증을 포함한다(C2.14에서 분리)
+- [ ] C2.6 launcher: 등록된 절대 경로·인자 리스트·최소 환경, shell·동적 실행 금지. 실행 핵심은 C2.12 `launch_process`. 남은 것은 설정 파일의 stdio 서버 값(`ServerSettings.command`·`args`·`env_allow`) 검증과 MCP 서버 실행 파일 해시의 출처(C2.14에서 분리)
 - [ ] C2.7 ids: 암호학적 난수, 비밀값 누락은 전용 예외
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
 - [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
@@ -39,7 +39,7 @@
 - [x] C2.12 codex.exe 실행 launcher(`security/launcher.py`): 쓰기 금지 핸들로 실행마다 SHA-256 대조, 허용 목록 환경, `-c sqlite_home='<Task 폴더>'`, 멈춘 채 생성 후 Job Object 할당, stdin/stdout은 A `CodexPipes` 형식, stderr는 Task 폴더 격리 파일, `close()`로 종료 확인(#21 2번). stdio MCP 서버도 같은 `launch_process`를 쓴다(#21 5번) · [기록](archive/c/C2.12-codex-launcher.md)
 - [x] C2.13 앱 폴더 경로·권한(`security/paths.py`): `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 codex 설치·CODEX_HOME·Task 폴더·config에 사용자·SYSTEM만의 보호된 DACL, 단일 실행 잠금, Task 폴더 생성·삭제와 앱 시작 때 남은 폴더 삭제(#21 6번) · [기록](archive/c/C2.13-app-folders.md)
 - [ ] C2.11 제품용 읽기 전용 파일 MCP 서버(stdio): 폴더 목록·파일 읽기만, `safe_path`(C2.3) 사용, `structuredContent.resource_id` 보고, UTF-8 텍스트만 · [결정](contracts.md#사용자-결정)
-- [ ] C2.14 설정 파일·Profile 로딩의 경로·실행 파일 검증(B가 읽어 Catalog에 넣고 A가 앱 시작에 연결, #19 1번). CFG-01: `%LOCALAPPDATA%\MCPRuntimeGuard\config\settings.json` 경로·사용자 전용 권한, 1MiB 제한 읽기, 같은 폴더 임시 파일·fsync·교체(#33) · [결정](contracts.md#사용자-결정)
+- [x] C2.14 설정 파일 연산(CFG-01, #33, `security/settings_io.py`): `config\settings.json`을 링크 없이 열어 일반 파일·하드링크 1·사용자·SYSTEM 권한 확인, 상한+1바이트 읽기, 세대(크기·SHA-256)가 같을 때만 같은 폴더 임시 파일·fsync·`MoveFileExW(WRITE_THROUGH)` 교체, 실패와 결과 불명 구분, 앱 시작 때 남은 임시 파일 삭제. 서버 실행 파일·URL 검증은 C2.6·C2.5로 분리 · [기록](archive/c/C2.14-settings-file-io.md)
 - [x] C2.15 로그아웃 정리 함수 `clear_codex_credentials`(`security/codex_home.py`): `secrets/` 암호문과 자격증명 관리자 항목 두 개 삭제, 모르는 항목이 있으면 아무것도 지우지 않음. A가 `account/logout` 성공 뒤 부름 · [기록](archive/c/C2.15-codex-credential-cleanup.md)
 - [x] C2.16 앱 폴더 권한 확인의 SID 비교를 전체 SID로(C2.13 후속): SDDL 약어(`LA` 등) 때문에 CI 러너(내장 Administrator)에서 거부되던 문제 수정, 읽지 못한 ACE는 거부(#35 B 리뷰 3번) · [기록](archive/c/C2.16-sid-alias-compare.md)
 - [x] C2.17 제품 DB 위치 `data\guard.sqlite3`와 백업 폴더 `data\backups`(`AppPaths.db_file`·`backups`). `app.lock`과 앱 폴더 권한으로 DB 단일 소유(REC-01, #35 A·B 합의) · [기록](archive/c/C2.17-product-db-path.md)
