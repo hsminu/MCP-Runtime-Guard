@@ -116,6 +116,7 @@
 - [ ] C6.20 설치판에서 `config/codex/` 위치: 지금 기본값은 소스 checkout 기준. A 패키징과 맞춰 설치 패키지에서도 찾게 함 — 막힘: A 패키징
 - [x] C6.21 CODEX_HOME `secrets/` 허용(알려진 암호문·임시 파일만, 해시 대조 제외, 앱 시작 때 유지)과 L1 `include_permissions_instructions`·`include_environment_context` = false, `codex.lock.json` 갱신(C-CODEX-08) · [기록](archive/c/C6.21-codex-secrets-and-prompt-blocks.md)
 - [ ] C6.22 CI에서 실제 L2: 워크플로에서 `tools/install_codex.py`로 codex.exe를 받고 `GUARD_TEST_CODEX_EXE`로 `test_real_codex_passes_l2`를 켬(C6.14 후속, 공용 CI 파일 변경이라 따로 제안)
+- [x] C6.23 #41 A 리뷰 후속(L2): 전체 시간 상한 `deadline_s`(기본 30초)와 `L2_DEADLINE_EXCEEDED`, 최악 시간·취소·예외 경로 설명, 가짜 모델 서버 밖 통신은 관찰하지 않는다는 범위 명시, L2·L3 허용 항목 같음 테스트 · [기록](archive/c/C6.23-l2-a-review-followup.md)
 
 ## 인수 기준
 

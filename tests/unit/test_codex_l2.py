@@ -541,3 +541,66 @@ async def test_real_codex_passes_l2(tmp_path):
     assert report.failures == ()
     assert report.passed
     assert report.home_digest == digest
+
+
+# #41 A 리뷰 후속(C6.23)
+
+
+def test_l2_allowed_items_match_the_l3_allowed_items():
+    """#41 A 리뷰 4번: L2와 L3가 같은 허용 항목으로 판정한다."""
+    from guard_app.services.codex_session import L3_ALLOWED_ITEMS
+
+    assert codex_l2.ALLOWED_ITEM_TYPES == L3_ALLOWED_ITEMS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deadline", [0, -1, float("inf"), float("nan"), True, "30", 601])
+async def test_invalid_deadline_is_refused_before_anything_starts(tmp_path, deadline):
+    with pytest.raises(codex_l2.L2Error) as raised:
+        await codex_l2.observe_l2(None, None, thread_params=_params, deadline_s=deadline)
+    assert str(raised.value) == "L2_DEADLINE_INVALID"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="launcher는 Windows 전용이다")
+@pytest.mark.asyncio
+async def test_deadline_ends_a_codex_that_never_answers(tmp_path):
+    """#41 A 리뷰 2번: 응답하지 않는 Codex는 상한에서 끊고, 종료 확인과 폴더 삭제까지 한다."""
+    import hashlib
+    import time
+
+    from guard_app.security.launcher import LaunchSpec, launch_process
+    from guard_app.security.paths import prepare_app_folders
+
+    data = PYTHON.read_bytes()
+
+    class SilentCodex:
+        """요청을 읽기만 하고 답하지 않다가 stdin EOF에 끝나는 대역."""
+
+        async def launch_l2(self, task_dir, port, token):
+            return await launch_process(
+                LaunchSpec(
+                    executable=PYTHON,
+                    executable_size=len(data),
+                    executable_sha256=hashlib.sha256(data).hexdigest(),
+                    args=("-I", "-c", "import sys; sys.stdin.buffer.read()"),
+                    env=(("SYSTEMROOT", os.environ["SYSTEMROOT"]),),
+                    cwd=task_dir,
+                    stderr_path=task_dir / "stderr.log",
+                )
+            )
+
+    folders = prepare_app_folders(tmp_path / "app")
+    try:
+        started = time.perf_counter()
+        observation = await codex_l2.observe_l2(
+            SilentCodex(), folders, thread_params=_params, deadline_s=0.5
+        )
+        elapsed = time.perf_counter() - started
+        assert list(folders.paths.tasks.iterdir()) == []
+    finally:
+        folders.close()
+    assert observation.errors == ["L2_DEADLINE_EXCEEDED"]
+    assert observation.exit_confirmed
+    assert observation.folder_removed
+    assert elapsed < 5
+    assert "L2_DEADLINE_EXCEEDED" in _judge(observation)
