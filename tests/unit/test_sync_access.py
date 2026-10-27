@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from guard_app.domain.contracts import Denied, Pending, Released
-from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus
+from guard_app.domain.enums import ApprovalStatus, Label, RegStatus, TaskStatus
 from guard_app.domain.models import AccessResult
 from guard_app.domain.reasons import Reason
 from guard_app.services.approvals import PendingResultError
@@ -528,6 +528,99 @@ def test_sync_access_uses_current_task_and_never_starts_thread_or_task(monkeypat
         assert len(checker.calls) == 1
         assert checker.calls[0][2:] == (current, thread_id)
         assert created == []
+        await h.guard.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("phase", ["submit", "approval_recheck"])
+@pytest.mark.parametrize(
+    ("change", "submit_reason", "approval_reason"),
+    [
+        ("missing", Reason.TOOL_FINGERPRINT_CHANGED, Reason.TOOL_FINGERPRINT_CHANGED),
+        ("changed", Reason.TOOL_FINGERPRINT_CHANGED, Reason.APPROVAL_STALE),
+        ("blocked", Reason.REG_NOT_ACTIVE, Reason.APPROVAL_STALE),
+        ("pending", Reason.REG_NOT_ACTIVE, Reason.APPROVAL_STALE),
+    ],
+)
+def test_synchronous_access_rechecks_registry_before_reservation(
+    phase, change, submit_reason, approval_reason
+):
+    """Change the queried Registry inside check_access; no scheduling gap is needed."""
+
+    async def scenario():
+        label = Label.PUBLIC if phase == "submit" else Label.INTERNAL
+        h = _Harness(label=label, source_label=Label.PUBLIC)
+        calls = []
+        reservations = []
+        original_reserve = h.store.reserve_dispatch
+        original_consume = h.store.consume_and_reserve
+
+        async def reserve(*args, **kwargs):
+            reservations.append("reserve_dispatch")
+            return await original_reserve(*args, **kwargs)
+
+        async def consume(*args, **kwargs):
+            reservations.append("consume_and_reserve")
+            return await original_consume(*args, **kwargs)
+
+        h.store.reserve_dispatch = reserve
+        h.store.consume_and_reserve = consume
+        pending = None
+        handle = None
+        if phase == "approval_recheck":
+            pending = await h.guard.submit("task", _call("send"))
+            assert isinstance(pending, Pending)
+            handle = h.guard.pending_result(pending.request_id)
+            assert h.store.states["task"].status is TaskStatus.WAITING_APPROVAL
+
+        expected_task = asyncio.current_task()
+        expected_thread = threading.get_ident()
+
+        class MutatingChecker:
+            def check_access(self, req, ctx):
+                calls.append(
+                    (
+                        req.tool.tool_name,
+                        ctx.state.status,
+                        asyncio.current_task(),
+                        threading.get_ident(),
+                    )
+                )
+                if change == "missing":
+                    h.registry.current_fingerprint = None
+                elif change == "changed":
+                    h.registry.current_fingerprint = "b" * 64
+                else:
+                    status = RegStatus.BLOCKED if change == "blocked" else RegStatus.PENDING
+                    h.registry.record = h.registry.record.model_copy(update={"status": status})
+                return AccessResult(allowed=True, reason="ACCESS_RULE_ALLOW", error=False)
+
+        h.guard._access_checker = MutatingChecker()
+        if pending is None:
+            outcome = await h.guard.submit("task", _call("read"))
+        else:
+            outcome = await h.guard.human_control("operator").approve(pending.approval_id)
+        assert isinstance(outcome, Denied)
+        assert outcome.reasons == (submit_reason if pending is None else approval_reason,)
+        assert len(calls) == 1
+        assert calls[0][0] == ("read" if pending is None else "send")
+        assert calls[0][1] is (
+            TaskStatus.RUNNING if pending is None else TaskStatus.WAITING_APPROVAL
+        )
+        assert calls[0][2] is expected_task
+        assert calls[0][3] == expected_thread
+        assert reservations == []
+        assert h.store.consume_count == 0
+        assert h.transport.calls == []
+        assert not any(event[0] == "reserve" for event in h.store.trace)
+        if pending is not None:
+            assert h.store.approvals[pending.approval_id].status is ApprovalStatus.INVALIDATED
+            assert h.store.states["task"].status is TaskStatus.HALTED
+            assert handle is not None
+            final = await asyncio.wait_for(handle.wait(), timeout=1)
+            assert isinstance(final.outcome, Denied)
+            assert final.outcome.reasons == (approval_reason,)
         await h.guard.aclose()
 
     asyncio.run(scenario())
