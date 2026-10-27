@@ -114,3 +114,47 @@ def test_actual_task_cancellation_is_contained(
         return await task
 
     assert asyncio.run(exercise()) == "contained"
+
+
+@pytest.mark.parametrize("callback_error", [RuntimeError, asyncio.CancelledError])
+@pytest.mark.parametrize("containment_cancel", [False, True])
+@pytest.mark.parametrize("fallback_fails", [False, True])
+def test_cancel_callback_failure_halts_and_preserves_original_cancellation(
+    callback_error, containment_cancel, fallback_fails, caplog
+):
+    cancelled = asyncio.CancelledError()
+    events = []
+    halted = False
+
+    async def operation():
+        if containment_cancel:
+            raise RuntimeError("PRIVATE_OPERATION")
+        raise cancelled
+
+    async def contain(error):
+        if containment_cancel:
+            raise cancelled
+        return "withheld"
+
+    def notify(result):
+        events.append("notify")
+        assert result in ("withheld", "halted")
+        raise callback_error("PRIVATE_CALLBACK")
+
+    def halt(error):
+        nonlocal halted
+        halted = True
+        events.append(type(error).__name__)
+        if fallback_fails and "notify" in events:
+            raise RuntimeError("PRIVATE_HALT")
+        return "halted"
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        asyncio.run(after_dispatch(operation, contain, halt, on_cancelled=notify))
+    assert caught.value is cancelled
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+    assert halted
+    assert events.count("notify") == 1
+    assert events[-1] == callback_error.__name__
+    assert "PRIVATE" not in repr(caught.value) + repr(events) + caplog.text
