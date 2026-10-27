@@ -44,6 +44,10 @@ CODEX_ENV_ALLOWLIST = (
     "USERPROFILE",
 )
 CODEX_STDERR_FILE = "codex-stderr.log"
+# L2 시작 시험(C6.14) 전용 가짜 모델 제공자. 제품 세션 입구는 이 값을 쓰지 않는다.
+L2_PROVIDER = "guard_l2"
+L2_TOKEN_ENV = "GUARD_L2_TOKEN"  # noqa: S105 - 토큰이 아니라 토큰을 담을 환경변수 이름
+_L2_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _HASH_CHUNK = 1 << 20
@@ -299,6 +303,7 @@ class CodexLauncher:
         self._home_digest = home_digest
         self._source_dir = source_dir
         self.launches = 0
+        self.l2_launches = 0
 
     def spec(self, task_dir: Path) -> LaunchSpec:
         """Task 하나의 실행 명세. Task별 값은 `sqlite_home` 하나다(L2 `config/read` 대조 기준)."""
@@ -328,6 +333,70 @@ class CodexLauncher:
         launched = await launch_process(spec)
         self.launches += 1
         return launched
+
+    @property
+    def home_digest(self) -> str:
+        return self._home_digest
+
+    @property
+    def executable_sha256(self) -> str:
+        return self._sha256
+
+    @property
+    def source_dir(self) -> Path:
+        return self._source_dir
+
+    def l2_spec(self, task_dir: Path, port: int, token: str) -> LaunchSpec:
+        """L2 시작 시험의 실행 명세. 제품 명세에 고정된 가짜 모델 덮어쓰기와 토큰 하나만 더한다.
+
+        실행 파일·CODEX_HOME·환경 허용 목록·`sqlite_home`은 제품 세션과 같다. 바뀌는 값은
+        `127.0.0.1`의 포트와 이번 실행의 토큰뿐이다. `l2_overrides`가 L2의 `config/read`
+        대조 기준이다.
+        """
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise LaunchError("LAUNCH_L2_INVALID")
+        if type(token) is not str or not _L2_TOKEN.fullmatch(token):
+            raise LaunchError("LAUNCH_L2_INVALID")
+        base = self.spec(task_dir)
+        overrides: list[str] = []
+        for key, value in l2_overrides(port).items():
+            text = f'"{value}"' if isinstance(value, str) else str(value).lower()
+            overrides += ["-c", f"{key}={text}"]
+        return LaunchSpec(
+            executable=base.executable,
+            executable_size=base.executable_size,
+            executable_sha256=base.executable_sha256,
+            args=(*base.args, *overrides),
+            env=(*base.env, (L2_TOKEN_ENV, token)),
+            cwd=base.cwd,
+            stderr_path=base.stderr_path,
+        )
+
+    async def launch_l2(self, task_dir: Path, port: int, token: str) -> LaunchedProcess:
+        """L2 시작 시험용 실행. `launches`가 아니라 `l2_launches`로 센다."""
+        spec = self.l2_spec(task_dir, port, token)
+        try:
+            verify_codex_home(self._codex_home, self._home_digest, source_dir=self._source_dir)
+        except CodexConfigError:
+            raise LaunchError("LAUNCH_CODEX_HOME_MISMATCH") from None
+        launched = await launch_process(spec)
+        self.l2_launches += 1
+        return launched
+
+
+def l2_overrides(port: int) -> dict[str, str | int | bool]:
+    """L2가 더하는 `-c` 키와 값. 재시도를 끄고 `127.0.0.1`의 가짜 모델에만 붙는다."""
+    prefix = f"model_providers.{L2_PROVIDER}"
+    return {
+        "model_provider": L2_PROVIDER,
+        f"{prefix}.name": L2_PROVIDER,
+        f"{prefix}.base_url": f"http://127.0.0.1:{port}/v1",
+        f"{prefix}.wire_api": "responses",
+        f"{prefix}.env_key": L2_TOKEN_ENV,
+        f"{prefix}.request_max_retries": 0,
+        f"{prefix}.stream_max_retries": 0,
+        f"{prefix}.supports_websockets": False,
+    }
 
 
 async def launch_process(spec: LaunchSpec) -> LaunchedProcess:

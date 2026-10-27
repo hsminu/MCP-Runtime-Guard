@@ -106,7 +106,7 @@
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록
 - [x] C6.13 Codex 0.162.1 L1 설정·모델 정보 파일·고정값(`config/codex/`)·설치 스크립트, CODEX_HOME에 쓰고 해시를 돌려주는 함수(#21 4번) · [기록](archive/c/C6.13-codex-l1.md)
-- [ ] C6.14 L2 시작 시험(T22): `configRequirements/read`·`config/read` 대조, 가짜 모델 서버로 도구 목록 정확 대조·금지 도구 7종 거부·호출 순차·요청 프롬프트 확인(권한·환경 안내 블록이 빠졌는지 포함, C6.21), `config/read` 대조에서 Task별 `-c sqlite_home` 하나만 허용, 원격 제어 상태 `disabled` 확인(C-CODEX-07), 실패 시 시작 거부, 앱 시작·버전 변경·CI 실행. 스크래치 실험 스크립트를 저장소로. C 구현은 A가 여는 주입형 L2 결과 포트에 채움(#21 3번). A `SessionPreparation`(#29)에 C2.12·C2.13과 함께 연결 · [결정](contracts.md#사용자-결정)
+- [x] C6.14 L2 시작 시험(T22·T39·T40, `security/codex_l2.py`): 같은 codex.exe·CODEX_HOME·환경에 가짜 모델만 바꿔 requirements·설정 층·적용 값·원격 제어·도구 목록·프롬프트 블록·금지 호출 30종 거부·Guard 호출 순차·종료를 판정, `run_l2`가 A 입구에 줄 결과를 돌려줌. 진행 중 종료 0.05–0.11초 측정 · [기록](archive/c/C6.14-codex-l2.md)
 - [ ] C6.15 L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답, 원격 제어 상태가 `disabled`가 아닐 때 정지(C-CODEX-07) 검증 · [결정](contracts.md#사용자-결정)
 - [ ] C6.16 Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.sandbox_migration`·`tmp\arg0` 보조 파일·인증 파일(`secrets/*.age`는 C6.21에서 확인), T43·#21 8번)과 동시 실행 때 경합(T46) 확인. Codex가 TEMP에 쓰는 것을 보고 TEMP·TMP를 Task 폴더 아래로 둘지, `codex-stderr.log` 크기 상한(#35 B launcher 2·3번) · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C6.17 (후속·선택) codex.exe AppContainer 실행 실험(C-CODEX-04)
@@ -114,6 +114,7 @@
 - [x] C6.19 CODEX_HOME 최상위 허용 항목 확인: 지시문 파일(AGENTS.md 등)·허용 밖 항목이 있으면 쓰기·Task 시작 거부(C-CODEX-06) · [기록](archive/c/C6.19-codex-home-allowlist.md)
 - [ ] C6.20 설치판에서 `config/codex/` 위치: 지금 기본값은 소스 checkout 기준. A 패키징과 맞춰 설치 패키지에서도 찾게 함 — 막힘: A 패키징
 - [x] C6.21 CODEX_HOME `secrets/` 허용(알려진 암호문·임시 파일만, 해시 대조 제외, 앱 시작 때 유지)과 L1 `include_permissions_instructions`·`include_environment_context` = false, `codex.lock.json` 갱신(C-CODEX-08) · [기록](archive/c/C6.21-codex-secrets-and-prompt-blocks.md)
+- [ ] C6.22 CI에서 실제 L2: 워크플로에서 `tools/install_codex.py`로 codex.exe를 받고 `GUARD_TEST_CODEX_EXE`로 `test_real_codex_passes_l2`를 켬(C6.14 후속, 공용 CI 파일 변경이라 따로 제안)
 
 ## 인수 기준
 

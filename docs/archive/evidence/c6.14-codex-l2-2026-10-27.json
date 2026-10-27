@@ -1,0 +1,147 @@
+{
+ "item": "C6.14",
+ "date": "2026-10-27",
+ "codex": "0.162.1 (C6.13 설치본, launcher가 실행마다 해시 대조)",
+ "source": "openai/codex rust-v0.162.1 (092d3ac)",
+ "observation": {
+  "requirements": null,
+  "config_layers": [
+   {
+    "type": "sessionFlags",
+    "keys": [
+     "model_provider",
+     "model_providers",
+     "sqlite_home"
+    ]
+   },
+   {
+    "type": "user",
+    "keys": [
+     "analytics",
+     "check_for_update_on_startup",
+     "cli_auth_credentials_store",
+     "features",
+     "feedback",
+     "history",
+     "include_environment_context",
+     "include_permissions_instructions",
+     "model",
+     "model_catalog_json",
+     "project_doc_max_bytes",
+     "project_root_markers",
+     "skills",
+     "web_search"
+    ]
+   },
+   {
+    "type": "system",
+    "keys": []
+   }
+  ],
+  "features_on_outside_l1": [
+   "mentions_v2"
+  ],
+  "l1_features_all_applied": true,
+  "remote_control": [
+   "disabled",
+   "disabled"
+  ],
+  "thread_start_fields": [
+   "approvalsReviewer",
+   "baseInstructions",
+   "dynamicTools",
+   "environments",
+   "ephemeral",
+   "model"
+  ],
+  "offered_tools": [
+   "functions.request_user_input",
+   "guard_l2.probe"
+  ],
+  "request_top_level_tools": null,
+  "prompt_messages": [
+   [
+    "developer",
+    "<baseInstructions>"
+   ],
+   [
+    "developer",
+    "<collaboration_mode>"
+   ],
+   [
+    "user",
+    "Guard L2 self-test. Call the probe tool."
+   ]
+  ],
+  "forbidden_prompt_tags_found": [],
+  "forced_calls": {
+   "function_names": 28,
+   "unsupported_call": 28,
+   "custom_apply_patch": "unsupported custom tool call: apply_patch",
+   "local_shell_call": "aborted"
+  },
+  "item_types": [
+   "agentMessage",
+   "dynamicToolCall",
+   "userMessage"
+  ],
+  "server_requests": [
+   "item/tool/call"
+  ],
+  "probe_calls_sequential": true,
+  "turn_status": "completed",
+  "model_traffic_other": [],
+  "unauthorized": 0,
+  "exit_confirmed": true,
+  "folder_removed": true,
+  "errors": []
+ },
+ "run_l2_product_like_root": {
+  "passed": true,
+  "failures": [],
+  "seconds": 2.84,
+  "home_digest_matches": true,
+  "l2_launches": 1,
+  "launches": 0,
+  "tasks_left": []
+ },
+ "shutdown_while_turn_active": {
+  "tool_call_pending": {
+   "state_reached": true,
+   "close_seconds": 0.11,
+   "close_confirmed": true,
+   "returncode": 0,
+   "exited_by_itself_on_stdin_eof": true
+  },
+  "model_in_flight": {
+   "state_reached": true,
+   "close_seconds": 0.054,
+   "close_confirmed": true,
+   "returncode": 0,
+   "exited_by_itself_on_stdin_eof": true
+  }
+ },
+ "regression_multi_agent_v1": {
+  "change": "L1 features.multi_agent=true, model_catalog multi_agent_version=v1 (시험 전용 사본)",
+  "failures_against_repo_l1": [
+   "L2_CONFIG_MISMATCH",
+   "L2_TOOLS_UNEXPECTED",
+   "L2_FORBIDDEN_NOT_REFUSED"
+  ],
+  "failures_against_its_own_l1": [
+   "L2_TOOLS_UNEXPECTED",
+   "L2_FORBIDDEN_NOT_REFUSED"
+  ],
+  "extra_tool_elements": [
+   "tool_search"
+  ],
+  "outputs_differing": [
+   [
+    "l2_forbidden_17",
+    "unsupported call: tool_search",
+    "aborted"
+   ]
+  ]
+ },
+ "regression_shell_not_exposed": "L1 shell_tool·unified_exec=true + 모델 정보 shell_type=unified_exec에서도 셸 도구가 나오지 않았다. environments=[]가 환경 의존 도구를 뺀다(core/src/tools/spec_plan.rs 1156·1226행)."
+}
