@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-27 · main `bc7d8a4` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-27 · main `c2da9e0` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -43,7 +43,8 @@
 - [x] C2.15 로그아웃 정리 함수 `clear_codex_credentials`(`security/codex_home.py`): `secrets/` 암호문과 자격증명 관리자 항목 두 개 삭제, 모르는 항목이 있으면 아무것도 지우지 않음. A가 `account/logout` 성공 뒤 부름 · [기록](archive/c/C2.15-codex-credential-cleanup.md)
 - [x] C2.16 앱 폴더 권한 확인의 SID 비교를 전체 SID로(C2.13 후속): SDDL 약어(`LA` 등) 때문에 CI 러너(내장 Administrator)에서 거부되던 문제 수정, 읽지 못한 ACE는 거부(#35 B 리뷰 3번) · [기록](archive/c/C2.16-sid-alias-compare.md)
 - [x] C2.17 제품 DB 위치 `data\guard.sqlite3`와 백업 폴더 `data\backups`(`AppPaths.db_file`·`backups`). `app.lock`과 앱 폴더 권한으로 DB 단일 소유(REC-01, #35 A·B 합의) · [기록](archive/c/C2.17-product-db-path.md)
-- [ ] C2.18 #35 리뷰 후속: 실행 이미지와 검사한 파일의 파일 ID(볼륨 일련번호·파일 인덱스) 대조(B launcher 1번), 이미 있는 루트의 DACL 재적용을 잠금 뒤로(B paths 2번, 결과 권한은 같음)
+- [x] C2.18 #35 리뷰 후속: 재개 전 실행 이미지와 검사한 파일의 경로·파일 ID 대조(B launcher 1번), 이미 있는 루트의 DACL 재적용을 잠금 뒤로(B paths 2번, 결과 권한은 같음) · [기록](archive/c/C2.18-image-check-and-lock-order.md)
+- [x] C2.19 DB 입구(#37 REC-01·SEQ-03): `AppFolders.db_path()`(DB와 옆 파일이 링크·하드링크·넓은 권한이 아닌지 확인), `begin_backup(label)`→`BackupTarget.publish()`·`discard()`, 앱 시작 때 남은 `.partial` 삭제 · [기록](archive/c/C2.19-db-backup-entry.md)
 
 ## C3 · B SQLite 리뷰와 독립 검증
 

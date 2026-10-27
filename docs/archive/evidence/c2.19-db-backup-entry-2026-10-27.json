@@ -1,0 +1,24 @@
+{
+ "item": "C2.19",
+ "date": "2026-10-27",
+ "environment": {
+  "os": "Windows 11 Pro 10.0.26200",
+  "python": "3.12.10",
+  "filesystem": "NTFS"
+ },
+ "killed_mid_backup": {
+  "note": "자식 프로세스가 prepare_app_folders → begin_backup → SQLite backup(8쪽씩) 진행 중일 때 TerminateProcess. 원본은 약 12MB(4000바이트 행 3000개)",
+  "child_reached": "progress",
+  "second_start_while_child_holds_lock": "APP_ALREADY_RUNNING",
+  "left_after_kill": [
+   "v2-to-v3-<UTC>.partial",
+   "v2-to-v3-<UTC>.partial-journal"
+  ],
+  "restart_after_kill": "ok",
+  "restart_seconds": 0.004,
+  "stale_backups_removed": 2,
+  "backups_after_restart": [],
+  "source_quick_check": "ok",
+  "source_user_version": 2
+ }
+}
