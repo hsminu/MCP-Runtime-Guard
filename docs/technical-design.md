@@ -259,14 +259,13 @@ stdio로 실행되는 Local MCP라도 내부적으로 외부 웹훅을 호출한
 
 ### 2.1 디렉터리
 
+사용자의 신뢰 설정(Profile·서버 등록·목적지·출처 규칙·접근 규칙·정책 파라미터)은 저장소가 아니라 `%LOCALAPPDATA%\MCPRuntimeGuard\config\settings.json` 파일 하나에 둔다(CFG-01). 형식은 JSON `{"schema_version": 1, "settings": {...}}`이고 `policy_version`은 `settings`만으로 계산한다. 4·5·8·10장의 `profiles/default.yaml`·`servers.yaml`·`destinations.yaml`·`policy.yaml` 표기는 이 파일 안의 해당 부분을 뜻한다.
+
 ```
 mcp-runtime-guard/
   pyproject.toml
   config/
-    profiles/default.yaml      Profile: 허용 서버, 출처 규칙, 목적지, 정책 버전
-    servers.yaml               서버 등록: transport, trust_tier, max_label, 실행 정보
-    destinations.yaml          목적지: destination_id, trust_tier, max_label
-    policy.yaml                정책 파라미터, taint_mode
+    codex/                     〔C〕 Codex L1 설정·모델 정보·고정값(10.4절)
   src/guard_app/
     __main__.py                〔A〕 앱 시작·종료, 백엔드 스레드 기동
     domain/
@@ -1248,7 +1247,7 @@ servers:
       - { name: post_issue, kind: send, destination_arg: destination_id }
 ```
 
-도구 지문은 `tools/list` 결과의 Tool 객체 전체(모든 필드)를 키 정렬·공백 없는 UTF-8 JSON으로 직렬화해 SHA-256을 취한 값이다. 배열 순서가 바뀌어도 변경으로 본다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다. float는 거부하지 않고 정해진 표기로 처리한다(2026-10-15 결정). 승인 사본의 `canonical_json`(8.1절)과는 다른 함수이며, RFC 8785(JCS)로 정규화하고 B의 `digest.py`에 둔다. Registry·Scanner는 그 함수를 쓴다(FP-01). Registry는 DB의 ACTIVE 상태만 믿지 않고 연결할 때마다 실제 지문을 등록 지문과 대조한다.
+도구 지문은 `tools/list` 결과의 Tool 객체 전체(모든 필드)를 키 정렬·공백 없는 UTF-8 JSON으로 직렬화해 SHA-256을 취한 값이다. 배열 순서가 바뀌어도 변경으로 본다. 설명문 한 글자만 바뀌어도 지문이 달라진다. 설명문이야말로 도구 정의 인젝션이 들어가는 곳이기 때문이다. float는 거부하지 않고 정해진 표기로 처리한다(2026-10-15 결정). 승인 사본의 `canonical_json`(8.1절)과는 다른 함수이며, RFC 8785(JCS)로 정규화하고 B의 `digest.py`에 둔다. Registry·Scanner는 그 함수를 쓴다(FP-01). Registry는 DB의 ACTIVE 상태만 믿지 않고 연결할 때마다 실제 지문을 등록 지문과 대조한다. 연결 뒤 서버가 `notifications/tools/list_changed`를 보내면, 연결 직후 대조가 끝난 뒤에 온 알림에 한해 그 서버를 이번 실행 동안 PENDING으로 취급한다(새 호출 DENY, 대기 승인은 재평가에서 무효). 대조가 끝나기 전에 온 알림은 그 대조가 최신 목록을 보므로 차단하지 않는다. 다음 연결 때 다시 대조한다. 이 알림은 보안 경계가 아니며 정의 변조 방어는 연결 시 대조(I10)가 맡는다. 알림 내용은 화면·모델·로그로 내보내지 않고 고정 코드만 남긴다(LIST-01).
 
 등록 상태 전이:
 
