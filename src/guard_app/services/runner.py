@@ -67,7 +67,7 @@ class CodexSession(Protocol):
     must own a fresh app-server per Task. None of this live wiring exists here.
     """
 
-    async def send(self, text: str) -> str: ...
+    async def send(self, text: str, effort: str | None = None) -> str: ...
     async def interrupt(self) -> None: ...
     async def aclose(self) -> None: ...
 
@@ -85,7 +85,7 @@ class TaskExecution(Protocol):
     def can_advance(self) -> bool: ...
     @property
     def runtime_status(self) -> str: ...
-    def add_user_message(self, content: str) -> None: ...
+    def add_user_message(self, content: str, effort: str | None = None) -> None: ...
     async def advance(self) -> RunUpdate: ...
     async def resume_approval(
         self, task_id: str, epoch: int, approval_id: str, outcome: object
@@ -108,6 +108,7 @@ class CodexTaskRunner:
         self._session = session
         self._failure = failure
         self._input: str | None = None
+        self._effort: str | None = None
         self._closed = False
         self._status = "idle"
         self._lock = asyncio.Lock()
@@ -124,20 +125,23 @@ class CodexTaskRunner:
     def runtime_status(self) -> str:
         return self._status
 
-    def add_user_message(self, content: str) -> None:
+    def add_user_message(self, content: str, effort: str | None = None) -> None:
+        """`effort` overrides the reasoning level from this turn on; None keeps it."""
         if not self.can_accept_message or type(content) is not str or not content.strip():
             raise RunnerStateError()
         self._input = content
+        self._effort = effort
 
     async def advance(self) -> RunUpdate:
         async with self._lock:
             if self._closed or self._input is None:
                 raise RunnerStateError()
             text, self._input = self._input, None
+            effort, self._effort = self._effort, None
             self._status = "running"
             completed = failure_handled = False
             try:
-                code, response = await self._send(text)
+                code, response = await self._send(text, effort)
                 if self._closed:
                     return self._update("closed")
                 if code is not None:
@@ -154,14 +158,14 @@ class CodexTaskRunner:
                     finally:
                         self.close()
 
-    async def _send(self, text: str) -> tuple[str | None, str]:
+    async def _send(self, text: str, effort: str | None) -> tuple[str | None, str]:
         """The session's answer, or the code that halts this Task.
 
         An authentication failure is a CodexSessionError with CODEX_AUTH_FAILED.
         Any other exception reaches advance(), which halts with CODEX_SESSION_FAILED.
         """
         try:
-            response = await self._session.send(text)
+            response = await self._session.send(text, effort)
         except CodexSessionError as error:
             return error.code, ""
         if type(response) is not str or len(response) > 65_536:

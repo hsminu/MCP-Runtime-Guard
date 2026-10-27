@@ -39,7 +39,7 @@ class Session:
         self.release = asyncio.Event()
         self.error = None
 
-    async def send(self, text):
+    async def send(self, text, effort=None):
         self.messages.append(text)
         self.entered.set()
         await self.release.wait()

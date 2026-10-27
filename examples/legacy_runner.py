@@ -179,7 +179,8 @@ class TaskRunner:
             or self._lock.locked()
         )
 
-    def add_user_message(self, content: str) -> None:
+    def add_user_message(self, content: str, effort: str | None = None) -> None:
+        """The synthetic model has no reasoning level; `effort` is ignored."""
         if (
             self._closed
             or self._stopped

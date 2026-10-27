@@ -110,7 +110,7 @@ def test_cleanup_never_owns_a_mismatched_or_shared_receipt(receipt):
 
 
 class _Session:
-    async def send(self, text):
+    async def send(self, text, effort=None):
         return text
 
     async def interrupt(self):

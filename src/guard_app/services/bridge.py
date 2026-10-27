@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
 
+from guard_app.adapters.codex_protocol import REASONING_EFFORTS
 from guard_app.core.snapshot import ApprovalSnapshot
 from guard_app.domain.contracts import (
     Denied,
@@ -149,6 +150,12 @@ DEVICE_LOGIN_TIMEOUT_S = 15 * 60
 
 # The only model pinned by C's config/codex/codex.lock.json (allowed_models).
 CODEX_MODEL_ID = "gpt-6.1-sol"
+# The model picker lists these; adding one needs C's lock and L2 first.
+CODEX_MODELS = (CODEX_MODEL_ID,)
+# Offered in the composer; the wire builder checks the same tuple again.
+CODEX_REASONING_EFFORTS = REASONING_EFFORTS
+# The model's own default in config/codex/model_catalog.json.
+CODEX_DEFAULT_EFFORT = "low"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +164,7 @@ class SessionOptions:
     model: str = CODEX_MODEL_ID
 
     def __post_init__(self) -> None:
-        if self.mode != "codex" or self.model != CODEX_MODEL_ID:
+        if self.mode != "codex" or self.model not in CODEX_MODELS:
             raise ValueError("Invalid Codex selection")
 
 
@@ -241,6 +248,7 @@ class _Command:
     user_text: str | None = field(default=None, repr=False)
     options: SessionOptions | None = None
     access: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+    effort: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,16 +486,33 @@ class BackendBridge(QObject):
         return command.command_id
 
     def request_message(
-        self, task_id: str, epoch: int, text: str, *, command_id: str | None = None
+        self,
+        task_id: str,
+        epoch: int,
+        text: str,
+        *,
+        command_id: str | None = None,
+        effort: str | None = None,
     ) -> str:
-        """Queue a user turn through the existing Runner, without new sessions."""
+        """Queue a user turn through the existing Runner, without new sessions.
+
+        `effort` is the reasoning level picked in the composer; None keeps the
+        session's current level."""
         self._require_qt_thread()
         if type(epoch) is not int or epoch < 0:
             raise ValueError("Message epoch is invalid")
         if type(text) is not str or not text.strip() or len(text) > 32768:
             raise ValueError("Message text is invalid")
+        if effort is not None and effort not in CODEX_REASONING_EFFORTS:
+            raise ValueError("Reasoning effort is invalid")
         command = _Command(
-            self._id(command_id, generate=True), "run", "message", self._id(task_id), epoch, text
+            self._id(command_id, generate=True),
+            "run",
+            "message",
+            self._id(task_id),
+            epoch,
+            text,
+            effort=effort,
         )
         self._submit(command)
         return command.command_id
@@ -1203,7 +1228,7 @@ class BackendBridge(QObject):
                         return "MESSAGE_UNAVAILABLE"
                     if command.user_text is None:
                         return "MESSAGE_UNAVAILABLE"
-                    runner.add_user_message(command.user_text)
+                    runner.add_user_message(command.user_text, command.effort)
                     self.conversation_ready.emit(
                         ConversationEvent(
                             command.target_id,
