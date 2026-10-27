@@ -1758,40 +1758,7 @@ def safe_path(root: Path, user_path: str) -> Path:
 
 검사와 열기 사이의 경쟁(TOCTOU)은 이 함수만으로 완전히 없앨 수 없다. 파일 서버 루트는 사용자 전용 권한 폴더로 두고, Windows에는 `O_NOFOLLOW`가 없으므로 열기 직전 재검사와 결과 `resource_id` 대조(T33)로 보완한다.
 
-```python
-# security/endpoints.py
-def normalize_endpoint(url: str) -> Endpoint:
-    """URL-01(2026-10-27): https 원칙, http는 루프백 IP 리터럴만(10.1절)."""
-    parts = urlsplit(url)
-    if parts.scheme not in ("https", "http"):
-        raise EndpointRejected("scheme")
-    if parts.username or parts.password or "@" in parts.netloc:
-        raise EndpointRejected("userinfo")
-    if parts.fragment:
-        raise EndpointRejected("fragment")
-    host = parts.hostname or ""
-    if not host or host.endswith(".") or "%" in parts.netloc:
-        raise EndpointRejected("host")              # 끝 점·퍼센트 인코딩 호스트는 정규화하지 않고 거부
-    try:
-        literal = ipaddress.ip_address(host)        # 표준 점 십진 IPv4·IPv6 리터럴만
-    except ValueError:
-        literal = None
-        if NUMERIC_HOST.fullmatch(host):            # 0x7f.1, 2130706433, 017.0.0.1 같은 변형
-            raise EndpointRejected("numeric host")
-        try:
-            host = host.encode("idna").decode("ascii").lower()
-        except UnicodeError as e:
-            raise EndpointRejected("idna") from e
-    if parts.scheme == "http" and (literal is None or not literal.is_loopback):
-        raise EndpointRejected("plain http")        # localhost 이름도 여기서 거부된다
-    host_ascii = host if literal is None else literal.compressed
-    port = parts.port or (443 if parts.scheme == "https" else 80)
-    if "%2e" in parts.path.lower() or "%2f" in parts.path.lower():
-        raise EndpointRejected("encoded traversal")
-    path = posixpath.normpath(parts.path or "/")
-    return Endpoint(scheme=parts.scheme, host=host_ascii, port=port,
-                    path_parts=tuple(p for p in path.split("/") if p))
-```
+URL 검사는 참고 코드를 두지 않는다. 규칙은 10.1절(URL-01)이고 구현은 `security/endpoints.py`(C2.5)다. 등록 화면은 `normalize_endpoint`로 정규형을 만들어 저장하고, 설정 로더와 transport는 `canonical_endpoint`로 정규형만 받는다. `urlsplit`은 탭·줄바꿈을 조용히 지우고 파이썬 내장 `idna` 코덱은 IDNA 2003이라, URL을 직접 나누고 IDNA 2008(`idna` 패키지)을 쓴다.
 
 ```python
 # security/failclosed.py
