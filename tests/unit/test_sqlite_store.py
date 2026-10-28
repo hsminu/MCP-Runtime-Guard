@@ -32,6 +32,11 @@ TABLES = {
     "registrations",
     "registration_tools",
     "scan_reports",
+    "task_call_sequences",
+    "store_runs",
+    "recovery_reports",
+    "recovery_quarantine",
+    "task_run_owners",
 }
 
 
@@ -355,7 +360,7 @@ def test_schema_enforces_foreign_key_unique_and_strict_types(store: SQLiteStore)
     create(store, state())
     connection = writer_connection(store)
     statement = """INSERT INTO requests (request_id,task_id,call_seq,server_id,tool_name,
-        arguments_digest,status) VALUES (?,?,?,?,?,?,?)"""
+        arguments_digest,status,epoch,kind) VALUES (?,?,?,?,?,?,?,1,'read')"""
     connection.execute(statement, ("r1", "task-1", 1, "s", "read", "a" * 64, "DECIDED"))
     for parameters in [
         ("r2", "task-1", 1, "s", "read", "a" * 64, "DECIDED"),
@@ -492,7 +497,7 @@ class FaultConnection(sqlite3.Connection):
     before_history: Callable[[], None] | None = None
 
     def execute(self, sql: str, parameters: object = (), /) -> sqlite3.Cursor:
-        if self.fail_migration and sql.startswith("CREATE TABLE requests"):
+        if self.fail_migration and sql.startswith('CREATE TABLE "requests"'):
             raise sqlite3.OperationalError("TEST_SECRET_migration")
         if self.before_history is not None and "SELECT at_seq, source_id" in sql:
             callback, self.before_history = self.before_history, None

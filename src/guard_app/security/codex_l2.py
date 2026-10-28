@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import secrets
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -32,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from guard_app.security.codex_home import load_codex_pins
+from guard_app.security.ids import new_id, new_token, token_matches
 from guard_app.security.launcher import (
     L2_PROVIDER,
     CodexLauncher,
@@ -331,7 +331,7 @@ class MockModel:
             return True
         body = await reader.readexactly(length) if length else b""
         closing = headers.get("connection", "").lower() == "close"
-        if headers.get("authorization") != f"Bearer {self._token}":
+        if not token_matches(f"Bearer {self._token}", headers.get("authorization")):
             self.unauthorized += 1
             await _reply(writer, 401, b"", close=True)
             return True
@@ -547,11 +547,11 @@ async def observe_l2(
     if type(deadline_s) not in (int, float) or not 0 < deadline_s <= _MAX_DEADLINE_S:
         raise L2Error("L2_DEADLINE_INVALID")
     observation = L2Observation()
-    token = secrets.token_urlsafe(32)
+    token = new_token(32)
     model = MockModel(token, first_response=first_response)
     port = await model.start()
     try:
-        folder = folders.create_task_folder(task_id or f"l2-{secrets.token_hex(8)}")
+        folder = folders.create_task_folder(task_id or new_id("l2"))
     except AppPathError as error:
         await model.close()
         observation.errors.append(str(error))
