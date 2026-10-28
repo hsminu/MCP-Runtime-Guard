@@ -34,7 +34,7 @@ import socket
 import sqlite3
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -406,17 +406,21 @@ class Run:
             )
         return self.assembled
 
+    def _read_db(self) -> sqlite3.Connection:
+        # sqlite3의 with는 트랜잭션만 끝낸다. closing으로 연결과 파일 핸들까지 닫는다(#56 B 리뷰).
+        return sqlite3.connect(f"file:{self.db.as_posix()}?mode=ro", uri=True)
+
     def _consumed(self, request_id: str | None = None) -> int:
         query = "SELECT COUNT(*) FROM approvals WHERE status = 'CONSUMED'"
         args: tuple[str, ...] = ()
         if request_id is not None:
             query += " AND request_id = ?"
             args = (request_id,)
-        with sqlite3.connect(f"file:{self.db.as_posix()}?mode=ro", uri=True) as db:
+        with closing(self._read_db()) as db:
             return int(db.execute(query, args).fetchone()[0])
 
     def approvals_for(self, request_id: str) -> int:
-        with sqlite3.connect(f"file:{self.db.as_posix()}?mode=ro", uri=True) as db:
+        with closing(self._read_db()) as db:
             row = db.execute("SELECT COUNT(*) FROM approvals WHERE request_id = ?", (request_id,))
             return int(row.fetchone()[0])
 
