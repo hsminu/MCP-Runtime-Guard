@@ -69,15 +69,15 @@
 - [x] C4.6 운영 설정 추천안과 실제 정의 144개 검증 · [추천안](archive/tasks/c-scanner-operating-proposal.md) · [검증](archive/tasks/c-scanner-operating-validation.md)
 - [x] C4.7 C 브랜치 main 병합 · #6
 - [x] C4.8 Scanner 준비가 이벤트 루프를 막지 않게 수정(C-CISCO-06) · #8
-- [ ] C4.9 Scanner 결과를 B ScanReport로 번역(필수 분석기·완료/생략/실패·지문·severity). B SCAN-01 형식(#32), 모델 문장은 `defang_scanner_text`로 무해화
+- [x] C4.9 Scanner 결과를 B ScanReport로 번역(`cisco_aggregation.scan_report`): 필수 LLM·YARA, 모든 도구에서 끝난 분석기만 완료, 준비 실패·도구별 실패 진단, 등록 지문 집합, SDK severity 그대로. `ServerRegistry.record_scan`으로 저장. 번역 규칙은 B 동의 대기 · [기록](archive/c/C4.9-scan-report-translation.md)
 - [x] C4.10 Registry 등록·지문 영속화와 변경 시 승인 무효화(`services/registry.ServerRegistry`): B `RegistryStore` 위 동기 조회 캐시, 시작 때 복원, 연결 직후 `observe`가 정의 변경을 기록해 ACTIVE→PENDING과 바뀐 도구별 승인 무효화, 기록 실패 서버는 이번 실행 PENDING. A 연결(`assemble_guard`의 `observe`·`load`)과 설정에서 도구 종류를 바꾸는 경로는 A·B와 정함 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.11 신규 서버 PENDING(`register`: 설정 레코드 + 실제 목록, 설정에 없는 도구는 `OTHER`), 사용자 확인 후 ACTIVE(`activate`: 캐시의 등록 지문으로) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.12 정의 전체로 도구 지문 계산(`services/registry.listing_fingerprints`): FP-01 입력(A transport의 SDK 재구성 dict)에 B `tool_fingerprint`(JCS), 미완료·이름 없음·중복·JCS 실패면 지문 없음. 실제 SDK 파싱 경로로 예시 정의 7개의 지문을 고정해 SDK·변환·JCS 변화를 잡음 · [기록](archive/c/C4.12-tool-fingerprints.md)
 - [ ] C4.13 경고 데이터를 등록 화면과 도구 호출 승인 창에 제공 · [결정](contracts.md#사용자-결정) — 막힘: A 화면
 - [ ] C4.14 Scanner 검사 예산 구현(동시성·작업 10분·YARA native 5초·대기열 8건) · [결정](contracts.md#사용자-결정)
-- [ ] C4.15 LLM 자체 평가(`overall_risk`)를 참고 필드로 보존. 판정·정렬에 쓰지 않음 · [결정](contracts.md#사용자-결정) — 필드 형식은 C4.9
+- [x] C4.15 LLM 자체 평가(`overall_risk`)를 참고 필드로 보존. 판정·정렬에 쓰지 않음. SDK가 버리는 값을 `raw_response`에서 꺼내 64자로 무해화 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.9-scan-report-translation.md)
 - [ ] C4.16 LLM 경고의 반복 실행 변동 측정(144개 × 여러 회)
-- [ ] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록
+- [x] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록(`defang_scanner_text`) · [기록](archive/c/C4.9-scan-report-translation.md)
 - [x] C4.18 등록 때 서버 ID의 `__`·끝 `_` 거부: B `valid_server_id`를 그대로 쓰고 등록 화면은 bridge가 넘기는 같은 검사 결과를 씀. Registry `register`·`observe`가 설정 검증과 별도로 다시 검사 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.19 Registry 쓰기 결과를 모를 때 닫기(#46 B 리뷰): 제어 쓰기가 실패하거나 커밋 뒤 취소되면 그 서버의 ACTIVE를 PENDING으로 보고, 다음 제어 연산·`refresh`가 DB 행을 다시 읽어 맞춤. `observe` 취소는 기록 실패와 같이 이번 실행 PENDING. 실제 저장소 재현은 B6.13 뒤 · [기록](archive/c/C4.19-registry-unknown-write.md)
 
