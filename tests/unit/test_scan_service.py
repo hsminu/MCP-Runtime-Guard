@@ -5,10 +5,13 @@
 """
 
 import asyncio
+import functools
 import json
 import re
+import sys
 import threading
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +24,7 @@ from guard_app.domain.enums import RegStatus, ScanErrorCode
 from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.reasons import Reason
+from guard_app.security import secrets
 from guard_app.services import scanner as scanner_module
 from guard_app.services.catalog import ServerSettings
 from guard_app.services.registry import RegistryError, ServerRegistry
@@ -481,3 +485,79 @@ def test_defaults_are_the_decided_values():
     assert scanner_module.SCAN_QUEUE_LIMIT == 8
     assert scanner_module.SCAN_JOB_SECONDS == 600.0
     assert scanner_module.SCAN_LLM_CONCURRENCY == 4
+
+
+# C2.20: 제품 연결은 검사를 열 때마다 자격증명 관리자에서 키를 읽는다
+
+
+class _ConnectRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, *, environ, yara_executor):
+        self.calls.append((dict(environ), yara_executor))
+
+        @asynccontextmanager
+        async def opened():
+            yield InternalMetadataScanner(None, None)
+
+        return opened()
+
+
+def test_product_connector_reads_the_store_on_every_connect(monkeypatch):
+    recorder = _ConnectRecorder()
+    stored = iter([{}, {"OPENAI_API_KEY": "sk-proj-TESTONLY0123456789abcdef"}])
+    monkeypatch.setattr(scanner_module, "connect_metadata_scanner", recorder)
+    monkeypatch.setattr(scanner_module, "scanner_key_environ", lambda: next(stored))
+    monkeypatch.setenv("OPENAI_API_KEY", "PROCESS-ENV-KEY-NOT-USED")
+    connect = scanner_module.cisco_connector()
+    worker = object()
+    connect(worker)
+    connect(worker)
+    assert recorder.calls == [
+        ({}, worker),
+        ({"OPENAI_API_KEY": "sk-proj-TESTONLY0123456789abcdef"}, worker),
+    ]
+
+
+def test_connector_takes_a_fixed_mapping_or_a_reader(monkeypatch):
+    recorder = _ConnectRecorder()
+    monkeypatch.setattr(scanner_module, "connect_metadata_scanner", recorder)
+    fixed = {"OPENAI_API_KEY": "FIXED"}
+    connect = scanner_module.cisco_connector(fixed)
+    fixed["OPENAI_API_KEY"] = "CHANGED-AFTER"
+    connect(None)
+    reads = []
+    scanner_module.cisco_connector(lambda: reads.append(1) or {})(None)
+    assert [call[0] for call in recorder.calls] == [{"OPENAI_API_KEY": "FIXED"}, {}]
+    assert reads == [1]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="자격증명 관리자는 Windows 전용이다")
+def test_key_saved_on_the_screen_reaches_the_next_connect(monkeypatch):
+    """A 화면의 `save_scanner_key`가 쓰는 저장소를 실제로 읽는다. 테스트 전용 대상만 쓴다."""
+    target = f"MCPRuntimeGuard/test-{uuid.uuid4().hex}"
+    recorder = _ConnectRecorder()
+    monkeypatch.setattr(scanner_module, "connect_metadata_scanner", recorder)
+    monkeypatch.setattr(
+        scanner_module,
+        "scanner_key_environ",
+        functools.partial(secrets.scanner_key_environ, target=target),
+    )
+    connect = scanner_module.cisco_connector()
+    try:
+        try:
+            secrets.store_scanner_key("sk-proj-TESTONLY0123456789abcdef", target=target)
+        except secrets.ScannerKeyError as error:
+            if str(error) == "SCAN_KEY_STORE_UNAVAILABLE":
+                pytest.skip("이 환경에는 자격증명 관리자 로그온 세션이 없다")
+            raise
+        connect(None)
+        secrets.delete_scanner_key(target=target)
+        connect(None)
+    finally:
+        secrets.delete_scanner_key(target=target)
+    assert [call[0] for call in recorder.calls] == [
+        {"OPENAI_API_KEY": "sk-proj-TESTONLY0123456789abcdef"},
+        {},
+    ]
