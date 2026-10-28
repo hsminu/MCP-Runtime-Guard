@@ -16,6 +16,7 @@
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 | bridge 및 목록 알림 변경 리뷰 | C·B | A115, A140 |
 | 실제 writer의 종료·정지 경합 재현 조건 ([#58 회신](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6473123051)) | B | A134 |
+| Codex 로그인 URL 검증·기본 브라우저 열기 입구와 독립 검증 | C | A109 제품 브라우저 로그인 |
 
 **A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49, #63·#64·#67 병합됨), C2.10 키 입력 화면 연결(#60, A 브랜치에 병합됨), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드는 #58로 병합됨), EXE-01 지문 확인 화면(A128), C6.20 설치판 리소스 위치(패키징).
 
@@ -83,7 +84,8 @@
 - [ ] A19·A20 실제 codex.exe 세션 — C 쪽 막힘은 풀림(L2 C6.14 #41, 설정 파일 CFG-01 #44·A129, CODEX_HOME `secrets` 허용 #35). 남은 것: A `run_l2` 연결, 세션 관리자 공통 계약 합의(막힌 것 표)
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
 - [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
-- [ ] A109 기기 코드 로그인이 막힌 계정 처리(화면 안내 또는 브라우저 로그인 지원) — 막힘: 사용자 결정(A108 발견 2)
+- [x] A109 기기 코드 제한 안내·브라우저 로그인 A 연결부·취소/시간초과·중복 요청 처리 · [기록](archive/a/A109-browser-login-wiring.md)
+- [ ] A109 제품 브라우저 로그인 활성화·실제 계정 확인 — 막힘: C URL 검증·브라우저 열기 입구(이번 작업은 사용자 지정으로 A 연결만 구현)
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
 - [x] A58 JSON-RPC 전송 마감·처리기 안 close 교착·종료 사유 보정 · [기록](archive/a/A58-jsonrpc-send-and-close.md)
