@@ -21,6 +21,7 @@ from guard_app.domain.models import Boundary, PolicyDecision, ResolvedRequest, T
 from guard_app.domain.reasons import Reason
 from guard_app.security.digest import json_digest
 from guard_app.storage import SQLiteStore
+from tests.unit.sqlite_writer_test_support import writer_connection
 
 NOW = datetime(2026, 10, 13, 12, 34, 56, 123456, tzinfo=UTC)
 LATER = NOW + timedelta(seconds=1)
@@ -142,7 +143,7 @@ def reserve(store: SQLiteStore, request_id: str = "request-1", at: datetime = LA
 
 
 def snapshot(store: SQLiteStore) -> dict[str, list[tuple[object, ...]]]:
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     queries = {
         "tasks": "SELECT * FROM tasks ORDER BY 1",
         "escalations": "SELECT * FROM escalations ORDER BY 1",
@@ -165,7 +166,7 @@ def assert_sanitized(error: StoreError) -> None:
 
 
 def audit_failure(store: SQLiteStore) -> None:
-    store._owned_connection().execute("""CREATE TRIGGER fail_audit BEFORE INSERT ON audit_events
+    writer_connection(store).execute("""CREATE TRIGGER fail_audit BEFORE INSERT ON audit_events
         BEGIN SELECT RAISE(ABORT, 'TEST_SECRET_audit'); END""")
 
 
@@ -184,7 +185,7 @@ def test_allowed_transition_preserves_security_state_and_has_atomic_audit(
             update={"status": after, "row_revision": 12, "security_version": 7 + increment}
         )
         assert asyncio.run(instance.load_task("task-1")) == result
-        rows = instance._owned_connection().execute("SELECT * FROM audit_events").fetchall()
+        rows = writer_connection(instance).execute("SELECT * FROM audit_events").fetchall()
         assert len(rows) == 1
         assert rows[0]["event_id"] == "event-1"
         assert rows[0]["task_id"] == "task-1"
@@ -202,7 +203,7 @@ def test_allowed_transition_preserves_security_state_and_has_atomic_audit(
         assert rows[0]["at_utc"] == NOW.isoformat(timespec="microseconds")
         assert rows[0]["detail"] is None
         assert rows[0]["label"] is None
-        assert not instance._owned_connection().in_transaction
+        assert not writer_connection(instance).in_transaction
 
 
 @pytest.mark.parametrize(
@@ -294,8 +295,8 @@ def test_status_change_audit_abort_rolls_back_and_can_retry(store: SQLiteStore) 
         change(store, TaskStatus.HALTED)
     assert_sanitized(error.value)
     assert snapshot(store) == before
-    assert not store._owned_connection().in_transaction
-    store._owned_connection().execute("DROP TRIGGER fail_audit")
+    assert not writer_connection(store).in_transaction
+    writer_connection(store).execute("DROP TRIGGER fail_audit")
     assert change(store, TaskStatus.HALTED).status is TaskStatus.HALTED
 
 
@@ -304,7 +305,7 @@ def test_decision_records_only_metadata_and_audit(store: SQLiteStore, choice: De
     req = request()
     result = decision(decision=choice, reasons=(Reason.OK, Reason.AGT_DENY))
     record(store, req, result)
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     row = connection.execute("SELECT * FROM requests").fetchone()
     assert row["request_id"] == req.request_id
     assert row["task_id"] == req.task_id
@@ -429,7 +430,7 @@ def test_duplicate_request_or_task_sequence_does_not_overwrite(
     assert snapshot(store) == before
     reserve(store)
     assert (
-        store._owned_connection().execute("SELECT status FROM requests").fetchone()[0]
+        writer_connection(store).execute("SELECT status FROM requests").fetchone()[0]
         == "DISPATCHING"
     )
 
@@ -442,7 +443,7 @@ def test_sequence_is_scoped_to_task_and_other_task_is_unchanged(store: SQLiteSto
     reserve(store)
     assert asyncio.run(store.load_task("other")) == other
     rows = (
-        store._owned_connection()
+        writer_connection(store)
         .execute("SELECT request_id,status FROM requests ORDER BY request_id")
         .fetchall()
     )
@@ -459,7 +460,7 @@ def test_decision_audit_failure_rolls_back_request_and_can_retry(store: SQLiteSt
         record(store)
     assert_sanitized(error.value)
     assert snapshot(store) == before
-    store._owned_connection().execute("DROP TRIGGER fail_audit")
+    writer_connection(store).execute("DROP TRIGGER fail_audit")
     record(store)
     reserve(store)
 
@@ -467,7 +468,7 @@ def test_decision_audit_failure_rolls_back_request_and_can_retry(store: SQLiteSt
 def test_reservation_is_atomic_single_use_and_does_not_change_task(store: SQLiteStore) -> None:
     record(store)
     reserve(store)
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     row = connection.execute("SELECT * FROM requests").fetchone()
     assert row["status"] == "DISPATCHING"
     assert row["dispatch_reserved_at_utc"] == LATER.isoformat(timespec="microseconds")
@@ -509,7 +510,7 @@ def test_ask_and_deny_cannot_use_allow_reservation(store: SQLiteStore, choice: D
 )
 def test_nondecided_requests_cannot_reserve(store: SQLiteStore, status: str) -> None:
     record(store)
-    store._owned_connection().execute("UPDATE requests SET status=?", (status,))
+    writer_connection(store).execute("UPDATE requests SET status=?", (status,))
     before = snapshot(store)
     with pytest.raises(StoreError):
         reserve(store)
@@ -524,8 +525,8 @@ def test_reservation_audit_abort_rolls_back_and_can_retry(store: SQLiteStore) ->
         reserve(store)
     assert_sanitized(error.value)
     assert snapshot(store) == before
-    assert not store._owned_connection().in_transaction
-    store._owned_connection().execute("DROP TRIGGER fail_audit")
+    assert not writer_connection(store).in_transaction
+    writer_connection(store).execute("DROP TRIGGER fail_audit")
     reserve(store)
 
 
@@ -558,7 +559,7 @@ def test_any_task_context_change_blocks_old_allow(
         "security_version": "UPDATE tasks SET security_version=? WHERE task_id=?",
         "row_revision": "UPDATE tasks SET row_revision=? WHERE task_id=?",
     }
-    store._owned_connection().execute(queries[field], (value, "task-1"))
+    writer_connection(store).execute(queries[field], (value, "task-1"))
     before = snapshot(store)
     with pytest.raises(StoreError) as error:
         reserve(store)
@@ -609,7 +610,7 @@ def test_request_metadata_corruption_cannot_borrow_reservation_context(
             "UPDATE requests SET dispatch_reserved_at_utc=? WHERE request_id=?"
         ),
     }
-    store._owned_connection().execute(queries[field], (value, "request-1"))
+    writer_connection(store).execute(queries[field], (value, "request-1"))
     before = snapshot(store)
     with pytest.raises(StoreError) as error:
         reserve(store)
@@ -743,4 +744,4 @@ def test_sql_metacharacters_are_bound_and_secret_arguments_never_persist(
     assert asyncio.run(store.load_task(identifier)) == original
     assert asyncio.run(store.load_task("task-1")) == task()
     assert "TEST_SECRET" not in repr(snapshot(store))
-    assert store._owned_connection().execute("SELECT count(*) FROM tasks").fetchone()[0] == 2
+    assert writer_connection(store).execute("SELECT count(*) FROM tasks").fetchone()[0] == 2

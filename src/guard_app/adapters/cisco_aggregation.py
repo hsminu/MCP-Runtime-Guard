@@ -19,6 +19,7 @@ import asyncio
 import json
 import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from concurrent.futures import Executor
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -26,7 +27,7 @@ from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from time import monotonic
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import httpx
 from pydantic import ValidationError
@@ -51,6 +52,8 @@ DEFAULT_MAX_DEFINITION_BYTES = 65_536
 # ScanReport.scanner_version. pyproject의 고정 버전과 같다(테스트가 설치본과 대조한다).
 SCANNER_VERSION = "cisco-ai-mcp-scanner-4.8.6"
 _RISK_MAX_CHARS = 64
+# 도구별 YARA 검사 상한(2026-10-15 운영 상한 결정). yara-python은 초 단위 정수를 받는다.
+YARA_TIMEOUT_S = 5
 # Finding.code 형식(#57 B 리뷰). LLM 분석기에서는 모델 응답에서 온 값일 수 있다.
 _FINDING_CODE = re.compile(r"[A-Za-z0-9_ ]{1,64}")
 UNRECOGNIZED_FINDING_CODE = "SCAN_CODE_UNRECOGNIZED"
@@ -260,8 +263,40 @@ def _completion(results: Sequence[AnalyzerResult]) -> Completion:
     return "failed"
 
 
+class _ToolRun:
+    """도구 하나의 분석 진행. 작업 시간이 끝나도 이미 끝난 분석기 결과는 남긴다."""
+
+    def __init__(self, index: int, snapshot: PreparedToolDefinition) -> None:
+        self.index = index
+        self.snapshot = snapshot
+        self.started = False
+        self.done: dict[AnalyzerName, AnalyzerResult] = {}
+
+    def result(self) -> ToolScanResult:
+        # 시간 상한으로 끊긴 분석기는 시작했으면 실패, 시작 전이면 미실행이다.
+        analyzers = tuple(
+            self.done.get(name)
+            or AnalyzerResult(
+                name, "failed" if self.started else "not_run", None, "SCAN_INCOMPLETE", 0.0
+            )
+            for name in _NAMES
+        )
+        value = cast(dict[str, object], json.loads(self.snapshot.definition_json))
+        return ToolScanResult(
+            self.index,
+            cast(str, value["name"]),
+            len(self.snapshot.definition_json.encode("utf-8")),
+            _completion(analyzers),
+            None,
+            analyzers,
+        )
+
+
 class InternalMetadataScanner:
-    """도구별 분석기는 병행하고 도구 사이는 순차 실행한다. 전역 큐는 별도다."""
+    """도구별 분석기는 병행하고, 도구 사이는 `tool_concurrency`개까지 동시에 실행한다(기본 1).
+
+    앱 전체 예산(LLM 동시 수·YARA worker·작업 시간)은 호출자(`ScanService`, C4.14)가 정한다.
+    """
 
     def __init__(
         self,
@@ -281,9 +316,20 @@ class InternalMetadataScanner:
                 self._setup_errors[name] = code if code in _ERROR_CODES else f"SCAN_{name}_FAILED"
 
     async def scan(
-        self, server_id: str, definitions: Sequence[ToolDefinition]
+        self,
+        server_id: str,
+        definitions: Sequence[ToolDefinition],
+        *,
+        deadline: float | None = None,
+        tool_concurrency: int = 1,
+        llm_slots: asyncio.Semaphore | None = None,
     ) -> MetadataScanResult:
-        """await 전에 전체 입력을 고정한다. 서버 ID는 신뢰한 호출자가 제공한다."""
+        """await 전에 전체 입력을 고정한다. 서버 ID는 신뢰한 호출자가 제공한다.
+
+        `deadline`은 이벤트 루프 시각(`loop.time()`)이다. 그때까지 끝나지 않은 분석기는 취소하고
+        `SCAN_INCOMPLETE`로 남기며, 끝난 결과는 그대로 돌려준다. `llm_slots`는 앱 전체 LLM 동시
+        호출 예산이다. 분석기의 예상 밖 예외는 그 도구의 다른 분석기를 기다린 뒤 올린다.
+        """
         if type(server_id) is not str or not server_id.strip():
             raise ScannerAggregationError("SCAN_SERVER_ID_INVALID")
         try:
@@ -292,6 +338,13 @@ class InternalMetadataScanner:
             raise ScannerAggregationError("SCAN_SERVER_ID_INVALID") from None
         if not isinstance(definitions, Sequence) or isinstance(definitions, (str, bytes)):
             raise ScannerAggregationError("SCAN_METADATA_BATCH_INVALID")
+        if (
+            type(tool_concurrency) is not int
+            or tool_concurrency < 1
+            or (llm_slots is not None and not isinstance(llm_slots, asyncio.Semaphore))
+            or (deadline is not None and type(deadline) is not float)
+        ):
+            raise ScannerAggregationError("SCAN_BUDGET_INVALID")
         started = monotonic()
         snapshots: list[PreparedToolDefinition | DefinitionInputError] = []
         for definition in tuple(definitions):
@@ -303,55 +356,87 @@ class InternalMetadataScanner:
                 )
             except DefinitionInputError as error:
                 snapshots.append(error)
-        tools: list[ToolScanResult] = []
+        tools: dict[int, ToolScanResult] = {}
+        runs: list[_ToolRun] = []
         for index, snapshot in enumerate(snapshots):
             if isinstance(snapshot, DefinitionInputError):
                 code = str(snapshot)
                 if code not in {"SCAN_METADATA_INVALID", "SCAN_METADATA_TOO_LARGE"}:
                     code = "SCAN_METADATA_INVALID"
-                tools.append(
-                    ToolScanResult(
-                        index,
-                        None,
-                        None,
-                        "not_scanned",
-                        code,
-                        tuple(AnalyzerResult(name, "not_run", None, None, 0.0) for name in _NAMES),
-                    )
+                tools[index] = ToolScanResult(
+                    index,
+                    None,
+                    None,
+                    "not_scanned",
+                    code,
+                    tuple(AnalyzerResult(name, "not_run", None, None, 0.0) for name in _NAMES),
                 )
                 continue
-            tasks = [asyncio.create_task(self._analyze(name, snapshot)) for name in _NAMES]
+            runs.append(_ToolRun(index, snapshot))
+        slots = asyncio.Semaphore(tool_concurrency)
+        tasks = [asyncio.create_task(self._run_tool(run, slots, llm_slots)) for run in runs]
+        try:
+            if tasks:
+                timeout = None
+                if deadline is not None:
+                    timeout = max(0.0, deadline - asyncio.get_running_loop().time())
+                await asyncio.wait(tasks, timeout=timeout, return_when=asyncio.FIRST_EXCEPTION)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)  # 취소·예외 회수만 수행
+        for task in tasks:
+            if not task.cancelled():
+                task.result()  # 예상 밖 예외는 그대로 올린다
+        tools.update((run.index, run.result()) for run in runs)
+        ordered = tuple(tools[index] for index in range(len(snapshots)))
+        return self._aggregate(server_id, ordered, monotonic() - started)
+
+    async def _run_tool(
+        self,
+        run: _ToolRun,
+        slots: asyncio.Semaphore,
+        llm_slots: asyncio.Semaphore | None,
+    ) -> None:
+        async with slots:
+            run.started = True
+            tasks = [
+                asyncio.create_task(self._analyze_into(run, name, llm_slots)) for name in _NAMES
+            ]
             try:
                 # 예기치 않은 프로그래밍 오류도 다른 분석기의 실행을 끊지 않는다.
                 await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
-                analyzers = tuple(task.result() for task in tasks)
             finally:
                 for task in tasks:
                     if not task.done():
                         task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)  # 취소·예외 회수만 수행
-            value = cast(dict[str, object], json.loads(snapshot.definition_json))
-            tools.append(
-                ToolScanResult(
-                    index,
-                    cast(str, value["name"]),
-                    len(snapshot.definition_json.encode("utf-8")),
-                    _completion(analyzers),
-                    None,
-                    analyzers,
-                )
-            )
-        return self._aggregate(server_id, tuple(tools), monotonic() - started)
+                await asyncio.gather(*tasks, return_exceptions=True)
+            for task in tasks:
+                task.result()
+
+    async def _analyze_into(
+        self, run: _ToolRun, name: AnalyzerName, llm_slots: asyncio.Semaphore | None
+    ) -> None:
+        run.done[name] = await self._analyze(name, run.snapshot, llm_slots)
 
     async def _analyze(
-        self, name: AnalyzerName, snapshot: PreparedToolDefinition
+        self,
+        name: AnalyzerName,
+        snapshot: PreparedToolDefinition,
+        llm_slots: asyncio.Semaphore | None = None,
     ) -> AnalyzerResult:
         provider = self._providers[name]
         if provider is None:
             return AnalyzerResult(name, "failed", None, self._setup_errors[name], 0.0)
         started = monotonic()
         try:
-            findings, error_code = _copy_findings(await provider.analyze_prepared(snapshot), name)
+            if name == "LLM" and llm_slots is not None:
+                async with llm_slots:
+                    raw = await provider.analyze_prepared(snapshot)
+            else:
+                raw = await provider.analyze_prepared(snapshot)
+            findings, error_code = _copy_findings(raw, name)
         except (ValueError, OSError) as error:
             findings, error_code = None, _error_code(error, name)
         return AnalyzerResult(
@@ -521,22 +606,45 @@ def _scan_code(code: str, name: AnalyzerName) -> ScanErrorCode:
         return ScanErrorCode(f"SCAN_{name}_FAILED")
 
 
+class _TimedRules:
+    """SDK 4.8.6 `YaraAnalyzer`는 `match`에 시간 제한을 넘기지 않는다. native 제한을 붙인다(C4.14).
+
+    yara-python의 `timeout`은 초 단위 정수이고, 넘으면 native `TimeoutError`를 낸다. 스레드를
+    강제로 끝낼 수는 없으므로 이 제한이 YARA 한 번의 최대 실행 시간이다.
+    """
+
+    def __init__(self, rules: Any, timeout_s: int) -> None:
+        self._rules = rules
+        self._timeout_s = timeout_s
+
+    def match(self, *args: object, **kwargs: object) -> object:
+        return self._rules.match(*args, **{**kwargs, "timeout": self._timeout_s})
+
+
 class _ThreadedYara:
-    """동기 native matcher가 LLM 이벤트 루프를 막지 않게 한다. 강제 종료는 별도다."""
+    """동기 native matcher가 LLM 이벤트 루프를 막지 않게 한다. 강제 종료는 native 제한이다.
+
+    `executor`가 있으면 그 작업자에서만 돈다. `ScanService`는 앱 전체 작업자 1개를 넘긴다.
+    """
 
     def __init__(
         self,
         adapter: CiscoMetadataAdapter[CiscoFinding],
         native_error: type[Exception],
         native_timeout: type[Exception],
+        executor: Executor | None = None,
     ) -> None:
         self._adapter = adapter
         self._native_error = native_error
         self._native_timeout = native_timeout
+        self._executor = executor
 
     async def analyze_prepared(self, prepared: PreparedToolDefinition) -> list[CiscoFinding]:
         try:
-            return await asyncio.to_thread(self._run, prepared)
+            if self._executor is None:
+                return await asyncio.to_thread(self._run, prepared)
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(self._executor, self._run, prepared)
         except self._native_timeout:
             raise ScannerAggregationError("SCAN_YARA_TIMEOUT") from None
         except self._native_error:
@@ -546,7 +654,11 @@ class _ThreadedYara:
         return asyncio.run(self._adapter.analyze_prepared(prepared))
 
 
-def _build_yara_provider(max_definition_bytes: int) -> PreparedAnalyzer:
+def _build_yara_provider(
+    max_definition_bytes: int,
+    executor: Executor | None = None,
+    timeout_s: int = YARA_TIMEOUT_S,
+) -> PreparedAnalyzer:
     try:
         installed = version("cisco-ai-mcp-scanner")
     except PackageNotFoundError:
@@ -565,11 +677,19 @@ def _build_yara_provider(max_definition_bytes: int) -> PreparedAnalyzer:
             analyzer = factory()
         except native_error:
             raise ScannerAggregationError("SCAN_YARA_SDK_SETUP_FAILED") from None
+        # SDK 4.8.6은 컴파일한 규칙을 `_rules`에 두고 시간 제한 없이 `match`를 부른다.
+        sdk = cast(Any, analyzer)
+        if not callable(getattr(sdk._rules, "match", None)):
+            raise ScannerAggregationError("SCAN_YARA_SDK_SETUP_FAILED")
+        sdk._rules = _TimedRules(sdk._rules, timeout_s)
         adapter = CiscoMetadataAdapter(
             analyzer, input_format="yara", max_definition_bytes=max_definition_bytes
         )
         return _ThreadedYara(
-            adapter, cast(type[Exception], native.Error), cast(type[Exception], native.TimeoutError)
+            adapter,
+            cast(type[Exception], native.Error),
+            cast(type[Exception], native.TimeoutError),
+            executor,
         )
     except (ImportError, OSError, ValueError, AttributeError):
         raise ScannerAggregationError("SCAN_YARA_SDK_SETUP_FAILED") from None
@@ -582,8 +702,14 @@ async def connect_metadata_scanner(
     max_definition_bytes: int = DEFAULT_MAX_DEFINITION_BYTES,
     environ: Mapping[str, str] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
+    yara_executor: Executor | None = None,
+    yara_timeout_s: int = YARA_TIMEOUT_S,
 ) -> AsyncIterator[InternalMetadataScanner]:
-    """기존 Luna low와 native YARA를 연결한다. 한쪽 준비 실패도 별도로 기록한다."""
+    """기존 Luna low와 native YARA를 연결한다. 한쪽 준비 실패도 별도로 기록한다.
+
+    `yara_executor`는 YARA를 돌릴 작업자(앱 전체 1개, C4.14), `yara_timeout_s`는 도구별 native
+    상한이다.
+    """
     _check_limit(max_definition_bytes)
     errors: dict[AnalyzerName, str] = {}
     async with AsyncExitStack() as stack:
@@ -602,7 +728,9 @@ async def connect_metadata_scanner(
             errors["LLM"] = _error_code(error, "LLM")
         try:
             # SDK import와 규칙 컴파일은 동기 작업이라 이벤트 루프 밖에서 한다.
-            yara = await asyncio.to_thread(_build_yara_provider, max_definition_bytes)
+            yara = await asyncio.to_thread(
+                _build_yara_provider, max_definition_bytes, yara_executor, yara_timeout_s
+            )
         except ScannerAggregationError as error:
             errors["YARA"] = _error_code(error, "YARA")
         yield InternalMetadataScanner(

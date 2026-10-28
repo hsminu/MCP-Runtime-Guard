@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import get_ident
+from threading import Lock, get_ident
 from types import TracebackType
 from typing import Literal
 
@@ -32,11 +32,13 @@ from guard_app.domain.contracts import (
 )
 from guard_app.domain.enums import (
     ApprovalStatus,
+    CommitOutcome,
     Decision,
     Label,
     RegStatus,
     RequestStatus,
     SessionEvent,
+    StorePhase,
     SystemStopReason,
     TaskStatus,
     ToolKind,
@@ -49,12 +51,14 @@ from guard_app.domain.models import (
     Escalation,
     PolicyDecision,
     ResolvedRequest,
+    StoreExecutionState,
     TaskState,
     ToolSpec,
 )
 from guard_app.domain.reasons import Reason
 from guard_app.security.digest import jcs_canonicalize, json_digest
 from guard_app.services.catalog_sources import valid_server_id
+from guard_app.storage.sqlite_writer import SQLiteWriter
 from guard_app.storage.startup_inventory import (
     _StartupInventory,
     _StoredApproval,
@@ -65,6 +69,45 @@ from guard_app.storage.startup_inventory import (
 SCHEMA_VERSION = 2
 APPLICATION_ID = 0x4D435047  # MCPG. 기존 다른 앱의 DB를 자동 채택하지 않는다.
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
+# 취소 경계는 각 공개 연산의 트랜잭션 유형으로 고정한다.
+_METHOD_WRITES = {
+    "list_registrations": False,
+    "load_registration": False,
+    "register_server": True,
+    "record_scan_report": True,
+    "activate_server": True,
+    "record_fingerprint_change": True,
+    "block_server": True,
+    "request_review": True,
+    "save_reviewed_descriptions": True,
+    "create_task": True,
+    "load_task": False,
+    "set_task_status": True,
+    "list_tasks": False,
+    "record_session_event": True,
+    "record_decision": True,
+    "reserve_dispatch": True,
+    "create_approval": True,
+    "get_approval": False,
+    "transition_approval": True,
+    "consume_and_reserve": True,
+    "commit_observation": True,
+    "commit_send_outcome": True,
+    "commit_request_failure": True,
+}
+# 전역 정지 뒤 새 실행 권한을 부여하는 작업만 차단한다.
+# transition_approval은 APPROVED일 때만 이 표에 따른 차단 대상이다.
+_EXECUTION_GATED_METHODS = frozenset(
+    {
+        "create_task",
+        "record_decision",
+        "reserve_dispatch",
+        "create_approval",
+        "consume_and_reserve",
+        "transition_approval",
+        "activate_server",
+    }
+)
 # B6-06 제안 한계: UTF-8 정규화 후 크기. 등록 UI/검사 결과의 메모리·DB 폭주 제한.
 _MAX_SCHEMA_BYTES = 256 * 1024
 _MAX_TOOLS_BYTES = 8 * 1024 * 1024
@@ -294,15 +337,22 @@ class _ConsumeConflictError(Exception):
 
 
 class SQLiteStore:
-    """동기 단일 writer. 현행 Store의 Task·판정·승인·응답 저장을 구현한다.
+    """전용 daemon writer로 Task·판정·승인·응답 저장을 구현한다.
 
     파일 DB만 지원한다. 새 DB는 v2, 정확한 v1은 Registry 두 테이블이 비었을 때만
     v2로 원자 이관한다. RegistryStore도 같은 연결과 트랜잭션 경계를 사용한다.
     같은 앱/버전의 정확한 스키마만 다시 열며 다른/미래 버전은 거부한다.
     busy_timeout_ms=1000은 조정 가능한 잠금 대기 후보이며 전체 I/O 상한이 아니다.
-    SQL/검증 오류는 원문·경로 없는 StoreError다. 신뢰 audit_id_factory는 ID 또는
-    원문 없는 StoreError를 공급한다. 임의 callback 예외의 일반 변환기는 아니다.
+    SQL/검증 오류와 writer 작업의 callback 실패는 원문·경로 없는 StoreError다.
+    신뢰 audit_id_factory는 ID 또는 원문 없는 StoreError를 공급한다.
     정상 상태 전이의 보안 버전 유지 등은 검토용 구현 선택이며 B6 합의는 별도다.
+    audit_id_factory와 utc_now는 writer 스레드에서 호출된다. 생성자는 연결과
+    이관 준비를 동기 대기하며 busy_timeout 및 실제 I/O에 따라 지연될 수 있다.
+    전역 정지 시 create_task·record_decision·reserve_dispatch·create_approval·
+    consume_and_reserve·APPROVED 승인 전이·activate_server는 거부한다. 읽기,
+    Task 상태·예약 후 결과 기록, 다른 승인 전이·세션 감사와 나머지 Registry
+    쓰기는 허용한다. 연결 자체가 폐기되면 읽기와 정리도 모두 거부한다.
+    READY의 run_id=None은 B6.8 회차 활성화 전 임시 상태다.
     """
 
     def __init__(
@@ -312,9 +362,23 @@ class SQLiteStore:
         busy_timeout_ms: int = 1000,
         audit_id_factory: Callable[[], str] | None = None,
         utc_now: Callable[[], datetime] | None = None,
+        max_pending_jobs: int = 1024,
     ) -> None:
         self._connection: sqlite3.Connection | None = None
-        self._owner_thread = get_ident()
+        self._connection_close_ok = True
+        self._state_lock = Lock()
+        self._connection_faulted = False
+        self._state = StoreExecutionState(
+            run_id=None,
+            phase=StorePhase.MIGRATING,
+            execution_enabled=False,
+            state_revision=0,
+            reason=None,
+            commit_outcome=None,
+            last_committed_run_state=None,
+            requires_restart=False,
+        )
+        self._owner_thread = 0
         self._audit_id_factory = audit_id_factory
         self._allowed_decisions: dict[str, _DecisionContext] = {}
         self._request_contexts: dict[str, _DecisionContext] = {}
@@ -328,8 +392,22 @@ class SQLiteStore:
             or not 0 <= busy_timeout_ms <= (1 << 31) - 1
             or (audit_id_factory is not None and not callable(audit_id_factory))
             or not callable(self._utc_now)
+            or type(max_pending_jobs) is not int
+            or max_pending_jobs < 1
         ):
             raise StoreError()
+        self._writer = SQLiteWriter(
+            lambda: self._open_connection(path, busy_timeout_ms),
+            self._discard_connection,
+            max_pending_jobs,
+        )
+        with self._state_lock:
+            self._state = self._state.model_copy(
+                update={"phase": StorePhase.READY, "execution_enabled": True}
+            )
+
+    def _open_connection(self, path: str | Path, busy_timeout_ms: int) -> None:
+        self._owner_thread = get_ident()
         failed = False
         try:
             self._connection = sqlite3.connect(
@@ -356,7 +434,6 @@ class SQLiteStore:
             raise StoreError()
 
     def __enter__(self) -> SQLiteStore:
-        self._owned_connection()
         return self
 
     def __exit__(
@@ -365,14 +442,128 @@ class SQLiteStore:
         exception: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        """동기 사용만 지원한다. 이벤트 루프 안에서 이 컨텍스트 관리자를 쓰지 않는다."""
         self.close()
+        self._writer.wait_closed_sync(5.0)
 
     def close(self) -> None:
-        """소유 스레드에서 연결을 닫는다. 반복 종료는 허용한다."""
-        if get_ident() != self._owner_thread:
-            raise StoreError()
-        if not self._discard_connection():
-            raise StoreError()
+        """접수를 즉시 닫고 writer가 진행 중 작업을 끝낸 후 연결을 닫는다."""
+        with self._state_lock:
+            reason = self._state.reason or Reason.INTERNAL_ERROR
+        # writer 큐의 시작 판정과 접수 종료를 같은 Condition으로 직렬화한다.
+        # 이미 dequeue된 작업은 완료하고, 대기 중 작업은 시작하지 않는다.
+        self._writer.close(reason)
+        with self._state_lock:
+            if self._state.phase is StorePhase.READY:
+                self._state = self._state.model_copy(
+                    update={
+                        "phase": StorePhase.CLOSED,
+                        "execution_enabled": False,
+                        "state_revision": self._state.state_revision + 1,
+                    }
+                )
+
+    def execution_state(self) -> StoreExecutionState:
+        """SQL 큐와 독립된 불변 실행 권한 snapshot을 즉시 반환한다."""
+        with self._state_lock:
+            return self._state
+
+    def halt_execution(self, reason: Reason) -> None:
+        """연결이 정상이면 정리 쓰기는 보존하고 새 실행 권한만 닫는다."""
+        if not isinstance(reason, Reason):
+            reason = Reason.INTERNAL_ERROR
+        with self._state_lock:
+            if self._state.phase in (StorePhase.FAULTED, StorePhase.CLOSED):
+                return
+            self._state = self._state.model_copy(
+                update={
+                    "phase": StorePhase.FAULTED,
+                    "execution_enabled": False,
+                    "state_revision": self._state.state_revision + 1,
+                    "reason": reason,
+                    "commit_outcome": None,
+                    "requires_restart": True,
+                }
+            )
+
+    def _connection_fault(self, outcome: CommitOutcome) -> None:
+        with self._state_lock:
+            previous = self._state
+            self._connection_faulted = True
+            if previous.phase is StorePhase.FAULTED and previous.commit_outcome is not None:
+                return
+            self._state = previous.model_copy(
+                update={
+                    "phase": StorePhase.FAULTED,
+                    "execution_enabled": False,
+                    "state_revision": previous.state_revision + int(previous.execution_enabled),
+                    "reason": previous.reason or Reason.INTERNAL_ERROR,
+                    "commit_outcome": outcome,
+                    "requires_restart": True,
+                }
+            )
+
+    def _check_execution_gate(self, *, grants_execution: bool, started: bool = False) -> None:
+        with self._state_lock:
+            state = self._state
+            if (
+                (state.phase is StorePhase.CLOSED and not started)
+                or self._connection_faulted
+                or (
+                    grants_execution
+                    and not state.execution_enabled
+                    and not (started and state.phase is StorePhase.CLOSED)
+                )
+            ):
+                raise StoreError(state.reason or Reason.INTERNAL_ERROR)
+
+    async def wait_closed(self, timeout: float) -> bool:  # noqa: ASYNC109
+        """writer의 연결 종료를 이벤트 루프를 막지 않고 기다린다."""
+        return await self._writer.wait_closed(timeout)
+
+    async def _submit[T](
+        self, operation: Callable[[], T], *, method: str, grants_execution: bool | None = None
+    ) -> T:
+        if grants_execution is None:
+            grants_execution = method in _EXECUTION_GATED_METHODS
+        self._check_execution_gate(grants_execution=grants_execution)
+
+        def execute() -> T:
+            # 큐에 든 뒤 전역 정지 또는 연결 폐기가 된 작업도 시작하지 않는다.
+            self._check_execution_gate(grants_execution=grants_execution, started=True)
+            return _store_result(operation)
+
+        return await self._writer.submit(execute, write=_METHOD_WRITES[method])
+
+    def _run_on_writer[T](self, operation: Callable[[sqlite3.Connection], T]) -> T:
+        """테스트 전용. 이벤트 루프 밖에서 writer 소유 연결을 사용한다."""
+        return self._writer.submit_sync(lambda: operation(self._owned_connection()))
+
+    async def _run_on_writer_async[T](
+        self, operation: Callable[[sqlite3.Connection], T], *, write: bool = False
+    ) -> T:
+        """테스트 전용 비동기 writer 작업."""
+        return await self._writer.submit(
+            lambda: operation(self._owned_connection()), write=write, test_raw_exceptions=True
+        )
+
+    def _test_context_snapshot(
+        self,
+    ) -> tuple[
+        dict[str, _DecisionContext],
+        dict[str, _DecisionContext],
+        dict[str, _ApprovalContext],
+        dict[str, _DispatchContext],
+    ]:
+        """테스트 전용. 연결을 사용하지 않고 writer 소유 맥락 사본만 반환한다."""
+        return self._writer.submit_sync(
+            lambda: (
+                self._allowed_decisions.copy(),
+                self._request_contexts.copy(),
+                self._approval_contexts.copy(),
+                self._dispatch_contexts.copy(),
+            )
+        )
 
     async def list_registrations(self) -> tuple[RegistryEntry, ...]:
         """하나의 읽기 TX 사본. DB ACTIVE는 연결 후 지문 대조를 대체하지 않는다."""
@@ -384,7 +575,7 @@ class SQLiteStore:
                 ).fetchall()
                 return tuple(self._require_registration_locked(connection, row[0]) for row in rows)
 
-        return _store_result(read)
+        return await self._submit(read, method="list_registrations")
 
     async def load_registration(self, server_id: str) -> RegistryEntry | None:
         def read() -> RegistryEntry | None:
@@ -392,7 +583,7 @@ class SQLiteStore:
             with self._transaction(write=False) as connection:
                 return self._load_registration_locked(connection, server_id)
 
-        return _store_result(read)
+        return await self._submit(read, method="load_registration")
 
     async def register_server(
         self, registration: RegisteredServer, *, at_utc: datetime
@@ -408,7 +599,7 @@ class SQLiteStore:
                     connection, valid, previous=None, timestamp=timestamp, event="REGISTERED"
                 )
 
-        return _store_result(write)
+        return await self._submit(write, method="register_server")
 
     async def record_scan_report(
         self, scan_id: str, report: ScanReport, *, at_utc: datetime
@@ -455,7 +646,7 @@ class SQLiteStore:
                     reviewed_by=current.reviewed_by,
                 )
 
-        return _store_result(write)
+        return await self._submit(write, method="record_scan_report")
 
     async def activate_server(
         self,
@@ -504,7 +695,7 @@ class SQLiteStore:
                     reviewed_by=reviewed_by,
                 )
 
-        return _store_result(write)
+        return await self._submit(write, method="activate_server")
 
     async def record_fingerprint_change(
         self, server_id: str, tools: tuple[ToolSpec, ...], *, at_utc: datetime
@@ -568,24 +759,26 @@ class SQLiteStore:
                 )
                 return FingerprintChange(entry=result, changed_tools=changed)
 
-        return _store_result(write)
+        return await self._submit(write, method="record_fingerprint_change")
 
     async def block_server(
         self, server_id: str, *, expected_row_revision: int, at_utc: datetime
     ) -> RegistryEntry:
-        return _store_result(
+        return await self._submit(
             lambda: self._registry_transition(
                 server_id, expected_row_revision, at_utc, RegStatus.BLOCKED
-            )
+            ),
+            method="block_server",
         )
 
     async def request_review(
         self, server_id: str, *, expected_row_revision: int, at_utc: datetime
     ) -> RegistryEntry:
-        return _store_result(
+        return await self._submit(
             lambda: self._registry_transition(
                 server_id, expected_row_revision, at_utc, RegStatus.PENDING
-            )
+            ),
+            method="request_review",
         )
 
     def _registry_transition(
@@ -657,7 +850,7 @@ class SQLiteStore:
                     last_scan_id=current.last_scan_id,
                 )
 
-        return _store_result(write)
+        return await self._submit(write, method="save_reviewed_descriptions")
 
     def _load_scan_locked(self, connection: sqlite3.Connection, scan_id: str) -> StoredScanReport:
         row = connection.execute(
@@ -854,7 +1047,7 @@ class SQLiteStore:
 
     async def create_task(self, state: TaskState, *, created_at_utc: datetime) -> None:
         """Task와 제공된 승격 근거를 함께 저장. 중복 ID는 기존 행을 변경하지 않는다."""
-        _store_result(lambda: self._create_task(state, created_at_utc))
+        await self._submit(lambda: self._create_task(state, created_at_utc), method="create_task")
 
     def _create_task(self, state: TaskState, created_at_utc: datetime) -> None:
         self._owned_connection()
@@ -905,7 +1098,7 @@ class SQLiteStore:
 
     async def load_task(self, task_id: str) -> TaskState:
         """같은 읽기 트랜잭션에서 Task와 승격 근거를 조회. 없는 Task는 STATE_MISSING."""
-        return _store_result(lambda: self._load_task(task_id))
+        return await self._submit(lambda: self._load_task(task_id), method="load_task")
 
     def _load_task(self, task_id: str) -> TaskState:
         self._owned_connection()
@@ -938,7 +1131,13 @@ class SQLiteStore:
         이 반환은 준비/복구 성공 ACK가 아니다. 순번 배정·schema 이관·상태/epoch
         변경과 앱 bootstrap 연결은 SEQ/REC 합의 후다. SQL은 지정 모듈에만 둔다.
         """
-        return _store_result(self._inspect_startup_rows)
+        self._check_execution_gate(grants_execution=False)
+
+        def read() -> _StartupInventory:
+            self._check_execution_gate(grants_execution=False, started=True)
+            return _store_result(self._inspect_startup_rows)
+
+        return self._writer.submit_sync(read)
 
     def _inspect_startup_rows(self) -> _StartupInventory:
         connection = self._owned_connection()
@@ -1036,8 +1235,9 @@ class SQLiteStore:
         reason: Reason,
     ) -> TaskState:
         """Task revision CAS와 허용 전이·감사를 원자 저장. 실제 변경에서만 버전 증가."""
-        return _store_result(
-            lambda: self._set_task_status(task_id, status, expected_row_revision, at_utc, reason)
+        return await self._submit(
+            lambda: self._set_task_status(task_id, status, expected_row_revision, at_utc, reason),
+            method="set_task_status",
         )
 
     def _set_task_status(
@@ -1107,7 +1307,7 @@ class SQLiteStore:
         Guard.apply_policy_change(task_source=store.list_tasks)로 연결한다.
         단일 읽기 트랜잭션에서 현재 Task를 복원하며 상태를 변경하지 않는다.
         """
-        return _store_result(self._list_tasks)
+        return await self._submit(self._list_tasks, method="list_tasks")
 
     async def record_session_event(
         self,
@@ -1118,7 +1318,10 @@ class SQLiteStore:
         reason: SystemStopReason | None = None,
     ) -> None:
         """STOP-01 합의 전 제안: 사실 감사 ACK. 기존 스키마·Store 포트는 유지한다."""
-        return _store_result(lambda: self._record_session_event(identity, event, at_utc, reason))
+        return await self._submit(
+            lambda: self._record_session_event(identity, event, at_utc, reason),
+            method="record_session_event",
+        )
 
     def _record_session_event(
         self,
@@ -1169,7 +1372,10 @@ class SQLiteStore:
         at_utc: datetime,
     ) -> None:
         """신뢰 현재 Task와 판정 버전을 검사하고 요청·판정 감사만 원자 저장한다."""
-        _store_result(lambda: self._record_decision(req, decision, arguments_digest, at_utc))
+        await self._submit(
+            lambda: self._record_decision(req, decision, arguments_digest, at_utc),
+            method="record_decision",
+        )
 
     def _record_decision(
         self,
@@ -1254,7 +1460,9 @@ class SQLiteStore:
 
     async def reserve_dispatch(self, request_id: str, *, now_utc: datetime) -> None:
         """현 인스턴스의 검증된 ALLOW만 예약. DB 예약은 실제 도구 전송이 아니다."""
-        _store_result(lambda: self._reserve_dispatch(request_id, now_utc))
+        await self._submit(
+            lambda: self._reserve_dispatch(request_id, now_utc), method="reserve_dispatch"
+        )
 
     def _reserve_dispatch(self, request_id: str, now_utc: datetime) -> None:
         _identifier(request_id)
@@ -1339,7 +1547,7 @@ class SQLiteStore:
 
     async def create_approval(self, approval: ApprovalRecord) -> None:
         """PENDING 승인·ASK 요청 WAITING·감사를 함께 저장. Task 전이는 기존 별도 호출."""
-        _store_result(lambda: self._create_approval(approval))
+        await self._submit(lambda: self._create_approval(approval), method="create_approval")
 
     def _create_approval(self, approval: ApprovalRecord) -> None:
         approval = ApprovalRecord.model_validate(approval)
@@ -1411,7 +1619,7 @@ class SQLiteStore:
 
     async def get_approval(self, approval_id: str) -> ApprovalRecord | None:
         """검증된 승인 메타데이터 조회. 재개방 조회는 실행 결속/원문을 복원하지 않는다."""
-        return _store_result(lambda: self._get_approval(approval_id))
+        return await self._submit(lambda: self._get_approval(approval_id), method="get_approval")
 
     def _get_approval(self, approval_id: str) -> ApprovalRecord | None:
         _identifier(approval_id)
@@ -1465,7 +1673,7 @@ class SQLiteStore:
         reason: Reason,
     ) -> ApprovalRecord:
         """8.2 단방향 전이·revision/주체·관계를 검사. 승인 종결은 Task를 재개하지 않는다."""
-        return _store_result(
+        return await self._submit(
             lambda: self._transition_approval(
                 approval_id,
                 status,
@@ -1473,7 +1681,9 @@ class SQLiteStore:
                 approver_id,
                 now_utc,
                 reason,
-            )
+            ),
+            method="transition_approval",
+            grants_execution=status is ApprovalStatus.APPROVED,
         )
 
     def _transition_approval(
@@ -1582,7 +1792,7 @@ class SQLiteStore:
         now_utc: datetime,
     ) -> bool:
         """승인·요청·Task·감사를 원자 소비/예약. 조건 충돌은 전체 rollback 뒤 정확한 False."""
-        return _store_result(
+        return await self._submit(
             lambda: self._consume_and_reserve(
                 approval_id,
                 snapshot_hash,
@@ -1590,7 +1800,8 @@ class SQLiteStore:
                 task_id,
                 expected_security_version,
                 now_utc,
-            )
+            ),
+            method="consume_and_reserve",
         )
 
     def _consume_and_reserve(
@@ -1707,7 +1918,9 @@ class SQLiteStore:
         at_utc: datetime,
     ) -> TaskState:
         """READ 병합·승격·감사·요청 상태를 원자 커밋. 본문은 입력/저장하지 않는다."""
-        return _store_result(lambda: self._commit_observation(req, label, at_utc))
+        return await self._submit(
+            lambda: self._commit_observation(req, label, at_utc), method="commit_observation"
+        )
 
     def _commit_observation(
         self, req: ResolvedRequest, label: Label | None, at_utc: datetime
@@ -1759,7 +1972,9 @@ class SQLiteStore:
 
     async def commit_send_outcome(self, req: ResolvedRequest, *, at_utc: datetime) -> None:
         """SEND 성공의 요청·감사만 커밋. Task 등급/상태/버전은 변경하지 않는다."""
-        _store_result(lambda: self._commit_send_outcome(req, at_utc))
+        await self._submit(
+            lambda: self._commit_send_outcome(req, at_utc), method="commit_send_outcome"
+        )
 
     def _commit_send_outcome(self, req: ResolvedRequest, at_utc: datetime) -> None:
         req = ResolvedRequest.model_validate(req)
@@ -1794,7 +2009,7 @@ class SQLiteStore:
         exception_type: str | None = None,
     ) -> TaskState:
         """예약 후 실패의 종류별 상태 쌍·원자 감사. 종결 Task 재개와 등급 하락 금지."""
-        return _store_result(
+        return await self._submit(
             lambda: self._commit_request_failure(
                 req,
                 request_status,
@@ -1802,7 +2017,8 @@ class SQLiteStore:
                 reason,
                 at_utc,
                 exception_type,
-            )
+            ),
+            method="commit_request_failure",
         )
 
     def _commit_request_failure(
@@ -2090,10 +2306,12 @@ class SQLiteStore:
         self._approval_contexts.clear()
         self._dispatch_contexts.clear()
         if connection is None:
-            return True
+            return self._connection_close_ok
         try:
             connection.close()
         except sqlite3.Error:
+            # 폐기 과정에서 연결 종료 실패를 잃으면 wait_closed가 거짓 ACK를 낸다.
+            self._connection_close_ok = False
             return False
         return True
 
@@ -2105,6 +2323,8 @@ class SQLiteStore:
         except sqlite3.Error:
             failed = True
         if failed:
+            # COMMIT을 아직 보내지 않았으므로 rollback 실패여도 해당 작업은 미커밋이다.
+            self._connection_fault(CommitOutcome.ROLLED_BACK)
             self._discard_connection()
             raise StoreError()
 
@@ -2140,11 +2360,17 @@ class SQLiteStore:
         except sqlite3.Error:
             failed = True
         if failed:
-            # ACK 불명에서는 연결을 폐기한다. 새 공유 오류/Guard 연결은 B6 합의 후다.
+            # COMMIT 뒤 이미 TX가 없으면 실제 커밋인지 ACK 유실인지 구분할 수 없다.
+            outcome = CommitOutcome.UNKNOWN
             try:
-                self._rollback(connection)
-            finally:
-                self._discard_connection()
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                    if not connection.in_transaction:
+                        outcome = CommitOutcome.ROLLED_BACK
+            except sqlite3.Error:
+                pass
+            self._connection_fault(outcome)
+            self._discard_connection()
             raise StoreError()
 
     def _migrate(self) -> None:

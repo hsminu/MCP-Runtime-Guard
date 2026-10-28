@@ -34,7 +34,7 @@
 - [ ] C2.7 ids: 암호학적 난수, 비밀값 누락은 전용 예외
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
 - [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
-- [ ] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용 · [결정](contracts.md#사용자-결정) — 막힘: A 입력 화면
+- [x] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용(`secrets.store_scanner_key`·`save_scanner_key`(A `KeySaver`)·`load_scanner_key`·`scanner_key_tail`·`delete_scanner_key`·`scanner_key_environ`). A 화면 연결과 #59 뒤 검사기 연결은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.10-scanner-key-store.md)
 - [x] C2.12 codex.exe 실행 launcher(`security/launcher.py`): 쓰기 금지 핸들로 실행마다 SHA-256 대조, 허용 목록 환경, `-c sqlite_home='<Task 폴더>'`, 멈춘 채 생성 후 Job Object 할당, stdin/stdout은 A `CodexPipes` 형식, stderr는 Task 폴더 격리 파일, `close()`로 종료 확인(#21 2번). stdio MCP 서버도 같은 `launch_process`를 쓴다(#21 5번) · [기록](archive/c/C2.12-codex-launcher.md)
 - [x] C2.13 앱 폴더 경로·권한(`security/paths.py`): `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 codex 설치·CODEX_HOME·Task 폴더·config에 사용자·SYSTEM만의 보호된 DACL, 단일 실행 잠금, Task 폴더 생성·삭제와 앱 시작 때 남은 폴더 삭제(#21 6번) · [기록](archive/c/C2.13-app-folders.md)
 - [ ] C2.11 제품용 읽기 전용 파일 MCP 서버(stdio): 폴더 목록·파일 읽기만, `safe_path`(C2.3) 사용, `structuredContent.resource_id` 보고, UTF-8 텍스트만 · [결정](contracts.md#사용자-결정)
@@ -44,6 +44,7 @@
 - [x] C2.17 제품 DB 위치 `data\guard.sqlite3`와 백업 폴더 `data\backups`(`AppPaths.db_file`·`backups`). `app.lock`과 앱 폴더 권한으로 DB 단일 소유(REC-01, #35 A·B 합의) · [기록](archive/c/C2.17-product-db-path.md)
 - [x] C2.18 #35 리뷰 후속: 재개 전 실행 이미지와 검사한 파일의 경로·파일 ID 대조(B launcher 1번), 이미 있는 루트의 DACL 재적용을 잠금 뒤로(B paths 2번, 결과 권한은 같음) · [기록](archive/c/C2.18-image-check-and-lock-order.md)
 - [x] C2.19 DB 입구(#37 REC-01·SEQ-03): `AppFolders.db_path()`(DB와 옆 파일이 링크·하드링크·넓은 권한이 아닌지 확인), `begin_backup(label)`→`BackupTarget.publish()`·`discard()`, 앱 시작 때 남은 `.partial` 삭제 · [기록](archive/c/C2.19-db-backup-entry.md)
+- [x] C2.20 저장한 Scanner 키를 검사에 연결: `cisco_connector()` 기본값이 검사마다 자격증명 관리자(`scanner_key_environ`)에서 키를 읽음(화면에서 바꾼 키가 다음 검사부터), `.env`·프로세스 환경은 읽지 않음. A 조립은 `ScanService(registry, cisco_connector())` · [기록](archive/c/C2.20-scanner-key-wiring.md)
 
 ## C3 · B SQLite 리뷰와 독립 검증
 
@@ -73,7 +74,7 @@
 - [x] C4.11 신규 서버 PENDING(`register`: 설정 레코드 + 실제 목록, 설정에 없는 도구는 `OTHER`), 사용자 확인 후 ACTIVE(`activate`: 캐시의 등록 지문으로) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.12 정의 전체로 도구 지문 계산(`services/registry.listing_fingerprints`): FP-01 입력(A transport의 SDK 재구성 dict)에 B `tool_fingerprint`(JCS), 미완료·이름 없음·중복·JCS 실패면 지문 없음. 실제 SDK 파싱 경로로 예시 정의 7개의 지문을 고정해 SDK·변환·JCS 변화를 잡음 · [기록](archive/c/C4.12-tool-fingerprints.md)
 - [ ] C4.13 경고 데이터를 등록 화면과 도구 호출 승인 창에 제공 · [결정](contracts.md#사용자-결정) — 막힘: A 화면
-- [ ] C4.14 Scanner 검사 예산 구현(동시성·작업 10분·YARA native 5초·대기열 8건) · [결정](contracts.md#사용자-결정)
+- [x] C4.14 Scanner 검사 예산 구현(`services/scanner.ScanService`): 서버 검사 1건·대기 8건(`SCAN_QUEUE_FULL`), 작업 10분(끝난 결과 보존·`SCAN_INCOMPLETE` 보고서), LLM 동시 4개(도구 병렬), YARA 전용 작업자 1개·native 5초(SDK `_rules` 감쌈), 취소는 기록 없음, 제품 키는 넘긴 값만(C2.10 전 YARA만) · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.14-scan-service-budget.md)
 - [x] C4.15 LLM 자체 평가(`overall_risk`)를 참고 필드로 보존. 판정·정렬에 쓰지 않음. SDK가 버리는 값을 `raw_response`에서 꺼내 64자로 무해화 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.9-scan-report-translation.md)
 - [ ] C4.16 LLM 경고의 반복 실행 변동 측정(144개 × 여러 회)
 - [x] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록(`defang_scanner_text`) · [기록](archive/c/C4.9-scan-report-translation.md)

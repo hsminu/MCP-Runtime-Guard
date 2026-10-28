@@ -135,3 +135,23 @@ class RequestStatus(StrEnum):
     FAILED = "FAILED"
     UNKNOWN_OUTCOME = "UNKNOWN_OUTCOME"
     DENIED = "DENIED"
+
+
+class StorePhase(StrEnum):
+    """Store 실행 권한의 수명 단계(SEQ-02)."""
+
+    CLOSED = "CLOSED"
+    MIGRATING = "MIGRATING"
+    RECOVERING = "RECOVERING"
+    RECOVERED = "RECOVERED"
+    READY = "READY"
+    FAULTED = "FAULTED"
+
+
+class CommitOutcome(StrEnum):
+    """Store 작업 커밋의 확인된 결과 또는 불명 상태."""
+
+    NOT_STARTED = "NOT_STARTED"
+    ROLLED_BACK = "ROLLED_BACK"
+    COMMITTED = "COMMITTED"
+    UNKNOWN = "UNKNOWN"

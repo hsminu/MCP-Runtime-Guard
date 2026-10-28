@@ -606,10 +606,10 @@ def test_real_sqlite_inventory_stops_idle_and_waiting_and_preserves_terminal_row
                     assert state.status is TaskStatus.HALTED
                 else:
                     assert state == before[state.task_id]
-            rows = (
-                store._owned_connection()
-                .execute("SELECT reason_code FROM audit_events WHERE event_type='HALTED'")
-                .fetchall()
+            rows = await store._run_on_writer_async(
+                lambda connection: connection.execute(
+                    "SELECT reason_code FROM audit_events WHERE event_type='HALTED'"
+                ).fetchall()
             )
             assert [row[0] for row in rows] == [Reason.POLICY_CHANGED.value] * 2
             assert not store._approval_contexts

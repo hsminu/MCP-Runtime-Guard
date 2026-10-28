@@ -20,6 +20,7 @@ from guard_app.domain.models import Escalation, TaskState
 from guard_app.domain.reasons import Reason
 from guard_app.storage import SQLiteStore
 from guard_app.storage.sqlite_store import APPLICATION_ID, SCHEMA_VERSION
+from tests.unit.sqlite_writer_test_support import writer_connection
 
 NOW = datetime(2026, 10, 13, 12, 34, 56, 123456, tzinfo=UTC)
 TABLES = {
@@ -72,7 +73,7 @@ def assert_sanitized(error: StoreError) -> None:
 @pytest.mark.parametrize("timeout", [0, 1, 17, 1000, 2500])
 def test_file_settings_are_verified(tmp_path: Path, timeout: int) -> None:
     with SQLiteStore(tmp_path / "guard.db", busy_timeout_ms=timeout) as instance:
-        connection = instance._owned_connection()
+        connection = writer_connection(instance)
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA synchronous").fetchone()[0] == 2
@@ -83,7 +84,7 @@ def test_file_settings_are_verified(tmp_path: Path, timeout: int) -> None:
 
 
 def test_initial_migration_creates_only_design_tables_and_tags(store: SQLiteStore) -> None:
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert connection.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
     rows = connection.execute("PRAGMA table_list").fetchall()
@@ -118,9 +119,9 @@ def test_task_roundtrip_preserves_status_versions_and_history(
     )
     create(store, original)
     assert load(store) == original
-    assert not store._owned_connection().in_transaction
+    assert not writer_connection(store).in_transaction
     assert (
-        store._owned_connection().execute("SELECT created_at_utc FROM tasks").fetchone()[0]
+        writer_connection(store).execute("SELECT created_at_utc FROM tasks").fetchone()[0]
         == "2026-10-13T12:34:56.123456+00:00"
     )
 
@@ -140,8 +141,7 @@ def test_reopen_is_idempotent_and_does_not_reset_task(tmp_path: Path) -> None:
                 create(instance, original)
             assert load(instance) == original
             assert (
-                instance._owned_connection().execute("SELECT count(*) FROM tasks").fetchone()[0]
-                == 1
+                writer_connection(instance).execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
             )
 
 
@@ -194,7 +194,8 @@ def test_unknown_database_is_not_adopted_or_overwritten(tmp_path: Path, statemen
 )
 def test_modified_current_schema_or_tag_is_rejected(tmp_path: Path, statement: str) -> None:
     path = tmp_path / "guard.db"
-    SQLiteStore(path).close()
+    with SQLiteStore(path):
+        pass
     with sqlite3.connect(path) as connection:
         connection.execute(statement)
     with pytest.raises(StoreError) as error:
@@ -231,8 +232,8 @@ def test_missing_task_is_state_missing_without_creating_default(store: SQLiteSto
         load(store, "absent")
     assert error.value.reason is Reason.STATE_MISSING
     assert_sanitized(error.value)
-    assert store._owned_connection().execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
-    assert not store._owned_connection().in_transaction
+    assert writer_connection(store).execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
+    assert not writer_connection(store).in_transaction
 
 
 def test_duplicate_id_keeps_original_state(store: SQLiteStore) -> None:
@@ -254,7 +255,7 @@ def test_identifiers_use_binding_and_tasks_remain_isolated(
     create(store, other)
     assert load(store, identifier) == original
     assert load(store, "other") == other
-    assert store._owned_connection().execute("SELECT count(*) FROM tasks").fetchone()[0] == 2
+    assert writer_connection(store).execute("SELECT count(*) FROM tasks").fetchone()[0] == 2
 
 
 @pytest.mark.parametrize(
@@ -264,7 +265,7 @@ def test_non_utc_creation_time_fails_before_writes(store: SQLiteStore, at: datet
     with pytest.raises(StoreError) as error:
         create(store, state(), at)
     assert_sanitized(error.value)
-    assert store._owned_connection().execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
+    assert writer_connection(store).execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize(
@@ -290,7 +291,7 @@ def test_constructed_invalid_model_cannot_bypass_validation(
     with pytest.raises(StoreError) as error:
         create(store, invalid)
     assert_sanitized(error.value)
-    assert store._owned_connection().execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
+    assert writer_connection(store).execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("identifier", ["", 1, True, "\ud800"])
@@ -317,7 +318,7 @@ def test_corrupt_rows_are_not_coerced_to_safe_defaults(
     store: SQLiteStore, statement: str, parameters: tuple[object, ...]
 ) -> None:
     create(store, state())
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     connection.execute("PRAGMA ignore_check_constraints=ON")
     connection.execute(statement, parameters)
     connection.execute("PRAGMA ignore_check_constraints=OFF")
@@ -328,7 +329,7 @@ def test_corrupt_rows_are_not_coerced_to_safe_defaults(
 
 
 def test_create_rolls_back_task_if_escalation_insert_fails(store: SQLiteStore) -> None:
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     connection.execute("""CREATE TRIGGER fail_history BEFORE INSERT ON escalations
         BEGIN SELECT RAISE(ABORT, 'TEST_SECRET_history'); END""")
     original = state(
@@ -352,7 +353,7 @@ def test_create_rolls_back_task_if_escalation_insert_fails(store: SQLiteStore) -
 
 def test_schema_enforces_foreign_key_unique_and_strict_types(store: SQLiteStore) -> None:
     create(store, state())
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     statement = """INSERT INTO requests (request_id,task_id,call_seq,server_id,tool_name,
         arguments_digest,status) VALUES (?,?,?,?,?,?,?)"""
     connection.execute(statement, ("r1", "task-1", 1, "s", "read", "a" * 64, "DECIDED"))
@@ -371,18 +372,17 @@ def test_schema_enforces_foreign_key_unique_and_strict_types(store: SQLiteStore)
         connection.execute(statement, ("a2", *parameters[1:]))
 
 
-def test_wrong_thread_is_rejected_and_owner_can_still_read(store: SQLiteStore) -> None:
+def test_public_operations_and_close_can_run_from_other_threads(store: SQLiteStore) -> None:
     create(store, state())
     with ThreadPoolExecutor(max_workers=1) as executor:
-        for operation in (
-            lambda: load(store),
-            lambda: create(store, state(task_id="other")),
-            store.close,
-        ):
-            with pytest.raises(StoreError) as error:
-                executor.submit(operation).result()
-            assert_sanitized(error.value)
-    assert load(store) == state()
+        assert executor.submit(load, store).result() == state()
+        executor.submit(create, store, state(task_id="other")).result()
+        assert executor.submit(load, store, "other").result() == state(task_id="other")
+        executor.submit(store.close).result()
+    assert asyncio.run(store.wait_closed(5.0))
+    with pytest.raises(StoreError) as error:
+        load(store)
+    assert_sanitized(error.value)
 
 
 def test_close_is_idempotent_and_operations_then_fail(store: SQLiteStore) -> None:
@@ -411,7 +411,7 @@ def test_busy_begin_creates_no_task_and_leaves_no_transaction(tmp_path: Path) ->
             with pytest.raises(StoreError) as error:
                 create(instance, state())
             assert_sanitized(error.value)
-            assert not instance._owned_connection().in_transaction
+            assert not writer_connection(instance).in_transaction
             assert other.execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
             other.execute("ROLLBACK")
         create(instance, state())
@@ -450,7 +450,7 @@ def test_invalid_history_cannot_be_saved(
     with pytest.raises(StoreError) as error:
         create(store, state(high_watermark=Label.INTERNAL, escalations=history))
     assert_sanitized(error.value)
-    assert store._owned_connection().execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
+    assert writer_connection(store).execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
 
 
 def test_corrupt_escalation_chain_is_not_loaded(store: SQLiteStore) -> None:
@@ -469,7 +469,7 @@ def test_corrupt_escalation_chain_is_not_loaded(store: SQLiteStore) -> None:
         ),
     )
     create(store, original)
-    store._owned_connection().execute("UPDATE escalations SET from_label=0 WHERE at_seq=2")
+    writer_connection(store).execute("UPDATE escalations SET from_label=0 WHERE at_seq=2")
     with pytest.raises(StoreError) as error:
         load(store)
     assert_sanitized(error.value)
@@ -483,7 +483,7 @@ def test_cancelled_before_start_creates_no_task(store: SQLiteStore) -> None:
             await pending
 
     asyncio.run(cancel_before_start())
-    assert store._owned_connection().execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
+    assert writer_connection(store).execute("SELECT count(*) FROM tasks").fetchone()[0] == 0
 
 
 class FaultConnection(sqlite3.Connection):
@@ -538,8 +538,8 @@ def test_lost_commit_ack_discards_connection_without_retry(
     inject_connection(monkeypatch)
     path = tmp_path / "guard.db"
     with SQLiteStore(path) as instance:
-        connection = instance._owned_connection()
-        assert isinstance(connection, FaultConnection)
+        connection = writer_connection(instance)
+        assert connection.is_instance(FaultConnection)
         connection.fail_commit = True
         with pytest.raises(StoreError) as error:
             create(instance, state())
@@ -548,7 +548,7 @@ def test_lost_commit_ack_discards_connection_without_retry(
             load(instance)
     with SQLiteStore(path) as instance:
         assert load(instance) == state()
-        assert instance._owned_connection().execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
+        assert writer_connection(instance).execute("SELECT count(*) FROM tasks").fetchone()[0] == 1
 
 
 def test_task_and_history_read_share_one_snapshot(
@@ -558,8 +558,8 @@ def test_task_and_history_read_share_one_snapshot(
     path = tmp_path / "guard.db"
     with SQLiteStore(path) as instance:
         create(instance, state())
-        connection = instance._owned_connection()
-        assert isinstance(connection, FaultConnection)
+        connection = writer_connection(instance)
+        assert connection.is_instance(FaultConnection)
 
         def change_from_other_writer() -> None:
             with sqlite3.connect(path) as other:

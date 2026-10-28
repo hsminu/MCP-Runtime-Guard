@@ -18,6 +18,7 @@ from guard_app.domain.errors import StoreError
 from guard_app.domain.models import Escalation
 from guard_app.storage import SQLiteStore
 from guard_app.storage.sqlite_store import APPLICATION_ID, SCHEMA_VERSION
+from tests.unit.sqlite_writer_test_support import writer_connection
 from tests.unit.test_sqlite_decisions import (
     LATER,
     NOW,
@@ -43,7 +44,7 @@ def store(tmp_path: Path) -> Iterator[SQLiteStore]:
 
 
 def database_facts(store: SQLiteStore) -> dict[str, object]:
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     tables = {
         "tasks": "SELECT * FROM tasks ORDER BY 1,2",
         "escalations": "SELECT * FROM escalations ORDER BY 1,2",
@@ -67,15 +68,7 @@ def database_facts(store: SQLiteStore) -> dict[str, object]:
 
 
 def memory_contexts(store: SQLiteStore) -> tuple[dict[str, object], ...]:
-    return tuple(
-        dict(value)
-        for value in (
-            store._allowed_decisions,
-            store._request_contexts,
-            store._approval_contexts,
-            store._dispatch_contexts,
-        )
-    )
+    return store._test_context_snapshot()
 
 
 def test_empty_inventory_leaves_unknown_maxima_and_does_not_choose_first_number(
@@ -87,7 +80,7 @@ def test_empty_inventory_leaves_unknown_maxima_and_does_not_choose_first_number(
         assert inventory.schema_version == SCHEMA_VERSION
         assert inventory.tasks == inventory.requests == inventory.approvals == ()
         assert database_facts(instance) == before
-        assert not instance._owned_connection().in_transaction
+        assert not writer_connection(instance).in_transaction
 
 
 def test_maxima_are_observed_per_task_without_allocation(tmp_path: Path) -> None:
@@ -180,7 +173,7 @@ def test_repeated_inventory_preserves_all_tables_schema_and_cached_contexts(
     store: SQLiteStore,
 ) -> None:
     pending(store)
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     connection.execute(
         "INSERT INTO registrations VALUES (?,?,?,?,?,?,?,?,?,?)",
         (
@@ -285,7 +278,7 @@ def test_inventory_records_are_frozen_and_repr_hides_persisted_identifiers(
 def test_split_or_crash_stages_are_observed_without_rewriting_or_recovery_choice(
     store: SQLiteStore, stage: str
 ) -> None:
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     if stage.startswith(("pending_", "approved_", "consumed_")):
         pending(store)
         if stage == "approved_waiting":
@@ -362,7 +355,7 @@ def test_corrupt_persisted_format_fails_with_fixed_error_without_mutation(
     store: SQLiteStore, table: str, column: str, value: object
 ) -> None:
     pending(store)
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     connection.execute("PRAGMA ignore_check_constraints=ON")
     queries = {
         ("tasks", "created_at_utc"): "UPDATE tasks SET created_at_utc=?",
@@ -406,7 +399,7 @@ def test_foreign_key_orphan_is_rejected_without_deleting_evidence(
     store: SQLiteStore, table: str
 ) -> None:
     pending(store)
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     connection.execute("PRAGMA foreign_keys=OFF")
     if table == "approvals":
         connection.execute("UPDATE approvals SET request_id='TEST_SECRET_missing'")
@@ -430,7 +423,7 @@ def test_foreign_key_orphan_is_rejected_without_deleting_evidence(
 def test_invalid_escalation_history_is_not_reinterpreted_as_recovery_evidence(
     store: SQLiteStore, corruption: str
 ) -> None:
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     connection.execute("PRAGMA ignore_check_constraints=ON")
     connection.execute("UPDATE tasks SET high_watermark=2,last_read_label=2")
     history: list[tuple[object, ...]] = [("task-1", 4, "source-1", 0, 1)]
@@ -465,7 +458,7 @@ def test_invalid_escalation_history_is_not_reinterpreted_as_recovery_evidence(
 def test_schema_tags_and_exact_current_structure_are_rechecked_and_never_repaired(
     store: SQLiteStore, change: str
 ) -> None:
-    store._owned_connection().execute(change)
+    writer_connection(store).execute(change)
     before = database_facts(store)
     with pytest.raises(StoreError) as error:
         store._inspect_startup()
@@ -475,7 +468,7 @@ def test_schema_tags_and_exact_current_structure_are_rechecked_and_never_repaire
 
 def test_existing_transaction_is_preserved_instead_of_rolled_back(store: SQLiteStore) -> None:
     before = database_facts(store)
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     connection.execute("BEGIN")
     connection.execute("UPDATE tasks SET row_revision=row_revision+1")
     outstanding = database_facts(store)
@@ -488,13 +481,11 @@ def test_existing_transaction_is_preserved_instead_of_rolled_back(store: SQLiteS
     assert database_facts(store) == before
 
 
-def test_wrong_thread_and_closed_connection_are_sanitized(store: SQLiteStore) -> None:
+def test_other_thread_can_inspect_and_closed_connection_is_sanitized(store: SQLiteStore) -> None:
     before = database_facts(store)
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(store._inspect_startup)
-        with pytest.raises(StoreError) as error:
-            future.result()
-    assert_sanitized(error.value)
+        assert future.result().tasks
     assert database_facts(store) == before
     store.close()
     with pytest.raises(StoreError) as error:
@@ -539,8 +530,8 @@ def test_sql_read_error_rolls_back_without_mutating_memory_or_saved_evidence(
     with SQLiteStore(tmp_path / "guard.db", audit_id_factory=lambda: "event-1") as instance:
         asyncio.run(instance.create_task(task(), created_at_utc=NOW))
         record(instance)
-        connection = instance._owned_connection()
-        assert isinstance(connection, InspectConnection)
+        connection = writer_connection(instance)
+        assert connection.is_instance(InspectConnection)
         before, cached = database_facts(instance), memory_contexts(instance)
         connection.fail_requests = True
         with pytest.raises(StoreError) as error:
@@ -562,8 +553,8 @@ def test_uncertain_read_transaction_discards_context_without_granting_execution(
         asyncio.run(instance.create_task(task(), created_at_utc=NOW))
         record(instance)
         before = database_facts(instance)
-        connection = instance._owned_connection()
-        assert isinstance(connection, InspectConnection)
+        connection = writer_connection(instance)
+        assert connection.is_instance(InspectConnection)
         if fault == "commit_ack":
             connection.fail_commit = True
         else:
@@ -588,8 +579,8 @@ def test_tasks_requests_and_escalation_maxima_share_one_wal_snapshot(
     with SQLiteStore(path, audit_id_factory=lambda: "event-1") as instance:
         asyncio.run(instance.create_task(task(), created_at_utc=NOW))
         record(instance)
-        connection = instance._owned_connection()
-        assert isinstance(connection, InspectConnection)
+        connection = writer_connection(instance)
+        assert connection.is_instance(InspectConnection)
 
         def other_writer() -> None:
             with original_connect(path) as other:

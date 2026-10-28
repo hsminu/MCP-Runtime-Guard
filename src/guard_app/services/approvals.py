@@ -62,6 +62,8 @@ class ApprovalHost(Protocol):
 
     def policy_matches(self, state: TaskState) -> bool: ...
 
+    def policy_mismatch_reason(self) -> Reason: ...
+
     def effective_task_label(self, state: TaskState) -> Label: ...
 
     async def evaluate_request(
@@ -862,11 +864,10 @@ class ApprovalService:
             return self._denied(record, Reason.APPROVAL_STALE)
         state = await self._load_snapshot_task(snapshot)
         if not self._host.policy_matches(state):
-            await self._halt_snapshot_task(snapshot, Reason.POLICY_CHANGED)
-            await self._finish(
-                record, snapshot, self._invalid_status(record), Reason.POLICY_CHANGED
-            )
-            return self._denied(record, Reason.POLICY_CHANGED)
+            reason = self._host.policy_mismatch_reason()
+            await self._halt_snapshot_task(snapshot, reason)
+            await self._finish(record, snapshot, self._invalid_status(record), reason)
+            return self._denied(record, reason)
         if not self._task_matches(snapshot, state):
             await self._finish(
                 record, snapshot, self._invalid_status(record), Reason.APPROVAL_STALE
@@ -911,9 +912,10 @@ class ApprovalService:
                 await self._halt_snapshot_task(snapshot, Reason.APPROVAL_STALE)
             return self._denied(record, Reason.APPROVAL_STALE)
         if not self._host.policy_matches(state):
-            await self._finish(record, snapshot, ApprovalStatus.INVALIDATED, Reason.POLICY_CHANGED)
-            await self._halt_snapshot_task(snapshot, Reason.POLICY_CHANGED)
-            return self._denied(record, Reason.POLICY_CHANGED)
+            reason = self._host.policy_mismatch_reason()
+            await self._finish(record, snapshot, ApprovalStatus.INVALIDATED, reason)
+            await self._halt_snapshot_task(snapshot, reason)
+            return self._denied(record, reason)
         current = make_snapshot(
             req,
             state,
@@ -1122,7 +1124,7 @@ class ApprovalService:
         if resume:
             state = await self._load_snapshot_task(snapshot)
             if not self._host.policy_matches(state):
-                await self._halt_snapshot_task(snapshot, Reason.POLICY_CHANGED)
+                await self._halt_snapshot_task(snapshot, self._host.policy_mismatch_reason())
             elif self._task_matches(snapshot, state):
                 returned = await self._store.set_task_status(
                     state.task_id,

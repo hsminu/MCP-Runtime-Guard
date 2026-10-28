@@ -220,6 +220,9 @@ class _Host:
             and state.profile_id == self.profile_id
         )
 
+    def policy_mismatch_reason(self) -> Reason:
+        return Reason.INTERNAL_ERROR if self.globally_halted else Reason.POLICY_CHANGED
+
     def effective_task_label(self, state: TaskState) -> Label:
         return state.high_watermark
 
@@ -872,7 +875,7 @@ def test_global_halt_raised_during_recheck_prevents_consume():
         approval = await _open(setup)
         host.recheck_hook = host.global_halt
         result = await service.human_channel("operator-1").approve(approval.approval_id)
-        assert result.reasons == (Reason.POLICY_CHANGED,)
+        assert result.reasons == (Reason.INTERNAL_ERROR,)
         assert store.approvals[approval.approval_id].status is ApprovalStatus.INVALIDATED
         assert store.state.status is TaskStatus.HALTED
         assert not store.consumed
