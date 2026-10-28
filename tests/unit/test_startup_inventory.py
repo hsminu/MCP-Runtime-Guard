@@ -1,4 +1,4 @@
-"""B6 시작 전 v2 저장 사실 읽기의 B 단위 검사(I4/I8/I9, T11/T19, S03).
+"""B6 시작 전 v3 저장 사실 읽기의 B 단위 검사(I4/I8/I9, T11/T19, S03).
 
 복구 상태를 결정하거나 순번을 배정하지 않는다. 테스트의 직접 SQL은 기존 분리
 저장의 잔존 행·손상·WAL 읽기 시점을 구성하는 용도이며 C 독립 인수를 대신하지 않는다.
@@ -123,7 +123,7 @@ def test_zero_is_a_persisted_number_and_not_an_empty_history(store: SQLiteStore)
 
 
 @pytest.mark.parametrize("kind", [ToolKind.READ, ToolKind.SEND])
-def test_v1_does_not_infer_request_kind_or_epoch_from_live_or_reopened_context(
+def test_v3_preserves_request_kind_and_epoch_in_live_and_reopened_context(
     tmp_path: Path, kind: ToolKind
 ) -> None:
     path = tmp_path / "guard.db"
@@ -142,9 +142,9 @@ def test_v1_does_not_infer_request_kind_or_epoch_from_live_or_reopened_context(
         assert memory_contexts(instance) == ({}, {}, {}, {})
         assert reopened == live
         value = reopened.requests[0]
-        assert value.stored_epoch is None
-        assert value.stored_kind is None
-        assert value.stored_row_revision is None
+        assert value.stored_epoch == req.epoch
+        assert value.stored_kind is kind
+        assert value.stored_row_revision == 0
         assert value.decision is Decision.ALLOW
         assert value.status is RequestStatus.DISPATCHING
         assert value.dispatch_reserved_at_utc == LATER
@@ -594,7 +594,8 @@ def test_tasks_requests_and_escalation_maxima_share_one_wal_snapshot(
                 other.execute(
                     "INSERT INTO requests SELECT 'request-17',task_id,17,server_id,tool_name,"
                     "destination_id,arguments_digest,decision,reasons,status,"
-                    "dispatch_reserved_at_utc FROM requests WHERE request_id='request-1'"
+                    "dispatch_reserved_at_utc,epoch,kind,row_revision,legacy_source "
+                    "FROM requests WHERE request_id='request-1'"
                 )
 
         connection.before_history = other_writer

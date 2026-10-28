@@ -4,8 +4,9 @@
 Store의 날짜와 ID는 호출자가 공급하며 포트에서 생성하지 않는다.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
+from pathlib import Path
 from typing import Literal, Protocol
 
 from guard_app.domain.contracts import (
@@ -28,13 +29,18 @@ from guard_app.domain.enums import (
     RegStatus,
     RequestStatus,
     SessionEvent,
+    StorePrepareStep,
     SystemStopReason,
     TaskStatus,
 )
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
     AccessResult,
+    FailureAuditRecord,
+    MigrationReport,
     PolicyDecision,
+    RecoveryItemPage,
+    RecoveryReport,
     ResolvedRequest,
     StoreExecutionState,
     TaskState,
@@ -72,6 +78,17 @@ class PendingFinals(Protocol):
     async def aclose(self) -> None: ...
 
 
+class BackupDestination(Protocol):
+    """신뢰된 백업 생성자가 제공한 임시 대상과 발행·폐기 경계."""
+
+    @property
+    def path(self) -> Path: ...
+
+    def publish(self) -> Path: ...
+
+    def discard(self) -> None: ...
+
+
 class StoreLifecycle(Protocol):
     """Store 실행 권한과 종료 상태를 SQL 큐를 기다리지 않고 조회한다(SEQ-02).
 
@@ -92,6 +109,58 @@ class StoreLifecycle(Protocol):
         ...
 
     async def wait_closed(self, timeout: float) -> bool: ...  # noqa: ASYNC109
+
+    async def prepare_schema(
+        self,
+        *,
+        deadline: float,
+        begin_backup: Callable[[str], BackupDestination],
+        on_step: Callable[[StorePrepareStep], None] | None = None,
+    ) -> MigrationReport:
+        """A가 넘긴 time.monotonic 기준 바깥 deadline 안에서 스키마를 준비한다.
+
+        이관 ACK는 27b 복구 ACK와 별개다. on_step은 예외를 내지 않는 동기 함수다.
+        """
+        ...
+
+    async def recover(
+        self,
+        *,
+        deadline: float,
+        run_id: str,
+        on_step: Callable[[StorePrepareStep], None] | None = None,
+    ) -> RecoveryReport:
+        """복구를 완료하고 성공한 보고만 반환한다.
+
+        run_id는 A가 생성한 신뢰 식별자다(예: run-과 128비트 난수의 16진수).
+        prepare_schema의 이관 ACK와 이 복구 ACK는 서로 별개다.
+        성공한 RecoveryReport만 화면의 복구 결과로 쓴다.
+        """
+        ...
+
+    async def activate_run(self) -> StoreExecutionState: ...
+
+    async def load_recovery_report(self, run_id: str) -> RecoveryReport | None: ...
+
+    async def list_recovery_items(
+        self, *, run_id: str | None = None, after: str | None = None, limit: int = 100
+    ) -> RecoveryItemPage: ...
+
+
+class SequenceAllocator(Protocol):
+    """SEQ-02: Task별 순번과 감사의 커밋 ACK 뒤에만 값을 반환한다.
+
+    배정 뒤 판정 저장 실패·취소·ACK 유실이 나도 순번을 회수하지 않는다.
+    Task가 다른 경우 계수는 독립적이며 epoch 변경에도 초기화하지 않는다.
+    """
+
+    async def allocate_call_seq(self, task_id: str) -> int: ...
+
+
+class FailureAuditStore(Protocol):
+    """B-SQL-04: 예약 전후의 원문 없는 실패 감사 커밋을 제공한다."""
+
+    async def record_failure_audit(self, record: FailureAuditRecord) -> None: ...
 
 
 class SessionAudit(Protocol):
