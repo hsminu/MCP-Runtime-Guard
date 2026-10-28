@@ -27,8 +27,8 @@
 
 - [x] C2.1 Scanner 비밀값 로딩(`secrets.py`)·SDK 원문 로그 제한(`redact.py`) · [기록](archive/tasks/c-cisco-luna-connection.md)
 - [x] C2.2 SDK import의 외부 tokenizer 다운로드 차단(C-CISCO-05) · #6 · [대장](weakness_register.md#발견-항목과-조치)
-- [ ] C2.3 safe_path: 빈 값·NUL·역슬래시·절대·상위·symlink·드라이브·UNC·junction 거부
-- [ ] C2.4 검사-열기 TOCTOU 한계와 no-follow 옵션 확인
+- [x] C2.3 safe_path(`security/paths.py`): 빈 값·NUL·제어 문자·역슬래시·`:`(드라이브·ADS)·절대·상위·장치 이름·끝 점 거부, 루트 아래 symlink·junction·하드링크 거부, ID는 디스크 실제 이름(대소문자·8.3)의 root 기준 POSIX. B Catalog용 `file_resource_resolver` · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.3-safe-path.md)
+- [x] C2.4 검사-열기 TOCTOU: 파일 서버가 `safe_path` 뒤 링크 미추적(`OPEN_REPARSE_POINT`) 핸들로 열고 핸들의 실제 경로·reparse·하드링크를 다시 대조(`FILE_CHANGED`). 상위 폴더 junction 바꿔치기 실측 · [기록](archive/c/C2.11-file-server.md)
 - [x] C2.5 URL 검증(URL-01, `security/endpoints.py`): 등록 화면은 `normalize_endpoint`로 정규형을 만들고, 설정 로더(`ServerSettings.url`)와 transport는 `canonical_endpoint`로 정규형만 받는다. https 원칙, http는 루프백 IP 리터럴만, 사용자 정보·쿼리·fragment·끝 점·`%`·숫자 IP 변형·특수 주소 거부, IDNA 2008 · [기록](archive/c/C2.5-endpoint-validation.md)
 - [x] C2.6 stdio MCP 서버 실행 입구(EXE-01, `security/launcher.py`): `check_stdio_values`(command·args·env_allow 검사), `pin_executable`(등록 지문), `launch_mcp_server`(연결마다 재검사·지문 대조, 지문 없으면 `LAUNCH_EXECUTABLE_UNPINNED`, 서버별 폴더 `AppFolders.server_folder`·연결별 stderr·기본 환경 5개와 서버 폴더 TEMP·`env_allow`만). A 화면·연결과 B 지문 필드(#48)는 각 담당 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.6-mcp-server-launch.md)
 - [x] C2.7 ids(`security/ids.py`): `new_id`·`new_suffix`·`new_token`·`token_matches`, `secrets`만 사용. C 파일 6개의 직접 생성을 옮기고 L2 가짜 모델 인증 비교를 `compare_digest`로. `src`의 `random` import와 C 모듈의 직접 생성을 `test_ids.py`가 막음(Semgrep은 C2.9). 비밀값 누락은 기존 고정 코드(`SCAN_LLM_KEY_MISSING_OR_INVALID`, 대체값 없음). A 모듈 전환은 A 요청 · [기록](archive/c/C2.7-ids.md)
@@ -37,7 +37,7 @@
 - [x] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용(`secrets.store_scanner_key`·`save_scanner_key`(A `KeySaver`)·`load_scanner_key`·`scanner_key_tail`·`delete_scanner_key`·`scanner_key_environ`). A 화면 연결과 #59 뒤 검사기 연결은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.10-scanner-key-store.md)
 - [x] C2.12 codex.exe 실행 launcher(`security/launcher.py`): 쓰기 금지 핸들로 실행마다 SHA-256 대조, 허용 목록 환경, `-c sqlite_home='<Task 폴더>'`, 멈춘 채 생성 후 Job Object 할당, stdin/stdout은 A `CodexPipes` 형식, stderr는 Task 폴더 격리 파일, `close()`로 종료 확인(#21 2번). stdio MCP 서버도 같은 `launch_process`를 쓴다(#21 5번) · [기록](archive/c/C2.12-codex-launcher.md)
 - [x] C2.13 앱 폴더 경로·권한(`security/paths.py`): `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 codex 설치·CODEX_HOME·Task 폴더·config에 사용자·SYSTEM만의 보호된 DACL, 단일 실행 잠금, Task 폴더 생성·삭제와 앱 시작 때 남은 폴더 삭제(#21 6번) · [기록](archive/c/C2.13-app-folders.md)
-- [ ] C2.11 제품용 읽기 전용 파일 MCP 서버(stdio): 폴더 목록·파일 읽기만, `safe_path`(C2.3) 사용, `structuredContent.resource_id` 보고, UTF-8 텍스트만 · [결정](contracts.md#사용자-결정)
+- [x] C2.11 제품용 읽기 전용 파일 MCP 서버(`guard_app.servers.file_server`, stdio, 표준 라이브러리 JSON-RPC): `list_root`·`list_folder`·`read_file`(모두 READ), `structuredContent.resource_id`(C2.3), UTF-8 텍스트 192KiB, 목록 1,000개, 루트는 레코드 `args`의 `--root`(`file_server_args`·`file_server_root`). A 등록 화면·조립은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.11-file-server.md)
 - [x] C2.14 설정 파일 연산(CFG-01, #33, `security/settings_io.py`): `config\settings.json`을 링크 없이 열어 일반 파일·하드링크 1·사용자·SYSTEM 권한 확인, 상한+1바이트 읽기, 세대(크기·SHA-256)가 같을 때만 같은 폴더 임시 파일·fsync·`MoveFileExW(WRITE_THROUGH)` 교체, 실패와 결과 불명 구분, 앱 시작 때 남은 임시 파일 삭제. 서버 실행 파일·URL 검증은 C2.6·C2.5로 분리 · [기록](archive/c/C2.14-settings-file-io.md)
 - [x] C2.15 로그아웃 정리 함수 `clear_codex_credentials`(`security/codex_home.py`): `secrets/` 암호문과 자격증명 관리자 항목 두 개 삭제, 모르는 항목이 있으면 아무것도 지우지 않음. A가 `account/logout` 성공 뒤 부름 · [기록](archive/c/C2.15-codex-credential-cleanup.md)
 - [x] C2.16 앱 폴더 권한 확인의 SID 비교를 전체 SID로(C2.13 후속): SDDL 약어(`LA` 등) 때문에 CI 러너(내장 Administrator)에서 거부되던 문제 수정, 읽지 못한 ACE는 거부(#35 B 리뷰 3번) · [기록](archive/c/C2.16-sid-alias-compare.md)
@@ -86,9 +86,9 @@
 - [x] C5.1 Scanner 목록 수신 경계 합성 fixture(stdio·HTTP 22개 시나리오) · [검증](archive/tasks/c-scanner-operating-validation.md)
 - [ ] C5.2 C2.11 서버를 합성 문서(public·personal·private, TEST_SECRET)로 띄우는 fixture
 - [ ] C5.3 Remote Send HTTP 서버(127.0.0.1, tools/call과 프로토콜 메시지 구분 계수)
-- [ ] C5.4 approval_consumed·host_dispatch·wire tools/call·receiver_effect를 요청별로 연결
+- [x] C5.4 approval_consumed·host_dispatch·wire tools/call·receiver_effect를 요청별로 연결: 공용 하니스 `tests/unit/c_counting.py`(승인 소비·dispatch는 `request_id`, wire·효과는 인자 표지) · [기록](archive/c/C5.4-approval-counts.md)
 - [ ] C5.5 wire_tools_call과 wire_post 대응, 카운터는 테스트 임시 파일
-- [ ] C5.6 공격 fixture: 응답 유실·307/308·재연결·정의 변조·stderr/progress 유출
+- [ ] C5.6 공격 fixture: 응답 유실·307/308·재연결·정의 변조·stderr/progress 유출. 응답 유실(응답 없음·늦은 응답·프로세스 종료·500)·307/308·재연결은 완료(`c_counting` 서버 동작) · [기록](archive/c/C5.6-write-loss-counts.md). 정의 변조·stderr/progress 유출 남음
 - [ ] C5.7 관찰 불가 경로를 검증 불가로 기록
 - [ ] C5.9 실제 MCP 서버가 연결 뒤 `notifications/tools/list_changed`를 보내는지와 시점 관찰(LIST-01, #30). 연결 직후 습관적으로 보내는 서버가 많으면 3안(재조회·재대조) 재검토
 - [ ] C5.8 `tools/list` 바이트 상한(1MiB·8MiB) 집행 검증: `attack_fixtures/scanner_limits`로 stdio·HTTP 초과 시 파싱 전 중단·미완료 경고 확인(#21 5번) — 막힘: A 바이트 상한 층
@@ -121,8 +121,8 @@
 
 ## 인수 기준
 
-- [ ] DENY와 승인 전·거절·만료 ASK에서 dispatch·wire·부작용 0
-- [ ] 승인 1회와 더블클릭에서 consumed·dispatch·wire·부작용이 각각 1
-- [ ] 쓰기 응답 유실 후 UNKNOWN_OUTCOME, 새 호출 ID·재연결로도 추가 전송 0
+- [x] DENY와 승인 전·거절·만료 ASK에서 dispatch·wire·부작용 0: Guard 입구·실제 stdio·HTTP 서버 기준, 작업 취소 포함(C5.4). Codex 경유는 C6.8 · [기록](archive/c/C5.4-approval-counts.md)
+- [x] 승인 1회와 더블클릭에서 consumed·dispatch·wire·부작용이 각각 1: 연속 2회·동시 2·5회 승인 모두 각 1(C5.4). 화면 쪽 Enter 반복은 A `test_runtime` · [기록](archive/c/C5.4-approval-counts.md)
+- [x] 쓰기 응답 유실 후 UNKNOWN_OUTCOME, 새 호출 ID·재연결로도 추가 전송 0: stdio·HTTP 응답 없음·늦은 응답·종료·500, HTTP 307/308 미추적. Guard 입구·실제 서버 기준(Codex 경유는 C6.8) · [기록](archive/c/C5.6-write-loss-counts.md)
 - [ ] READ 커밋 실패·미분류·원시 로그 공격에서 결과·기밀 표지 미공개
 - [ ] 측정 원자료·미실행·검증 불가 항목·약점 조치와 재현 방법 기록
