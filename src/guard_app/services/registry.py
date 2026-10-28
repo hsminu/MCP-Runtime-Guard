@@ -9,8 +9,13 @@
 
 **Registry(C4.10·C4.11·C4.18).** `ServerRegistry`는 B `RegistryStore`의 저장 사본을 들고
 `ports.Registry` 동기 조회에 답한다. 제어 연산은 하나씩 직렬화하고, 저장이 성공하면 반환 사본으로
-캐시를 곧바로 바꾼다(반환과 교체 사이 await 없음, `RegistryStore` 설명). 저장이 실패하면 캐시는
-이전 사본 그대로다.
+캐시를 곧바로 바꾼다(반환과 교체 사이 await 없음, `RegistryStore` 설명).
+
+- 저장 호출이 실패하거나 기다리는 사이 취소되면 DB에 커밋됐는지 알 수 없다(C4.19). 저장 쓰기를
+  writer 스레드로 옮기면 커밋 뒤 반환 전에 취소가 들어올 수 있다. 그 서버의 캐시는 DB와 다를 수
+  있다고 표시하고, 표시된 서버의 ACTIVE는 PENDING으로 본다. 그래서 `block`이 커밋된 뒤 취소돼도
+  ACTIVE가 남지 않는다. 그 서버의 다음 제어 연산이나 `refresh`가 DB 행을 다시 읽어 표시를 푼다.
+  저절로 다시 읽지는 않는다.
 
 - 등록 레코드는 설정 파일의 서버 레코드(경계·도구 종류·인자)와 실제 목록(스키마·지문)을 합친
   것이다(10.1). 목록에는 있지만 설정에 종류가 없는 도구는 `OTHER`로 등록한다. 정책·Catalog가
@@ -108,6 +113,8 @@ class ServerRegistry:
         self._entries: dict[str, RegistryEntry] = {}
         # 연결 직후 대조를 기록하지 못한 서버. 이번 실행 동안 PENDING으로 본다.
         self._unrecorded: set[str] = set()
+        # 제어 쓰기의 결과를 모르는 서버. DB 행을 다시 읽을 때까지 PENDING으로 본다.
+        self._stale: set[str] = set()
         self._lock = asyncio.Lock()
 
     # ports.Registry: 동기 조회
@@ -116,9 +123,12 @@ class ServerRegistry:
         entry = self._entries.get(server_id)
         if entry is None:
             return None
-        if server_id in self._unrecorded:
-            return entry.registration.model_copy(update={"status": RegStatus.PENDING})
-        return entry.registration
+        registration = entry.registration
+        if registration.status is RegStatus.ACTIVE and (
+            server_id in self._unrecorded or server_id in self._stale
+        ):
+            return registration.model_copy(update={"status": RegStatus.PENDING})
+        return registration
 
     def status(self, server_id: str) -> RegStatus | None:
         registration = self.registration(server_id)
@@ -133,22 +143,36 @@ class ServerRegistry:
         return None if found is None else found.fingerprint
 
     def entry(self, server_id: str) -> RegistryEntry | None:
-        """화면용 저장 사본(최근 검사·revision). 실행 허가가 아니다."""
+        """화면용 저장 사본(최근 검사·revision). 실행 허가가 아니다.
+
+        제어 연산이 실패한 뒤에는 DB와 다를 수 있다. 화면은 `refresh`로 다시 읽은 사본을 쓴다.
+        """
         return self._entries.get(server_id)
 
     # 제어: 하나씩, 저장 성공 뒤 반환 사본으로 캐시 교체
 
     async def load(self) -> None:
-        """앱 시작 때 저장된 등록을 캐시로 복원한다. 대조 실패 표시는 지운다."""
+        """앱 시작 때 저장된 등록을 캐시로 복원한다. 대조 실패·결과 불명 표시는 지운다."""
         async with self._lock:
             entries = await self._store.list_registrations()
             self._entries = {entry.registration.server_id: entry for entry in entries}
             self._unrecorded.clear()
+            self._stale.clear()
+
+    async def refresh(self, server_id: str) -> RegistryEntry | None:
+        """DB의 현재 행으로 캐시를 맞추고 결과 불명 표시를 푼다. 행이 없으면 None이다.
+
+        대조를 기록하지 못한 표시는 풀지 않는다. 그 서버는 다음 시작에서 다시 대조한다.
+        """
+        async with self._lock:
+            await self._reread(server_id)
+            return self._entries.get(server_id)
 
     async def register(self, server: ServerSettings, listing: ToolListingView) -> RegistryEntry:
         """신규 서버를 PENDING으로 등록한다(C4.11). 이미 있으면 `REG_SERVER_EXISTS`다."""
         async with self._lock:
             _check_settings(server)
+            await self._reread_if_stale(server.id)
             if server.id in self._entries:
                 raise RegistryError("REG_SERVER_EXISTS")
             try:
@@ -160,9 +184,9 @@ class ServerRegistry:
                 )
             except ValidationError:
                 raise RegistryError("REG_REGISTRATION_INVALID") from None
-            entry = await self._store.register_server(registration, at_utc=self._clock())
-            self._entries[server.id] = entry
-            return entry
+            return await self._write(
+                server.id, self._store.register_server(registration, at_utc=self._clock())
+            )
 
     async def observe(
         self,
@@ -176,11 +200,15 @@ class ServerRegistry:
         바뀌었으면 `record_fingerprint_change`가 ACTIVE를 PENDING으로 내린 사본으로 캐시를 바꾸고,
         바뀐 도구마다 `invalidate_tool`(Guard의 승인 무효화)을 부른다. Guard가 아직 없는 앱 시작
         직후에는 대기 승인도 없으므로 None으로 둔다. 목록이 미완료·형식 오류면 쓰지 않고
-        `RegistryError`다(A의 대조가 그 서버를 이번 실행 동안 막는다). 기록이 실패하면 그 서버를
-        이번 실행 동안 PENDING으로 보고 `StoreError`를 올린다.
+        `RegistryError`다(A의 대조가 그 서버를 이번 실행 동안 막는다). 기록이 실패하거나 취소되면
+        그 서버를 이번 실행 동안 PENDING으로 보고 오류를 그대로 올린다.
+
+        무효화 도중 취소되면 남은 도구는 무효화하지 않는다. 캐시는 이미 ACTIVE가 아니고 지문도
+        바뀌어서, 그 도구의 대기 승인은 재판정에서 거절된다.
         """
         async with self._lock:
             _check_settings(server)
+            await self._reread_if_stale(server.id)
             current = self._entries.get(server.id)
             if current is None:
                 raise RegistryError("REG_SERVER_UNKNOWN")
@@ -191,7 +219,7 @@ class ServerRegistry:
                 change = await self._store.record_fingerprint_change(
                     server.id, tools, at_utc=self._clock()
                 )
-            except StoreError:
+            except (StoreError, asyncio.CancelledError):
                 self._unrecorded.add(server.id)
                 raise
             if change.changed_tools:
@@ -215,39 +243,45 @@ class ServerRegistry:
         서버는 `REG_SERVER_UNRECORDED`로 올리지 않는다.
         """
         async with self._lock:
+            await self._reread_if_stale(server_id)
             current = self._entries.get(server_id)
             if current is None:
                 raise RegistryError("REG_SERVER_UNKNOWN")
             if server_id in self._unrecorded:
                 raise RegistryError("REG_SERVER_UNRECORDED")
-            entry = await self._store.activate_server(
+            return await self._write(
                 server_id,
-                expected_row_revision=expected_row_revision,
-                tool_fingerprints={
-                    tool.tool_name: tool.fingerprint for tool in current.registration.tools
-                },
-                reviewed_by=reviewed_by,
-                at_utc=self._clock(),
-                reviewed_scan_id=reviewed_scan_id,
+                self._store.activate_server(
+                    server_id,
+                    expected_row_revision=expected_row_revision,
+                    tool_fingerprints={
+                        tool.tool_name: tool.fingerprint for tool in current.registration.tools
+                    },
+                    reviewed_by=reviewed_by,
+                    at_utc=self._clock(),
+                    reviewed_scan_id=reviewed_scan_id,
+                ),
             )
-            self._entries[server_id] = entry
-            return entry
 
     async def block(self, server_id: str, *, expected_row_revision: int) -> RegistryEntry:
         async with self._lock:
-            entry = await self._store.block_server(
-                server_id, expected_row_revision=expected_row_revision, at_utc=self._clock()
+            await self._reread_if_stale(server_id)
+            return await self._write(
+                server_id,
+                self._store.block_server(
+                    server_id, expected_row_revision=expected_row_revision, at_utc=self._clock()
+                ),
             )
-            self._entries[server_id] = entry
-            return entry
 
     async def request_review(self, server_id: str, *, expected_row_revision: int) -> RegistryEntry:
         async with self._lock:
-            entry = await self._store.request_review(
-                server_id, expected_row_revision=expected_row_revision, at_utc=self._clock()
+            await self._reread_if_stale(server_id)
+            return await self._write(
+                server_id,
+                self._store.request_review(
+                    server_id, expected_row_revision=expected_row_revision, at_utc=self._clock()
+                ),
             )
-            self._entries[server_id] = entry
-            return entry
 
     async def save_reviewed_descriptions(
         self,
@@ -257,14 +291,39 @@ class ServerRegistry:
         expected_row_revision: int,
     ) -> RegistryEntry:
         async with self._lock:
-            entry = await self._store.save_reviewed_descriptions(
+            await self._reread_if_stale(server_id)
+            return await self._write(
                 server_id,
-                descriptions,
-                expected_row_revision=expected_row_revision,
-                at_utc=self._clock(),
+                self._store.save_reviewed_descriptions(
+                    server_id,
+                    descriptions,
+                    expected_row_revision=expected_row_revision,
+                    at_utc=self._clock(),
+                ),
             )
+
+    # 잠근 상태에서만 부른다.
+
+    async def _write(self, server_id: str, write: Awaitable[RegistryEntry]) -> RegistryEntry:
+        try:
+            entry = await write
+        except (StoreError, asyncio.CancelledError):
+            self._stale.add(server_id)
+            raise
+        self._entries[server_id] = entry
+        return entry
+
+    async def _reread_if_stale(self, server_id: str) -> None:
+        if server_id in self._stale:
+            await self._reread(server_id)
+
+    async def _reread(self, server_id: str) -> None:
+        entry = await self._store.load_registration(server_id)
+        if entry is None:
+            self._entries.pop(server_id, None)
+        else:
             self._entries[server_id] = entry
-            return entry
+        self._stale.discard(server_id)
 
 
 def _check_settings(server: object) -> None:
