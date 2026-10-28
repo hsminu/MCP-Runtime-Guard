@@ -1,5 +1,6 @@
 """I6·I9: 예외 원문을 받지 않고 경계의 의미만 전달하는 전용 오류."""
 
+from guard_app.domain.enums import StoreStartFailure
 from guard_app.domain.reasons import Reason
 
 
@@ -22,6 +23,19 @@ class StoreError(GuardError):
 
     def __init__(self, reason: Reason = Reason.INTERNAL_ERROR) -> None:
         super().__init__(reason)
+
+
+class StorePrepareError(Exception):
+    """Guard Reason과 별도인 원문 없는 저장소 시작 실패."""
+
+    def __init__(self, code: StoreStartFailure) -> None:
+        if not isinstance(code, StoreStartFailure):
+            raise TypeError("code는 StoreStartFailure enum이어야 한다")
+        self.code = code
+        super().__init__(code.value)
+
+    def __repr__(self) -> str:
+        return self.code.value
 
 
 class DispatchError(GuardError):
