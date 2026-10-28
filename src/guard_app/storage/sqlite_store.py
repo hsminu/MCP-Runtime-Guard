@@ -21,7 +21,6 @@ from pathlib import Path
 from threading import Lock, get_ident
 from types import MappingProxyType, TracebackType
 from typing import Literal, cast
-from uuid import uuid4
 
 from guard_app.core.approval_time import approval_event_time
 from guard_app.core.taint import merge
@@ -71,6 +70,7 @@ from guard_app.domain.models import (
 from guard_app.domain.reasons import Reason
 from guard_app.ports import BackupDestination
 from guard_app.security.digest import jcs_canonicalize, json_digest
+from guard_app.security.ids import new_id
 from guard_app.services.catalog_sources import valid_server_id
 from guard_app.storage.sqlite_writer import SQLiteWriter
 from guard_app.storage.startup_inventory import (
@@ -460,7 +460,7 @@ class SQLiteStore:
     같은 앱/버전의 정확한 스키마만 다시 열며 다른/미래 버전은 거부한다.
     busy_timeout_ms=1000은 조정 가능한 잠금 대기 후보이며 전체 I/O 상한이 아니다.
     SQL/검증 오류와 writer 작업의 callback 실패는 원문·경로 없는 StoreError다.
-    명시 모드 기본 감사 ID는 UUID4다. 주입한 신뢰 audit_id_factory는 ID 또는
+    명시 모드 기본 감사 ID는 security.ids에서 만든다. 주입한 신뢰 audit_id_factory는 ID 또는
     원문 없는 StoreError를 공급한다. 즉시 모드에서 기본 factory는 없다.
     정상 상태 전이의 보안 버전 유지 등은 검토용 구현 선택이며 B6 합의는 별도다.
     audit_id_factory와 utc_now는 writer 스레드에서 호출된다. 생성자는 연결과
@@ -504,7 +504,7 @@ class SQLiteStore:
         )
         self._owner_thread = 0
         self._audit_id_factory = (
-            (lambda: f"audit-{uuid4().hex}")
+            (lambda: new_id("audit"))
             if startup == "explicit" and audit_id_factory is None
             else audit_id_factory
         )
