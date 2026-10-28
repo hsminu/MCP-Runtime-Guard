@@ -30,6 +30,7 @@ from guard_app.services.catalog import Catalog
 from guard_app.services.catalog_sources import SourceRule
 from guard_app.services.response_gate import ResponseGate
 from guard_app.storage import SQLiteStore
+from tests.unit.sqlite_writer_test_support import writer_connection
 from tests.unit.test_response_gate import _raw, _Registry
 from tests.unit.test_sqlite_decisions import (
     LATER,
@@ -82,7 +83,7 @@ def approval(**updates: object) -> ApprovalRecord:
 
 
 def full_snapshot(store: SQLiteStore) -> dict[str, list[tuple[object, ...]]]:
-    connection = store._owned_connection()
+    connection = writer_connection(store)
     queries = {
         "tasks": "SELECT * FROM tasks ORDER BY 1",
         "escalations": "SELECT * FROM escalations ORDER BY 1,2",
@@ -169,7 +170,7 @@ def failure(
 
 
 def request_status(store: SQLiteStore) -> str:
-    return store._owned_connection().execute("SELECT status FROM requests").fetchone()[0]
+    return writer_connection(store).execute("SELECT status FROM requests").fetchone()[0]
 
 
 def execute(store: SQLiteStore, operation: str, req: ResolvedRequest | None = None) -> object:
@@ -219,11 +220,11 @@ def test_pending_get_and_approved_consume_commit_all_rows(
     )
     assert load(store) == task(row_revision=13)
     assert request_status(store) == RequestStatus.DISPATCHING.value
-    assert store._owned_connection().execute(
+    assert writer_connection(store).execute(
         "SELECT dispatch_reserved_at_utc FROM requests"
     ).fetchone()[0] == LATER.isoformat(timespec="microseconds")
     assert (
-        store._owned_connection()
+        writer_connection(store)
         .execute("SELECT count(*) FROM audit_events WHERE event_type='CONSUMED'")
         .fetchone()[0]
         == 1
@@ -339,7 +340,7 @@ def test_approval_cannot_approve_changed_task(
         "security_version": "UPDATE tasks SET security_version=8",
         "status": "UPDATE tasks SET status='halted'",
     }
-    store._owned_connection().execute(queries[changed])
+    writer_connection(store).execute(queries[changed])
     original = full_snapshot(store)
     with pytest.raises(StoreError):
         transition(store, ApprovalStatus.APPROVED)
@@ -393,7 +394,7 @@ def test_consume_rechecks_persistent_relations(
     pending(store)
     transition(store, ApprovalStatus.APPROVED)
     asyncio.run(store.create_task(task(task_id="other-task"), created_at_utc=NOW))
-    store._owned_connection().execute(query)
+    writer_connection(store).execute(query)
     before = full_snapshot(store)
     assert consume(store) is False
     assert full_snapshot(store) == before
@@ -463,7 +464,7 @@ def test_consume_database_failure_rolls_back_all_four_writes(
     pending(store)
     transition(store, ApprovalStatus.APPROVED)
     operation = "INSERT" if table == "audit_events" else "UPDATE"
-    store._owned_connection().execute(
+    writer_connection(store).execute(
         f"""CREATE TRIGGER fail_write BEFORE {operation} ON {table}
         BEGIN SELECT RAISE(ABORT, 'TEST_SECRET_write'); END"""
     )
@@ -472,7 +473,7 @@ def test_consume_database_failure_rolls_back_all_four_writes(
         consume(store)
     assert_sanitized(error.value)
     assert full_snapshot(store) == before
-    store._owned_connection().execute("DROP TRIGGER fail_write")
+    writer_connection(store).execute("DROP TRIGGER fail_write")
     assert consume(store) is True
 
 
@@ -483,7 +484,7 @@ def test_consume_zero_rows_is_false_and_rolls_back_prior_changes(
     store, _ = runtime
     pending(store)
     transition(store, ApprovalStatus.APPROVED)
-    store._owned_connection().execute(
+    writer_connection(store).execute(
         f"""CREATE TRIGGER ignore_write BEFORE UPDATE ON {table}
         BEGIN SELECT RAISE(IGNORE); END"""
     )
@@ -576,7 +577,7 @@ def test_get_approval_rejects_invalid_stored_metadata(
 ) -> None:
     store, _ = runtime
     pending(store)
-    store._owned_connection().execute(query)
+    writer_connection(store).execute(query)
     with pytest.raises(StoreError) as error:
         asyncio.run(store.get_approval("approval-1"))
     assert_sanitized(error.value)
@@ -622,7 +623,7 @@ def test_read_commits_monotonic_labels_history_and_request_atomically(
     revision_increment: int,
 ) -> None:
     store, _ = runtime
-    store._owned_connection().execute(
+    writer_connection(store).execute(
         "UPDATE tasks SET high_watermark=?,last_read_label=?", (int(high), int(last))
     )
     req = dispatched(store)
@@ -642,7 +643,7 @@ def test_read_commits_monotonic_labels_history_and_request_atomically(
         RequestStatus.WITHHELD.value if observed is None else RequestStatus.SUCCEEDED.value
     )
     audit = (
-        store._owned_connection()
+        writer_connection(store)
         .execute("SELECT * FROM audit_events WHERE event_type='OBSERVED'")
         .fetchone()
     )
@@ -671,7 +672,7 @@ def test_observation_any_write_failure_rolls_back_and_does_not_consume_reservati
     store, _ = runtime
     req = dispatched(store)
     action = "INSERT" if target in ("escalations", "audit_events") else "UPDATE"
-    store._owned_connection().execute(
+    writer_connection(store).execute(
         f"""CREATE TRIGGER fail_write BEFORE {action} ON {target}
         BEGIN SELECT RAISE(ABORT, 'TEST_SECRET_write'); END"""
     )
@@ -680,7 +681,7 @@ def test_observation_any_write_failure_rolls_back_and_does_not_consume_reservati
         observe(store, req, Label.INTERNAL)
     assert_sanitized(error.value)
     assert full_snapshot(store) == before
-    store._owned_connection().execute("DROP TRIGGER fail_write")
+    writer_connection(store).execute("DROP TRIGGER fail_write")
     assert observe(store, req, Label.INTERNAL).high_watermark is Label.INTERNAL
 
 
@@ -741,13 +742,13 @@ def test_send_success_preserves_all_task_fields_and_rejects_duplicate(
     runtime: tuple[SQLiteStore, Clock],
 ) -> None:
     store, _ = runtime
-    store._owned_connection().execute("UPDATE tasks SET high_watermark=2,last_read_label=1")
+    writer_connection(store).execute("UPDATE tasks SET high_watermark=2,last_read_label=1")
     req = dispatched(store, ToolKind.SEND)
     original = load(store)
     send(store, req)
     assert load(store) == original
     assert request_status(store) == RequestStatus.SUCCEEDED.value
-    assert store._owned_connection().execute("SELECT count(*) FROM escalations").fetchone()[0] == 0
+    assert writer_connection(store).execute("SELECT count(*) FROM escalations").fetchone()[0] == 0
     before = full_snapshot(store)
     with pytest.raises(StoreError):
         send(store, req)
@@ -781,7 +782,7 @@ def test_post_dispatch_failure_commits_valid_pair_without_lowering_taint(
     increment: int,
 ) -> None:
     store, _ = runtime
-    store._owned_connection().execute("UPDATE tasks SET high_watermark=2,last_read_label=1")
+    writer_connection(store).execute("UPDATE tasks SET high_watermark=2,last_read_label=1")
     req = dispatched(store, kind)
     original = load(store)
     result = failure(store, req, req_status, target)
@@ -795,7 +796,7 @@ def test_post_dispatch_failure_commits_valid_pair_without_lowering_taint(
     assert result == load(store)
     assert request_status(store) == req_status.value
     assert (
-        store._owned_connection()
+        writer_connection(store)
         .execute(
             "SELECT detail FROM audit_events WHERE event_type=?", ("REQUEST_" + req_status.name,)
         )
@@ -930,17 +931,14 @@ def test_lost_commit_ack_discards_all_authority_without_retry(
                 transition(store, ApprovalStatus.APPROVED)
         else:
             req = dispatched(store, ToolKind.SEND if operation == "send" else ToolKind.READ)
-        connection = store._owned_connection()
-        assert isinstance(connection, FaultConnection)
+        connection = writer_connection(store)
+        assert connection.is_instance(FaultConnection)
         connection.fail_commit = True
         with pytest.raises(StoreError) as error:
             execute(store, operation, req)
         assert_sanitized(error.value)
         assert store._connection is None
-        assert not store._allowed_decisions
-        assert not store._request_contexts
-        assert not store._approval_contexts
-        assert not store._dispatch_contexts
+        assert store._test_context_snapshot() == ({}, {}, {}, {})
     # ACK failure here occurred after actual COMMIT. The durable event appears once.
     with SQLiteStore(tmp_path / "guard.db") as reopened:
         event = {
@@ -952,7 +950,7 @@ def test_lost_commit_ack_discards_all_authority_without_retry(
             "failure": "REQUEST_WITHHELD",
         }[operation]
         assert (
-            reopened._owned_connection()
+            writer_connection(reopened)
             .execute("SELECT count(*) FROM audit_events WHERE event_type=?", (event,))
             .fetchone()[0]
             == 1
@@ -969,7 +967,7 @@ def test_all_lifecycle_metadata_and_audits_omit_raw_arguments(
     failure(store, request())
     assert "TEST_SECRET" not in repr(full_snapshot(store))
     assert {
-        row[0] for row in store._owned_connection().execute("SELECT detail FROM audit_events")
+        row[0] for row in writer_connection(store).execute("SELECT detail FROM audit_events")
     } == {
         None,
         '{"exception_type":"DispatchError"}',
@@ -1105,8 +1103,8 @@ def test_real_sqlite_read_commit_controls_b_gate_release(
         if result == "rollback":
             audit_failure(store)
         elif result == "ack":
-            connection = store._owned_connection()
-            assert isinstance(connection, FaultConnection)
+            connection = writer_connection(store)
+            assert connection.is_instance(FaultConnection)
             connection.fail_commit = True
         raw = _raw("TEST_SECRET_result_body")
         if result in ("rollback", "ack"):
