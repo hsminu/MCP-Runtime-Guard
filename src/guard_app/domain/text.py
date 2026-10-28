@@ -85,7 +85,8 @@ def defang_scanner_text(value: str, *, max_length: int = 300) -> str:
     if type(max_length) is not int or not 1 <= max_length <= 300:
         raise ValueError("검사 표시 상한은 1부터 300까지의 정수여야 한다")
     candidate = _truncate(value, max_length)
-    try:
+    # 잘라 낸 그대로 쓸 수 없으면 아래 무해화로 넘긴다(Semgrep 예외, 약점 대장).
+    try:  # nosemgrep: no-swallow
         return _scanner_text(candidate)
     except ValueError:
         pass

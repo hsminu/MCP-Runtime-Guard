@@ -461,7 +461,8 @@ class BackupTarget:
         failed = False
         sides = (_side_file(self.path, suffix) for suffix in _SQLITE_SIDE_SUFFIXES)
         for path in (self.path, *sides):
-            try:
+            # 이미 없는 파일은 지운 것과 같다(Semgrep 예외, 약점 대장).
+            try:  # nosemgrep: no-swallow
                 _unlink(path)
             except FileNotFoundError:
                 pass

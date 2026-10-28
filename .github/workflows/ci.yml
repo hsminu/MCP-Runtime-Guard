@@ -1,7 +1,7 @@
 name: ci
 
-# 설계 13.5절 파이프라인 중 현재 통과 가능한 단계만 실행한다.
-# import-linter 규칙·Bandit·Semgrep·pip-audit·통합 테스트는 C 후속(docs/archive/integration-a-b.md).
+# 설계 13.5절 파이프라인(C6.3·C6.4). Semgrep은 Windows wheel이 없고 의존성 고정이 프로젝트 lock과
+# 맞지 않아 Linux 작업에서 해시 고정 요구 파일(tools/ci/semgrep-requirements.txt)로 따로 설치한다.
 on:
   push:
     branches: [main]
@@ -45,5 +45,31 @@ jobs:
         run: uv run --no-sync ruff format --check .
       - name: mypy
         run: uv run --no-sync mypy
+      - name: Import contracts
+        run: uv run --no-sync lint-imports --config tools/ci/importlinter.ini
+      - name: Bandit
+        run: uv run --no-sync bandit -r src -ll -q
       - name: Unit tests
         run: uv run --no-sync pytest -q
+      - name: Contract tests
+        run: uv run --no-sync pytest -q tests/contract
+
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.0"
+      - name: Install Semgrep (hashed)
+        run: |
+          uv venv --python 3.12 .semgrep
+          uv pip install --python .semgrep --require-hashes -r tools/ci/semgrep-requirements.txt
+      - name: Semgrep
+        env:
+          SEMGREP_ENABLE_VERSION_CHECK: "0"
+          SEMGREP_SEND_METRICS: "off"
+        run: .semgrep/bin/semgrep scan --config tools/ci/semgrep.yml --error --metrics=off src
