@@ -1,7 +1,7 @@
 """앱 폴더 경로·권한과 Task 폴더 수명(C2.13, I9·T43). 오류에 경로를 싣지 않는다.
 
 앱 폴더는 `%LOCALAPPDATA%\\MCPRuntimeGuard`다. 루트와 관리 폴더(`codex`·`codex_home`·`tasks`·
-`config`·`data`·`data\\backups`)에는 현재 사용자와 SYSTEM만 접근하는 보호된 DACL을
+`servers`·`config`·`data`·`data\\backups`)에는 현재 사용자와 SYSTEM만 접근하는 보호된 DACL을
 걸고, 그 안의 파일은 이 권한을 물려받는다. 이미 있는 폴더는 소유자가 현재 사용자일 때만 쓰고
 권한을 다시 건다. 제품 DB는 `data\\guard.sqlite3`다. `app.lock`이 같은 사용자의 두 번째
 실행을, 폴더 권한이 다른 사용자를 막아 이 DB의 단일 소유가 된다(REC-01, #35 A·B 합의).
@@ -9,14 +9,16 @@ B는 DB 경로를 `db_path()`로, 이관 전 백업 자리를 `begin_backup()`�
 설정 파일 `config\\settings.json`의 읽기·교체는 `settings_io`가 맡는다(C2.14).
 
 `prepare_app_folders`는 앱 시작 때 한 번 부른다. 단일 실행 잠금(`app.lock`)을 잡은 뒤, 이전
-실행이 남긴 Task 폴더와 끝나지 않은 백업·설정 임시 파일을 모두 지운다. Task 폴더에는 Codex 로그 DB가
-생기고 그 DB는 도구 결과 원문을 담으므로(C-CODEX-01), Task가 끝나면 `remove_task_folder`로
-지운다. 삭제한 파일의 디스크 복구 가능성은 남는 한계다. 링크·junction은 따라가지 않는다.
-Windows 전용이다.
+실행이 남긴 Task 폴더·서버 폴더와 끝나지 않은 백업·설정 임시 파일을 모두 지운다. Task 폴더에는
+Codex 로그 DB가 생기고 그 DB는 도구 결과 원문을 담으므로(C-CODEX-01), Task가 끝나면
+`remove_task_folder`로 지운다. stdio MCP 서버의 작업 폴더(`server_folder`, C2.6)에는 서버의
+stderr와 임시 파일이 쌓인다. 삭제한 파일의 디스크 복구 가능성은 남는 한계다. 링크·junction은
+따라가지 않는다. Windows 전용이다.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -34,7 +36,7 @@ SETTINGS_FILE = "settings.json"
 DATABASE_FILE = "guard.sqlite3"
 BACKUP_SUFFIX = ".sqlite3"
 # 부모 폴더가 먼저 오게 둔다.
-MANAGED_DIRS = ("codex", "codex_home", "tasks", "config", "data", "data/backups")
+MANAGED_DIRS = ("codex", "codex_home", "tasks", "servers", "config", "data", "data/backups")
 SYSTEM_SID = "S-1-5-18"
 # SQLite가 DB 옆에 만드는 파일. 백업 임시 파일에도 같은 이름 규칙으로 생긴다.
 _SQLITE_SIDE_SUFFIXES = ("-journal", "-wal", "-shm")
@@ -46,10 +48,12 @@ _BACKUP_NAME_TRIES = 9
 SETTINGS_TEMP = re.compile(r"settings\.json\.[0-9a-f]{32}\.tmp")
 _TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
-_RESERVED_NAMES = frozenset(
+# Windows가 확장자와 상관없이 장치로 여는 이름. launcher의 실행 파일 경로 검사도 쓴다.
+RESERVED_DEVICE_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
     | {f"{device}{number}" for device in ("COM", "LPT") for number in range(10)}
 )
+_SERVER_FOLDER_CHARS = 32
 _ACE = re.compile(r"\(([^;()]*);([^;()]*);([^;()]*);([^;()]*);([^;()]*);([^;()]*)\)")
 
 _SE_FILE_OBJECT = 1
@@ -238,6 +242,11 @@ class AppPaths:
         return self.root / "tasks"
 
     @property
+    def servers(self) -> Path:
+        """stdio MCP 서버별 작업 폴더의 부모(C2.6)."""
+        return self.root / "servers"
+
+    @property
     def config(self) -> Path:
         return self.root / "config"
 
@@ -273,6 +282,7 @@ class AppFolders:
         self.stale_removed = stale_removed
         self.stale_backups_removed = 0
         self.stale_settings_removed = 0
+        self.stale_server_folders_removed = 0
         self._lock: int | None = lock
 
     def db_path(self) -> Path:
@@ -351,6 +361,29 @@ class AppFolders:
             raise AppPathError("TASK_FOLDER_INVALID") from None
         if not _remove_tree(task_dir):
             raise AppPathError("TASK_FOLDER_CLEANUP_FAILED")
+
+    def server_folder(self, server_id: str) -> Path:
+        """stdio MCP 서버 하나의 작업 폴더(C2.6). 없으면 만들고, 있으면 그대로 준다.
+
+        서버 ID에는 경로에 쓸 수 없는 문자도 올 수 있어서, 폴더 이름은 ID(UTF-8)의 SHA-256 앞
+        32자다. 같은 실행 안에서는 다시 연결해도 같은 폴더를 쓰고, 다음 시작이 모두 지운다.
+        """
+        self.require_open()
+        if type(server_id) is not str or not server_id:
+            raise AppPathError("SERVER_ID_INVALID")
+        try:
+            encoded = server_id.encode("utf-8")
+        except UnicodeEncodeError:
+            raise AppPathError("SERVER_ID_INVALID") from None
+        name = hashlib.sha256(encoded).hexdigest()[:_SERVER_FOLDER_CHARS]
+        folder = self.paths.servers / name
+        try:
+            folder.mkdir(exist_ok=True)
+            if folder.is_symlink() or folder.is_junction() or not folder.is_dir():
+                raise AppPathError("SERVER_FOLDER_INVALID")
+        except OSError:
+            raise AppPathError("SERVER_FOLDER_CREATE_FAILED") from None
+        return folder
 
     def close(self) -> None:
         """단일 실행 잠금을 푼다. 여러 번 불러도 된다."""
@@ -449,8 +482,9 @@ def prepare_app_folders(root: Path | None = None) -> AppFolders:
 
     `root`는 테스트용이다. 제품은 기본값(`app_root()`)을 쓴다. 다른 인스턴스가 실행 중이면
     `APP_ALREADY_RUNNING`, 남은 Task 폴더를 다 지우지 못하면 `APP_STALE_TASK_CLEANUP_FAILED`,
-    끝나지 않은 백업 임시 파일을 다 지우지 못하면 `APP_STALE_BACKUP_CLEANUP_FAILED`, 설정 임시
-    파일을 다 지우지 못하면 `APP_STALE_SETTINGS_CLEANUP_FAILED`다.
+    남은 서버 폴더를 다 지우지 못하면 `APP_STALE_SERVER_CLEANUP_FAILED`, 끝나지 않은 백업 임시
+    파일을 다 지우지 못하면 `APP_STALE_BACKUP_CLEANUP_FAILED`, 설정 임시 파일을 다 지우지 못하면
+    `APP_STALE_SETTINGS_CLEANUP_FAILED`다.
 
     이미 있는 루트는 잠금 전에는 링크·소유자만 본다. DACL을 다시 걸면 하위 항목 전체에 전파되므로,
     잠금을 잡은 인스턴스만 한다(#35 B 리뷰 2번). 그래서 두 번째 실행은 첫 인스턴스의 파일을
@@ -469,7 +503,10 @@ def prepare_app_folders(root: Path | None = None) -> AppFolders:
         _ensure_private_dir(base, user, "APP_ROOT")
         for name in MANAGED_DIRS:
             _ensure_private_dir(base / name, user, "APP_FOLDER")
-        folders.stale_removed = _clear_task_folders(folders.paths.tasks)
+        folders.stale_removed = _clear_all(folders.paths.tasks, "APP_STALE_TASK_CLEANUP_FAILED")
+        folders.stale_server_folders_removed = _clear_all(
+            folders.paths.servers, "APP_STALE_SERVER_CLEANUP_FAILED"
+        )
         folders.stale_backups_removed = _clear_partial_backups(folders.paths.backups)
         folders.stale_settings_removed = _clear_settings_temporaries(folders.paths.config)
     except AppPathError:
@@ -482,7 +519,7 @@ def _checked_task_id(task_id: object) -> str:
     if (
         type(task_id) is not str
         or not _TASK_ID.fullmatch(task_id)
-        or task_id.upper() in _RESERVED_NAMES
+        or task_id.upper() in RESERVED_DEVICE_NAMES
     ):
         raise AppPathError("TASK_ID_INVALID")
     return task_id
@@ -681,14 +718,14 @@ def _acquire_lock(path: Path) -> int:
     return int(handle)
 
 
-def _clear_task_folders(tasks: Path) -> int:
-    """이전 실행이 남긴 `tasks` 아래 항목을 모두 지운다. 링크는 대상이 아니라 링크만 지운다."""
+def _clear_all(folder: Path, code: str) -> int:
+    """이전 실행이 남긴 `tasks`·`servers` 아래 항목을 모두 지운다. 링크는 링크만 지운다."""
     try:
-        entries = list(tasks.iterdir())
+        entries = list(folder.iterdir())
     except OSError:
-        raise AppPathError("APP_STALE_TASK_CLEANUP_FAILED") from None
+        raise AppPathError(code) from None
     if not all(_remove_entry(entry) for entry in entries):
-        raise AppPathError("APP_STALE_TASK_CLEANUP_FAILED")
+        raise AppPathError(code)
     return len(entries)
 
 

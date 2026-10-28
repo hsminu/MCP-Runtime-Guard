@@ -1,13 +1,12 @@
 # C 현황
 
-갱신: 2026-10-27 · main `a3fc2a1` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-28 · main `6d5cbf7` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
 | Store 계약 회신(B6-01–05) | B·A | C1.8, C3.5 |
-| AGT 제거(구현) | A·B | C2.9, C6.3, C6.4, C6.9 |
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
 | 설치판 리소스 위치(패키징) | A | C6.20 |
@@ -30,8 +29,8 @@
 - [x] C2.2 SDK import의 외부 tokenizer 다운로드 차단(C-CISCO-05) · #6 · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C2.3 safe_path: 빈 값·NUL·역슬래시·절대·상위·symlink·드라이브·UNC·junction 거부
 - [ ] C2.4 검사-열기 TOCTOU 한계와 no-follow 옵션 확인
-- [ ] C2.5 URL 검증: scheme·userinfo·IDNA·끝 점·기본 포트·인코딩 경로. 설정 파일의 HTTP 서버 `url`(CFG-01 `ServerSettings.url`) 검증을 포함한다(C2.14에서 분리)
-- [ ] C2.6 launcher: 등록된 절대 경로·인자 리스트·최소 환경, shell·동적 실행 금지. 실행 핵심은 C2.12 `launch_process`. 남은 것은 설정 파일의 stdio 서버 값(`ServerSettings.command`·`args`·`env_allow`) 검증과 MCP 서버 실행 파일 해시의 출처(C2.14에서 분리)
+- [x] C2.5 URL 검증(URL-01, `security/endpoints.py`): 등록 화면은 `normalize_endpoint`로 정규형을 만들고, 설정 로더(`ServerSettings.url`)와 transport는 `canonical_endpoint`로 정규형만 받는다. https 원칙, http는 루프백 IP 리터럴만, 사용자 정보·쿼리·fragment·끝 점·`%`·숫자 IP 변형·특수 주소 거부, IDNA 2008 · [기록](archive/c/C2.5-endpoint-validation.md)
+- [x] C2.6 stdio MCP 서버 실행 입구(EXE-01, `security/launcher.py`): `check_stdio_values`(command·args·env_allow 검사), `pin_executable`(등록 지문), `launch_mcp_server`(연결마다 재검사·지문 대조, 지문 없으면 `LAUNCH_EXECUTABLE_UNPINNED`, 서버별 폴더 `AppFolders.server_folder`·연결별 stderr·기본 환경 5개와 서버 폴더 TEMP·`env_allow`만). A 화면·연결과 B 지문 필드(#48)는 각 담당 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.6-mcp-server-launch.md)
 - [ ] C2.7 ids: 암호학적 난수, 비밀값 누락은 전용 예외
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
 - [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
@@ -69,16 +68,17 @@
 - [x] C4.6 운영 설정 추천안과 실제 정의 144개 검증 · [추천안](archive/tasks/c-scanner-operating-proposal.md) · [검증](archive/tasks/c-scanner-operating-validation.md)
 - [x] C4.7 C 브랜치 main 병합 · #6
 - [x] C4.8 Scanner 준비가 이벤트 루프를 막지 않게 수정(C-CISCO-06) · #8
-- [ ] C4.9 Scanner 결과를 B ScanReport로 번역(필수 분석기·완료/생략/실패·지문·severity). B SCAN-01 형식(#32), 모델 문장은 `defang_scanner_text`로 무해화
+- [x] C4.9 Scanner 결과를 B ScanReport로 번역(`cisco_aggregation.scan_report`): 필수 LLM·YARA, 모든 도구에서 끝난 분석기만 완료, 준비 실패·도구별 실패 진단, 등록 지문 집합, SDK severity 그대로. `ServerRegistry.record_scan`으로 저장. 번역 규칙은 B 동의 대기 · [기록](archive/c/C4.9-scan-report-translation.md)
 - [x] C4.10 Registry 등록·지문 영속화와 변경 시 승인 무효화(`services/registry.ServerRegistry`): B `RegistryStore` 위 동기 조회 캐시, 시작 때 복원, 연결 직후 `observe`가 정의 변경을 기록해 ACTIVE→PENDING과 바뀐 도구별 승인 무효화, 기록 실패 서버는 이번 실행 PENDING. A 연결(`assemble_guard`의 `observe`·`load`)과 설정에서 도구 종류를 바꾸는 경로는 A·B와 정함 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.11 신규 서버 PENDING(`register`: 설정 레코드 + 실제 목록, 설정에 없는 도구는 `OTHER`), 사용자 확인 후 ACTIVE(`activate`: 캐시의 등록 지문으로) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.12 정의 전체로 도구 지문 계산(`services/registry.listing_fingerprints`): FP-01 입력(A transport의 SDK 재구성 dict)에 B `tool_fingerprint`(JCS), 미완료·이름 없음·중복·JCS 실패면 지문 없음. 실제 SDK 파싱 경로로 예시 정의 7개의 지문을 고정해 SDK·변환·JCS 변화를 잡음 · [기록](archive/c/C4.12-tool-fingerprints.md)
 - [ ] C4.13 경고 데이터를 등록 화면과 도구 호출 승인 창에 제공 · [결정](contracts.md#사용자-결정) — 막힘: A 화면
 - [ ] C4.14 Scanner 검사 예산 구현(동시성·작업 10분·YARA native 5초·대기열 8건) · [결정](contracts.md#사용자-결정)
-- [ ] C4.15 LLM 자체 평가(`overall_risk`)를 참고 필드로 보존. 판정·정렬에 쓰지 않음 · [결정](contracts.md#사용자-결정) — 필드 형식은 C4.9
+- [x] C4.15 LLM 자체 평가(`overall_risk`)를 참고 필드로 보존. 판정·정렬에 쓰지 않음. SDK가 버리는 값을 `raw_response`에서 꺼내 64자로 무해화 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.9-scan-report-translation.md)
 - [ ] C4.16 LLM 경고의 반복 실행 변동 측정(144개 × 여러 회)
-- [ ] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록
+- [x] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록(`defang_scanner_text`) · [기록](archive/c/C4.9-scan-report-translation.md)
 - [x] C4.18 등록 때 서버 ID의 `__`·끝 `_` 거부: B `valid_server_id`를 그대로 쓰고 등록 화면은 bridge가 넘기는 같은 검사 결과를 씀. Registry `register`·`observe`가 설정 검증과 별도로 다시 검사 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
+- [x] C4.19 Registry 쓰기 결과를 모를 때 닫기(#46 B 리뷰): 제어 쓰기가 실패하거나 커밋 뒤 취소되면 그 서버의 ACTIVE를 PENDING으로 보고, 다음 제어 연산·`refresh`가 DB 행을 다시 읽어 맞춤. `observe` 취소는 기록 실패와 같이 이번 실행 PENDING. 실제 저장소 재현은 B6.13 뒤 · [기록](archive/c/C4.19-registry-unknown-write.md)
 
 ## C5 · fixture와 계수
 
@@ -96,13 +96,13 @@
 
 - [x] C6.1 CI 1단계(Windows, Ruff·포맷·mypy·단위) · #4 · [통합 기록](archive/integration-a-b.md)
 - [x] C6.2 contract 테스트 Windows 수정(socket 차단·SDK import 경로·deadline) · #7
-- [ ] C6.3 CI 2단계(import-linter·Bandit·Semgrep·pip-audit, pip-audit 예외 없음) — 막힘: AGT 제거
-- [ ] C6.4 contract 테스트 CI 편입(C6.3과 함께) — 막힘: AGT 제거
+- [ ] C6.3 CI 2단계(import-linter·Bandit·Semgrep·pip-audit, pip-audit 예외 없음)
+- [ ] C6.4 contract 테스트 CI 편입(C6.3과 함께)
 - [ ] C6.5 실험 스크립트 Windows 수정(socket 차단·`PYTHONPATH`·인코딩)과 MCP 정의 수집기 저장소 반영
 - [ ] C6.6 Windows Cisco 실험(2026-10-14~15) 완료 기록 작성
 - [ ] C6.7 Fake·실제 Transport·Store·AccessChecker·Scanner에 같은 계약 테스트
 - [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05
-- [ ] C6.9 자체 접근 규칙의 거절·오류·누락(활성화 때 사용자가 끈 도구)에서 host_dispatch 0 · [결정](contracts.md#사용자-결정) — 막힘: AGT 제거(B 판정·A 연결)
+- [x] C6.9 자체 접근 규칙의 거절·오류·누락(활성화 때 사용자가 끈 도구)에서 전송 0: 제품 조립의 실제 `AccessRulesChecker`·C `ServerRegistry`와 실제 stdio(C2.6)·HTTP 서버로 승인 소비·host_dispatch·wire `tools/call`·수신 효과 4개 계수 확인, 대조군 포함 28개 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C6.9-access-rule-counts.md)
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록

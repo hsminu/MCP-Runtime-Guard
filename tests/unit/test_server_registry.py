@@ -1,4 +1,4 @@
-"""services.registry.ServerRegistry(C4.10·C4.11·C4.18) 단위 테스트. B의 실제 SQLiteStore를 쓴다."""
+"""services.registry.ServerRegistry(C4.10·C4.11·C4.18·C4.19) 단위 테스트. B의 SQLiteStore를 쓴다."""
 
 import asyncio
 import json
@@ -166,13 +166,19 @@ def _revision(registry: ServerRegistry) -> int:
     return registry.entry("docs").registration.row_revision
 
 
-def test_stale_revision_fails_and_keeps_the_cache(registry):
+def test_failed_write_closes_the_server_until_reread(registry, store):
+    """C4.19: 실패한 제어 쓰기 뒤에는 DB를 다시 읽기 전까지 ACTIVE로 보지 않는다."""
     seen = run(registry.register(settings(), listing())).registration.row_revision
     run(registry.activate("docs", expected_row_revision=seen, reviewed_by="operator"))
     before = registry.entry("docs")
     with pytest.raises(StoreError):
         run(registry.block("docs", expected_row_revision=seen))  # 활성화 전에 본 revision
     assert registry.entry("docs") is before
+    assert registry.status("docs") is RegStatus.PENDING
+    assert run(registry.refresh("docs")) == run(store.load_registration("docs"))
+    assert registry.status("docs") is RegStatus.ACTIVE
+    run(registry.block("docs", expected_row_revision=_revision(registry)))
+    assert registry.status("docs") is RegStatus.BLOCKED
 
 
 def test_load_restores_after_restart_without_trusting_it_for_execution(store):
@@ -284,6 +290,8 @@ def test_unrecorded_change_keeps_the_server_pending_this_run(registry, store, mo
             )
         )
     assert str(raised.value) == "REG_SERVER_UNRECORDED"
+    run(registry.refresh("docs"))  # 다시 읽어도 대조 실패 표시는 남는다
+    assert registry.status("docs") is RegStatus.PENDING
     monkeypatch.undo()
     run(registry.load())  # 다음 시작은 다시 대조한다
     assert registry.status("docs") is RegStatus.ACTIVE
@@ -340,6 +348,242 @@ def test_control_operations_run_one_at_a_time(registry, store, monkeypatch):
 
     run(scenario())
     assert order == ["observe-start", "released", "observe-end"]
+
+
+def _commit_then_hang(store, monkeypatch, method: str) -> asyncio.Event:
+    """B6.13 뒤처럼 쓰기는 커밋됐는데 반환 전에 호출자가 취소되는 저장 호출."""
+    original = getattr(store, method)
+    committed = asyncio.Event()
+
+    async def write(*args, **kwargs):
+        await original(*args, **kwargs)
+        committed.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(store, method, write)
+    return committed
+
+
+def _cancel_after_commit(operation, committed: asyncio.Event) -> None:
+    async def scenario():
+        task = asyncio.create_task(operation)
+        await committed.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    run(scenario())
+
+
+def _registered(registry: ServerRegistry) -> None:
+    run(registry.register(settings(), listing()))
+
+
+@pytest.mark.parametrize(
+    ("method", "setup", "operation", "stored"),
+    [
+        (
+            "register_server",
+            lambda registry: None,
+            lambda registry: registry.register(settings(), listing()),
+            RegStatus.PENDING,
+        ),
+        (
+            "activate_server",
+            _registered,
+            lambda registry: registry.activate(
+                "docs", expected_row_revision=_revision(registry), reviewed_by="operator"
+            ),
+            RegStatus.ACTIVE,
+        ),
+        (
+            "block_server",
+            _active,
+            lambda registry: registry.block("docs", expected_row_revision=_revision(registry)),
+            RegStatus.BLOCKED,
+        ),
+        (
+            "request_review",
+            _active,
+            lambda registry: registry.request_review(
+                "docs", expected_row_revision=_revision(registry)
+            ),
+            RegStatus.PENDING,
+        ),
+        (
+            "save_reviewed_descriptions",
+            _registered,
+            lambda registry: registry.save_reviewed_descriptions(
+                "docs", {"read": "검토한 설명"}, expected_row_revision=_revision(registry)
+            ),
+            RegStatus.PENDING,
+        ),
+    ],
+    ids=["register", "activate", "block", "request_review", "save_reviewed_descriptions"],
+)
+def test_write_cancelled_after_commit_is_closed_until_reread(
+    registry, store, monkeypatch, method, setup, operation, stored
+):
+    """C4.19(#46 B 리뷰): 커밋 뒤 취소되면 캐시가 ACTIVE로 남지 않고, 다시 읽으면 DB와 같다."""
+    setup(registry)
+    committed = _commit_then_hang(store, monkeypatch, method)
+    _cancel_after_commit(operation(registry), committed)
+    saved = run(store.load_registration("docs"))
+    assert saved.registration.status is stored
+    assert registry.status("docs") is not RegStatus.ACTIVE
+    assert run(registry.refresh("docs")) == saved
+    assert registry.entry("docs") == saved
+    assert registry.status("docs") is stored
+
+
+def test_next_control_operation_rereads_after_a_cancelled_block(registry, store, monkeypatch):
+    """B 리뷰의 위험한 경우: DB는 BLOCKED인데 캐시는 ACTIVE. 다음 조작은 DB부터 다시 읽는다."""
+    _active(registry)
+    old_revision = _revision(registry)
+    committed = _commit_then_hang(store, monkeypatch, "block_server")
+    _cancel_after_commit(registry.block("docs", expected_row_revision=old_revision), committed)
+    assert registry.status("docs") is RegStatus.PENDING
+    blocked = run(store.load_registration("docs"))
+    assert blocked.registration.status is RegStatus.BLOCKED
+    with pytest.raises(StoreError):  # 다시 읽은 revision과 다르다
+        run(registry.request_review("docs", expected_row_revision=old_revision))
+    assert registry.entry("docs") == blocked
+    assert registry.status("docs") is RegStatus.BLOCKED
+    run(registry.request_review("docs", expected_row_revision=blocked.registration.row_revision))
+    assert registry.status("docs") is RegStatus.PENDING
+
+
+def test_register_cancelled_after_commit_is_found_again(registry, store, monkeypatch):
+    committed = _commit_then_hang(store, monkeypatch, "register_server")
+    _cancel_after_commit(registry.register(settings(), listing()), committed)
+    assert registry.registration("docs") is None
+    with pytest.raises(RegistryError) as raised:
+        run(registry.register(settings(), listing()))
+    assert str(raised.value) == "REG_SERVER_EXISTS"
+    assert registry.entry("docs") == run(store.load_registration("docs"))
+
+
+def test_observe_cancelled_after_commit_keeps_the_server_pending_this_run(
+    registry, store, monkeypatch
+):
+    _active(registry)
+    committed = _commit_then_hang(store, monkeypatch, "record_fingerprint_change")
+    _cancel_after_commit(
+        registry.observe(settings(), listing(edit={"read": {"description": "x"}})), committed
+    )
+    assert run(store.load_registration("docs")).registration.status is RegStatus.PENDING
+    assert registry.status("docs") is RegStatus.PENDING
+    run(registry.refresh("docs"))
+    with pytest.raises(RegistryError) as raised:
+        run(
+            registry.activate(
+                "docs", expected_row_revision=_revision(registry), reviewed_by="operator"
+            )
+        )
+    assert str(raised.value) == "REG_SERVER_UNRECORDED"
+
+
+def test_cancel_during_invalidation_leaves_the_rest_to_the_pending_state(registry, store):
+    _active(registry)
+    calls = []
+    started = asyncio.Event()
+
+    async def invalidate(server_id, tool_name):
+        calls.append(tool_name)
+        started.set()
+        await asyncio.Event().wait()  # 첫 무효화 중에 취소된다
+        return 1
+
+    observed = listing(edit={"read": {"description": "x"}, "send": {"description": "y"}})
+
+    async def scenario():
+        task = asyncio.create_task(
+            registry.observe(settings(), observed, invalidate_tool=invalidate)
+        )
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    run(scenario())
+    assert calls == ["read"]
+    assert registry.status("docs") is RegStatus.PENDING
+    assert registry.entry("docs") == run(store.load_registration("docs"))
+    # 기록은 끝났으므로 사용자가 다시 확인하면 올릴 수 있다
+    run(
+        registry.activate("docs", expected_row_revision=_revision(registry), reviewed_by="operator")
+    )
+    assert registry.status("docs") is RegStatus.ACTIVE
+
+
+class _UnexpectedStoreError(RuntimeError):
+    """B 계약 밖의 예외. 저장소가 커밋한 뒤 던졌다고 본다."""
+
+
+def _commit_then_raise(store, monkeypatch, method: str) -> None:
+    original = getattr(store, method)
+
+    async def write(*args, **kwargs):
+        await original(*args, **kwargs)
+        raise _UnexpectedStoreError
+
+    monkeypatch.setattr(store, method, write)
+
+
+def test_unexpected_store_exception_on_a_write_also_closes_the_server(registry, store, monkeypatch):
+    """#53 B 리뷰 2번: `StoreError`가 아닌 예외에서도 커밋 여부는 모른다."""
+    _active(registry)
+    _commit_then_raise(store, monkeypatch, "block_server")
+    with pytest.raises(_UnexpectedStoreError):
+        run(registry.block("docs", expected_row_revision=_revision(registry)))
+    assert registry.status("docs") is RegStatus.PENDING
+    assert run(registry.refresh("docs")) == run(store.load_registration("docs"))
+    assert registry.status("docs") is RegStatus.BLOCKED
+
+
+def test_unexpected_store_exception_on_observe_keeps_the_server_pending_this_run(
+    registry, store, monkeypatch
+):
+    _active(registry)
+    _commit_then_raise(store, monkeypatch, "record_fingerprint_change")
+    with pytest.raises(_UnexpectedStoreError):
+        run(registry.observe(settings(), listing(edit={"read": {"description": "x"}})))
+    assert registry.status("docs") is RegStatus.PENDING
+    with pytest.raises(RegistryError) as raised:
+        run(
+            registry.activate(
+                "docs", expected_row_revision=_revision(registry), reviewed_by="operator"
+            )
+        )
+    assert str(raised.value) == "REG_SERVER_UNRECORDED"
+
+
+def test_cancel_while_waiting_for_the_lock_marks_nothing(registry, store, monkeypatch):
+    _active(registry)
+    gate = asyncio.Event()
+    original = store.record_fingerprint_change
+
+    async def slow(*args, **kwargs):
+        await gate.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(store, "record_fingerprint_change", slow)
+    seen = _revision(registry)
+
+    async def scenario():
+        observing = asyncio.create_task(registry.observe(settings(), listing()))
+        await asyncio.sleep(0)
+        blocking = asyncio.create_task(registry.block("docs", expected_row_revision=seen))
+        await asyncio.sleep(0)
+        blocking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await blocking
+        gate.set()
+        await observing
+
+    run(scenario())
+    assert run(store.load_registration("docs")).registration.status is RegStatus.ACTIVE
+    assert registry.status("docs") is RegStatus.ACTIVE
 
 
 DOCUMENT = {

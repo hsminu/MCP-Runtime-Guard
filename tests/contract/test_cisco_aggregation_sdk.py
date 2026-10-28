@@ -7,13 +7,15 @@ import asyncio
 import json
 import logging
 import threading
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 
 from guard_app.adapters import cisco_aggregation
 from guard_app.adapters.cisco import prepare_tool_definition
-from guard_app.adapters.cisco_aggregation import connect_metadata_scanner
+from guard_app.adapters.cisco_aggregation import connect_metadata_scanner, scan_report
+from guard_app.security.digest import tool_fingerprint
 
 _KEY = "SENSITIVE_SYNTHETIC_KEY"
 _ENV = {"OPENAI_API_KEY": _KEY}
@@ -95,6 +97,50 @@ def test_real_sdk_pair_receives_same_full_definition_and_keeps_both_findings(loc
     assert _KEY not in caplog.text
     assert _ATTACK not in caplog.text
     assert "SENSITIVE_EXTRA_METADATA" not in caplog.text
+
+
+def test_real_sdk_self_assessment_reaches_the_scan_report():
+    """C4.15·C4.17: SDK 4.8.6은 응답의 overall_risk·threat_summary를 finding에 싣지 않는다.
+
+    C가 `details["raw_response"]`에서 두 값만 무해화해 꺼내고, native YARA finding과 함께
+    B ScanReport로 옮긴다.
+    """
+    metadata = definition("schema")
+    body = response_body(threat=True)
+    body["choices"][0]["message"]["content"] = json.dumps(
+        {
+            "threat_analysis": {
+                "malicious_content_detected": True,
+                "primary_threats": ["PROMPT INJECTION"],
+                "overall_risk": "MEDIUM",
+                "threat_summary": "Schema text says to ignore rules, see http://evil.example/x",
+            }
+        }
+    )
+
+    async def handler(request):
+        return httpx.Response(200, json=body)
+
+    async def run():
+        async with connect_metadata_scanner(
+            environ=_ENV, transport=httpx.MockTransport(handler)
+        ) as scanner:
+            return await scanner.scan("trusted_server", [metadata])
+
+    result = asyncio.run(run())
+    llm = result.tools[0].analyzers[0].findings[0]
+    assert llm.overall_risk == "MEDIUM"
+    assert llm.threat_summary.startswith("Schema text says to ignore rules")
+    assert "http://" not in llm.threat_summary
+    tools = [(metadata["name"], tool_fingerprint(metadata))]
+    report = scan_report(result, tools, scanned_at_utc=datetime(2026, 10, 28, tzinfo=UTC))
+    assert report.analyzers_completed == ("LLM", "YARA")
+    by_source = {finding.source: finding for finding in report.findings}
+    assert by_source["LLM"].severity == "HIGH"  # SDK 값 그대로, 모델의 MEDIUM으로 내리지 않는다
+    assert by_source["LLM"].overall_risk == "MEDIUM"
+    assert by_source["YARA"].overall_risk is None
+    assert report.max_severity == "HIGH"
+    assert _ATTACK not in report.model_dump_json()
 
 
 def test_http_failure_keeps_real_yara_high_and_has_no_retry(caplog):
