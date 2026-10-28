@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from guard_app.domain.errors import StoreError
+from guard_app.domain.reasons import Reason
 
 
 @dataclass(repr=False)
@@ -46,6 +47,7 @@ class SQLiteWriter:
         self._condition = threading.Condition()
         self._jobs: deque[_Job] = deque()
         self._closing = False
+        self._close_reason = Reason.INTERNAL_ERROR
         self._ready = threading.Event()
         self._closed = threading.Event()
         self._close_ok = False
@@ -109,7 +111,9 @@ class SQLiteWriter:
 
     def _enqueue(self, job: _Job) -> None:
         with self._condition:
-            if self._closing or len(self._jobs) >= self._capacity:
+            if self._closing:
+                raise StoreError(self._close_reason)
+            if len(self._jobs) >= self._capacity:
                 raise StoreError()
             self._jobs.append(job)
             self._condition.notify()
@@ -161,16 +165,17 @@ class SQLiteWriter:
             raise job.outcome.error from None
         return cast(T, job.outcome.value)
 
-    def close(self) -> None:
+    def close(self, reason: Reason = Reason.INTERNAL_ERROR) -> None:
         with self._condition:
             if self._closing:
                 return
             self._closing = True
+            self._close_reason = reason
             pending = tuple(self._jobs)
             self._jobs.clear()
             self._condition.notify_all()
         for job in pending:
-            self._publish(job, _Outcome(error=StoreError()))
+            self._publish(job, _Outcome(error=StoreError(reason)))
 
     async def wait_closed(self, timeout: float) -> bool:  # noqa: ASYNC109
         loop = asyncio.get_running_loop()

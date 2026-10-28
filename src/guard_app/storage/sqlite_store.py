@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import get_ident
+from threading import Lock, get_ident
 from types import TracebackType
 from typing import Literal
 
@@ -32,11 +32,13 @@ from guard_app.domain.contracts import (
 )
 from guard_app.domain.enums import (
     ApprovalStatus,
+    CommitOutcome,
     Decision,
     Label,
     RegStatus,
     RequestStatus,
     SessionEvent,
+    StorePhase,
     SystemStopReason,
     TaskStatus,
     ToolKind,
@@ -49,6 +51,7 @@ from guard_app.domain.models import (
     Escalation,
     PolicyDecision,
     ResolvedRequest,
+    StoreExecutionState,
     TaskState,
     ToolSpec,
 )
@@ -92,6 +95,19 @@ _METHOD_WRITES = {
     "commit_send_outcome": True,
     "commit_request_failure": True,
 }
+# 전역 정지 뒤 새 실행 권한을 부여하는 작업만 차단한다.
+# transition_approval은 APPROVED일 때만 이 표에 따른 차단 대상이다.
+_EXECUTION_GATED_METHODS = frozenset(
+    {
+        "create_task",
+        "record_decision",
+        "reserve_dispatch",
+        "create_approval",
+        "consume_and_reserve",
+        "transition_approval",
+        "activate_server",
+    }
+)
 # B6-06 제안 한계: UTF-8 정규화 후 크기. 등록 UI/검사 결과의 메모리·DB 폭주 제한.
 _MAX_SCHEMA_BYTES = 256 * 1024
 _MAX_TOOLS_BYTES = 8 * 1024 * 1024
@@ -332,6 +348,11 @@ class SQLiteStore:
     정상 상태 전이의 보안 버전 유지 등은 검토용 구현 선택이며 B6 합의는 별도다.
     audit_id_factory와 utc_now는 writer 스레드에서 호출된다. 생성자는 연결과
     이관 준비를 동기 대기하며 busy_timeout 및 실제 I/O에 따라 지연될 수 있다.
+    전역 정지 시 create_task·record_decision·reserve_dispatch·create_approval·
+    consume_and_reserve·APPROVED 승인 전이·activate_server는 거부한다. 읽기,
+    Task 상태·예약 후 결과 기록, 다른 승인 전이·세션 감사와 나머지 Registry
+    쓰기는 허용한다. 연결 자체가 폐기되면 읽기와 정리도 모두 거부한다.
+    READY의 run_id=None은 B6.8 회차 활성화 전 임시 상태다.
     """
 
     def __init__(
@@ -344,6 +365,19 @@ class SQLiteStore:
         max_pending_jobs: int = 1024,
     ) -> None:
         self._connection: sqlite3.Connection | None = None
+        self._connection_close_ok = True
+        self._state_lock = Lock()
+        self._connection_faulted = False
+        self._state = StoreExecutionState(
+            run_id=None,
+            phase=StorePhase.MIGRATING,
+            execution_enabled=False,
+            state_revision=0,
+            reason=None,
+            commit_outcome=None,
+            last_committed_run_state=None,
+            requires_restart=False,
+        )
         self._owner_thread = 0
         self._audit_id_factory = audit_id_factory
         self._allowed_decisions: dict[str, _DecisionContext] = {}
@@ -367,6 +401,10 @@ class SQLiteStore:
             self._discard_connection,
             max_pending_jobs,
         )
+        with self._state_lock:
+            self._state = self._state.model_copy(
+                update={"phase": StorePhase.READY, "execution_enabled": True}
+            )
 
     def _open_connection(self, path: str | Path, busy_timeout_ms: int) -> None:
         self._owner_thread = get_ident()
@@ -410,16 +448,92 @@ class SQLiteStore:
 
     def close(self) -> None:
         """접수를 즉시 닫고 writer가 진행 중 작업을 끝낸 후 연결을 닫는다."""
-        self._writer.close()
+        with self._state_lock:
+            reason = self._state.reason or Reason.INTERNAL_ERROR
+        # writer 큐의 시작 판정과 접수 종료를 같은 Condition으로 직렬화한다.
+        # 이미 dequeue된 작업은 완료하고, 대기 중 작업은 시작하지 않는다.
+        self._writer.close(reason)
+        with self._state_lock:
+            if self._state.phase is StorePhase.READY:
+                self._state = self._state.model_copy(
+                    update={
+                        "phase": StorePhase.CLOSED,
+                        "execution_enabled": False,
+                        "state_revision": self._state.state_revision + 1,
+                    }
+                )
+
+    def execution_state(self) -> StoreExecutionState:
+        """SQL 큐와 독립된 불변 실행 권한 snapshot을 즉시 반환한다."""
+        with self._state_lock:
+            return self._state
+
+    def halt_execution(self, reason: Reason) -> None:
+        """연결이 정상이면 정리 쓰기는 보존하고 새 실행 권한만 닫는다."""
+        if not isinstance(reason, Reason):
+            reason = Reason.INTERNAL_ERROR
+        with self._state_lock:
+            if self._state.phase in (StorePhase.FAULTED, StorePhase.CLOSED):
+                return
+            self._state = self._state.model_copy(
+                update={
+                    "phase": StorePhase.FAULTED,
+                    "execution_enabled": False,
+                    "state_revision": self._state.state_revision + 1,
+                    "reason": reason,
+                    "commit_outcome": None,
+                    "requires_restart": True,
+                }
+            )
+
+    def _connection_fault(self, outcome: CommitOutcome) -> None:
+        with self._state_lock:
+            previous = self._state
+            self._connection_faulted = True
+            if previous.phase is StorePhase.FAULTED and previous.commit_outcome is not None:
+                return
+            self._state = previous.model_copy(
+                update={
+                    "phase": StorePhase.FAULTED,
+                    "execution_enabled": False,
+                    "state_revision": previous.state_revision + int(previous.execution_enabled),
+                    "reason": previous.reason or Reason.INTERNAL_ERROR,
+                    "commit_outcome": outcome,
+                    "requires_restart": True,
+                }
+            )
+
+    def _check_execution_gate(self, *, grants_execution: bool, started: bool = False) -> None:
+        with self._state_lock:
+            state = self._state
+            if (
+                (state.phase is StorePhase.CLOSED and not started)
+                or self._connection_faulted
+                or (
+                    grants_execution
+                    and not state.execution_enabled
+                    and not (started and state.phase is StorePhase.CLOSED)
+                )
+            ):
+                raise StoreError(state.reason or Reason.INTERNAL_ERROR)
 
     async def wait_closed(self, timeout: float) -> bool:  # noqa: ASYNC109
         """writer의 연결 종료를 이벤트 루프를 막지 않고 기다린다."""
         return await self._writer.wait_closed(timeout)
 
-    async def _submit[T](self, operation: Callable[[], T], *, method: str) -> T:
-        return await self._writer.submit(
-            lambda: _store_result(operation), write=_METHOD_WRITES[method]
-        )
+    async def _submit[T](
+        self, operation: Callable[[], T], *, method: str, grants_execution: bool | None = None
+    ) -> T:
+        if grants_execution is None:
+            grants_execution = method in _EXECUTION_GATED_METHODS
+        self._check_execution_gate(grants_execution=grants_execution)
+
+        def execute() -> T:
+            # 큐에 든 뒤 전역 정지 또는 연결 폐기가 된 작업도 시작하지 않는다.
+            self._check_execution_gate(grants_execution=grants_execution, started=True)
+            return _store_result(operation)
+
+        return await self._writer.submit(execute, write=_METHOD_WRITES[method])
 
     def _run_on_writer[T](self, operation: Callable[[sqlite3.Connection], T]) -> T:
         """테스트 전용. 이벤트 루프 밖에서 writer 소유 연결을 사용한다."""
@@ -1017,7 +1131,13 @@ class SQLiteStore:
         이 반환은 준비/복구 성공 ACK가 아니다. 순번 배정·schema 이관·상태/epoch
         변경과 앱 bootstrap 연결은 SEQ/REC 합의 후다. SQL은 지정 모듈에만 둔다.
         """
-        return self._writer.submit_sync(lambda: _store_result(self._inspect_startup_rows))
+        self._check_execution_gate(grants_execution=False)
+
+        def read() -> _StartupInventory:
+            self._check_execution_gate(grants_execution=False, started=True)
+            return _store_result(self._inspect_startup_rows)
+
+        return self._writer.submit_sync(read)
 
     def _inspect_startup_rows(self) -> _StartupInventory:
         connection = self._owned_connection()
@@ -1563,6 +1683,7 @@ class SQLiteStore:
                 reason,
             ),
             method="transition_approval",
+            grants_execution=status is ApprovalStatus.APPROVED,
         )
 
     def _transition_approval(
@@ -2185,10 +2306,12 @@ class SQLiteStore:
         self._approval_contexts.clear()
         self._dispatch_contexts.clear()
         if connection is None:
-            return True
+            return self._connection_close_ok
         try:
             connection.close()
         except sqlite3.Error:
+            # 폐기 과정에서 연결 종료 실패를 잃으면 wait_closed가 거짓 ACK를 낸다.
+            self._connection_close_ok = False
             return False
         return True
 
@@ -2200,6 +2323,8 @@ class SQLiteStore:
         except sqlite3.Error:
             failed = True
         if failed:
+            # COMMIT을 아직 보내지 않았으므로 rollback 실패여도 해당 작업은 미커밋이다.
+            self._connection_fault(CommitOutcome.ROLLED_BACK)
             self._discard_connection()
             raise StoreError()
 
@@ -2235,11 +2360,17 @@ class SQLiteStore:
         except sqlite3.Error:
             failed = True
         if failed:
-            # ACK 불명에서는 연결을 폐기한다. 새 공유 오류/Guard 연결은 B6 합의 후다.
+            # COMMIT 뒤 이미 TX가 없으면 실제 커밋인지 ACK 유실인지 구분할 수 없다.
+            outcome = CommitOutcome.UNKNOWN
             try:
-                self._rollback(connection)
-            finally:
-                self._discard_connection()
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                    if not connection.in_transaction:
+                        outcome = CommitOutcome.ROLLED_BACK
+            except sqlite3.Error:
+                pass
+            self._connection_fault(outcome)
+            self._discard_connection()
             raise StoreError()
 
     def _migrate(self) -> None:
