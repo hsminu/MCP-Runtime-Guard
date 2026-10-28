@@ -349,7 +349,7 @@ class Run:
     call_timeout_s: float = 30.0
     # 다시 조립해도 같은 Task의 call_seq가 겹치지 않게 실행 전체에서 하나를 쓴다.
     sequence: Iterator[int] = field(default_factory=lambda: itertools.count(1))
-    # 조립한 Guard를 닫을 때 transport가 알린 실패 코드(DispatchError)
+    # 조립한 Guard를 닫을 때 transport가 알린 실패 종류(`DispatchError.exception_type`)
     close_errors: list[str] = field(default_factory=list)
 
     @property
@@ -358,14 +358,17 @@ class Run:
         return self.assembled.guard
 
     async def close_guard(self) -> None:
-        """조립한 Guard를 닫는다. transport가 실패를 알리면 코드를 남기고 계속한다."""
+        """조립한 Guard를 닫는다. transport가 실패를 알리면 그 종류를 남기고 계속한다.
+
+        `str(DispatchError)`는 언제나 Reason(`POST_DISPATCH_ERROR`)이라 종류를 구분하지 못한다.
+        """
         assembled, self.assembled = self.assembled, None
         if assembled is None:
             return
         try:
             await assembled.aclose()
         except DispatchError as error:
-            self.close_errors.append(str(error))
+            self.close_errors.append(error.exception_type)
 
     def human(self):
         return self.guard.human_control("local-operator")
@@ -569,4 +572,6 @@ async def harness(
         for process in launched:
             assert await process.close() is True
         store.close()
+        # 앱 잠금을 풀기 전에 Store가 실제로 닫혔는지 확인한다(REC-01, B6.13).
+        assert await store.wait_closed(5.0)
         folders.close()
