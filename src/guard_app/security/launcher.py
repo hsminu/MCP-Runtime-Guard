@@ -10,8 +10,13 @@
 
 `CodexLauncher`는 codex.exe 전용 입구다. 실행마다 `codex.lock.json`의 고정값과 CODEX_HOME 묶음
 해시를 대조하고, 허용 목록 환경과 `app-server -c sqlite_home='<Task 폴더>'`만 쓴다. Task 폴더
-생성·권한·삭제는 C2.13, L2 시작 시험은 C6.14, stdio MCP 서버 등록 값의 검증과 그 실행 파일
-해시의 출처는 C2.6이다. Windows 전용이다.
+생성·권한·삭제는 C2.13, L2 시작 시험은 C6.14다.
+
+stdio MCP 서버는 `launch_mcp_server`로 띄운다(C2.6, EXE-01, 개발문서 10.1절). 등록 화면은
+`check_stdio_values`로 설정 레코드의 실행 값을 검사하고, `pin_executable`이 센 실행 파일 크기·
+SHA-256을 사용자에게 보여 준다. 사용자가 확인한 값이 레코드의 `command_size`·`command_sha256`이
+되고, 연결마다 실행 값을 다시 검사한 뒤 그 지문으로 대조한다. 인터프리터형 서버(`python.exe -m
+…`)에서는 인터프리터만 고정되고 스크립트·패키지는 덮지 못한다. Windows 전용이다.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import contextlib
 import hashlib
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +38,7 @@ from guard_app.security.codex_home import (
     load_codex_pins,
     verify_codex_home,
 )
+from guard_app.security.paths import RESERVED_DEVICE_NAMES
 
 # 10-18 결정(개발문서 10.4절)의 허용 목록. CODEX_HOME은 부모 환경이 아니라 앱 경로로 채운다.
 CODEX_ENV_ALLOWLIST = (
@@ -47,6 +54,18 @@ CODEX_STDERR_FILE = "codex-stderr.log"
 # L2 시작 시험(C6.14) 전용 가짜 모델 제공자. 제품 세션 입구는 이 값을 쓰지 않는다.
 L2_PROVIDER = "guard_l2"
 L2_TOKEN_ENV = "GUARD_L2_TOKEN"  # noqa: S105 - 토큰이 아니라 토큰을 담을 환경변수 이름
+# stdio MCP 서버(C2.6)에 늘 넘기는 부모 환경. 실측(2026-10-28): 환경을 비우면 Python은 소켓을 못
+# 열고 Node는 시작하자마자 끝난다. TEMP·TMP는 부모 값 대신 서버 폴더의 `tmp`를 준다.
+MCP_SERVER_ENV_BASE = ("SYSTEMROOT", "WINDIR", "LOCALAPPDATA", "APPDATA", "USERPROFILE")
+MCP_SERVER_TEMP_DIR = "tmp"
+MAX_SERVER_ARGS = 256
+MAX_SERVER_ARG_CHARS = 4096
+MAX_SERVER_ENV_ALLOW = 64
+_SERVER_ENV_FIXED = frozenset({*MCP_SERVER_ENV_BASE, "TEMP", "TMP"})
+# CreateProcessW의 명령줄 상한(끝 NUL 포함 32,767자).
+_MAX_COMMAND_LINE = 32766
+_DRIVE_PATH = re.compile(r"[A-Za-z]:[\\/]")
+_PATH_FORBIDDEN = frozenset('<>:"|?*')
 _L2_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -428,6 +447,183 @@ def l2_overrides(port: int) -> dict[str, str | int | bool]:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class ExecutablePin:
+    """사용자가 등록 때 확인한 실행 파일 지문(EXE-01). 레코드의 `command_size`·`command_sha256`."""
+
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class StdioServerValues:
+    """검사를 통과한 stdio 서버 실행 값. 레코드의 `command`·`args`·`env_allow`다."""
+
+    command: Path
+    args: tuple[str, ...]
+    env_allow: tuple[str, ...]
+
+
+def check_stdio_values(command: object, args: object, env_allow: object) -> StdioServerValues:
+    """stdio 서버 실행 값을 검사한다(C2.6, 개발문서 10.1절). 등록 화면과 연결마다 쓴다.
+
+    - `command`: 드라이브 문자로 시작하는 절대 경로의 `.exe`. UNC·장치 경로, `.`·`..`·빈 조각,
+      Windows가 달리 읽는 이름(`<>:"|?*`·제어 문자, 끝 점·공백, `CON` 같은 장치 이름)은 거부한다.
+      파일이 있어야 하고 링크·junction이 아니어야 한다.
+    - `args`: 256개 이하, 하나에 4,096자 이하, NUL·짝 없는 서로게이트 없음. 실행 파일과 합친
+      명령줄이 Windows 상한 안이어야 한다.
+    - `env_allow`: 환경변수 이름 64개 이하. 대소문자만 다른 중복과 Guard가 정하는 이름
+      (`MCP_SERVER_ENV_BASE`·TEMP·TMP)은 거부한다.
+
+    실패 코드: `LAUNCH_EXECUTABLE_INVALID`, `LAUNCH_ARGS_INVALID`, `LAUNCH_ENV_ALLOW_INVALID`.
+    """
+    path = _checked_command(command)
+    return StdioServerValues(path, _checked_args(path, args), _checked_env_allow(env_allow))
+
+
+async def pin_executable(command: object) -> ExecutablePin:
+    """등록 화면용 지문(EXE-01). `command`를 검사한 뒤 쓰기·이름 변경·삭제를 막는 핸들로 열어
+    크기와 SHA-256을 센다. 해시는 스레드에서 계산한다."""
+    if sys.platform != "win32":
+        raise LaunchError("LAUNCH_UNSUPPORTED")
+    return await asyncio.to_thread(_measure, _checked_command(command))
+
+
+async def launch_mcp_server(
+    server_dir: Path,
+    command: object,
+    args: object,
+    env_allow: object,
+    pin: ExecutablePin | None,
+) -> LaunchedProcess:
+    """stdio MCP 서버 하나를 띄운다(C2.6). A는 파이프를 `validated_stdio_stream_factory`에 넘긴다.
+
+    연결마다 실행 값을 다시 검사하고(`check_stdio_values`), 실행 파일을 등록 지문과 대조한다.
+    지문이 없으면(지문 필드가 없는 레코드) `LAUNCH_EXECUTABLE_UNPINNED`, 다르면
+    `LAUNCH_EXECUTABLE_MISMATCH`로 띄우지 않는다. 둘 다 사용자가 다시 확인해야 한다.
+
+    `server_dir`은 `AppFolders.server_folder`가 준 폴더다. 작업 폴더로 쓰고, stderr는 연결마다
+    새 `stderr-<난수>.log`로, TEMP·TMP는 그 안의 `tmp`로 보낸다. 환경은 `MCP_SERVER_ENV_BASE`와
+    `env_allow`에 적힌 이름의 부모 값만 넘기고, 부모에 없는 이름은 넘기지 않는다.
+    """
+    if sys.platform != "win32":
+        raise LaunchError("LAUNCH_UNSUPPORTED")
+    values = check_stdio_values(command, args, env_allow)
+    if pin is None:
+        raise LaunchError("LAUNCH_EXECUTABLE_UNPINNED")
+    if type(pin) is not ExecutablePin:
+        raise LaunchError("LAUNCH_SPEC_INVALID")
+    folder = _checked_dir(server_dir, "LAUNCH_SERVER_DIR_INVALID")
+    temp = folder / MCP_SERVER_TEMP_DIR
+    try:
+        temp.mkdir(exist_ok=True)
+    except OSError:
+        raise LaunchError("LAUNCH_SERVER_DIR_INVALID") from None
+    _checked_dir(temp, "LAUNCH_SERVER_DIR_INVALID")
+    inherited = (*MCP_SERVER_ENV_BASE, *values.env_allow)
+    env = (
+        *((name, os.environ[name]) for name in inherited if name in os.environ),
+        ("TEMP", str(temp)),
+        ("TMP", str(temp)),
+    )
+    spec = LaunchSpec(
+        executable=values.command,
+        executable_size=pin.size,
+        executable_sha256=pin.sha256,
+        args=values.args,
+        env=env,
+        cwd=folder,
+        stderr_path=folder / f"stderr-{os.urandom(16).hex()}.log",
+    )
+    return await launch_process(spec)
+
+
+def _checked_command(command: object) -> Path:
+    if (
+        type(command) is not str
+        or len(command) > _MAX_PATH_CHARS
+        or not _DRIVE_PATH.match(command)
+        or not _encodable(command)
+    ):
+        raise LaunchError("LAUNCH_EXECUTABLE_INVALID")
+    names = re.split(r"[\\/]", command[3:])
+    if any(
+        not name
+        or name in (".", "..")
+        or name.endswith((".", " "))
+        or name.split(".", 1)[0].upper() in RESERVED_DEVICE_NAMES
+        or any(char in _PATH_FORBIDDEN or ord(char) < 0x20 for char in name)
+        for name in names
+    ) or not names[-1].casefold().endswith(".exe"):
+        raise LaunchError("LAUNCH_EXECUTABLE_INVALID")
+    path = Path(command)
+    try:
+        if path.is_symlink() or path.is_junction() or not path.is_file():
+            raise LaunchError("LAUNCH_EXECUTABLE_INVALID")
+    except OSError:
+        raise LaunchError("LAUNCH_EXECUTABLE_INVALID") from None
+    return path
+
+
+def _checked_args(command: Path, args: object) -> tuple[str, ...]:
+    if type(args) is not tuple and type(args) is not list:
+        raise LaunchError("LAUNCH_ARGS_INVALID")
+    checked = tuple(args)
+    if len(checked) > MAX_SERVER_ARGS or any(
+        type(arg) is not str
+        or len(arg) > MAX_SERVER_ARG_CHARS
+        or "\0" in arg
+        or not _encodable(arg)
+        for arg in checked
+    ):
+        raise LaunchError("LAUNCH_ARGS_INVALID")
+    # asyncio의 Windows 실행이 쓰는 인용 규칙 그대로 잰다.
+    if len(subprocess.list2cmdline([str(command), *checked])) > _MAX_COMMAND_LINE:
+        raise LaunchError("LAUNCH_ARGS_INVALID")
+    return checked
+
+
+def _checked_env_allow(env_allow: object) -> tuple[str, ...]:
+    if type(env_allow) is not tuple and type(env_allow) is not list:
+        raise LaunchError("LAUNCH_ENV_ALLOW_INVALID")
+    checked = tuple(env_allow)
+    if len(checked) > MAX_SERVER_ENV_ALLOW:
+        raise LaunchError("LAUNCH_ENV_ALLOW_INVALID")
+    seen: set[str] = set()
+    for name in checked:
+        if type(name) is not str or not _ENV_NAME.fullmatch(name):
+            raise LaunchError("LAUNCH_ENV_ALLOW_INVALID")
+        upper = name.upper()
+        if upper in seen or upper in _SERVER_ENV_FIXED:
+            raise LaunchError("LAUNCH_ENV_ALLOW_INVALID")
+        seen.add(upper)
+    return checked
+
+
+def _encodable(text: str) -> bool:
+    """CreateProcessW로 넘길 수 있는지 본다. 짝 없는 서로게이트는 UTF-16으로 나타낼 수 없다."""
+    try:
+        text.encode("utf-16-le")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _measure(path: Path) -> ExecutablePin:
+    with _open_locked(path) as image:
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            while chunk := image.read(_HASH_CHUNK):
+                size += len(chunk)
+                digest.update(chunk)
+        except OSError:
+            raise LaunchError("LAUNCH_EXECUTABLE_INVALID") from None
+    if size == 0:
+        raise LaunchError("LAUNCH_EXECUTABLE_INVALID")
+    return ExecutablePin(size, digest.hexdigest())
+
+
 async def launch_process(spec: LaunchSpec) -> LaunchedProcess:
     """명세를 검증하고 실행한다. 실패하면 만든 프로세스·Job을 정리하고 고정 코드만 올린다."""
     if sys.platform != "win32":
@@ -578,8 +774,8 @@ def _close_late_image(opening: asyncio.Future[BinaryIO]) -> None:
         opening.result().close()
 
 
-def _open_verified(path: Path, size: int, sha256: str) -> BinaryIO:
-    """쓰기·이름 변경·삭제를 막는 핸들로 열어 크기·SHA-256을 대조하고, 열린 채로 돌려준다."""
+def _open_locked(path: Path) -> BinaryIO:
+    """쓰기·이름 변경·삭제를 막는 읽기 핸들로 연다. reparse point는 따라가지 않는다."""
     handle = _CreateFileW(
         str(path),
         _GENERIC_READ,
@@ -596,8 +792,13 @@ def _open_verified(path: Path, size: int, sha256: str) -> BinaryIO:
     except OSError:
         _CloseHandle(handle)
         raise LaunchError("LAUNCH_EXECUTABLE_INVALID") from None
+    return open(descriptor, "rb", closefd=True)  # noqa: SIM115 - 호출자가 닫는다
+
+
+def _open_verified(path: Path, size: int, sha256: str) -> BinaryIO:
+    """쓰기·이름 변경·삭제를 막는 핸들로 열어 크기·SHA-256을 대조하고, 열린 채로 돌려준다."""
     # 프로세스 생성까지 핸들을 쥐어야 해서 with로 닫지 않는다. 실패 경로는 아래 finally가 닫는다.
-    image = open(descriptor, "rb", closefd=True)  # noqa: SIM115
+    image = _open_locked(path)
     verified = False
     try:
         digest = hashlib.sha256()
