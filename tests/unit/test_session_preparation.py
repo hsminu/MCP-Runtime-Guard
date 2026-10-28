@@ -57,7 +57,7 @@ class Session:
         self.trace = trace
         self.closed = False
 
-    async def send(self, text):
+    async def send(self, text, effort=None):
         return text
 
     async def interrupt(self):

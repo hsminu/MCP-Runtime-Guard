@@ -19,12 +19,14 @@ class Session:
         self.response = response
         self.error = error
         self.sent: list[str] = []
+        self.efforts: list[str | None] = []
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
         self.release.set()
 
-    async def send(self, text: str) -> object:
+    async def send(self, text: str, effort: str | None = None) -> object:
         self.sent.append(text)
+        self.efforts.append(effort)
         self.entered.set()
         await self.release.wait()
         if self.error is not None:
@@ -63,6 +65,19 @@ def test_one_message_completes_and_the_runner_accepts_the_next() -> None:
         assert runner.can_accept_message
         assert session.sent == ["first"]
         assert failures == []
+
+    asyncio.run(run())
+
+
+def test_picked_reasoning_level_goes_with_its_own_message_only() -> None:
+    async def run() -> None:
+        session = Session("ok")
+        runner, _ = _runner(session)
+        runner.add_user_message("think hard", "high")
+        await runner.advance()
+        runner.add_user_message("plain")
+        await runner.advance()
+        assert session.efforts == ["high", None]
 
     asyncio.run(run())
 

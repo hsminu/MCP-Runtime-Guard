@@ -27,6 +27,7 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "guard_app"
 
 A_SERVICES = frozenset(
     {
+        "account_runtime",
         "bridge",
         "codex_account",
         "codex_composition",
@@ -37,6 +38,7 @@ A_SERVICES = frozenset(
         "guard_relay",
         "policy_view",
         "product_assembly",
+        "product_settings",
         "runner",
         "session_admission",
         "session_cleanup",

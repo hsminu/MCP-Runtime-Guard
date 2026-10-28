@@ -22,6 +22,7 @@ from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import TaskState
 from guard_app.ports import SessionAudit, Store
+from guard_app.services.account_runtime import AccountAccess, ProductAccount
 from guard_app.services.bridge import (
     BackendBindings,
     ControlAction,
@@ -29,11 +30,17 @@ from guard_app.services.bridge import (
     TaskProjection,
 )
 from guard_app.services.catalog import GuardSettings
-from guard_app.services.codex_composition import codex_session_factory
+from guard_app.services.codex_composition import app_version, codex_session_factory
 from guard_app.services.guard import PolicyTaskSource, SystemControl
 from guard_app.services.guard_relay import ApprovalOutcomes
 from guard_app.services.policy_view import PolicyView, policy_view
 from guard_app.services.product_assembly import AssembledGuard, ProductInputs, assemble_guard
+from guard_app.services.product_settings import (
+    SETTINGS_LOADED,
+    SettingsFile,
+    SettingsFileSaver,
+    load_settings_profile,
+)
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 from guard_app.services.session_cleanup import BackgroundWork, CleanupLimits, SessionCleanup
@@ -121,6 +128,10 @@ class _Creations:
     def owns(self, task_id: str) -> bool:
         return task_id in self._creators.values()
 
+    @property
+    def active(self) -> bool:
+        return bool(self._creators)
+
     async def cancel(self, timeout_s: float) -> bool:
         """Cancel every other creator. False when one still runs after the wait."""
         creating = tuple(task for task in self._creators if task is not asyncio.current_task())
@@ -165,6 +176,8 @@ class SessionRuntime:
     preparation, TaskPolicy the Profile for new rows, SessionCleanup what a Task
     launched, StopChannel where a stop is recorded. `system_control` and
     `cleanup_limits` default to Guard's system channel and the reviewed bounds.
+    `account` gives the login screen its own app-server (A52); logout waits
+    until no session may run and blocks new ones meanwhile (#21).
     """
 
     def __init__(
@@ -179,11 +192,14 @@ class SessionRuntime:
         approvals: ApprovalOutcomes | None = None,
         profile_document: Mapping[str, object] | None = None,
         profile_saver: ProfileSaver | None = None,
+        settings_status: str | None = None,
         system_control: SystemControl | None = None,
         cleanup_limits: CleanupLimits | None = None,
+        account: AccountAccess | None = None,
     ) -> None:
         self.store = store
         self._assembled = assembled
+        self._settings_status = settings_status
         self._approvals = approvals
         self._session_factory = session_factory
         self._limits = CleanupLimits() if cleanup_limits is None else cleanup_limits
@@ -196,8 +212,18 @@ class SessionRuntime:
             document=profile_document,
             saver=profile_saver,
             task_source=_task_source(store),
+            # Without a Profile, a settings-file failure says more than "not connected".
+            missing_code=(
+                settings_status
+                if settings_status is not None and settings_status != SETTINGS_LOADED
+                else "GUARD_PROFILE_UNAVAILABLE"
+            ),
         )
         self._work = BackgroundWork()
+        # Guard's records of session stops and user-input requests, apart from
+        # cleanup so shutdown waits for exactly them before the Store closes.
+        self._records = BackgroundWork()
+        self._stops_unconfirmed = False
         self._cleanup = SessionCleanup(
             preparation,
             self._admission,
@@ -206,7 +232,7 @@ class SessionRuntime:
             lambda task_id: self._set_code(task_id, "CODEX_CLEANUP_UNCONFIRMED"),
         )
         system = _system_control(store, assembled) if system_control is None else system_control
-        self._stops = StopChannel(store, system, self._admission, self._work)
+        self._stops = StopChannel(store, system, self._admission, self._records)
         self._events = _TaskEvents(approvals, self._admission)
         self._creations = _Creations(close_store)
         self._running: dict[str, _RunningTask] = {}
@@ -217,11 +243,23 @@ class SessionRuntime:
             if assembled is None
             else build_dynamic_tools(assembled.tool_views).tool_refs
         )
+        self._account = (
+            None
+            if account is None
+            else ProductAccount(account, version=app_version(), sessions_alive=self._sessions_alive)
+        )
 
     @property
     def pending_cleanup(self) -> frozenset[str]:
         """Tasks whose session or C resources are still owned: cleanup not yet proven."""
         return self._cleanup.pending
+
+    def _sessions_alive(self) -> bool:
+        """Whether any Task app-server may still run: one is being created or not yet cleaned up."""
+        return self._creations.active or bool(self._cleanup.pending)
+
+    def _signing_out(self) -> bool:
+        return self._account is not None and self._account.signing_out
 
     def runner_for_task(self, task_id: str) -> CodexTaskRunner:
         running = self._running.get(task_id)
@@ -237,6 +275,8 @@ class SessionRuntime:
         for blocker in (self._admission.refusal(), self._startup.blocker()):
             if blocker is not None:
                 return blocker
+        if self._signing_out():
+            return "CODEX_SIGNING_OUT"
         if self._session_factory is None:
             return "CODEX_SESSION_UNAVAILABLE"
         return self._policy.blocker()
@@ -259,6 +299,10 @@ class SessionRuntime:
             raise SessionRuntimeError("SESSION_UNAVAILABLE")
         self._creations.enter(creator)
         try:
+            # Checked with nothing awaited since enter: a logout that starts
+            # later sees this creator and is refused (#21).
+            if self._signing_out():
+                raise SessionRuntimeError("CODEX_SIGNING_OUT")
             return await self._create_session(options, creator)
         finally:
             self._creations.leave(creator)
@@ -454,6 +498,8 @@ class SessionRuntime:
         if self._admission.closed:
             if self._admission.cleanup_unconfirmed:
                 raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
+            if self._stops_unconfirmed:
+                raise SessionRuntimeError("SESSION_STOP_UNCONFIRMED")
             return
         self._admission.close()
         # Bridge normally cancels creation first; direct callers get the same
@@ -471,22 +517,57 @@ class SessionRuntime:
                     for task_id in self._cleanup.pending
                     if not self._creations.owns(task_id)
                 ),
+                self._close_account(),
                 return_exceptions=True,
             )
             if (
                 self._admission.cleanup_unconfirmed
                 or not creations_finished
-                or any(isinstance(result, BaseException) for result in results)
+                or any(isinstance(result, BaseException) or result is False for result in results)
             ):
                 self._admission.mark_cleanup_unconfirmed()
                 raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
         finally:
             self._running.clear()
             try:
-                if self._assembled is not None:
-                    await self._assembled.aclose()
+                self._stops_unconfirmed = not await self._close_guard()
             finally:
                 self._creations.close_store()
+        if self._stops_unconfirmed:
+            raise SessionRuntimeError("SESSION_STOP_UNCONFIRMED")
+
+    async def _close_guard(self) -> bool:
+        """Close Guard once the session stops it is recording have ended.
+
+        Guard records a stop under the Task lock (STOP-01), in the background.
+        Closing Guard halts it globally and a closed Store refuses the write, so
+        a stop still waiting then ends as SystemControlError (#58 B review). The
+        stops are waited for after the transport has settled reserved calls,
+        while Guard still records. One that does not end in time fails against
+        the halted Guard, and that too ends before the Store closes. False when
+        a stop did not end within its bound.
+        """
+        recorded = False
+
+        async def settle() -> None:
+            nonlocal recorded
+            recorded = await self._records.wait(self._limits.stop_record_s)
+
+        if self._assembled is None:
+            await settle()
+        else:
+            await self._assembled.aclose(settle=settle)
+        ended = await self._records.wait(self._limits.session_s)
+        return recorded and ended
+
+    async def _close_account(self) -> bool:
+        """End the login screen's app-server. False when its exit was not confirmed in time."""
+        if self._account is None:
+            return True
+        try:
+            return await asyncio.wait_for(self._account.aclose(), self._limits.confirm_exit_s)
+        except TimeoutError:
+            return False
 
     def bindings(self) -> BackendBindings:
         assembled = self._assembled
@@ -506,6 +587,8 @@ class SessionRuntime:
             task_events=self._events.set_task_listener,
             answer_partials=self._events.set_partial_listener,
             policy_access=self.change_server_access if available else None,
+            settings_status=self._settings_status,
+            account=self._account,
         )
 
 
@@ -516,12 +599,35 @@ async def bootstrap_product(
     preparation: SessionPreparation | None = None,
     product: ProductInputs | None = None,
     profile_saver: ProfileSaver | None = None,
+    settings: SettingsFile | None = None,
+    account: AccountAccess | None = None,
 ) -> BackendBindings:
-    """Product start. `product` comes from B3.11 file loading and C's launcher/Registry."""
+    """Product start.
+
+    `account` is the login screen's access to C's launcher and logout cleanup
+    (A52, #21). `settings` is the CFG-01 file read at start. Its Profile sets the policy of
+    new Task rows, and policy saves go back to that file. Building Guard from it
+    also needs B's durable call_seq and failure audit (B6.8) and C's MCP server
+    launch (C2.6, EXE-01); until then `product` is supplied only by tests.
+    """
 
     store = SQLiteStore(db_path, audit_id_factory=lambda: f"audit-{uuid4().hex}")
     assembled: AssembledGuard | None = None
     approvals: ApprovalOutcomes | None = None
+    guard_settings: GuardSettings | None = None
+    profile_document: Mapping[str, object] | None = None
+    settings_status: str | None = None
+    if settings is not None:
+        try:
+            settings_status, loaded = await load_settings_profile(settings, store)
+        finally:
+            if settings_status is None:
+                store.close()
+        if loaded is not None:
+            guard_settings = loaded.guard_settings
+            profile_document = settings.document
+            if profile_saver is None:
+                profile_saver = SettingsFileSaver(settings)
     if product is not None:
         try:
             assembled = await assemble_guard(store, product)
@@ -536,10 +642,13 @@ async def bootstrap_product(
         session_factory=session_factory,
         preparation=preparation,
         close_store=store.close,
+        guard_settings=guard_settings,
         assembled=assembled,
         approvals=approvals,
-        profile_document=None if product is None else product.profile_document,
+        profile_document=profile_document if product is None else product.profile_document,
         profile_saver=profile_saver,
+        settings_status=settings_status,
+        account=account,
     )
     adopted = False
     try:

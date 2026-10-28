@@ -63,6 +63,7 @@ class UntrustedTextView(QWidget):
         self.notice.setVisible(show_unverified_notice)
         layout.addWidget(self.notice)
         self.body = QPlainTextEdit()
+        self.body.setObjectName("untrustedBody")
         self.body.setAccessibleName(accessible_name)
         if show_unverified_notice:
             self.body.setAccessibleDescription(UNVERIFIED_NOTICE)
@@ -82,7 +83,7 @@ class UntrustedTextView(QWidget):
     def set_text(self, value: str) -> None:
         shown, omitted = untrusted_display_text(value, max_chars=self._max_chars)
         self.body.setPlainText(shown)
-        self.omission.setText(f"뒤의 {omitted}자는 표시하지 않았어." if omitted else "")
+        self.omission.setText(f"뒤의 {omitted}자는 표시하지 않음." if omitted else "")
         self.omission.setVisible(bool(omitted))
 
     def clear(self) -> None:

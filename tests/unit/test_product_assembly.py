@@ -27,6 +27,7 @@ from guard_app.domain.contracts import (
     Released,
     ToolView,
     TrustedContext,
+    Withheld,
 )
 from guard_app.domain.enums import (
     ApprovalStatus,
@@ -43,6 +44,7 @@ from guard_app.services.guard import FailureEvent
 from guard_app.services.product_assembly import (
     AssembledGuard,
     LiveCheckedRegistry,
+    LiveFingerprints,
     ProductAssemblyError,
     ProductInputs,
     assemble_guard,
@@ -533,6 +535,130 @@ def test_tools_list_changed_invalidates_a_pending_approval(tmp_path) -> None:
     assert record.status is ApprovalStatus.INVALIDATED
     assert [call["name"] for call in peer.calls] == ["read"]
     assert state.status is TaskStatus.HALTED
+
+
+class DyingPeer(Peer):
+    """A stdio server whose output ends (its process exited) after it has served."""
+
+    def __init__(self, definitions: list[dict[str, object]], *, die_on_call: bool) -> None:
+        super().__init__(definitions)
+        self.dead = False
+        self.die_on_call = die_on_call
+        self.ended = asyncio.Event()
+
+    def die(self) -> None:
+        self.dead = True
+        self.available.set()
+
+    async def read(self, size: int) -> bytes:
+        while not self.output:
+            if self.dead:
+                self.ended.set()
+                return b""
+            self.available.clear()
+            await self.available.wait()
+        return await super().read(size)
+
+    async def write(self, frame: bytes) -> None:
+        if self.dead:
+            return  # nobody reads the pipe any more
+        if self.die_on_call and self.calls:
+            self.calls.append(json.loads(frame)["params"])
+            self.die()  # exits with the call unanswered
+            return
+        await super().write(frame)
+
+
+@pytest.mark.parametrize("die_on_call", [False, True], ids=["while-idle", "during-a-call"])
+def test_a_server_that_stops_serving_is_pending_for_the_rest_of_the_run(
+    tmp_path, die_on_call
+) -> None:
+    """#61: the call that finds the dead session keeps its unknown outcome and
+    halts its Task; every later call is denied with REG_NOT_ACTIVE before it is
+    reserved, so no other Task is locked. C's Registry is not written."""
+    peer = DyingPeer([READ_DEFINITION], die_on_call=die_on_call)
+    registry = Registry(tool_fingerprint(READ_DEFINITION))
+    audits: list[FailureEvent] = []
+
+    async def run():
+        async with running(tmp_path, peer, registry, document(), audits) as (assembled, store):
+            guard = assembled.guard
+            base = await store.load_task("task-1")
+            for task_id in ("task-2", "task-3"):
+                await store.create_task(
+                    base.model_copy(update={"task_id": task_id}), created_at_utc=datetime.now(UTC)
+                )
+            first = await guard.submit("task-1", read_call("c1"), expected_epoch=1)
+            if not die_on_call:
+                peer.die()
+                await peer.ended.wait()
+                # Let the SDK close the session first, so the next call finds it
+                # closed rather than in flight; both end the same way.
+                await asyncio.sleep(0.05)
+            found = await guard.submit("task-2", read_call("c2"), expected_epoch=1)
+            later = await guard.submit("task-3", read_call("c3"), expected_epoch=1)
+            states = [(await store.load_task(t)).status for t in ("task-2", "task-3")]
+            return first, found, later, states, assembled.offered_tool_views(), assembled.registry
+
+    first, found, later, states, offered, view = asyncio.run(run())
+    assert type(first) is Released
+    assert type(found) is Withheld
+    assert found.reasons == (Reason.POST_DISPATCH_ERROR,)
+    assert type(later) is Denied
+    assert later.reasons == (Reason.REG_NOT_ACTIVE,)
+    assert states == [TaskStatus.HALTED, TaskStatus.RUNNING]
+    assert len(peer.calls) == (2 if die_on_call else 1)
+    assert [(e.task_id, e.phase, e.reason) for e in audits if e.task_id == "task-3"] == [
+        ("task-3", "before_dispatch", Reason.REG_NOT_ACTIVE)
+    ]
+    assert view.status("docs") is RegStatus.PENDING
+    assert view.unavailable == frozenset({"docs"})
+    assert offered == ()
+    assert registry.record.status is RegStatus.ACTIVE
+
+
+def test_close_settles_between_the_transport_and_guard(tmp_path) -> None:
+    """#58 B review: a session stop recorded in the background must end after the
+    reserved calls settled (transport closed) and before Guard halts globally."""
+    order: list[str] = []
+
+    async def run():
+        store = SQLiteStore(tmp_path / "close.db", audit_id_factory=lambda: f"audit-{uuid4().hex}")
+        try:
+            peer = Peer([READ_DEFINITION])
+            registry = Registry(tool_fingerprint(READ_DEFINITION))
+            assembled = await assemble_guard(store, inputs(peer, registry, document()))
+            guard_close = assembled.guard.aclose
+
+            async def closing_guard() -> None:
+                order.append("guard")
+                await guard_close()
+
+            assembled.guard.aclose = closing_guard  # type: ignore[method-assign]
+
+            async def settle() -> None:
+                order.append("settle")
+                assert assembled.transport._closed
+
+            await assembled.aclose(settle=settle)
+        finally:
+            store.close()
+
+    asyncio.run(run())
+    assert order == ["settle", "guard"]
+
+
+def test_a_server_failure_is_not_superseded_by_the_comparison() -> None:
+    """#61: unlike an early list-change notice, a session that stopped serving
+    before the live comparison finished keeps its server PENDING for this run."""
+    view = LiveCheckedRegistry(Registry(tool_fingerprint(READ_DEFINITION)))
+    view.server_failed("docs")
+    assert view.status("docs") is RegStatus.PENDING
+    live = {("docs", "read"): tool_fingerprint(READ_DEFINITION)}
+    view.seal(LiveFingerprints(live, frozenset(), frozenset()))
+    assert view.status("docs") is RegStatus.PENDING
+    assert view.blocked_servers == view.unavailable == frozenset({"docs"})
+    assert view.listing_changed == frozenset()
 
 
 def test_unsupported_tool_schema_is_a_fixed_code_and_closes_the_transport(

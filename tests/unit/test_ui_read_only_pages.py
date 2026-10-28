@@ -184,7 +184,7 @@ def test_product_window_without_approval_source_never_waits_forever(app: QApplic
     page.lane_tabs.setCurrentIndex(1)
     assert approval_queries == []
     assert page.state is LoadState.UNAVAILABLE
-    assert "아직 연결되지 않았어" in page.state_message.message.text()
+    assert "아직 연결되지 않음" in page.state_message.message.text()
     assert "불러오는 중" not in page.state_message.message.text()
     window.set_approval_query_connected(True)
     page.refresh()

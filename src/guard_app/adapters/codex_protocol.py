@@ -26,6 +26,10 @@ from guard_app.domain.contracts import ReleasedResult, ToolView
 CLIENT_NAME = "mcp_runtime_guard"
 CLIENT_TITLE = "MCP Runtime Guard"
 MAX_TURN_TEXT_CHARS = 1_048_576
+# Reasoning levels config/codex/model_catalog.json advertises for the pinned
+# model, minus "ultra": it delegates to sub-agents, which L1 turns off.
+# Codex 0.162.1 turn/start takes `effort` for this turn and later ones.
+REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 TOOL_NAME_MAX = 128
 NAMESPACE_MAX = 64
 NAMESPACE_DESCRIPTION = "Tools reached only through MCP Runtime Guard."
@@ -160,10 +164,15 @@ def thread_start_params(
     }
 
 
-def turn_start_params(thread_id: str, text: str) -> dict[str, object]:
+def turn_start_params(thread_id: str, text: str, effort: str | None = None) -> dict[str, object]:
     if type(text) is not str or not text or len(text) > MAX_TURN_TEXT_CHARS:
         raise CodexProtocolError("CODEX_INPUT_INVALID")
-    return {"threadId": thread_id, "input": [{"type": "text", "text": text}]}
+    if effort is not None and effort not in REASONING_EFFORTS:
+        raise CodexProtocolError("CODEX_INPUT_INVALID")
+    params: dict[str, object] = {"threadId": thread_id, "input": [{"type": "text", "text": text}]}
+    if effort is not None:
+        params["effort"] = effort
+    return params
 
 
 def turn_interrupt_params(thread_id: str, turn_id: str) -> dict[str, object]:

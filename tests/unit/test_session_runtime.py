@@ -11,7 +11,7 @@ from dataclasses import replace
 import pytest
 
 from guard_app.domain.contracts import Pending
-from guard_app.domain.enums import TaskStatus
+from guard_app.domain.enums import SystemStopReason, TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.reasons import Reason
 from guard_app.services.bridge import ControlAction, SessionOptions
@@ -39,7 +39,7 @@ class Session:
         self.release = asyncio.Event()
         self.error = None
 
-    async def send(self, text):
+    async def send(self, text, effort=None):
         self.messages.append(text)
         self.entered.set()
         await self.release.wait()
@@ -943,3 +943,85 @@ def test_streamed_pieces_carry_their_own_task_and_epoch_until_shutdown(tmp_path)
         assert len(pieces) == 2
 
     asyncio.run(run())
+
+
+class RecordingSystem:
+    """Guard's system channel: a stop waits (for the Task lock) before its Store write."""
+
+    def __init__(self, events):
+        self.events = events
+        self.store = None
+        self.waiting = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def stop_task(self, identity, reason):
+        self.waiting.set()
+        await self.release.wait()
+        state = await self.store.load_task(identity.task_id)  # refused once the Store closed
+        self.events.append(("stop-recorded", identity.task_id, reason))
+        return state
+
+    async def record_request_user_input(self, identity):
+        pass
+
+
+async def stop_one_task(runtime, sessions, system):
+    created = await runtime.create_session(SessionOptions())
+    runner = runtime.runner_for_task(created.task_id)
+    sessions[0].error = CodexAuthenticationError()
+    sessions[0].release.set()
+    runner.add_user_message("one")
+    assert (await runner.advance()).status == "halted"
+    await asyncio.wait_for(system.waiting.wait(), 1)
+    return created.task_id
+
+
+def test_shutdown_lets_a_session_stop_reach_the_store_before_closing_it(tmp_path):
+    """#58 B review: Guard records the stop in the background; closing the Store
+    first refused that write (SystemControlError). Shutdown now waits for it."""
+
+    async def run():
+        events = []
+        system = RecordingSystem(events)
+        runtime, sessions = make_runtime(
+            tmp_path,
+            system_control=system,
+            on_store_close=lambda: events.append(("store-closed",)),
+        )
+        system.store = runtime.store
+        task_id = await stop_one_task(runtime, sessions, system)
+        closing = asyncio.create_task(runtime.close())
+        await asyncio.sleep(0.05)
+        assert events == []  # the Store is still open for the waiting stop
+        system.release.set()
+        await asyncio.wait_for(closing, 1)
+        return events, task_id
+
+    events, task_id = asyncio.run(run())
+    assert events == [
+        ("stop-recorded", task_id, SystemStopReason.AUTH_FAILED),
+        ("store-closed",),
+    ]
+
+
+def test_a_stop_that_does_not_end_in_time_is_reported_and_the_store_still_closes(tmp_path):
+    async def run():
+        events = []
+        system = RecordingSystem(events)
+        runtime, sessions = make_runtime(
+            tmp_path,
+            system_control=system,
+            on_store_close=lambda: events.append(("store-closed",)),
+            cleanup_limits=CleanupLimits(stop_record_s=0.05, session_s=0.05),
+        )
+        system.store = runtime.store
+        await stop_one_task(runtime, sessions, system)
+        for _ in range(2):  # a repeated close reports it again
+            with pytest.raises(SessionRuntimeError, match="^SESSION_STOP_UNCONFIRMED$"):
+                await runtime.close()
+        assert events == [("store-closed",)]
+        system.release.set()  # the late write is refused by the closed Store
+        await asyncio.sleep(0.05)
+        return events
+
+    assert asyncio.run(run()) == [("store-closed",)]

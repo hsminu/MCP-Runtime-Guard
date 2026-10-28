@@ -57,7 +57,7 @@ def test_server_form_reflows_without_horizontal_page_scroll(app: QApplication) -
     )
     form.server_id.setText("synthetic-id")
     form.display_name.setText("Synthetic")
-    form.command.setText(os.path.abspath("synthetic-executable"))
+    form.command.setText(os.path.abspath("synthetic-executable.exe"))
     form.tier.setCurrentIndex(form.tier.findData("internal"))
     form.max_label.setCurrentIndex(form.max_label.findData("PUBLIC"))
     assert form.prepare_button.isEnabled()
@@ -216,6 +216,7 @@ def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None
     long_id = "synthetic-" + "x" * 100
     window = GuardWindow()
     window.resize(320, 400)
+    window.navigate("overview")
     window.set_overview_snapshot(
         OverviewSnapshot(
             servers=Surface(

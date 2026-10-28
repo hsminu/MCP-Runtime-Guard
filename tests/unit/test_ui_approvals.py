@@ -91,7 +91,7 @@ def test_empty_error_and_loading_are_not_reported_as_zero(app: QApplication) -> 
     assert view.state is LoadState.READY
     assert view.count_label.text() == "전체 0건 · 현재 페이지 0건"
     assert view.page_label.text() == "1 / 1"
-    assert "대기 중인 승인 요청이 없어" in view.state_message.message.text()
+    assert "대기 중인 승인 요청이 없음" in view.state_message.message.text()
     assert not view.previous_button.isEnabled()
     assert not view.next_button.isEnabled()
 
@@ -226,7 +226,7 @@ def test_incomplete_backend_page_is_error_not_empty_success(
     assert view.table.rowCount() == 0
     assert "미제공" in view.count_label.text()
     assert "불러오지 못함" in view.state_message.message.text()
-    assert "대기 중인 승인 요청이 없어" not in view.state_message.message.text()
+    assert "대기 중인 승인 요청이 없음" not in view.state_message.message.text()
 
 
 def test_equal_time_ties_require_stable_id_order_and_no_raw_actions(

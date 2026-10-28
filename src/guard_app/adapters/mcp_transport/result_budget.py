@@ -13,6 +13,7 @@ _MAX_RESULT_VALUE_NODES = 4096
 
 
 # The name is DispatchError.exception_type audit metadata, so it keeps no Error suffix.
+# Renaming it would make new audit rows disagree with the ones already stored (#40).
 class ResultTooLarge(ValueError):  # noqa: N818
     """An SDK result exceeds the local pre-copy resource budget."""
 

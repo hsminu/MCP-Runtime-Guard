@@ -149,3 +149,50 @@ def test_tools_left_out_of_codex_are_listed_with_a_fixed_reason(app) -> None:
     assert page.excluded.rowCount() == 0
     assert not page.excluded.isVisibleTo(page)
     page.close()
+
+
+def _excluded_view() -> PolicyView:
+    from dataclasses import replace
+
+    return replace(view(), codex_excluded=(("crm__export.all", "TOOL_NAME"),))
+
+
+def test_policy_tables_fill_the_page_width_and_show_every_row(app) -> None:
+    """Columns end flush with the table, and the page scrolls instead of the table."""
+    page = PolicyPage()
+    page.set_view(_excluded_view())
+    page.resize(1000, 900)
+    page.show()
+    app.processEvents()
+    for table in (page.rules, page.excluded):
+        assert table.width() > 900
+        assert table.horizontalHeader().length() == table.viewport().width()
+        assert table.verticalScrollBar().maximum() == 0
+        rows = sum(table.rowHeight(row) for row in range(table.rowCount()))
+        assert table.viewport().height() >= rows
+    page.close()
+
+
+def test_excluded_tool_name_and_reason_are_never_cut_off(app) -> None:
+    """The name keeps its full width; a long reason wraps and its row grows."""
+    from guard_app.ui.policy import EXCLUDED_REASONS
+
+    page = PolicyPage()
+    page.set_view(_excluded_view())
+    table = page.excluded
+    reason = EXCLUDED_REASONS["TOOL_NAME"]
+    heights = []
+    for width in (1000, 480):
+        page.resize(width, 900)
+        page.show()
+        app.processEvents()
+        # The view's own size hints: the name's one-line width, the reason's
+        # wrapped height at the reason column's current width.
+        assert table.columnWidth(0) >= table.sizeHintForColumn(0)
+        assert table.rowHeight(0) >= table.sizeHintForRow(0)
+        assert table.horizontalScrollBar().maximum() == 0
+        heights.append(table.rowHeight(0))
+    assert heights[1] > heights[0]
+    assert table.item(0, 0).text() == "crm__export.all"
+    assert table.item(0, 1).text() == reason
+    page.close()

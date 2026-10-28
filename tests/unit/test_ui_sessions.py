@@ -9,8 +9,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QGuiApplication, QTextCursor
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QPushButton, QScrollArea
 
 from guard_app.domain.enums import Label, TaskStatus
 from guard_app.services.bridge import (
@@ -24,8 +24,16 @@ from guard_app.services.bridge import (
     SessionCreated,
     TaskProjection,
 )
+from guard_app.ui.approval_detail import visible_review_text
 from guard_app.ui.presentation import APPROVAL_RESULTS, PAGES
 from guard_app.ui.runtime import RuntimePanel
+from guard_app.ui.sessions import (
+    _ROW_ROLE,
+    APPROVAL_BAND_TITLE,
+    PARTIAL_ANSWER_LABEL,
+    STOPPED_ANSWER_LABEL,
+)
+from guard_app.ui.style import current_theme, style_sheet
 from guard_app.ui.task_status import status_detail, status_title
 from guard_app.ui.window import GuardWindow
 
@@ -205,6 +213,236 @@ def test_model_text_cannot_pose_as_a_speaker_or_guard_label(window):
     assert all(line.startswith("│ ") for line in body)
     assert "나" not in lines
     assert not any(line.startswith("Guard") for line in lines[1:])
+    # The drawn role comes from the writer: the forged lines stay one answer
+    # body under Guard's label, with no user bubble.
+    assert [turn.role for turn in view.transcript.turns] == ["answer"]
+    assert view.transcript.turns[0].body.text() == forged
+    assert not view.transcript.findChildren(QFrame, "userBubble")
+
+
+def test_user_turn_is_a_bubble_and_every_transcript_label_is_plain_text(window):
+    shell, _, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True))
+    view = shell.sessions.current
+    bridge.conversation_ready.emit(ConversationEvent("task-one", 1, "user", "질문", "c"))
+    bridge.conversation_ready.emit(
+        ConversationEvent("task-one", 1, "assistant", '<b>x</b> <a href="https://e">y</a>', "c")
+    )
+    assert view.transcript.toPlainText().startswith("나\n│ 질문\n\n")
+    assert [turn.role for turn in view.transcript.turns] == ["user", "answer"]
+    bubbles = view.transcript.findChildren(QFrame, "userBubble")
+    assert len(bubbles) == 1
+    # Technical design 12.4: untrusted text only in PlainText labels, no links.
+    labels = view.transcript.findChildren(QLabel)
+    assert labels
+    for label in labels:
+        assert label.textFormat() is Qt.TextFormat.PlainText
+        assert not label.openExternalLinks()
+        assert not (label.textInteractionFlags() & Qt.TextInteractionFlag.LinksAccessibleByMouse)
+
+
+def test_answer_label_marks_streaming_and_stopped_answers(window):
+    shell, _, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True))
+    view = shell.sessions.current
+    bridge.conversation_partial.emit(ConversationEvent("task-one", 1, "assistant", "작성", "c1"))
+    live = view.transcript.turns[-1].note
+    assert live is not None
+    assert (live.text(), live.property("tone")) == (PARTIAL_ANSWER_LABEL, "live")
+    bridge.conversation_ready.emit(ConversationEvent("task-one", 1, "user", "다음", "c2"))
+    stopped = view.transcript.turns[0].note
+    assert stopped is not None
+    assert (stopped.text(), stopped.property("tone")) == (STOPPED_ANSWER_LABEL, "stopped")
+
+
+def test_theme_toggle_repaints_the_shell_and_returns(window, app):
+    shell, _, _ = window
+    assert current_theme() == "light"
+    assert shell.styleSheet() == style_sheet("light")
+    assert shell.theme_button.accessibleName() == "다크 테마로 전환"
+    try:
+        shell.theme_button.click()
+        app.processEvents()
+        assert current_theme() == "dark"
+        assert shell.styleSheet() == style_sheet("dark")
+        assert shell.theme_button.accessibleName() == "라이트 테마로 전환"
+        shell.theme_button.click()
+        app.processEvents()
+        assert current_theme() == "light"
+        assert shell.styleSheet() == style_sheet("light")
+    finally:
+        shell.set_theme("light")
+        QGuiApplication.styleHints().setColorScheme(Qt.ColorScheme.Unknown)
+
+
+@pytest.mark.parametrize(
+    ("status", "tone"),
+    [
+        (TaskStatus.RUNNING, "live"),
+        (TaskStatus.WAITING_APPROVAL, "attn"),
+        (TaskStatus.HALTED, "deny"),
+    ],
+)
+def test_header_pill_states_the_confirmed_status_in_words(window, status, tone):
+    shell, _, bridge = window
+    draft = shell.sessions.current
+    assert (draft.pill.text(), draft.pill.property("tone")) == ("초안 · 미연결", "neutral")
+    bridge.task_changed.emit(replace(snapshot(), status=status))
+    view = shell.sessions.current
+    # Words carry the status; color only repeats it (technical design 12.4).
+    assert view.pill.text() == status_title(status)
+    assert view.pill.property("tone") == tone
+    assert status_title(status) not in view.status.text()
+    assert "task-one" in view.status.text()
+
+
+def test_sidebar_results_open_a_full_page_with_the_selected_session_in_scope(window, app):
+    shell, panel, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True))
+    view = shell.sessions.current
+    shell._nav_buttons["results"].click()
+    app.processEvents()
+    assert shell._page == "results"
+    assert shell.stack.currentWidget() is shell.results_page
+    assert shell.results_page.isAncestorOf(panel)
+    assert panel.isVisible()
+    assert not view.widget.isVisible()
+    assert shell.results_scope.text() == view.title
+    assert shell.back_to_conversation.isVisible()
+    shell.back_to_conversation.click()
+    app.processEvents()
+    assert shell._page == "runs"
+    assert view.widget.isVisible()
+    assert not shell.results_page.isVisible()
+    assert not shell.activity_pane.isVisible()
+    shell.resize(320, 400)
+    shell.navigate("results")
+    app.processEvents()
+    assert shell.width() == 320
+    assert shell.results_page.isVisible()
+    scroll = shell.results_page.findChild(QScrollArea, "resultsScroll")
+    assert scroll is not None
+    assert scroll.horizontalScrollBar().maximum() == 0
+    shell.back_to_conversation.click()
+    app.processEvents()
+    assert view.widget.isVisible()
+    assert shell._conversation_scroll.horizontalScrollBar().maximum() == 0
+
+
+def test_activity_button_docks_results_beside_the_conversation(window, app):
+    shell, panel, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True))
+    shell.resize(1280, 800)
+    app.processEvents()
+    view = shell.sessions.current
+    view.results.click()
+    app.processEvents()
+    assert shell._page == "runs"
+    assert view.widget.isVisible()
+    assert shell.activity_pane.isVisible()
+    assert shell.activity_pane.isAncestorOf(panel)
+    assert panel.isVisible()
+    assert view.results.property("selected") is True
+    # The dock has its own title row, so the page heading stays out of it.
+    assert not shell.results_scope.isVisible()
+    assert not shell._results_scroll.isAncestorOf(panel.cancel_button)
+    assert panel.cancel_button.isVisible()
+
+    shell._nav_buttons["results"].click()
+    app.processEvents()
+    assert shell.results_page.isAncestorOf(panel)
+    assert shell.results_scope.isVisible()
+    shell.back_to_conversation.click()
+    app.processEvents()
+    assert shell.activity_pane.isAncestorOf(panel)
+    assert shell.activity_pane.isVisible()
+
+    view.results.click()
+    app.processEvents()
+    assert not shell.activity_pane.isVisible()
+    assert view.results.property("selected") is False
+    view.results.click()
+    shell.activity_close.click()
+    app.processEvents()
+    assert not shell.activity_pane.isVisible()
+
+
+def test_compact_activity_button_opens_the_results_page(window, app):
+    shell, panel, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True))
+    shell.resize(320, 400)
+    app.processEvents()
+    shell.sessions.current.results.click()
+    app.processEvents()
+    assert shell._page == "results"
+    assert shell.results_page.isAncestorOf(panel)
+    assert not shell.activity_pane.isVisible()
+
+
+def test_model_chip_picks_the_reasoning_level_and_keeps_a_started_task_model(window, monkeypatch):
+    shell, _, bridge = window
+    sent = []
+    monkeypatch.setattr(
+        bridge,
+        "request_message",
+        lambda task, epoch, text, *, command_id, effort: sent.append(effort),
+    )
+    picker = shell.sessions.current.model
+    assert picker.text() == "GPT-6.1-Sol · 추론 낮음"
+    assert list(picker.model_actions) == ["gpt-6.1-sol"]
+    assert [action.text() for action in picker.effort_actions.values()] == [
+        "낮음",
+        "보통",
+        "높음",
+        "매우 높음",
+        "최대",
+    ]
+    assert all(action.isEnabled() for action in picker.model_actions.values())
+
+    bridge.task_changed.emit(snapshot(can_accept_message=True, model_mode="codex"))
+    view = shell.sessions.current
+    assert view.model.isEnabled()
+    assert not any(action.isEnabled() for action in view.model.model_actions.values())
+    view.model.effort_actions["high"].trigger()
+    assert view.model.text() == "GPT-6.1-Sol · 추론 높음"
+    assert view.model.effort_actions["high"].isChecked()
+    view.draft.setPlainText("깊게 생각해 줘")
+    view.send.click()
+    assert sent == ["high"]
+
+
+def test_synthetic_model_shows_its_mode_and_sends_no_reasoning_level(window, monkeypatch):
+    shell, _, bridge = window
+    sent = []
+    monkeypatch.setattr(
+        bridge,
+        "request_message",
+        lambda task, epoch, text, *, command_id, effort: sent.append(effort),
+    )
+    bridge.task_changed.emit(snapshot(can_accept_message=True, model_mode="mock"))
+    view = shell.sessions.current
+    assert view.model.text() == "모델: mock"
+    assert not view.model.isEnabled()
+    view.draft.setPlainText("시연 메시지")
+    view.send.click()
+    assert sent == [None]
+
+
+def test_stop_controls_stay_pinned_below_the_scrolling_results_page(window, app):
+    shell, panel, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True))
+    shell.resize(1100, 420)
+    shell.navigate("results")
+    app.processEvents()
+    page = shell.results_page
+    scroll = page.findChild(QScrollArea, "resultsScroll")
+    assert scroll is not None
+    assert scroll.verticalScrollBar().maximum() > 0
+    for button in (panel.cancel_button, panel.halt_button):
+        assert button.isVisible()
+        assert not scroll.isAncestorOf(button)
+        bottom = button.mapTo(page, button.rect().bottomLeft()).y()
+        assert bottom < page.height()
 
 
 @pytest.mark.parametrize(
@@ -238,8 +476,15 @@ def test_existing_feature_pages_and_preparation_forms_remain_reachable(window):
         shell.navigate(page)
         assert shell.stack.currentIndex() == shell._page_indices[page]
     shell.navigate("server_add")
-    assert shell.folder_rules_form.isVisibleTo(shell)
     assert shell.server_add_form.isVisibleTo(shell)
+    # The folder rules sit folded under the add form until opened.
+    toggle = next(
+        button
+        for button in shell.server_add_form.findChildren(QPushButton)
+        if button.accessibleName() == "로컬 파일 서버 폴더 등급 펼치기"
+    )
+    toggle.click()
+    assert shell.folder_rules_form.isVisibleTo(shell)
     shell.navigate("settings")
     assert shell.scanner_key_form.isVisibleTo(shell)
     assert not shell.scanner_key_form.save_button.isEnabled()
@@ -319,7 +564,7 @@ def test_busy_task_does_not_block_other_task_or_new_session_and_results_stay_sco
     monkeypatch.setattr(
         bridge,
         "request_message",
-        lambda task, epoch, text, *, command_id: sent.append((task, epoch, command_id)),
+        lambda task, epoch, text, *, command_id, effort: sent.append((task, epoch, command_id)),
     )
     alpha = snapshot(can_accept_message=True, model_mode="codex")
     beta = replace(alpha, task_id="task-beta")
@@ -356,14 +601,15 @@ def test_busy_task_does_not_block_other_task_or_new_session_and_results_stay_sco
     )
     assert panel._busy
     assert not beta_view.send.isEnabled()
-    assert "NOT_READY" not in panel.message.text()
+    assert "NOT_READY" not in panel.internal_code.text()
     assert alpha_view.pending_command is None
     assert beta_view.pending_command == beta_command
 
     shell.sessions.select(alpha_view.key)
     assert not panel._busy
     assert alpha_view.send.isEnabled()
-    assert "NOT_READY" in panel.message.text()
+    assert "NOT_READY" not in panel.message.text()
+    assert panel.internal_code.text() == "내부 코드: NOT_READY"
     shell.new_session_button.click()
     assert shell.sessions.current.start.isEnabled()
     assert beta_view.pending_command == beta_command
@@ -441,7 +687,7 @@ def test_missing_codex_dependency_keeps_draft_and_shows_persistent_rejection(
     assert view.snapshot is None
     assert view.pending_command is None
     assert view.start.isEnabled()
-    assert "시작하지 않았어" in view.notice.text()
+    assert "시작하지 않았음" in view.notice.text()
     message = view.notice.text()
     panel.state_changed.emit()
     shell.sessions.set_ready(True)
@@ -453,10 +699,10 @@ def test_missing_codex_dependency_keeps_draft_and_shows_persistent_rejection(
 @pytest.mark.parametrize(
     ("code", "detail"),
     [
-        ("CODEX_CONFIG_UNAVAILABLE", "설정 검증이 준비되지 않았어"),
-        ("CODEX_CONFIG_MISMATCH", "시작 검사에서 확인한 설정과 달라"),
-        ("CODEX_PREPARATION_FAILED", "세션 준비를 완료하지 못했어"),
-        ("CODEX_CLEANUP_UNCONFIRMED", "정리 완료를 확인하지 못했어"),
+        ("CODEX_CONFIG_UNAVAILABLE", "설정 검증이 준비되지 않음"),
+        ("CODEX_CONFIG_MISMATCH", "시작 검사에서 확인한 설정과 다름"),
+        ("CODEX_PREPARATION_FAILED", "세션 준비를 완료하지 못함"),
+        ("CODEX_CLEANUP_UNCONFIRMED", "정리 완료를 확인하지 못함"),
     ],
 )
 def test_preparation_rejection_replaces_pending_notice_only_for_its_draft(
@@ -490,16 +736,16 @@ def test_preparation_rejection_replaces_pending_notice_only_for_its_draft(
     assert selected.notice.text() == other_notice
     assert selected.draft.toPlainText() == "other draft"
     if code == "CODEX_CLEANUP_UNCONFIRMED":
-        assert "시작하지 않았어" not in rejected.notice.text()
-        assert "자동으로 다시 실행하지 않아" in rejected.notice.text()
-        assert "정리 상태를 확인해" in rejected.notice.text()
+        assert "시작하지 않았음" not in rejected.notice.text()
+        assert "자동으로 다시 실행하지 않음" in rejected.notice.text()
+        assert "정리 상태를 확인하세요" in rejected.notice.text()
     elif code == "CODEX_CONFIG_UNAVAILABLE":
         # A component missing from this build is not fixed by settings or restart.
-        assert "시작하지 않았어" in rejected.notice.text()
+        assert "시작하지 않았음" in rejected.notice.text()
         assert "이 앱 구성에서는 아직" in rejected.notice.text()
-        assert "다시 시작해" not in rejected.notice.text()
+        assert "다시 시작하세요" not in rejected.notice.text()
     else:
-        assert "시작하지 않았어" in rejected.notice.text()
+        assert "시작하지 않았음" in rejected.notice.text()
         assert "앱 설정을 확인" in rejected.notice.text()
     notice = rejected.notice.text()
     panel.state_changed.emit()
@@ -517,10 +763,10 @@ def test_preparation_rejection_replaces_pending_notice_only_for_its_draft(
 @pytest.mark.parametrize(
     ("code", "detail"),
     [
-        ("CODEX_CONFIG_UNAVAILABLE", "설정 검증이 준비되지 않았어"),
-        ("CODEX_CONFIG_MISMATCH", "시작 검사에서 확인한 설정과 달라"),
-        ("CODEX_PREPARATION_FAILED", "세션 준비를 완료하지 못했어"),
-        ("CODEX_CLEANUP_UNCONFIRMED", "정리 완료를 확인하지 못했어"),
+        ("CODEX_CONFIG_UNAVAILABLE", "설정 검증이 준비되지 않음"),
+        ("CODEX_CONFIG_MISMATCH", "시작 검사에서 확인한 설정과 다름"),
+        ("CODEX_PREPARATION_FAILED", "세션 준비를 완료하지 못함"),
+        ("CODEX_CLEANUP_UNCONFIRMED", "정리 완료를 확인하지 못함"),
     ],
 )
 def test_existing_task_preparation_notice_preserves_scope_and_disables_send(
@@ -540,7 +786,7 @@ def test_existing_task_preparation_notice_preserves_scope_and_disables_send(
         replace(alpha, status=status, connection_code=code, runner_state="stopped")
     )
     assert detail in failed.notice.text()
-    assert "시작하지 않았어" not in failed.notice.text()
+    assert "시작하지 않았음" not in failed.notice.text()
     assert not failed.send.isEnabled()
     if code == "CODEX_CLEANUP_UNCONFIRMED":
         row = next(
@@ -567,7 +813,7 @@ def test_unknown_creation_failure_clears_pending_notice_without_echoing_raw_text
     assert command is not None
     raw = r"C:\private\codex: secret exception text"
     shell.sessions.settle_command(command, raw)
-    assert "세션 시작 결과를 확인하지 못했어" in view.notice.text()
+    assert "세션 시작 결과를 확인하지 못함" in view.notice.text()
     assert "확인 중" not in view.notice.text()
     assert raw not in view.notice.text()
     assert "secret exception" not in view.notice.text()
@@ -576,10 +822,10 @@ def test_unknown_creation_failure_clears_pending_notice_without_echoing_raw_text
 @pytest.mark.parametrize(
     ("code", "detail"),
     [
-        ("NOT_READY", "준비되지 않았어"),
+        ("NOT_READY", "준비되지 않음"),
         ("CLOSING", "종료 중"),
-        ("INGRESS_FULL", "가득 찼어"),
-        ("QUEUE_FULL", "가득 찼어"),
+        ("INGRESS_FULL", "가득 참"),
+        ("QUEUE_FULL", "가득 참"),
         ("COMMAND_ID_CONFLICT", "이미 처리 중"),
     ],
 )
@@ -598,16 +844,16 @@ def test_bridge_refusals_say_not_accepted_for_drafts_and_tasks(
         view.start.click()
     assert view.pending_command is not None
     shell.sessions.settle_command(view.pending_command, code)
-    assert "접수하지 않았어" in view.notice.text()
+    assert "접수하지 않음" in view.notice.text()
     assert detail in view.notice.text()
-    assert "확인하지 못했어" not in view.notice.text()
+    assert "확인하지 못함" not in view.notice.text()
 
 
 @pytest.mark.parametrize(
     ("code", "detail"),
     [
-        ("RUNNER_UNAVAILABLE", "실행·제어하지 않았어"),
-        ("RUNNER_UNCONFIRMED", "실행 결과를 확인하지 못했어"),
+        ("RUNNER_UNAVAILABLE", "실행·제어하지 않음"),
+        ("RUNNER_UNCONFIRMED", "실행 결과를 확인하지 못함"),
     ],
 )
 def test_runner_failures_reach_the_task_conversation(window, code, detail):
@@ -630,15 +876,15 @@ def test_results_summary_never_prints_none_counters(window):
 
 def test_withheld_control_result_does_not_claim_a_single_cause():
     text = APPROVAL_RESULTS["CONTROL_WITHHELD_QUERY_REQUIRED"]
-    assert "공개하지 않았어" in text
+    assert "공개하지 않음" in text
     assert "분류" not in text
 
 
 @pytest.mark.parametrize(
     ("code", "detail"),
     [
-        ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않았어"),
-        ("SESSION_CREATION_UNCONFIRMED", "새 Task 생성 결과를 확인하지 못했어"),
+        ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않음"),
+        ("SESSION_CREATION_UNCONFIRMED", "새 Task 생성 결과를 확인하지 못함"),
     ],
 )
 def test_creation_unavailable_and_unconfirmed_have_distinct_notices(
@@ -659,11 +905,11 @@ def test_creation_unavailable_and_unconfirmed_have_distinct_notices(
 @pytest.mark.parametrize(
     ("code", "detail"),
     [
-        ("CODEX_CONFIG_UNAVAILABLE", "아직 새 세션을 시작할 수 없어"),
-        ("CODEX_CLEANUP_UNCONFIRMED", "정리 상태를 확인해"),
-        ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않았어"),
-        ("POLICY_APPLY_FAILED", "Guard를 정지했어"),
-        ("SOMETHING_NEW", "지금은 새 세션을 시작할 수 없어"),
+        ("CODEX_CONFIG_UNAVAILABLE", "아직 새 세션을 시작할 수 없음"),
+        ("CODEX_CLEANUP_UNCONFIRMED", "정리 상태를 확인하세요"),
+        ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않음"),
+        ("POLICY_APPLY_FAILED", "Guard를 정지함"),
+        ("SOMETHING_NEW", "지금은 새 세션을 시작할 수 없음"),
     ],
 )
 def test_known_session_blocker_disables_start_before_any_click(window, code, detail):
@@ -673,7 +919,7 @@ def test_known_session_blocker_disables_start_before_any_click(window, code, det
     bridge.session_capability_changed.emit(code)
     assert not view.start.isEnabled()
     assert detail in view.notice.text()
-    assert "시작하지 않았어" not in view.notice.text()
+    assert "시작하지 않았음" not in view.notice.text()
     bridge.session_capability_changed.emit("")
     assert view.start.isEnabled()
 
@@ -688,8 +934,8 @@ def test_window_title_names_no_model_for_a_new_draft(window):
     ("label", "unclassified", "expected"),
     [
         (None, False, "Task 등급: 미제공"),
-        (Label.INTERNAL, False, "Task 등급: 내부 · INTERNAL"),
-        (Label.CONFIDENTIAL, True, "Task 등급: 기밀 · CONFIDENTIAL · 미분류 자료 표시됨"),
+        (Label.INTERNAL, False, "Task 등급: 내부"),
+        (Label.CONFIDENTIAL, True, "Task 등급: 기밀 · 미분류 자료 표시됨"),
     ],
 )
 def test_task_label_comes_from_the_projection_in_header_and_results(
@@ -697,7 +943,7 @@ def test_task_label_comes_from_the_projection_in_header_and_results(
 ):
     shell, panel, bridge = window
     bridge.task_changed.emit(snapshot(label=label, unclassified=unclassified))
-    assert expected in shell.sessions.current.status.text()
+    assert expected in shell.sessions.current.grade.text()
     assert expected in panel.summary.text()
     if not unclassified:
         assert "미분류" not in panel.summary.text()
@@ -806,3 +1052,91 @@ def test_run_ending_without_an_answer_keeps_the_stream_marked_as_stopped(window)
     text = view.transcript.toPlainText()
     assert text.index("중단됨") < text.index("작성 중")
     assert all(kept in text for kept in ("│ half", "│ next"))
+
+
+def test_approval_band_shows_only_while_guard_waits_on_a_person(window, app):
+    shell, panel, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True))
+    view = shell.sessions.current
+    band = view.approval
+    assert band.isHidden()
+    assert not view.notice.isHidden()
+    assert panel.approval_section.property("attention") is False
+    bridge.task_changed.emit(
+        replace(snapshot(), status=TaskStatus.WAITING_APPROVAL, approval_id="approval-one")
+    )
+    app.processEvents()
+    assert not band.isHidden()
+    assert any(label.text() == APPROVAL_BAND_TITLE for label in band.findChildren(QLabel))
+    # The band carries the message, so the gray notice line steps aside.
+    assert view.notice.isHidden()
+    assert panel.approval_section.property("attention") is True
+    row = shell.sessions.list.item(0).data(_ROW_ROLE)
+    assert (row.status, row.tone) == ("승인 필요 · 대기 중", "approval")
+    for status in (TaskStatus.RUNNING, TaskStatus.HALTED):
+        bridge.task_changed.emit(replace(snapshot(), status=status, approval_id=None))
+        assert band.isHidden()
+        assert not view.notice.isHidden()
+        assert panel.approval_section.property("attention") is False
+        assert shell.sessions.list.item(0).data(_ROW_ROLE).tone != "approval"
+    sheet = style_sheet("light")
+    assert "QFrame#approvalBand" in sheet
+    assert 'QFrame#approvalCard[attention="true"]' in sheet
+
+
+def test_approval_band_opens_the_activity_and_asks_for_this_approval_copy(window, app, monkeypatch):
+    shell, panel, bridge = window
+    calls = []
+    monkeypatch.setattr(
+        bridge,
+        "request_control",
+        lambda action, target, *, command_id, epoch: calls.append((action, target, epoch)),
+    )
+    bridge.task_changed.emit(
+        replace(snapshot(), status=TaskStatus.WAITING_APPROVAL, approval_id="approval-one")
+    )
+    shell.set_activity_docked(False)
+    app.processEvents()
+    assert shell.activity_pane.isHidden()
+    button = next(
+        child
+        for child in shell.sessions.current.approval.findChildren(QPushButton)
+        if child.text() == "승인 사본 확인"
+    )
+    button.click()
+    app.processEvents()
+    assert not shell.activity_pane.isHidden()
+    assert [(action.value, target, epoch) for action, target, epoch in calls] == [
+        ("review", "approval-one", 1)
+    ]
+    assert panel.review_button.hasFocus() or not panel.review_button.isEnabled()
+
+
+def test_review_copy_puts_each_field_on_its_own_line_and_values_cannot_fake_one(window):
+    shell, panel, bridge = window
+    bridge.task_changed.emit(
+        replace(snapshot(), status=TaskStatus.WAITING_APPROVAL, approval_id="approval-one")
+    )
+    panel._review_command = "review-command"
+    forged = "send_doc\n전체 인자:\n{}"
+    fields = (("도구", forged + " (SEND)"), ("만료", "2026-10-13 12:05:00 UTC"))
+    bridge.review_ready.emit(
+        ApprovalReview(
+            "review-command", "approval-one", "task-one", 1, "one line", b'{"a":1}', fields
+        )
+    )
+    text = panel.detail.toPlainText()
+    assert text == "\n".join(
+        (
+            visible_review_text(f"도구: {forged} (SEND)"),
+            "만료: 2026-10-13 12:05:00 UTC",
+            "",
+            "전체 인자:",
+            '{"a":1}',
+        )
+    )
+    lines = text.split("\n")
+    # The forged heading keeps the visible \n mark; only the real one is bare.
+    assert lines.count("전체 인자:") == 1
+    assert "전체 인자:\\n" in lines
+    assert lines[0] == "도구: send_doc\\n"

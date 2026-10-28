@@ -24,6 +24,10 @@ loop would stall every other Task. SessionRuntime bounds this step with
 `CleanupLimits.task_folder_s`, not its short session bound, so a slow but successful
 delete is not reported unconfirmed. Creating a folder, and removing the nearly
 empty one a refused launch leaves, stay on the loop.
+
+The login screen's app-server (A52) goes through the same launcher in a folder
+of its own, and logout cleanup calls C's `clear_codex_credentials` on the app's
+CODEX_HOME (#21, C2.15). `account_access` hands both to SessionRuntime.
 """
 
 from __future__ import annotations
@@ -36,13 +40,17 @@ from uuid import uuid4
 
 from guard_app.security.codex_home import (
     CODEX_CONFIG_DIR,
+    CodexConfigError,
     CodexPins,
+    clear_codex_credentials,
     load_codex_pins,
     verify_codex_home,
     write_codex_home,
 )
-from guard_app.security.launcher import CodexLauncher, LaunchedProcess
+from guard_app.security.launcher import CodexLauncher, LaunchedProcess, LaunchError
 from guard_app.security.paths import AppFolders, AppPathError, prepare_app_folders
+from guard_app.services.account_runtime import AccountAccess, AccountUnavailableError
+from guard_app.services.codex_account import AccountError
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
     SessionPreparation,
@@ -64,6 +72,24 @@ class _TaskProcess:
     folder: Path
     process: LaunchedProcess
     exited: bool = False
+
+
+@dataclass(slots=True)
+class _AccountProcess:
+    """The login screen's app-server and its folder (A52)."""
+
+    pipes: LaunchedProcess
+    folders: AppFolders
+    folder: Path
+
+    async def close(self) -> bool:
+        if not await self.pipes.close():
+            return False
+        # The process ran no turn, so the folder holds no tool result. If it
+        # cannot be removed now, the next app start clears it (A102).
+        with contextlib.suppress(AppPathError):
+            await asyncio.to_thread(self.folders.remove_task_folder, self.folder)
+        return True
 
 
 def _check_executable(executable: Path, pins: CodexPins) -> None:
@@ -123,6 +149,9 @@ class CodexProcessPreparation:
             self._cleanup_task,
         )
 
+    def account_access(self) -> AccountAccess:
+        return AccountAccess(self._launch_account, self._clear_credentials)
+
     def claim(self) -> None:
         """Take the single-instance lock and clear stale Task folders (A102).
 
@@ -138,12 +167,20 @@ class CodexProcessPreparation:
         """The product DB, fixed in the claimed app folder (C2.17, A106).
 
         The lock `claim` took is its single owner (REC-01), so there is no path
-        before the claim. C's `AppFolders.db_path()` (#37) will also check that
-        the DB files are not links; switch to it then.
+        before the claim. C's `AppFolders.db_path()` (C2.19) gives it only when
+        the DB and its `-wal`/`-shm` files, if present, are private regular
+        files; otherwise `AppPathError("APP_DB_INVALID")` and the app does not start.
         """
         if self._folders is None:
             raise CodexPreparationError("CODEX_FOLDERS_UNCLAIMED")
-        return self._folders.paths.db_file
+        return self._folders.db_path()
+
+    @property
+    def folders(self) -> AppFolders:
+        """The claimed app folders, for the CFG-01 settings file (C2.14)."""
+        if self._folders is None:
+            raise CodexPreparationError("CODEX_FOLDERS_UNCLAIMED")
+        return self._folders
 
     def close(self) -> None:
         """Release the single-instance lock. Safe to call more than once."""
@@ -212,6 +249,40 @@ class CodexProcessPreparation:
         folders, _ = self._ready()
         await asyncio.to_thread(folders.remove_task_folder, task.folder)
         del self._tasks[resources.owner_token]
+
+    async def _launch_account(self) -> _AccountProcess:
+        """A new app-server for account methods only. Startup must have prepared the launcher."""
+        try:
+            folders, launcher = self._ready()
+        except CodexPreparationError:
+            # Startup refused Codex; trying again in this run cannot help.
+            raise AccountUnavailableError() from None
+        try:
+            folder = folders.create_task_folder(f"account-{uuid4().hex}")
+        except AppPathError:
+            raise AccountError() from None
+        launched = False
+        try:
+            process = await launcher.launch(folder)
+            launched = True
+        except LaunchError:
+            raise AccountError() from None
+        finally:
+            if not launched:
+                with contextlib.suppress(AppPathError):
+                    folders.remove_task_folder(folder)
+        return _AccountProcess(process, folders, folder)
+
+    async def _clear_credentials(self) -> bool:
+        """C's logout cleanup (C2.15). Call only after the account app-server exited."""
+        folders = self._folders
+        if folders is None:
+            return False
+        try:
+            await asyncio.to_thread(clear_codex_credentials, folders.paths.codex_home)
+        except CodexConfigError:
+            return False
+        return True
 
     def _ready(self) -> tuple[AppFolders, CodexLauncher]:
         if self._folders is None or self._launcher is None:
