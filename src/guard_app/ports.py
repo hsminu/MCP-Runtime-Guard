@@ -156,7 +156,10 @@ class RegistryStore(Protocol):
     실제 변경 쓰기는 등록 revision +1·정의/검사·원문 없는 감사를 같은 트랜잭션에
     커밋하고 전체 사본을 반환한다. 무변경 지문 관측은 쓰지 않고 저장 사본을 반환한다.
     실패는 StoreError이며 원문을 담지 않는다.
-    지문은 C가 tools/list 원본으로 계산한다. 저장소는 형식만 검사한다.
+    C는 A transport의 SDK 재구성 정의 dict
+    (`model_dump(mode="json", by_alias=True, exclude_unset=True)`)로
+    `tool_fingerprint`를 계산한다(FP-01). 원본 수신 JSON은 쓰지 않는다.
+    저장소는 형식만 검사한다.
 
     C: 연결 직후 실제 정의 대조 → record_fingerprint_change 커밋 → 반환 사본으로
     동기 Registry 캐시 즉시 교체(동일 사본이면 생략, 반환과 교체 사이 await 금지) →
