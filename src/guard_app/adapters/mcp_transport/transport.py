@@ -41,6 +41,8 @@ class McpTransport:
     ``notifications/tools/list_changed`` (LIST-01). ``on_server_failed``
     receives only the server ID, once, when its session stops serving outside
     a requested close (#61).
+    ``on_listing_received`` marks each tools/list response in SDK receive order,
+    before a later change notice, even while other servers are still starting.
     """
 
     def __init__(
@@ -56,6 +58,7 @@ class McpTransport:
         tool_list_limits: ToolListLimits | None = None,
         on_tools_changed: Callable[[str], None] | None = None,
         on_server_failed: Callable[[str], None] | None = None,
+        on_listing_received: Callable[[str], None] | None = None,
     ) -> None:
         if not isinstance(server_streams, Mapping):
             raise TypeError("server stream mapping required")
@@ -63,6 +66,8 @@ class McpTransport:
             raise TypeError("tools changed callback must be callable")
         if on_server_failed is not None and not callable(on_server_failed):
             raise TypeError("server failed callback must be callable")
+        if on_listing_received is not None and not callable(on_listing_received):
+            raise TypeError("listing received callback must be callable")
         if any(type(server_id) is not str or not server_id for server_id in server_streams):
             raise ValueError("nonempty server IDs required")
         require_result_copy_budget(max_result_copy_bytes)
@@ -70,7 +75,11 @@ class McpTransport:
 
         self._workers = {
             server_id: ServerWorker(
-                sdk_session_factory(stream_factory, _for_server(on_tools_changed, server_id)),
+                sdk_session_factory(
+                    stream_factory,
+                    _for_server(on_tools_changed, server_id),
+                    on_listing_received=_for_server(on_listing_received, server_id),
+                ),
                 call_timeout_s=call_timeout_s,
                 startup_timeout_s=startup_timeout_s,
                 close_timeout_s=close_timeout_s,

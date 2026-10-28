@@ -54,6 +54,8 @@ class _UnvalidatedClientSession(ClientSession):
     """
 
     listing_ingress: IngressGate | None = None
+    listing_received: Callable[[], None] | None = None
+    _listing_request_id: int | None = None
 
     async def send_request[T: BaseModel](
         self,
@@ -73,6 +75,7 @@ class _UnvalidatedClientSession(ClientSession):
             # await. Enter super in this same task, with no scheduling point
             # between registration and assignment, including concurrent pings.
             gate.expect(self._request_id)
+            self._listing_request_id = self._request_id
         return await super().send_request(
             request,
             result_type,
@@ -80,6 +83,19 @@ class _UnvalidatedClientSession(ClientSession):
             metadata,
             progress_callback,
         )
+
+    async def _handle_response(self, message: SessionMessage) -> None:
+        # mcp 1.29.0 calls this in receive order, before the next notification.
+        # Mark the first page here, not after list_tools/collection resumes:
+        # a response and a change notice can arrive in the same read batch.
+        root = message.message.root
+        if isinstance(root, JSONRPCResponse | JSONRPCError) and (
+            type(root.id) is int and root.id == self._listing_request_id
+        ):
+            self._listing_request_id = None
+            if isinstance(root, JSONRPCResponse) and self.listing_received is not None:
+                self.listing_received()
+        await super()._handle_response(message)
 
     async def list_tools(
         self,
@@ -167,7 +183,10 @@ class _DeliveryCheckedStream(ObjectReceiveStream[Any]):
 
 
 def sdk_session_factory(
-    stream_factory: StreamFactory, on_tools_changed: Callable[[], None] | None = None
+    stream_factory: StreamFactory,
+    on_tools_changed: Callable[[], None] | None = None,
+    *,
+    on_listing_received: Callable[[], None] | None = None,
 ) -> SessionFactory:
     """Wrap only streams supplied by a verified composition root.
 
@@ -207,6 +226,7 @@ def sdk_session_factory(
                 ) as session:
                     if isinstance(session, ClientSession):
                         session.listing_ingress = gate
+                        session.listing_received = on_listing_received
                     yield session
         finally:
             SDK_LOG_SCOPE.reset(token)

@@ -489,8 +489,8 @@ def test_tools_list_changed_after_the_comparison_blocks_the_server_for_this_run(
     assert "secret-notice-text" not in caplog.text
 
 
-def test_tools_list_changed_before_the_comparison_does_not_block(tmp_path) -> None:
-    """LIST-01: the comparison itself reads the listing announced before it."""
+def test_tools_list_changed_before_the_first_listing_response_does_not_block(tmp_path) -> None:
+    """LIST-01/A140: an initial notice precedes every received listing page."""
     peer = Peer([READ_DEFINITION], notify_on_list=True)
     outcome, views, view = asyncio.run(
         submit_call(tmp_path, peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
