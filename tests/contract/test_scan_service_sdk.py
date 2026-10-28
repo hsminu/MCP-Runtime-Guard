@@ -4,8 +4,10 @@
 """
 
 import asyncio
+import functools
 import json
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +22,8 @@ from guard_app.adapters.cisco_aggregation import ScannerAggregationError, connec
 from guard_app.adapters.mcp_transport import ToolListing
 from guard_app.domain.enums import RegStatus, ScanErrorCode
 from guard_app.domain.json_types import FrozenJsonObject
+from guard_app.security import secrets
+from guard_app.services import scanner as scanner_module
 from guard_app.services.catalog import ServerSettings
 from guard_app.services.registry import ServerRegistry
 from guard_app.services.scanner import ScanService, cisco_connector
@@ -138,8 +142,15 @@ def test_service_runs_real_llm_and_yara_and_the_scan_activates(store):
 
 
 def test_product_connector_ignores_the_process_environment(store, monkeypatch):
-    """C2.10 전 제품 경로: 키는 넘긴 값으로만 받는다. 프로세스 환경의 키를 읽지 않는다."""
+    """제품 연결은 자격증명 관리자만 읽는다(C2.20). 저장된 키가 없으면 프로세스 환경에 키가
+    있어도 LLM은 키 없음이다. 개발자 PC의 실제 키에 기대지 않도록 빈 테스트 대상을 읽게 한다."""
     monkeypatch.setenv("OPENAI_API_KEY", _KEY)
+    empty = f"MCPRuntimeGuard/test-{uuid.uuid4().hex}"
+    monkeypatch.setattr(
+        scanner_module,
+        "scanner_key_environ",
+        functools.partial(secrets.scanner_key_environ, target=empty),
+    )
 
     async def scenario():
         registry = await _registered(store)

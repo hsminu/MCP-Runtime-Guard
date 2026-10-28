@@ -44,6 +44,7 @@
 - [x] C2.17 제품 DB 위치 `data\guard.sqlite3`와 백업 폴더 `data\backups`(`AppPaths.db_file`·`backups`). `app.lock`과 앱 폴더 권한으로 DB 단일 소유(REC-01, #35 A·B 합의) · [기록](archive/c/C2.17-product-db-path.md)
 - [x] C2.18 #35 리뷰 후속: 재개 전 실행 이미지와 검사한 파일의 경로·파일 ID 대조(B launcher 1번), 이미 있는 루트의 DACL 재적용을 잠금 뒤로(B paths 2번, 결과 권한은 같음) · [기록](archive/c/C2.18-image-check-and-lock-order.md)
 - [x] C2.19 DB 입구(#37 REC-01·SEQ-03): `AppFolders.db_path()`(DB와 옆 파일이 링크·하드링크·넓은 권한이 아닌지 확인), `begin_backup(label)`→`BackupTarget.publish()`·`discard()`, 앱 시작 때 남은 `.partial` 삭제 · [기록](archive/c/C2.19-db-backup-entry.md)
+- [x] C2.20 저장한 Scanner 키를 검사에 연결: `cisco_connector()` 기본값이 검사마다 자격증명 관리자(`scanner_key_environ`)에서 키를 읽음(화면에서 바꾼 키가 다음 검사부터), `.env`·프로세스 환경은 읽지 않음. A 조립은 `ScanService(registry, cisco_connector())` · [기록](archive/c/C2.20-scanner-key-wiring.md)
 
 ## C3 · B SQLite 리뷰와 독립 검증
 
