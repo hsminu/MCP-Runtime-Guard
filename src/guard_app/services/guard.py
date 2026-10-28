@@ -633,6 +633,8 @@ class GuardService:
         if expected_epoch is not None and state.epoch != expected_epoch:
             return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
         self._check_stop(task_id, epoch=state.epoch)
+        if self._global_halt:
+            return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
         if not self._policy_matches(state):
             await self._halt_task(task_id, Reason.POLICY_CHANGED)
             await self._approvals.invalidate_task(task_id, Reason.POLICY_CHANGED)
@@ -963,6 +965,9 @@ class _ApprovalHost:
 
     def policy_matches(self, state: TaskState) -> bool:
         return self._guard._policy_matches(state)
+
+    def policy_mismatch_reason(self) -> Reason:
+        return Reason.INTERNAL_ERROR if self._guard._global_halt else Reason.POLICY_CHANGED
 
     def effective_task_label(self, state: TaskState) -> Label:
         return effective_label(state, self._guard._mode)
