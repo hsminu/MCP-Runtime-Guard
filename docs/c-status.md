@@ -30,7 +30,7 @@
 - [x] C2.2 SDK import의 외부 tokenizer 다운로드 차단(C-CISCO-05) · #6 · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C2.3 safe_path: 빈 값·NUL·역슬래시·절대·상위·symlink·드라이브·UNC·junction 거부
 - [ ] C2.4 검사-열기 TOCTOU 한계와 no-follow 옵션 확인
-- [ ] C2.5 URL 검증: scheme·userinfo·IDNA·끝 점·기본 포트·인코딩 경로. 설정 파일의 HTTP 서버 `url`(CFG-01 `ServerSettings.url`) 검증을 포함한다(C2.14에서 분리)
+- [x] C2.5 URL 검증(URL-01, `security/endpoints.py`): 등록 화면은 `normalize_endpoint`로 정규형을 만들고, 설정 로더(`ServerSettings.url`)와 transport는 `canonical_endpoint`로 정규형만 받는다. https 원칙, http는 루프백 IP 리터럴만, 사용자 정보·쿼리·fragment·끝 점·`%`·숫자 IP 변형·특수 주소 거부, IDNA 2008 · [기록](archive/c/C2.5-endpoint-validation.md)
 - [ ] C2.6 launcher: 등록된 절대 경로·인자 리스트·최소 환경, shell·동적 실행 금지. 실행 핵심은 C2.12 `launch_process`. 남은 것은 설정 파일의 stdio 서버 값(`ServerSettings.command`·`args`·`env_allow`) 검증과 MCP 서버 실행 파일 해시의 출처(C2.14에서 분리)
 - [ ] C2.7 ids: 암호학적 난수, 비밀값 누락은 전용 예외
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
@@ -79,6 +79,7 @@
 - [ ] C4.16 LLM 경고의 반복 실행 변동 측정(144개 × 여러 회)
 - [ ] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록
 - [x] C4.18 등록 때 서버 ID의 `__`·끝 `_` 거부: B `valid_server_id`를 그대로 쓰고 등록 화면은 bridge가 넘기는 같은 검사 결과를 씀. Registry `register`·`observe`가 설정 검증과 별도로 다시 검사 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
+- [x] C4.19 Registry 쓰기 결과를 모를 때 닫기(#46 B 리뷰): 제어 쓰기가 실패하거나 커밋 뒤 취소되면 그 서버의 ACTIVE를 PENDING으로 보고, 다음 제어 연산·`refresh`가 DB 행을 다시 읽어 맞춤. `observe` 취소는 기록 실패와 같이 이번 실행 PENDING. 실제 저장소 재현은 B6.13 뒤 · [기록](archive/c/C4.19-registry-unknown-write.md)
 
 ## C5 · fixture와 계수
 
