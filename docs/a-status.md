@@ -14,10 +14,10 @@
 | T43/T46·수신 상한 독립 인수(C5.8) ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A52 |
 | 제품 Guard 조립용 영속 `next_call_seq`·실패 감사(B6.8). 설정 파일 읽기·저장과 Registry 로드는 A129로 연결됨 | B | A24–A27, A81, A129 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
-| HTTP 닫기 기대값 후속·bridge 및 목록 알림 변경 리뷰 | C | A132, A115, A140 |
+| bridge 및 목록 알림 변경 리뷰 | C·B | A115, A140 |
 | 실제 writer의 종료·정지 경합 재현 조건 ([#58 회신](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6473123051)) | B | A134 |
 
-**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49, #63·#64·#67 병합됨), C2.10 키 입력 화면 연결(#60, A 브랜치에 병합됨), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드는 #58로 병합됨), EXE-01 지문 확인 화면(A128), C6.20 설치판 리소스 위치(패키징). #61 A 리뷰와 A132에 맞춘 HTTP `CLOSE_ERRORS` 기대값 변경 요청([댓글](https://github.com/hsminu/MCP-Runtime-Guard/pull/61#issuecomment-6470235928))은 게시했다.
+**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49, #63·#64·#67 병합됨), C2.10 키 입력 화면 연결(#60, A 브랜치에 병합됨), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드는 #58로 병합됨), EXE-01 지문 확인 화면(A128), C6.20 설치판 리소스 위치(패키징).
 
 ## 계약·환경
 
@@ -56,7 +56,7 @@
 - [x] A140 A100 후속: 서버별 첫 목록 응답 뒤 알림은 대조 전에도 이번 실행 차단 · [기록](archive/a/A140-list-change-before-seal.md)
 - [ ] A140 수신 순서·서버 격리 리뷰 — 막힘: [#70](https://github.com/hsminu/MCP-Runtime-Guard/pull/70) B·C 리뷰, 실제 알림 시점 관찰은 C5.9
 - [x] A132 HTTP 세션이 요청 오류(`httpx.HTTPError`)만으로 끝나면 종료를 완료로 봄(#61 A 후속 2) · [기록](archive/a/A132-http-teardown-completed.md)
-- [ ] A132 #61 HTTP `CLOSE_ERRORS` 기대값을 A132의 종료 완료 동작에 맞춤 — 막힘: C 후속([요청](https://github.com/hsminu/MCP-Runtime-Guard/pull/61#issuecomment-6470235928))
+- [x] A141 A132의 HTTP 종료 기대값 C 수정(#68)을 A 브랜치에 통합·전체 재검사 · [기록](archive/a/A141-c68-integration-check.md)
 - [x] A133 세션이 끊긴 서버를 이번 실행 동안 PENDING으로 보고 다음 호출을 예약 전 `REG_NOT_ACTIVE`로 거부(#61 A 후속 3) · [기록](archive/a/A133-failed-server-pending.md)
 - [x] A15·A16 연결 직후 목록을 C `ServerRegistry.observe`로 기록(정의 변경은 PENDING으로 저장, 기록 실패는 이번 실행 차단) · [기록](archive/a/A129-settings-file-registry-connection.md)
 - [ ] A15·A16 실제 launcher 연결 — A 차례(EXE-01 B 필드 #58·C2.6 #54 병합됨)
