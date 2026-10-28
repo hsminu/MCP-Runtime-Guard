@@ -39,6 +39,8 @@ from guard_app.domain.models import (
     FailureAuditRecord,
     MigrationReport,
     PolicyDecision,
+    RecoveryItemPage,
+    RecoveryReport,
     ResolvedRequest,
     StoreExecutionState,
     TaskState,
@@ -120,6 +122,29 @@ class StoreLifecycle(Protocol):
         이관 ACK는 27b 복구 ACK와 별개다. on_step은 예외를 내지 않는 동기 함수다.
         """
         ...
+
+    async def recover(
+        self,
+        *,
+        deadline: float,
+        run_id: str,
+        on_step: Callable[[StorePrepareStep], None] | None = None,
+    ) -> RecoveryReport:
+        """복구를 완료하고 성공한 보고만 반환한다.
+
+        run_id는 A가 생성한 신뢰 식별자다(예: run-과 128비트 난수의 16진수).
+        prepare_schema의 이관 ACK와 이 복구 ACK는 서로 별개다.
+        성공한 RecoveryReport만 화면의 복구 결과로 쓴다.
+        """
+        ...
+
+    async def activate_run(self) -> StoreExecutionState: ...
+
+    async def load_recovery_report(self, run_id: str) -> RecoveryReport | None: ...
+
+    async def list_recovery_items(
+        self, *, run_id: str | None = None, after: str | None = None, limit: int = 100
+    ) -> RecoveryItemPage: ...
 
 
 class SequenceAllocator(Protocol):

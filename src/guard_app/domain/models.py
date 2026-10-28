@@ -20,7 +20,9 @@ from guard_app.domain.enums import (
     CommitOutcome,
     Decision,
     Label,
+    RecoveryCategory,
     RegStatus,
+    RequestStatus,
     StorePhase,
     TaskStatus,
     ToolKind,
@@ -44,6 +46,9 @@ __all__ = [
     "PolicyDecision",
     "PolicyInput",
     "ProposedCall",
+    "RecoveryItem",
+    "RecoveryItemPage",
+    "RecoveryReport",
     "ResolvedRequest",
     "StrictDecision",
     "StrictLabel",
@@ -116,6 +121,58 @@ class MigrationReport(Frozen):
     to_version: Annotated[int, Field(ge=3, le=3)]
     backup_published: bool
     migrated: bool
+
+
+class RecoveryReport(Frozen):
+    """성공한 복구 TX의 원문 없는 결과(REC-04)."""
+
+    schema_version: Annotated[int, Field(ge=3, le=3)]
+    recovery_version: Annotated[int, Field(ge=1, le=1)]
+    run_id: NonEmptyString = Field(repr=False)
+    committed_at_utc: datetime
+    changed_task_count: NonNegativeInt
+    changed_request_count: NonNegativeInt
+    changed_approval_count: NonNegativeInt
+    unknown_outcome_count: NonNegativeInt
+    quarantined_count: NonNegativeInt
+    unresolved_count: Annotated[int, Field(ge=0, le=0)]
+
+    @field_validator("committed_at_utc")
+    @classmethod
+    def validate_committed_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError("복구 시각은 UTC여야 한다")
+        return value
+
+
+class RecoveryItem(Frozen):
+    """격리된 요청의 검증된 저장 메타데이터(REC-02)."""
+
+    run_id: NonEmptyString = Field(repr=False)
+    task_id: NonEmptyString = Field(repr=False)
+    request_id: NonEmptyString = Field(repr=False)
+    original_status: RequestStatus
+    category: RecoveryCategory
+    at_utc: datetime
+    server_id: NonEmptyString = Field(repr=False)
+    tool_name: NonEmptyString = Field(repr=False)
+    destination_id: NonEmptyString | None = Field(repr=False)
+    kind: ToolKind | None
+    epoch: Annotated[int, Field(ge=0, le=MAX_SAFE_SEQUENCE)] | None
+
+    @field_validator("at_utc")
+    @classmethod
+    def validate_at_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError("격리 시각은 UTC여야 한다")
+        return value
+
+
+class RecoveryItemPage(Frozen):
+    """request_id 순서의 격리 항목과 다음 페이지 커서."""
+
+    items: tuple[RecoveryItem, ...]
+    next_after: NonEmptyString | None = Field(repr=False)
 
 
 class FailureAuditRecord(Frozen):
