@@ -47,6 +47,7 @@ from guard_app.domain.enums import (
 from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
+    MAX_SAFE_SEQUENCE,
     Boundary,
     Escalation,
     PolicyDecision,
@@ -66,7 +67,7 @@ from guard_app.storage.startup_inventory import (
     _StoredTask,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 APPLICATION_ID = 0x4D435047  # MCPG. 기존 다른 앱의 DB를 자동 채택하지 않는다.
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
 # 취소 경계는 각 공개 연산의 트랜잭션 유형으로 고정한다.
@@ -252,7 +253,7 @@ _SCHEMA_V1: tuple[tuple[str, str], ...] = (
 )
 
 
-_SCHEMA = _SCHEMA_V1[:5] + (
+_SCHEMA_V2 = _SCHEMA_V1[:5] + (
     (
         "registrations",
         """CREATE TABLE registrations (
@@ -298,6 +299,39 @@ _SCHEMA = _SCHEMA_V1[:5] + (
     ),
 )
 
+# SQLite가 RENAME 후 sqlite_schema에 남기는 인용 이름과 새 DB의 DDL을 일치시킨다.
+_REQUESTS_V3 = f"""CREATE TABLE "requests" (
+            request_id TEXT PRIMARY KEY CHECK (length(request_id) > 0),
+            task_id TEXT NOT NULL REFERENCES tasks(task_id),
+            call_seq INTEGER NOT NULL CHECK (call_seq BETWEEN 0 AND {MAX_SAFE_SEQUENCE}),
+            server_id TEXT NOT NULL CHECK (length(server_id) > 0),
+            tool_name TEXT NOT NULL CHECK (length(tool_name) > 0),
+            destination_id TEXT,
+            arguments_digest TEXT NOT NULL CHECK
+                (length(arguments_digest) = 64 AND arguments_digest NOT GLOB '*[^0-9a-f]*'),
+            decision INTEGER CHECK (decision IN (0,1,2)),
+            reasons TEXT,
+            status TEXT NOT NULL CHECK (status IN ('DECIDED','WAITING_APPROVAL',
+                'DISPATCHING','SUCCEEDED','WITHHELD','FAILED','UNKNOWN_OUTCOME','DENIED')),
+            dispatch_reserved_at_utc TEXT,
+            epoch INTEGER CHECK (epoch IS NULL OR epoch BETWEEN 0 AND {MAX_SAFE_SEQUENCE}),
+            kind TEXT CHECK (kind IS NULL OR kind IN ('read','send','other')),
+            row_revision INTEGER NOT NULL DEFAULT 0 CHECK (row_revision >= 0),
+            legacy_source TEXT CHECK (legacy_source IS NULL OR legacy_source IN ('v1','v2')),
+            CHECK (legacy_source IS NOT NULL OR (epoch IS NOT NULL AND kind IS NOT NULL)),
+            UNIQUE (task_id, call_seq)
+        ) STRICT"""
+_TASK_CALL_SEQUENCES_V3 = f"""CREATE TABLE task_call_sequences (
+            task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
+            last_issued INTEGER NOT NULL CHECK (last_issued BETWEEN 0 AND {MAX_SAFE_SEQUENCE})
+        ) STRICT"""
+_SCHEMA = (
+    _SCHEMA_V2[:2]
+    + (("requests", _REQUESTS_V3),)
+    + _SCHEMA_V2[3:]
+    + (("task_call_sequences", _TASK_CALL_SEQUENCES_V3),)
+)
+
 
 @dataclass(frozen=True, slots=True)
 class _DecisionContext:
@@ -339,8 +373,9 @@ class _ConsumeConflictError(Exception):
 class SQLiteStore:
     """전용 daemon writer로 Task·판정·승인·응답 저장을 구현한다.
 
-    파일 DB만 지원한다. 새 DB는 v2, 정확한 v1은 Registry 두 테이블이 비었을 때만
-    v2로 원자 이관한다. RegistryStore도 같은 연결과 트랜잭션 경계를 사용한다.
+    파일 DB만 지원한다. 새 DB는 v3로 만들고 기존 v1·v2의 자동 이관은 하지 않는다.
+    기존 자료의 이관은 백업 후 별도 준비 단계가 맡는다. RegistryStore도 같은 연결과
+    트랜잭션 경계를 사용한다.
     같은 앱/버전의 정확한 스키마만 다시 열며 다른/미래 버전은 거부한다.
     busy_timeout_ms=1000은 조정 가능한 잠금 대기 후보이며 전체 I/O 상한이 아니다.
     SQL/검증 오류와 writer 작업의 callback 실패는 원문·경로 없는 StoreError다.
@@ -1389,6 +1424,8 @@ class SQLiteStore:
         timestamp = _utc_text(at_utc)
         _integer(req.call_seq)
         _integer(req.epoch)
+        if req.call_seq > MAX_SAFE_SEQUENCE or req.epoch > MAX_SAFE_SEQUENCE:
+            raise StoreError(Reason.INVALID_ARGUMENTS)
         if type(arguments_digest) is not str or arguments_digest != json_digest(
             req.arguments.to_dict()
         ):
@@ -1415,8 +1452,8 @@ class SQLiteStore:
             )
             connection.execute(
                 """INSERT INTO requests (request_id,task_id,call_seq,server_id,tool_name,
-                    destination_id,arguments_digest,decision,reasons,status)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    destination_id,arguments_digest,decision,reasons,status,epoch,kind)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     req.request_id,
                     req.task_id,
@@ -1428,6 +1465,8 @@ class SQLiteStore:
                     int(decision.decision),
                     reasons_json,
                     request_status.value,
+                    req.epoch,
+                    req.tool.kind.value,
                 ),
             )
             self._insert_audit(
@@ -2386,23 +2425,7 @@ class SQLiteStore:
                 for _, statement in _SCHEMA:
                     connection.execute(statement)
                 connection.execute("PRAGMA application_id=0x4D435047")
-                connection.execute("PRAGMA user_version=2")
-            elif version == 1:
-                if (
-                    application != APPLICATION_ID
-                    or {row[0]: row[1] for row in entries} != dict(_SCHEMA_V1)
-                    or connection.execute("SELECT 1 FROM registrations LIMIT 1").fetchone()
-                    is not None
-                    or connection.execute("SELECT 1 FROM scan_reports LIMIT 1").fetchone()
-                    is not None
-                ):
-                    raise StoreError()
-                # BEGIN IMMEDIATE 안에서 검사·교체·버전 갱신. 다른 다섯 테이블은 보존.
-                connection.execute("DROP TABLE scan_reports")
-                connection.execute("DROP TABLE registrations")
-                for _, statement in _SCHEMA[5:]:
-                    connection.execute(statement)
-                connection.execute("PRAGMA user_version=2")
+                connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             elif (
                 version != SCHEMA_VERSION
                 or application != APPLICATION_ID
@@ -2433,6 +2456,100 @@ class SQLiteStore:
             failed = True
         if failed:
             raise StoreError()
+
+
+def _migrate_to_v3(connection: sqlite3.Connection, from_version: int) -> None:
+    """정확한 v1/v2를 한 트랜잭션으로 v3로 이관한다.
+
+    호출자는 이관 전 백업과 연결 소유권을 확보해야 한다. 이 함수는 생성자에서
+    호출하지 않는다. 외래 키 전환은 트랜잭션 밖에서 하고 기존 설정을 복원한다.
+    """
+    if not isinstance(connection, sqlite3.Connection) or type(from_version) is not int:
+        raise StoreError()
+    if from_version not in (1, 2):
+        raise StoreError()
+    original_foreign_keys: int | None = None
+    failed = False
+    began = False
+    try:
+        if connection.in_transaction:
+            raise StoreError()
+        original_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+        if original_foreign_keys not in (0, 1):
+            raise StoreError()
+        connection.execute("PRAGMA foreign_keys=OFF")
+        if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
+            raise StoreError()
+        connection.execute("BEGIN IMMEDIATE")
+        began = True
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        application = connection.execute("PRAGMA application_id").fetchone()[0]
+        entries = connection.execute(
+            "SELECT name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
+        ).fetchall()
+        expected = _SCHEMA_V1 if from_version == 1 else _SCHEMA_V2
+        if (
+            version != from_version
+            or application != APPLICATION_ID
+            or {row[0]: row[1] for row in entries} != dict(expected)
+            or connection.execute("PRAGMA foreign_key_check").fetchone() is not None
+        ):
+            raise StoreError()
+        if from_version == 1:
+            if (
+                connection.execute("SELECT 1 FROM registrations LIMIT 1").fetchone() is not None
+                or connection.execute("SELECT 1 FROM scan_reports LIMIT 1").fetchone() is not None
+            ):
+                raise StoreError()
+            connection.execute("DROP TABLE scan_reports")
+            connection.execute("DROP TABLE registrations")
+            for _, statement in _SCHEMA_V2[5:]:
+                connection.execute(statement)
+
+        connection.execute(
+            _REQUESTS_V3.replace('CREATE TABLE "requests"', 'CREATE TABLE "requests_new"', 1)
+        )
+        connection.execute(
+            """INSERT INTO requests_new (
+                request_id,task_id,call_seq,server_id,tool_name,destination_id,
+                arguments_digest,decision,reasons,status,dispatch_reserved_at_utc,
+                epoch,kind,row_revision,legacy_source
+            ) SELECT request_id,task_id,call_seq,server_id,tool_name,destination_id,
+                arguments_digest,decision,reasons,status,dispatch_reserved_at_utc,
+                NULL,NULL,0,? FROM requests""",
+            (f"v{from_version}",),
+        )
+        connection.execute("DROP TABLE requests")
+        connection.execute('ALTER TABLE "requests_new" RENAME TO "requests"')
+        connection.execute(_TASK_CALL_SEQUENCES_V3)
+        connection.execute(
+            """INSERT INTO task_call_sequences (task_id,last_issued)
+            SELECT t.task_id, max(
+                coalesce((SELECT max(r.call_seq) FROM requests AS r WHERE r.task_id=t.task_id),0),
+                coalesce((SELECT max(e.at_seq) FROM escalations AS e WHERE e.task_id=t.task_id),0)
+            ) FROM tasks AS t"""
+        )
+        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise StoreError()
+        connection.execute("COMMIT")
+    except (sqlite3.Error, StoreError, TypeError, ValueError, OverflowError):
+        failed = True
+    finally:
+        try:
+            if began and connection.in_transaction:
+                connection.execute("ROLLBACK")
+        except sqlite3.Error:
+            failed = True
+        if original_foreign_keys is not None:
+            try:
+                connection.execute(f"PRAGMA foreign_keys={original_foreign_keys}")
+                if connection.execute("PRAGMA foreign_keys").fetchone()[0] != original_foreign_keys:
+                    failed = True
+            except sqlite3.Error:
+                failed = True
+    if failed:
+        raise StoreError() from None
 
 
 def _registry_input[T](operation: Callable[[], T]) -> T:
@@ -2634,11 +2751,14 @@ def _text(value: object) -> str:
 def _check_task(state: TaskState) -> None:
     for number in (state.epoch, state.security_version, state.row_revision):
         _integer(number)
+    if state.epoch > MAX_SAFE_SEQUENCE:
+        raise ValueError("invalid epoch")
     previous: Escalation | None = None
     for item in state.escalations:
         _integer(item.at_seq)
         if (
-            item.to_label <= item.from_label
+            item.at_seq > MAX_SAFE_SEQUENCE
+            or item.to_label <= item.from_label
             or item.to_label > state.high_watermark
             or (
                 previous is not None
@@ -2650,7 +2770,7 @@ def _check_task(state: TaskState) -> None:
 
 
 def _decode_stored_request(row: sqlite3.Row) -> _StoredRequest:
-    """v1 문자열/정수/시각을 기존 타입으로 검사하고 상태 조합은 추정하지 않는다."""
+    """저장된 요청을 검사하며 legacy의 누락된 필드는 추정하지 않는다."""
     _identifier(row["server_id"])
     _identifier(row["tool_name"])
     if row["destination_id"] is not None:
@@ -2675,6 +2795,9 @@ def _decode_stored_request(row: sqlite3.Row) -> _StoredRequest:
         dispatch_reserved_at_utc=None
         if row["dispatch_reserved_at_utc"] is None
         else _utc_value(row["dispatch_reserved_at_utc"]),
+        stored_epoch=None if row["epoch"] is None else _integer(row["epoch"]),
+        stored_kind=None if row["kind"] is None else ToolKind(_text(row["kind"])),
+        stored_row_revision=_integer(row["row_revision"]),
     )
 
 

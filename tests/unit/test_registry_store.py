@@ -28,6 +28,7 @@ from guard_app.storage.sqlite_store import (
     _SCHEMA_V1,
     APPLICATION_ID,
     SCHEMA_VERSION,
+    _migrate_to_v3,
 )
 from tests.unit.test_sqlite_store import FaultConnection, assert_sanitized, inject_connection
 
@@ -816,7 +817,7 @@ def test_restart_rebuilds_full_copies_without_restoring_execution_authority(tmp_
         assert rows(instance) == facts
         contexts = instance._test_context_snapshot()
         assert all(not context for context in contexts)
-        assert instance._inspect_startup().schema_version == 2
+        assert instance._inspect_startup().schema_version == SCHEMA_VERSION == 3
 
 
 def test_new_wrappers_are_frozen_and_validate_utc_and_scan_ownership(store: SQLiteStore) -> None:
@@ -891,13 +892,17 @@ def test_v1_empty_registry_migration_preserves_all_other_table_rows(tmp_path: Pa
     path = tmp_path / "legacy.db"
     legacy_database(path)
     before = legacy_facts(path)
+    with sqlite3.connect(path, isolation_level=None) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        _migrate_to_v3(connection, 1)
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     with SQLiteStore(path) as instance:
         assert (
             instance._run_on_writer(
                 lambda connection: connection.execute("PRAGMA user_version").fetchone()[0]
             )
             == SCHEMA_VERSION
-            == 2
+            == 3
         )
         assert run(instance.list_registrations()) == ()
         assert (
@@ -915,10 +920,17 @@ def test_v1_empty_registry_migration_preserves_all_other_table_rows(tmp_path: Pa
             == []
         )
     after = legacy_facts(path)
-    assert after[1] == before[1]
+    for index in (0, 1, 3, 4, 5, 6):
+        assert after[1][index] == before[1][index]
+    assert [row[:11] for row in after[1][2]] == before[1][2]
+    assert [row[11:] for row in after[1][2]] == [(None, None, 0, "v1")]
     with sqlite3.connect(path) as connection:
         actual = dict(connection.execute("SELECT name,sql FROM sqlite_schema"))
-        assert all(actual[name] == statement for name, statement in _SCHEMA_V1[:5])
+        assert all(
+            actual[name] == statement
+            for index, (name, statement) in enumerate(_SCHEMA_V1[:5])
+            if index != 2
+        )
 
 
 @pytest.mark.parametrize(
@@ -940,15 +952,16 @@ def test_nonempty_or_modified_v1_is_rejected_without_any_database_change(
     with sqlite3.connect(path) as connection:
         connection.execute(mutation)
     before = legacy_facts(path)
-    with pytest.raises(StoreError) as error:
-        SQLiteStore(path)
+    with sqlite3.connect(path, isolation_level=None) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
+        with pytest.raises(StoreError) as error:
+            _migrate_to_v3(connection, 1)
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert_sanitized(error.value)
     assert legacy_facts(path) == before
 
 
-def test_v1_migration_failure_rolls_back_table_drops_and_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_v1_migration_failure_rolls_back_table_drops_and_version(tmp_path: Path) -> None:
     path = tmp_path / "legacy.db"
     legacy_database(path)
     before = legacy_facts(path)
@@ -960,18 +973,15 @@ def test_v1_migration_failure_rolls_back_table_drops_and_version(
                 raise sqlite3.OperationalError(RAW)
             return super().execute(statement, parameters)
 
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            sqlite3,
-            "connect",
-            lambda *args, **kw: original_connect(*args, **kw, factory=MigrationFailure),
-        )
+    with original_connect(path, isolation_level=None, factory=MigrationFailure) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
         with pytest.raises(StoreError) as error:
-            SQLiteStore(path)
+            _migrate_to_v3(connection, 1)
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert_sanitized(error.value)
     assert legacy_facts(path) == before
-    with SQLiteStore(path) as instance:
-        assert run(instance.list_registrations()) == ()
+    with pytest.raises(StoreError):
+        SQLiteStore(path)
 
 
 def test_scan_server_foreign_key_rejects_orphan_rows(store: SQLiteStore) -> None:
