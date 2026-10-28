@@ -113,6 +113,7 @@
 - [x] A24–A27 제품 SQLite 기본 시작·새 Task 연결부 · [기록](archive/a/A65-codex-only-concurrent-tasks.md)
 - [x] A24–A27 Profile 로딩·Guard 조립을 제품 시작에 연결(A86, 주입형 설정 문서·Registry) · [기록](archive/a/A86-profile-guard-assembly.md)
 - [x] A129 시작 때 설정 파일 읽기(C2.14·B3.11)·Registry 로드(C4.10)·Profile 확인, 미설정·오류 상태 표시와 새 Task 거부, 정책 저장을 파일 교체에 연결(결과 불명은 재시작) · [기록](archive/a/A129-settings-file-registry-connection.md)
+- [x] A130 #52 B·C 리뷰 후속: 저장 중 취소도 Guard를 닫음, 앱 밖에서 바뀐 설정 파일은 저장하지 않고 재시작 안내, `turn/start` 키 집합 고정 테스트 · [기록](archive/a/A130-pr52-review-followups.md)
 - [ ] A24–A27 제품 Guard 조립·시작 복구 — 막힘: B6.8(영속 call_seq·실패 감사)·C2.6·C2.5
 - [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
