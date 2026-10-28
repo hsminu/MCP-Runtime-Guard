@@ -175,7 +175,9 @@ def test_turn_answer_and_streamed_deltas() -> None:
             assert fake.methods().count("turn/start") == 1
             assert await asyncio.wait_for(session.send("again", "high"), 2) == "echo:again"
             turns = [m["params"] for m in fake.received if m.get("method") == "turn/start"]
-            assert "effort" not in turns[0]
+            # Nothing else that overrides the turn's settings reaches the wire.
+            assert set(turns[0]) == {"threadId", "input"}
+            assert set(turns[1]) == {"threadId", "input", "effort"}
             assert turns[1]["effort"] == "high"
         finally:
             await session.aclose()

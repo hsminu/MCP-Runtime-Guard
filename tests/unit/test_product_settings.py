@@ -43,6 +43,7 @@ from guard_app.services.product_settings import (
     SETTINGS_PROFILE_INVALID,
     SaveOutcomeUnknownError,
     SettingsFile,
+    SettingsFileChangedError,
     SettingsFileSaver,
     SettingsStartError,
     load_settings_profile,
@@ -51,6 +52,7 @@ from guard_app.services.product_settings import (
 from guard_app.services.registry import ServerRegistry
 from guard_app.services.session_runtime import SessionRuntimeError, bootstrap_product
 from guard_app.storage.sqlite_store import SQLiteStore
+from guard_app.ui.policy import CHANGE_RESULTS, PolicyPage
 from guard_app.ui.presentation import SETTINGS_FILE_NOT_READ, SETTINGS_FILE_STATUS
 from guard_app.ui.window import GuardWindow
 
@@ -172,20 +174,43 @@ def test_saver_never_overwrites_a_file_changed_outside_the_app(folders) -> None:
     saver = SettingsFileSaver(read_settings(folders))
     edited = envelope({**document(), "policy": {"approval_ttl_seconds": 120}})
     replace_settings_file(folders, edited, expected=generation, max_bytes=SETTINGS_MAX_BYTES)
-    assert run(saver(deny_read(document()))) is False
+    for _ in range(2):  # every later save is refused too, until a restart reads it
+        with pytest.raises(SettingsFileChangedError):
+            run(saver(deny_read(document())))
     assert folders.paths.settings_file.read_bytes() == edited
 
 
 @pytest.mark.parametrize(
-    "code", ["SETTINGS_FILE_WRITE_FAILED", "SETTINGS_FILE_CHANGED", "SETTINGS_FILE_READ_FAILED"]
+    "error",
+    [
+        SettingsIOError("SETTINGS_FILE_WRITE_FAILED"),
+        SettingsIOError("SETTINGS_FILE_DATA_INVALID"),
+        AppPathError("APP_FOLDERS_CLOSED"),
+    ],
 )
-def test_saver_reports_an_unchanged_file_as_not_saved(monkeypatch, code) -> None:
+def test_saver_reports_an_unchanged_file_as_not_saved(monkeypatch, error) -> None:
+    def refuse(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(product_settings, "replace_settings_file", refuse)
+    saver = SettingsFileSaver(SettingsFile(object(), document(), None))  # type: ignore[arg-type]
+    assert run(saver(deny_read(document()))) is False
+
+
+@pytest.mark.parametrize(
+    "code", ["SETTINGS_FILE_CHANGED", "SETTINGS_FILE_INVALID", "SETTINGS_FILE_READ_FAILED"]
+)
+def test_saver_reports_a_file_that_is_not_the_one_last_read(monkeypatch, code) -> None:
+    """C2.14 table: found while checking the file before the write; nothing written."""
+
     def refuse(*_args, **_kwargs):
         raise SettingsIOError(code)
 
     monkeypatch.setattr(product_settings, "replace_settings_file", refuse)
     saver = SettingsFileSaver(SettingsFile(object(), document(), None))  # type: ignore[arg-type]
-    assert run(saver(deny_read(document()))) is False
+    with pytest.raises(SettingsFileChangedError) as refused:
+        run(saver(deny_read(document())))
+    assert refused.value.args == (code,)
 
 
 def test_saver_raises_when_the_write_outcome_is_unknown(monkeypatch) -> None:
@@ -318,6 +343,103 @@ def test_save_with_unknown_outcome_closes_guard_until_restart(tmp_path) -> None:
     assert servers == []
 
 
+def test_save_cancelled_mid_write_closes_guard_until_restart(tmp_path) -> None:
+    """#52 B review 2: the cancelled write may still land, as with an unknown outcome."""
+    servers: list[FakeAppServer] = []
+    peer = Peer([READ_DEFINITION])
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def hanging_saver(_change) -> bool:
+            entered.set()
+            await release.wait()
+            return True
+
+        bindings = await bootstrap_product(
+            str(tmp_path / "policy.db"),
+            preparation=preparation(servers, read_then_answer),
+            product=inputs(peer, registry_stub(), document()),
+            profile_saver=hanging_saver,
+        )
+        try:
+            assert bindings.policy_access is not None
+            assert bindings.create_session is not None
+            assert bindings.session_blocker is not None
+            old = await bindings.create_session(SessionOptions())
+            change = asyncio.ensure_future(bindings.policy_access("docs", (), ("read",)))
+            await asyncio.wait_for(entered.wait(), 5)
+            change.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await change
+            blocker = bindings.session_blocker()
+            with pytest.raises(SessionRuntimeError) as again:
+                await bindings.policy_access("docs", (), ("read",))
+            with pytest.raises(SessionRuntimeError) as created:
+                await bindings.create_session(SessionOptions())
+            runner = bindings.runner_for_task(old.task_id)
+            runner.add_user_message("summarize the public document")
+            update = await asyncio.wait_for(runner.advance(), 5)
+            return blocker, (again.value.code, created.value.code), update
+        finally:
+            assert bindings.close is not None
+            await bindings.close()
+
+    blocker, codes, update = run(scenario())
+    assert blocker == "POLICY_SAVE_UNKNOWN"
+    assert codes == ("POLICY_SAVE_UNKNOWN", "POLICY_SAVE_UNKNOWN")
+    # The old session's READ is refused by the closed Guard, never dispatched.
+    assert update.status == "complete"
+    assert peer.calls == []
+    assert servers[0].last_reply["result"]["success"] is False  # type: ignore[attr-defined]
+    assert len(servers) == 1
+
+
+def test_file_changed_outside_the_app_refuses_saves_and_keeps_guard_running(tmp_path) -> None:
+    """C2.14 table: nothing was written, so Guard keeps its rules until a restart."""
+    saved: list[object] = []
+    servers: list[FakeAppServer] = []
+    peer = Peer([READ_DEFINITION])
+
+    async def changed_saver(change) -> bool:
+        saved.append(change)
+        raise SettingsFileChangedError("SETTINGS_FILE_CHANGED")
+
+    async def scenario():
+        bindings = await bootstrap_product(
+            str(tmp_path / "policy.db"),
+            preparation=preparation(servers, read_then_answer),
+            product=inputs(peer, registry_stub(), document()),
+            profile_saver=changed_saver,
+        )
+        try:
+            assert bindings.policy_access is not None
+            assert bindings.create_session is not None
+            assert bindings.session_blocker is not None
+            codes = []
+            for _ in range(2):
+                with pytest.raises(SessionRuntimeError) as refused:
+                    await bindings.policy_access("docs", (), ("read",))
+                codes.append(refused.value.code)
+            blocker = bindings.session_blocker()
+            created = await bindings.create_session(SessionOptions())
+            runner = bindings.runner_for_task(created.task_id)
+            runner.add_user_message("summarize the public document")
+            update = await asyncio.wait_for(runner.advance(), 5)
+            return codes, blocker, update
+        finally:
+            assert bindings.close is not None
+            await bindings.close()
+
+    codes, blocker, update = run(scenario())
+    assert codes == ["POLICY_SAVE_FILE_CHANGED"] * 2
+    assert blocker is None
+    assert len(saved) == 2
+    # The change that would deny the READ was not applied, so the READ runs.
+    assert update.status == "complete"
+    assert len(peer.calls) == 1
+
+
 # Recording live listings in C's Registry during assembly (C4.10)
 
 
@@ -442,6 +564,15 @@ def test_settings_page_shows_the_status_and_opens_when_the_file_is_missing(app) 
         assert "private" not in window.settings_file_status.text()
     finally:
         window.close()
+
+
+def test_policy_page_says_to_restart_after_the_file_changed_outside(app) -> None:
+    page = PolicyPage()
+    page.set_change_pending("change")
+    page.settle_change("change", "POLICY_SAVE_FILE_CHANGED")
+    assert page.notice.text() == CHANGE_RESULTS["POLICY_SAVE_FILE_CHANGED"]
+    assert "다시 시작" in page.notice.text()
+    assert "다시 시작" not in CHANGE_RESULTS["POLICY_SAVE_FAILED"]
 
 
 @windows_only

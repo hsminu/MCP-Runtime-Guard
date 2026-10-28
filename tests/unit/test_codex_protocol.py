@@ -125,8 +125,15 @@ def test_turn_text_limit_matches_codex() -> None:
 
 
 def test_turn_effort_is_sent_only_when_picked_and_only_from_the_offered_levels() -> None:
-    assert "effort" not in turn_start_params("thread", "hi")
-    assert turn_start_params("thread", "hi", "high")["effort"] == "high"
+    # turn/start can also override the model, sandbox and approval policy for
+    # the turn; any such key would get around L1, so the whole key set is pinned.
+    assert turn_start_params("thread", "hi") == {
+        "threadId": "thread",
+        "input": [{"type": "text", "text": "hi"}],
+    }
+    picked = turn_start_params("thread", "hi", "high")
+    assert set(picked) == {"threadId", "input", "effort"}
+    assert picked["effort"] == "high"
     for effort in ("ultra", "minimal", "", "HIGH"):
         with pytest.raises(CodexProtocolError):
             turn_start_params("thread", "hi", effort)

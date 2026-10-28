@@ -17,12 +17,16 @@ from guard_app.services.catalog import (
 from guard_app.services.guard import PolicyChangeError, PolicyTaskSource
 from guard_app.services.policy_view import PolicyView, policy_view
 from guard_app.services.product_assembly import AssembledGuard
-from guard_app.services.product_settings import SaveOutcomeUnknownError
+from guard_app.services.product_settings import (
+    SaveOutcomeUnknownError,
+    SettingsFileChangedError,
+)
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 
 # Stores B's prepared policy document (CFG-01: product_settings.SettingsFileSaver).
 # True only after the document is durably saved; apply follows only then. A save
-# that may have happened raises SaveOutcomeUnknownError.
+# that may have happened raises SaveOutcomeUnknownError; a file changed outside
+# the app raises SettingsFileChangedError.
 type ProfileSaver = Callable[[PreparedPolicyChange], Awaitable[bool]]
 
 
@@ -116,9 +120,11 @@ class TaskPolicy:
         nothing is applied. If Guard refuses or fails to apply a saved change,
         Guard is closed to new tool calls, new sessions and further changes are
         refused, and this raises POLICY_APPLY_FAILED; a restart loads the saved
-        file (A104, #33 B reply). A save whose outcome is unknown is handled the
-        same way with POLICY_SAVE_UNKNOWN: the file may hold either document
-        (C2.14).
+        file (A104, #33 B reply). A save whose outcome is unknown, or cancelled
+        mid-write, is handled the same way with POLICY_SAVE_UNKNOWN: the file may
+        hold either document (C2.14). A file changed outside the app is not
+        written and raises POLICY_SAVE_FILE_CHANGED; Guard keeps the rules it
+        runs, and only a restart reads the file again.
         """
         assembled, saver, task_source = self._assembled, self._saver, self._task_source
         if (
@@ -142,12 +148,16 @@ class TaskPolicy:
             if change.changed:
                 try:
                     saved = await saver(change)
+                except SettingsFileChangedError:
+                    raise SessionRuntimeError("POLICY_SAVE_FILE_CHANGED") from None
                 except SaveOutcomeUnknownError:
                     await self._require_restart(assembled, "POLICY_SAVE_UNKNOWN")
                     raise SessionRuntimeError("POLICY_SAVE_UNKNOWN") from None
                 except asyncio.CancelledError:
-                    # The write may still finish after the cancel.
-                    self._admission.require_restart("POLICY_SAVE_UNKNOWN")
+                    # The write may still finish after the cancel. Guard sets its
+                    # global stop before its first await, so a second cancel
+                    # during the close still leaves it stopped.
+                    await self._require_restart(assembled, "POLICY_SAVE_UNKNOWN")
                     raise
                 if saved is not True:
                     raise SessionRuntimeError("POLICY_SAVE_FAILED")

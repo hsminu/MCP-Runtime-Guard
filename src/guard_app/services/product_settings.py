@@ -13,8 +13,10 @@ Saving is B then C: B's `serialize_settings_bytes` of the prepared document,
 then C's `replace_settings_file` against the generation last read or written.
 The policy lock serializes saves, as C2.14 requires (#44 B review 2). A
 failed or refused write leaves the file as it was, so the change is not
-applied. A write whose outcome is unknown may have left the new document in
-place, so the caller must stop and ask for a restart (C2.14 table).
+applied. A file changed, replaced or unreadable outside the app also refuses
+every later save, so that case says to restart and read it again. A write
+whose outcome is unknown may have left the new document in place, so the
+caller must stop and ask for a restart (C2.14 table).
 """
 
 from __future__ import annotations
@@ -44,6 +46,11 @@ from guard_app.services.catalog import (
 from guard_app.services.registry import ServerRegistry
 
 _WRITE_UNKNOWN = "SETTINGS_FILE_WRITE_UNKNOWN"
+# The file is not the one this run read or wrote, found while checking it
+# before the write (C2.14 table). Nothing was written.
+_FILE_CHANGED = frozenset(
+    {"SETTINGS_FILE_CHANGED", "SETTINGS_FILE_INVALID", "SETTINGS_FILE_READ_FAILED"}
+)
 
 # What the start made of the file, shown on the settings screen. Every code but
 # SETTINGS_LOADED also refuses new Tasks.
@@ -63,6 +70,10 @@ class SettingsStartError(RuntimeError):
 
 class SaveOutcomeUnknownError(RuntimeError):
     """The file may hold the new document. Only a restart shows which rules it has."""
+
+
+class SettingsFileChangedError(RuntimeError):
+    """The file changed outside the app; nothing was written. Only a restart reads it."""
 
 
 def _code(error: Exception, fallback: str) -> str:
@@ -130,7 +141,9 @@ class SettingsFileSaver:
     async def __call__(self, change: PreparedPolicyChange) -> bool:
         """True once the file holds the change; False when it is unchanged.
 
-        Raises SaveOutcomeUnknownError when the replacement may have happened.
+        Raises SettingsFileChangedError when the file is not the one last read
+        or written, and SaveOutcomeUnknownError when the replacement may have
+        happened.
         """
         try:
             data = serialize_settings_bytes(change.document.to_dict())
@@ -145,9 +158,12 @@ class SettingsFileSaver:
                 max_bytes=SETTINGS_MAX_BYTES,
             )
         except (SettingsIOError, AppPathError) as error:
-            if _code(error, "") == _WRITE_UNKNOWN:
+            code = _code(error, "")
+            if code == _WRITE_UNKNOWN:
                 raise SaveOutcomeUnknownError(_WRITE_UNKNOWN) from None
-            # Unchanged, changed by someone else, or refused before writing.
+            if code in _FILE_CHANGED:
+                raise SettingsFileChangedError(code) from None
+            # Unchanged: the write failed, or it was refused before writing.
             return False
         self._generation = written
         return True
