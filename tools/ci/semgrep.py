@@ -2,7 +2,8 @@
 """Semgrep rule tests for tools/ci/semgrep.yml. Never imported or run.
 
 CI: semgrep --test --config tools/ci/semgrep.yml tools/ci/semgrep.py
-`# ruleid:` marks the next line as a required finding, `# ok:` as a required non-finding.
+Each case is preceded by a Semgrep test annotation naming the rules that must (or must not)
+match the next line. Do not write the annotation keywords anywhere else in this file.
 """
 
 import hashlib
