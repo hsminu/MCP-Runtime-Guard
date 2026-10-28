@@ -9,13 +9,15 @@ C4.15·C4.17). 검사 대상 설명이 조작할 수 있는 텍스트라 `defang
 `scan_report`는 집계 결과를 B `ScanReport`(SCAN-01)로 옮긴다. 지문 집합은 등록에 쓴 목록의
 지문(C4.12)이라 활성화 때 등록과 대조된다. 필수 분석기는 LLM·YARA 둘이고, 모든 도구에서
 끝난 분석기만 완료다. 준비 실패는 분석기 진단 하나, 도구별 실패·미검사는 그 도구의 진단으로
-남긴다. severity는 SDK 값 그대로다.
+남긴다. 완료가 아닌 분석기가 끝내지 못한 도구에는 반드시 진단이 있다. severity는 SDK 값
+그대로이고, 분류 코드는 영문·숫자·`_`·공백 64자 밖이면 `SCAN_CODE_UNRECOGNIZED`다.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, field
@@ -49,6 +51,9 @@ DEFAULT_MAX_DEFINITION_BYTES = 65_536
 # ScanReport.scanner_version. pyproject의 고정 버전과 같다(테스트가 설치본과 대조한다).
 SCANNER_VERSION = "cisco-ai-mcp-scanner-4.8.6"
 _RISK_MAX_CHARS = 64
+# Finding.code 형식(#57 B 리뷰). LLM 분석기에서는 모델 응답에서 온 값일 수 있다.
+_FINDING_CODE = re.compile(r"[A-Za-z0-9_ ]{1,64}")
+UNRECOGNIZED_FINDING_CODE = "SCAN_CODE_UNRECOGNIZED"
 type AnalyzerName = Literal["LLM", "YARA"]
 type AnalyzerStatus = Literal["completed", "failed", "not_run"]
 type Completion = Literal["completed", "partial", "failed", "not_scanned"]
@@ -460,8 +465,9 @@ def scan_report(
             analyzed = next(item for item in scanned.analyzers if item.analyzer == name)
             if analyzed.status != "completed":
                 complete = False
-                code = scanned.input_error_code or analyzed.error_code
-                if setup is None and code is not None:
+                # 준비 실패가 아니면 끝내지 못한 도구마다 진단을 남긴다(#57 B 리뷰 조건).
+                code = scanned.input_error_code or analyzed.error_code or f"SCAN_{name}_FAILED"
+                if setup is None:
                     diagnostics.append(
                         AnalyzerDiagnostic(
                             analyzer=name,
@@ -473,7 +479,7 @@ def scan_report(
             findings.extend(
                 Finding(
                     analyzer=name,
-                    code=summary.code or summary.category,
+                    code=_finding_code(summary.code or summary.category),
                     severity=summary.severity,
                     tool_fingerprint=fingerprint,
                     tool_name=tool_name,
@@ -500,6 +506,11 @@ def scan_report(
         )
     except ValidationError:
         raise ScanReportError("SCAN_REPORT_INVALID") from None
+
+
+def _finding_code(code: str) -> str:
+    """영문·숫자·`_`·공백 64자 밖의 분류 코드는 고정값으로 바꾼다. 원문은 싣지 않는다."""
+    return code if _FINDING_CODE.fullmatch(code) else UNRECOGNIZED_FINDING_CODE
 
 
 def _scan_code(code: str, name: AnalyzerName) -> ScanErrorCode:

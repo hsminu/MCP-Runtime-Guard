@@ -7,16 +7,21 @@ tests/contract/test_cisco_aggregation_sdk.py가 본다.
 import asyncio
 import dataclasses
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from guard_app.adapters.cisco_aggregation import (
     SCANNER_VERSION,
+    UNRECOGNIZED_FINDING_CODE,
     InternalMetadataScanner,
+    ScannerAggregationError,
     ScanReportError,
     scan_report,
 )
@@ -203,6 +208,29 @@ def test_unknown_severity_is_kept_and_marks_the_result_invalid():
     assert report.analyzer_diagnostics[0].code is ScanErrorCode.SCAN_ANALYZER_RESULT_INVALID
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("PROMPT INJECTION", "PROMPT INJECTION"),
+        ("new_rule", "new_rule"),
+        ("A" * 64, "A" * 64),
+        ("A" * 65, UNRECOGNIZED_FINDING_CODE),
+        ("x<script>PLANTED</script>", UNRECOGNIZED_FINDING_CODE),
+        ("see http://PLANTED.example", UNRECOGNIZED_FINDING_CODE),
+        ("line\nPLANTED", UNRECOGNIZED_FINDING_CODE),
+        ("위협PLANTED", UNRECOGNIZED_FINDING_CODE),
+    ],
+    ids=["llm", "yara-rule", "64", "65", "html", "link", "newline", "non-ascii"],
+)
+def test_finding_code_outside_the_plain_format_is_replaced(raw, expected):
+    """#57 B 리뷰 2번: LLM 분석기의 code는 모델 응답에서 왔을 수 있다."""
+    finding = SdkFinding("LLM", "HIGH", "PROMPT INJECTION", {"threat_type": raw})
+    report = report_of(scanned(Analyzer({"read_doc": [finding]}), Analyzer()))
+    assert report.findings[0].code == expected
+    if expected == UNRECOGNIZED_FINDING_CODE:
+        assert "PLANTED" not in report.model_dump_json()
+
+
 def test_codes_outside_the_b_enum_become_the_analyzers_general_failure():
     result = scanned(Analyzer(errors={"read_doc": ScannerLLMError("SCAN_LLM_TIMEOUT")}), Analyzer())
     tool = result.tools[0]
@@ -212,6 +240,20 @@ def test_codes_outside_the_b_enum_become_the_analyzers_general_failure():
         tools=(dataclasses.replace(tool, analyzers=(odd, tool.analyzers[1])), result.tools[1]),
     )
     diagnostic = report_of(patched).analyzer_diagnostics[0]
+    assert diagnostic.code is ScanErrorCode.SCAN_LLM_FAILED
+
+
+def test_failed_analyzer_without_a_code_still_gets_a_tool_diagnostic():
+    """집계기는 실패에 늘 코드를 붙이지만, 비어도 진단이 빠지지 않는다(#57 B 리뷰 조건)."""
+    result = scanned(Analyzer(errors={"read_doc": ScannerLLMError("SCAN_LLM_TIMEOUT")}), Analyzer())
+    tool = result.tools[0]
+    blank = dataclasses.replace(tool.analyzers[0], error_code=None)
+    patched = dataclasses.replace(
+        result,
+        tools=(dataclasses.replace(tool, analyzers=(blank, tool.analyzers[1])), result.tools[1]),
+    )
+    (diagnostic,) = report_of(patched).analyzer_diagnostics
+    assert (diagnostic.analyzer, diagnostic.tool_name) == ("LLM", "read_doc")
     assert diagnostic.code is ScanErrorCode.SCAN_LLM_FAILED
 
 
@@ -347,3 +389,75 @@ def test_record_scan_refuses_non_reports_and_unknown_servers(registry):
     with pytest.raises(RegistryError) as raised:
         run(registry.record_scan("scan-1", report_of(result)))
     assert str(raised.value) == "REG_SERVER_UNKNOWN"
+
+
+# #57 B 리뷰 조건: 번역 함수 전체의 성질
+
+_OUTCOMES = st.sampled_from(["clean", "finding", "error", "unknown", "odd_code"])
+_CODE = re.compile(r"[A-Za-z0-9_ ]{1,64}")
+
+
+class _Scripted:
+    """도구 이름마다 정해 둔 결과를 내는 분석기 대역."""
+
+    def __init__(self, name, outcomes, odd_code):
+        self.name = name
+        self.outcomes = outcomes
+        self.odd_code = odd_code
+
+    async def analyze_prepared(self, prepared):
+        outcome = self.outcomes[json.loads(prepared.definition_json)["name"]]
+        if outcome == "error":
+            raise ScannerAggregationError(f"SCAN_{self.name}_TIMEOUT")
+        if outcome == "clean":
+            return []
+        severity, code = {
+            "finding": ("HIGH", "PROMPT INJECTION"),
+            "unknown": ("UNKNOWN", "new_rule"),
+            "odd_code": ("LOW", self.odd_code),
+        }[outcome]
+        return [SdkFinding(self.name, severity, "CATEGORY", {"threat_type": code})]
+
+
+@given(
+    plan=st.lists(st.tuples(_OUTCOMES, _OUTCOMES, st.booleans()), max_size=4),
+    setup_failed=st.sets(st.sampled_from(["LLM", "YARA"])),
+    odd_code=st.text(max_size=80),
+)
+@settings(max_examples=200, deadline=None)
+def test_every_tool_an_analyzer_did_not_finish_has_a_diagnostic(plan, setup_failed, odd_code):
+    definitions = [
+        definition(f"tool_{index}", **({"description": "x" * 300} if too_large else {}))
+        for index, (_, _, too_large) in enumerate(plan)
+    ]
+    analyzers = {
+        name: None
+        if name in setup_failed
+        else _Scripted(
+            name,
+            {f"tool_{index}": outcomes[slot] for index, outcomes in enumerate(plan)},
+            odd_code,
+        )
+        for slot, name in enumerate(("LLM", "YARA"))
+    }
+    result = scanned(
+        analyzers["LLM"],
+        analyzers["YARA"],
+        definitions=definitions,
+        max_definition_bytes=200,
+        setup_errors={name: f"SCAN_{name}_UNAVAILABLE" for name in setup_failed},
+    )
+    tools = pairs(definitions)
+    report = scan_report(result, tools, scanned_at_utc=NOW)
+    keys = {(d.analyzer, d.tool_name, d.tool_fingerprint) for d in report.analyzer_diagnostics}
+    for name in ("LLM", "YARA"):
+        if name in report.analyzers_completed:
+            assert not any(key[0] == name for key in keys)
+            continue
+        if (name, None, None) in keys:  # 준비 실패
+            continue
+        for (tool_name, fingerprint), tool in zip(tools, result.tools, strict=True):
+            analyzed = next(item for item in tool.analyzers if item.analyzer == name)
+            if analyzed.status != "completed":
+                assert (name, tool_name, fingerprint) in keys
+    assert all(_CODE.fullmatch(finding.code) for finding in report.findings)
