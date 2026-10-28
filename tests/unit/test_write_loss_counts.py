@@ -28,12 +28,10 @@ CALL_TIMEOUT_S = 1.5
 LOST_ONCE = {"approval_consumed": 0, "host_dispatch": 1, "wire": 1, "effect": 1}
 
 # HTTP에서 실패한 요청(500·307·308)이나 닫을 때 진행 중인 요청(응답 없음)이 있으면 SDK 세션이
-# 예외 묶음으로 끝나고, Guard를 닫을 때 transport가 `SessionCloseFailed`를 알린다. 결과 불명
-# 처리와는 별개고 정리는 실제로 끝난다. A132(#52)가 이 경우를 정리 완료로 보면 모두 []가 된다.
-CLOSE_ERRORS = {
-    ("http", "hang"): ["SessionCloseFailed"],
-    ("http", "error500"): ["SessionCloseFailed"],
-}
+# `httpx.HTTPError`만 담은 예외 묶음으로 끝난다. 정리는 실제로 끝나므로 A132(#52)부터 transport는
+# 이것을 정리 완료로 본다. 그래서 어떤 유실에서도 Guard를 닫을 때 알리는 실패가 없다. 다른 예외가
+# 섞인 종료는 여전히 `SessionCloseFailed`라, 기대 밖 실패가 생기면 이 비교가 잡는다.
+CLOSE_ERRORS: dict[tuple[str, str], list[str]] = {}
 
 LOSSES = [
     ("stdio", "hang"),
@@ -142,8 +140,8 @@ def test_redirect_is_not_followed_and_the_write_is_not_resent(tmp_path, status, 
     assert type(retry) is Denied
     assert redirected == []
     assert counts == {"approval_consumed": 0, "host_dispatch": 1, "wire": 1, "effect": 0}
-    # 리다이렉트도 HTTP 세션 실패라 닫을 때 같은 종류가 남는다(CLOSE_ERRORS 설명).
-    assert close_errors == ["SessionCloseFailed"]
+    # 리다이렉트도 HTTP 요청 오류라 A132 뒤에는 정리 완료다(CLOSE_ERRORS 설명).
+    assert close_errors == []
 
 
 @pytest.mark.parametrize("kind", KINDS)
