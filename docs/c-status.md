@@ -74,7 +74,7 @@
 - [x] C4.11 신규 서버 PENDING(`register`: 설정 레코드 + 실제 목록, 설정에 없는 도구는 `OTHER`), 사용자 확인 후 ACTIVE(`activate`: 캐시의 등록 지문으로) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.12 정의 전체로 도구 지문 계산(`services/registry.listing_fingerprints`): FP-01 입력(A transport의 SDK 재구성 dict)에 B `tool_fingerprint`(JCS), 미완료·이름 없음·중복·JCS 실패면 지문 없음. 실제 SDK 파싱 경로로 예시 정의 7개의 지문을 고정해 SDK·변환·JCS 변화를 잡음 · [기록](archive/c/C4.12-tool-fingerprints.md)
 - [ ] C4.13 경고 데이터를 등록 화면과 도구 호출 승인 창에 제공 · [결정](contracts.md#사용자-결정) — 막힘: A 화면
-- [ ] C4.14 Scanner 검사 예산 구현(동시성·작업 10분·YARA native 5초·대기열 8건) · [결정](contracts.md#사용자-결정)
+- [x] C4.14 Scanner 검사 예산 구현(`services/scanner.ScanService`): 서버 검사 1건·대기 8건(`SCAN_QUEUE_FULL`), 작업 10분(끝난 결과 보존·`SCAN_INCOMPLETE` 보고서), LLM 동시 4개(도구 병렬), YARA 전용 작업자 1개·native 5초(SDK `_rules` 감쌈), 취소는 기록 없음, 제품 키는 넘긴 값만(C2.10 전 YARA만) · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.14-scan-service-budget.md)
 - [x] C4.15 LLM 자체 평가(`overall_risk`)를 참고 필드로 보존. 판정·정렬에 쓰지 않음. SDK가 버리는 값을 `raw_response`에서 꺼내 64자로 무해화 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.9-scan-report-translation.md)
 - [ ] C4.16 LLM 경고의 반복 실행 변동 측정(144개 × 여러 회)
 - [x] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록(`defang_scanner_text`) · [기록](archive/c/C4.9-scan-report-translation.md)
