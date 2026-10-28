@@ -9,11 +9,14 @@ All values are identifiers shown as plain text.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
     QCheckBox,
     QDialog,
     QHBoxLayout,
+    QHeaderView,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -57,6 +60,31 @@ EXCLUDED_REASONS = {
     "DUPLICATE": "같은 이름의 도구가 이미 있음",
 }
 EXCLUDED_UNKNOWN = "Codex 이름 규칙에 맞지 않음"
+
+
+def _page_table(name: str, columns: list[str]) -> QTableWidget:
+    """A table on the scrolling page: full width, every row shown, nothing cut off.
+
+    Leading columns fit their text and the last one takes the slack, wrapping
+    long text; rows grow to fit and the table grows with them instead of
+    scrolling inside the page.
+    """
+    table = QTableWidget(0, len(columns))
+    table.setAccessibleName(name)
+    table.setHorizontalHeaderLabels(columns)
+    table.verticalHeader().setVisible(False)
+    table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    table.setWordWrap(True)
+    table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    table.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+    table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    header = table.horizontalHeader()
+    header.setMinimumSectionSize(120)
+    for column in range(len(columns) - 1):
+        header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+    header.setStretchLastSection(True)
+    return table
 
 
 class ToolAllowDialog(QDialog):
@@ -122,21 +150,13 @@ class PolicyPage(QWidget):
         self.notice.setVisible(False)
         layout.addWidget(self.notice)
         self._change_command: str | None = None
-        self.rules = QTableWidget(0, 3)
-        self.rules.setAccessibleName("접근 규칙 목록")
-        self.rules.setHorizontalHeaderLabels(["MCP 서버", "도구", "규칙"])
-        self.rules.verticalHeader().setVisible(False)
-        self.rules.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.rules = _page_table("접근 규칙 목록", ["MCP 서버", "도구", "규칙"])
         layout.addWidget(self.rules)
         self.server_area = QVBoxLayout()
         layout.addLayout(self.server_area)
         self.excluded_title = plain_label(EXCLUDED_TITLE, name="sectionTitle")
         self.excluded_note = plain_label(EXCLUDED_NOTE, name="secondary")
-        self.excluded = QTableWidget(0, 2)
-        self.excluded.setAccessibleName("Codex에서 쓸 수 없는 도구 목록")
-        self.excluded.setHorizontalHeaderLabels(["도구", "이유"])
-        self.excluded.verticalHeader().setVisible(False)
-        self.excluded.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.excluded = _page_table("Codex에서 쓸 수 없는 도구 목록", ["도구", "이유"])
         for widget in (self.excluded_title, self.excluded_note, self.excluded):
             widget.setVisible(False)
             layout.addWidget(widget)
