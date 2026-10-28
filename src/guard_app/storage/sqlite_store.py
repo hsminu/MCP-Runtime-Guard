@@ -1313,7 +1313,8 @@ class SQLiteStore:
             task_id = _identifier(row["task_id"])
             request_id = _identifier(row["request_id"])
             task = tasks.get(task_id)
-            request = requests.get(request_id)
+            # dict 조회다. Bandit B113(HTTP 시간 제한) 오탐(Bandit 예외, 약점 대장 BA-01).
+            request = requests.get(request_id)  # nosec B113
             if task is None or request is None or request.task_id != task_id:
                 raise StoreError()
             _utc_value(row["at_utc"])
