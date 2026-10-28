@@ -1,0 +1,33 @@
+{
+  "item": "C4.14",
+  "date": "2026-10-28",
+  "purpose": "yara-python native match timeout that C passes to the Cisco SDK 4.8.6 YaraAnalyzer rules (the SDK calls match without a timeout)",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.10",
+    "yara_python": "4.5.4",
+    "cisco_ai_mcp_scanner": "4.8.6"
+  },
+  "rule": "rule slow: one-byte string, nested for-loops over every match offset (quadratic in match count)",
+  "runs": [
+    {
+      "timeout_s": 1,
+      "data_bytes": 65536,
+      "outcome": "TimeoutError",
+      "seconds": 1.0008
+    },
+    {
+      "timeout_s": 5,
+      "data_bytes": 65536,
+      "outcome": "TimeoutError",
+      "seconds": 5.003
+    },
+    {
+      "timeout_s": 5,
+      "data_bytes": 512,
+      "outcome": "completed",
+      "seconds": 0.0009
+    }
+  ],
+  "notes": "64 KB is the scanner's per-definition limit (DEFAULT_MAX_DEFINITION_BYTES). Without a timeout the 64 KB case does not finish in practice; the bundled SDK rules finish well under the limit on normal definitions."
+}

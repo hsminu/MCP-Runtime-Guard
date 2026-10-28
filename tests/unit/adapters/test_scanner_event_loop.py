@@ -81,7 +81,7 @@ def test_yara_provider_is_built_off_the_event_loop(monkeypatch):
         raise cisco_llm.ScannerLLMError("SCAN_LLM_KEY_MISSING_OR_INVALID")
         yield
 
-    def build_yara_provider(max_definition_bytes):
+    def build_yara_provider(max_definition_bytes, executor=None, timeout_s=None):
         seen["yara"] = threading.get_ident()
         return SimpleNamespace()
 
