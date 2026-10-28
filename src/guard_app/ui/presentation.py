@@ -182,7 +182,7 @@ PAGES = {
     "logs": "호출 로그",
     "approvals": "승인 대기",
     "servers": "MCP 서버",
-    "server_add": "MCP 추가 초안",
+    "server_add": "MCP 서버 추가",
     "policy": "정책 · 경계",
     "audit": "감사 기록",
     "runs": "대화",
@@ -316,6 +316,15 @@ def format_kst(value: datetime | None) -> str:
     if value is None or value.tzinfo is None or value.utcoffset() is None:
         return MISSING
     return value.astimezone(_KST).strftime("%Y년 %m월 %d일 %H:%M:%S KST")
+
+
+def format_kst_short(value: datetime | None) -> str:
+    """Month, day and minute for list rows; format_kst keeps the full stamp."""
+
+    if value is None or value.tzinfo is None or value.utcoffset() is None:
+        return MISSING
+    local = value.astimezone(_KST)
+    return f"{local.month}월 {local.day}일 {local:%H:%M}"
 
 
 # Letters and symbols that render as blank space although Unicode does not

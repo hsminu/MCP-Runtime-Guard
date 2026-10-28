@@ -144,14 +144,8 @@ def test_boxed_cards_stay_few_and_never_nest_in_the_activity_panel() -> None:
     for selector, body in _rules():
         if "border: 1px solid" in body and "border-radius: 10px" in body:
             boxed.update(re.findall(r"QFrame#(\w+)", selector))
-    assert boxed == {
-        "serverCard",
-        "attentionCard",
-        "recentCard",
-        "flowCard",
-        "placeholderCard",
-        "metricList",
-    }
+    # Lists are one box of hairline rows; nothing inside a list is boxed again.
+    assert boxed == {"placeholderCard", "metricList", "rowList"}
 
 
 def test_no_eyebrow_labels_or_letter_spacing() -> None:

@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QTextCursor
-from PySide6.QtWidgets import QApplication, QFrame, QLabel, QScrollArea
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QPushButton, QScrollArea
 
 from guard_app.domain.enums import Label, TaskStatus
 from guard_app.services.bridge import (
@@ -470,8 +470,15 @@ def test_existing_feature_pages_and_preparation_forms_remain_reachable(window):
         shell.navigate(page)
         assert shell.stack.currentIndex() == shell._page_indices[page]
     shell.navigate("server_add")
-    assert shell.folder_rules_form.isVisibleTo(shell)
     assert shell.server_add_form.isVisibleTo(shell)
+    # The folder rules sit folded under the add form until opened.
+    toggle = next(
+        button
+        for button in shell.server_add_form.findChildren(QPushButton)
+        if button.accessibleName() == "로컬 파일 서버 폴더 등급 펼치기"
+    )
+    toggle.click()
+    assert shell.folder_rules_form.isVisibleTo(shell)
     shell.navigate("settings")
     assert shell.scanner_key_form.isVisibleTo(shell)
     assert not shell.scanner_key_form.save_button.isEnabled()

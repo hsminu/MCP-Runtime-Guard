@@ -194,9 +194,18 @@ QLabel#secondary, QLabel#stateMessage { color: $mute; font-size: 12px; }
 QLabel#navCaption { color: $mute; font-size: 11px; font-weight: 500; padding: 0 8px; }
 QLabel#brandTitle { font-size: 13px; font-weight: 600; }
 QLabel#brandMark { background: $accent; border-radius: 5px; }
-QFrame#metricList { background: $surface; border: 1px solid $hairline; border-radius: 10px; }
-QFrame#metricRow { border-bottom: 1px solid $hairline; }
-QFrame#metricRow[last="true"] { border-bottom: none; }
+QFrame#metricList, QFrame#rowList {
+    background: $surface; border: 1px solid $hairline; border-radius: 10px; }
+QFrame#metricRow, QFrame#listRow { border-bottom: 1px solid $hairline; }
+QFrame#metricRow[last="true"], QFrame#listRow[last="true"] { border-bottom: none; }
+QLabel#labelPill { color: $mute; background: $bubble; border: 1px solid $hairline_strong;
+    border-radius: 9px; padding: 0 8px; font-size: 12px; font-weight: 500; }
+QLabel#labelPill[labelLevel="public"] { color: $public; background: $public_soft;
+    border-color: $public_line; }
+QLabel#labelPill[labelLevel="internal"] { color: $internal; background: $internal_soft;
+    border-color: $internal_line; }
+QLabel#labelPill[labelLevel="confidential"] { color: $confidential;
+    background: $confidential_soft; border-color: $confidential_line; }
 QLabel#metricValue { font-size: 14px; font-weight: 600; color: $ink; }
 QLabel#metricValue[unavailable="true"] { font-weight: 400; color: $mute; }
 QLabel#cardTitle { font-size: 13px; font-weight: 600; }
@@ -208,7 +217,6 @@ QLabel#folderRootError, QLabel#folderRulesError, QLabel#folderRuleError {
     color: $danger; font-size: 12px; }
 QLabel#draftStatus, QLabel#folderDraftStatus, QLabel#boundaryNotice {
     color: $body; font-size: 12px; }
-QFrame#serverCard, QFrame#attentionCard, QFrame#recentCard, QFrame#flowCard,
 QFrame#placeholderCard {
     background: $surface;
     border: 1px solid $hairline;

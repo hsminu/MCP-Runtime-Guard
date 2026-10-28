@@ -24,7 +24,7 @@ from guard_app.ui.widgets import KeyboardActionButton, PlainDetailDialog
 from guard_app.ui.window import GuardWindow
 
 # Absolute on this OS and ASCII-only; the form never touches the file.
-SYNTHETIC_COMMAND = r"C:\synthetic-server" if os.name == "nt" else "/synthetic-server"
+SYNTHETIC_COMMAND = r"C:\synthetic-server.exe" if os.name == "nt" else "/synthetic-server.exe"
 
 
 @pytest.fixture(scope="module")
@@ -315,12 +315,12 @@ def test_add_form_keyboard_reaches_fields_and_prepares_only_local_draft(
     form.show()
     app.processEvents()
     try:
-        form.server_id.setFocus()
-        QTest.keyClicks(form.server_id, "keyboard-server")
-        QTest.keyClick(form.server_id, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.display_name
+        form.display_name.setFocus()
         QTest.keyClicks(form.display_name, "Keyboard Server")
         QTest.keyClick(form.display_name, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.server_id
+        assert form.server_id.text() == "keyboard-server"
+        QTest.keyClick(form.server_id, Qt.Key.Key_Tab)
         assert form.focusWidget() is form.transport
         QTest.keyClick(form.transport, Qt.Key.Key_Tab)
         assert form.focusWidget() is form.command
@@ -328,6 +328,8 @@ def test_add_form_keyboard_reaches_fields_and_prepares_only_local_draft(
         # non-ASCII character, so never type a path derived from the checkout.
         QTest.keyClicks(form.command, SYNTHETIC_COMMAND)
         QTest.keyClick(form.command, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.browse_button
+        QTest.keyClick(form.browse_button, Qt.Key.Key_Tab)
         assert form.focusWidget() is form.args_json
         before = form.args_json.toPlainText()
         QTest.keyClick(form.args_json, Qt.Key.Key_Tab)

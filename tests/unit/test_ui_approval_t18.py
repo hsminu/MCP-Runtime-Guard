@@ -23,7 +23,7 @@ from guard_app.ui.approval_detail import (
 )
 from guard_app.ui.approvals import ApprovalListPage, ApprovalPage, ApprovalSummary
 from guard_app.ui.models import AttentionItem
-from guard_app.ui.overview import AttentionCard
+from guard_app.ui.overview import AttentionRow
 from guard_app.ui.runtime import RuntimePanel
 
 
@@ -147,7 +147,7 @@ def test_all_approval_fields_are_literal_and_never_open_links(app, monkeypatch, 
             header + "\n전체 인자:\n" + payload
         )
         assert payload in panel.summary.text()
-        card = AttentionCard(
+        card = AttentionRow(
             AttentionItem(
                 "attention",
                 "approval",

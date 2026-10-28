@@ -54,7 +54,7 @@ def test_missing_counts_and_failed_query_never_look_like_zero(app) -> None:
     assert window.overview.metric_rows[2].value.text() == "0건"
 
 
-def test_overview_order_and_server_preview_adapt_to_window_width(app) -> None:
+def test_overview_puts_attention_first_and_previews_five_servers_at_any_width(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
     window.resize(320, 400)
@@ -77,45 +77,37 @@ def test_overview_order_and_server_preview_adapt_to_window_width(app) -> None:
     window.show()
     app.processEvents()
     try:
-        layout = window.overview.layout()
+        page = window.overview
+        layout = page.layout()
+        # Counts, then what needs a person, then servers, calls and the flow.
+        assert page.metrics_state.mapTo(page, QPoint(0, 0)).y() < page.attention_section.y()
         assert (
-            layout.indexOf(window.overview.metrics_state)
-            < layout.indexOf(window.overview.servers_state)
-            < layout.indexOf(window.overview.attention_state)
-            < layout.indexOf(window.overview.calls_state)
-            < layout.indexOf(window.overview.flow_state)
+            layout.indexOf(page.attention_section)
+            < layout.indexOf(page.servers_section)
+            < layout.indexOf(page.calls_section)
+            < layout.indexOf(page.flow_section)
         )
-        assert all(row.isVisibleTo(window.overview) for row in window.overview.metric_rows)
-        assert window.overview._server_columns == 1
-        assert len(window.overview._server_cards) == 1
-        assert "12개 중 1개" in window.overview.server_preview_note.text()
-        assert window.overview.server_preview_note.isVisibleTo(window.overview)
-        assert window.overview.all_servers_button.isVisibleTo(window.overview)
-        assert window.overview.attention_state.isVisibleTo(window.overview)
-        assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
-
-        for width, height, expected_cards in (
-            (540, 580, 1),
-            (900, 700, 2),
-            (1100, 750, 2),
-        ):
+        assert all(row.isVisibleTo(page) for row in page.metric_rows)
+        assert page.attention_state.isVisibleTo(page)
+        for width, height in ((320, 400), (540, 580), (900, 700), (1100, 750)):
             window.resize(width, height)
             app.processEvents()
-            assert len(window.overview._server_cards) == expected_cards
-            assert len(window.overview._server_cards) == window.overview._server_columns
-            assert f"12개 중 {expected_cards}개" in window.overview.server_preview_note.text()
+            # Rows, not a card grid: the preview no longer depends on the width.
+            assert len(page._server_rows) == 5
+            assert "12개 중 5개" in page.server_preview_note.text()
+            assert page.server_preview_note.isVisibleTo(page)
+            assert page.all_servers_button.isVisibleTo(page)
             assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
 
         window.resize(320, 400)
         app.processEvents()
-        assert len(window.overview._server_cards) == 1
-        window.overview.all_servers_button.click()
+        page.all_servers_button.click()
         assert window._page == "servers"
     finally:
         window.close()
 
 
-def test_small_overview_exposes_attention_shortcut_and_prioritizes_related_server(
+def test_small_overview_shows_attention_before_servers_and_prioritizes_related_server(
     app,
 ) -> None:
     window = GuardWindow()
@@ -141,23 +133,17 @@ def test_small_overview_exposes_attention_shortcut_and_prioritizes_related_serve
     try:
         scroll = window.stack.currentWidget()
         assert isinstance(scroll, QScrollArea)
-        assert window.overview.attention_shortcut.isVisibleTo(window)
-        assert "1개" in window.overview.attention_shortcut_summary.text()
-        assert window.overview._server_cards[0].link.accessibleName().startswith("zeta")
+        page = window.overview
+        assert "미해결 1개" in page.attention_title.text()
+        assert page._server_rows[0].link.accessibleName().startswith("zeta")
         assert scroll.horizontalScrollBar().maximum() == 0
-        window.overview.attention_shortcut.click()
-        app.processEvents()
-        assert scroll.verticalScrollBar().value() > 0
-        header_top = window.overview.attention_header.mapTo(scroll.viewport(), QPoint(0, 0)).y()
-        assert 0 <= header_top <= 20
-        first_card = window.overview.attention_layout.itemAt(0).widget()
-        card_top = first_card.mapTo(scroll.viewport(), QPoint(0, 0)).y()
-        assert 0 <= card_top < scroll.viewport().height()
+        first_row = page.attention_layout.itemAt(0).widget()
+        assert first_row.mapTo(page, QPoint(0, 0)).y() < page.servers_section.y()
     finally:
         window.close()
 
 
-def test_server_preview_keeps_keyboard_focus_when_columns_collapse(app) -> None:
+def test_server_row_keeps_keyboard_focus_when_the_window_narrows(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
     window.resize(900, 700)
@@ -176,13 +162,13 @@ def test_server_preview_keeps_keyboard_focus_when_columns_collapse(app) -> None:
     window.activateWindow()
     app.processEvents()
     try:
-        before = window.overview._server_cards[0]
+        before = window.overview._server_rows[0]
         before.link.setFocus()
         assert before.link.hasFocus()
         window.resize(320, 400)
         app.processEvents()
-        after = window.overview._server_cards[0]
-        assert after is not before
+        after = window.overview._server_rows[0]
+        assert after is before
         assert after.link.hasFocus()
         assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
     finally:
@@ -226,7 +212,9 @@ def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(
         page.calls_next.click()
         assert "11개 중 6–10개" in page.calls_page_note.text()
 
-        page.attention_shortcut.click()
+        page.attention_previous.click()
+        page.attention_previous.click()
+        assert "12개 중 1–5개" in page.attention_page_note.text()
         app.processEvents()
         card = page.attention_layout.itemAt(0).widget()
         scroll = window.stack.currentWidget()
@@ -277,7 +265,7 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
         page.attention_next.click()
         page.attention_next.click()
         assert "12개 중 11–12개" in page.attention_page_note.text()
-        page.attention_shortcut.setFocus()
+        page.metric_rows[0].findChild(QPushButton).setFocus()
         urgent = AttentionItem("new-urgent", "outcome_unknown", server_id="urgent-server")
         window.set_overview_snapshot(
             OverviewSnapshot(attention=Surface(LoadState.READY, (urgent,) + old_items))
@@ -289,15 +277,13 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
         page.attention_next.click()
         page.attention_next.click()
         assert "13개 중 11–13개" in page.attention_page_note.text()
-        page.attention_shortcut.click()
+        page.attention_previous.click()
+        page.attention_previous.click()
         app.processEvents()
         assert "13개 중 1–5개" in page.attention_page_note.text()
-        scroll = window.stack.currentWidget()
-        assert isinstance(scroll, QScrollArea)
         first = page.attention_layout.itemAt(0).widget()
-        assert "MCP urgent-server" in (label.text() for label in first.findChildren(QLabel))
-        assert first.findChildren(type(page.attention_shortcut))[0].isEnabled() is False
-        assert first.mapTo(scroll.viewport(), QPoint(0, 0)).y() < (scroll.viewport().height())
+        assert any("MCP urgent-server" in label.text() for label in first.findChildren(QLabel))
+        assert first.link.isEnabled() is False
     finally:
         window.close()
 
@@ -324,12 +310,12 @@ def test_runs_page_only_displays_backend_status_without_controls(app) -> None:
     assert window.task_status_card.findChildren(QPushButton) == []
 
 
-def test_server_add_navigation_is_local_draft_only(app) -> None:
+def test_server_add_navigation_says_registration_is_not_connected(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
     window.navigate("server_add")
-    assert window.breadcrumb.text() == "MCP 추가 초안"
-    assert "Registry 등록은 아직 연결되지 않음" in window.server_add_form.status.text()
+    assert window.breadcrumb.text() == "MCP 서버 추가"
+    assert "Registry 등록은 아직 연결되지 않아" in window.server_add_form.status.text()
     assert window.server_add_form.validated_draft is None
 
 
@@ -364,13 +350,13 @@ def test_connected_server_is_not_inferred_from_active_registration(app) -> None:
         )
     )
     assert window.overview.metric_rows[0].value.text() == "1건"
-    assert len(window.overview._server_cards) == 1
-    card = window.overview._server_cards[0]
-    texts = [label.text() for label in card.findChildren(type(window.overview.metrics_state))]
-    assert "미지정" in texts
-    assert "등록 검토 중" in texts
-    assert "연결됨" in texts
-    assert "일반 외부" in texts
+    assert len(window.overview._server_rows) == 1
+    row = window.overview._server_rows[0]
+    text = " ".join(label.text() for label in row.findChildren(QLabel))
+    assert "최대 수신 미지정" in text
+    assert "등록 검토 중" in text
+    assert "세션 연결됨" in text
+    assert "신뢰 경계 일반 외부" in text
 
 
 def test_attention_deduplicates_and_never_enables_missing_target(app) -> None:

@@ -224,10 +224,11 @@ class GuardWindow(QMainWindow):
         # root that does calls set_approval_query_connected(True).
         self.approval_page.set_source_connected(False)
         self._page_indices["approvals"] = self.stack.addWidget(_scroll_page(self.approval_page))
-        # The draft form scrolls itself; the folder rules ride in the same scroll.
+        # The add form scrolls itself; the folder rules ride in the same scroll,
+        # folded, since only the app's local file server needs them.
         self.server_add_form = ServerAddForm()
         self.folder_rules_form = LocalFolderRulesForm()
-        self.server_add_form.add_section(self.folder_rules_form)
+        self.server_add_form.add_section(self.folder_rules_form, "로컬 파일 서버 폴더 등급")
         self._page_indices["server_add"] = self.stack.addWidget(self.server_add_form)
         # A session's results and activity are one block that moves between
         # two hosts: the chat header's 활동 docks it beside the conversation,

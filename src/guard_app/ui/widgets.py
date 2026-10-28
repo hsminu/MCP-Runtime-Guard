@@ -159,6 +159,24 @@ class KeyboardActionButton(QPushButton):
         super().keyReleaseEvent(event)
 
 
+class LabelPill(QLabel):
+    """The maximum receivable label as a small tinted pill for list rows.
+
+    The words name what it is ("최대 수신"), so it never reads as the trust
+    boundary, which shares the word 내부."""
+
+    def __init__(self, label: str | None = None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("labelPill")
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        korean, english, tone = LABELS.get(label or "", ("미지정", "미제공", "unknown"))
+        self.setText(f"최대 수신 {korean}")
+        self.setToolTip(english if label in LABELS else "")
+        self.setAccessibleName(f"보안 등급 최대 수신: {korean}, {english}")
+        self.setProperty("labelLevel", tone)
+
+
 class SecurityLabel(QFrame):
     """Maximum receivable label. It is distinct from tier and registry state."""
 
