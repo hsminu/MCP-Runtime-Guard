@@ -4,8 +4,9 @@
 자격증명 관리자에 저장한다. 현재 사용자의 일반 자격증명(`CRED_PERSIST_LOCAL_MACHINE`)이라
 Windows가 사용자 DPAPI로 암호화하고 다른 사용자는 읽지 못한다. 제품 경로는 이 저장소만 읽고
 `.env`(`load_scanner_environment`)는 개발·실험용이다. 키는 로그·예외·repr·프로세스 환경에
-싣지 않는다. 같은 사용자 권한의 프로세스는 읽을 수 있고(위협 모델 밖), Python 문자열은 메모리에서
-지울 수 없다.
+싣지 않는다. 같은 사용자 권한의 프로세스는 읽을 수 있다(위협 모델 밖). `CredWriteW`에 넘기는
+ctypes 버퍼는 쓴 뒤 0으로 지우지만, 호출자의 문자열과 그 `bytes` 사본은 Python에서 지울 수 없어
+GC 때까지 메모리에 남는다.
 """
 
 from __future__ import annotations
@@ -227,6 +228,8 @@ def load_scanner_environment(
 
 def store_scanner_key(key: object, *, target: str = SCANNER_KEY_TARGET) -> None:
     """키를 자격증명 관리자에 저장한다(같은 대상은 덮어쓴다).
+
+    `CredWriteW`에 넘기는 ctypes 버퍼만 쓴 뒤 0으로 지운다. `key`와 그 `bytes` 사본은 지울 수 없다.
 
     실패 코드: `SCAN_KEY_INVALID`(형식), `SCAN_KEY_STORE_UNAVAILABLE`(로그온 세션 없음, 서비스
     계정 등), `SCAN_KEY_STORE_FAILED`(그 밖의 Windows 오류), `SCAN_KEY_STORE_UNSUPPORTED`.
