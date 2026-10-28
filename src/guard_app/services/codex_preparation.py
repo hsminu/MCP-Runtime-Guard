@@ -138,12 +138,13 @@ class CodexProcessPreparation:
         """The product DB, fixed in the claimed app folder (C2.17, A106).
 
         The lock `claim` took is its single owner (REC-01), so there is no path
-        before the claim. C's `AppFolders.db_path()` (#37) will also check that
-        the DB files are not links; switch to it then.
+        before the claim. C's `AppFolders.db_path()` (C2.19) gives it only when
+        the DB and its `-wal`/`-shm` files, if present, are private regular
+        files; otherwise `AppPathError("APP_DB_INVALID")` and the app does not start.
         """
         if self._folders is None:
             raise CodexPreparationError("CODEX_FOLDERS_UNCLAIMED")
-        return self._folders.paths.db_file
+        return self._folders.db_path()
 
     @property
     def folders(self) -> AppFolders:

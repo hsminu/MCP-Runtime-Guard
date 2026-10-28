@@ -15,7 +15,6 @@ Run from the repository root::
 
 from __future__ import annotations
 
-import inspect
 import sys
 import time
 from collections.abc import Awaitable, Callable
@@ -625,9 +624,7 @@ class DemoData:
 def synthetic_backend() -> Awaitable[BackendBindings]:
     from examples.synthetic_app import bootstrap
 
-    # The rule-based mock access checker; PR #47 drops the AGT option.
-    options = {"agt_mode": "mock"} if "agt_mode" in inspect.signature(bootstrap).parameters else {}
-    return bootstrap("ask", **options)
+    return bootstrap("ask")
 
 
 def build(bridge: BackendBridge, window: GuardWindow) -> DemoData:

@@ -438,6 +438,39 @@ def test_db_file_is_the_product_db_in_the_claimed_folder(tmp_path, pin) -> None:
         _ = owner.db_file
 
 
+def test_db_file_refuses_a_db_with_a_second_hard_link(tmp_path, pin) -> None:
+    """A106: the path comes from C's `db_path()` (C2.19), so a DB file that is
+    also reachable from elsewhere is refused instead of opened."""
+    owner = preparation(tmp_path, pin)
+    try:
+        db = tmp_path / "app" / "data" / "guard.sqlite3"
+        db.write_bytes(b"SQLite format 3\x00")
+        os.link(db, tmp_path / "elsewhere.sqlite3")
+        with pytest.raises(AppPathError, match="^APP_DB_INVALID$"):
+            _ = owner.db_file
+    finally:
+        owner.close()
+
+
+def test_main_does_not_start_when_the_db_file_is_refused(monkeypatch, capsys, tmp_path) -> None:
+    """A106: a refused product DB stops the start before the backend or the
+    window, with fixed text and no path, and the lock is released."""
+    root = tmp_path / "app"
+    prepared = prepare_app_folders(root)
+    db = prepared.paths.db_file
+    prepared.close()
+    db.write_bytes(b"SQLite format 3\x00")
+    os.link(db, tmp_path / "elsewhere.sqlite3")
+    monkeypatch.setattr(paths, "app_root", lambda: root)
+    monkeypatch.setattr(entry, "_run", lambda *_args: pytest.fail("the window must not open"))
+    monkeypatch.setattr(sys, "argv", ["guard-app"])
+    assert entry.main() == 1
+    error = capsys.readouterr().err
+    assert "제품 DB 파일이 링크이거나 권한이 달라 앱을 시작하지 않음(APP_DB_INVALID)" in error
+    assert str(tmp_path) not in error
+    prepare_app_folders(root).close()  # the lock was released
+
+
 def _junction(target: Path, link: Path) -> None:
     import _winapi
 

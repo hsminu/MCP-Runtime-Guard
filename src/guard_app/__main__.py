@@ -110,6 +110,14 @@ def main() -> int:
             codex.close()
             print(_settings_refusal(error.code), file=sys.stderr)
             return 1
+        # A106: C's check of the product DB and its side files (C2.19) refuses a
+        # link, an extra hard link or foreign permissions before the window opens.
+        try:
+            _ = codex.db_file
+        except AppPathError as error:
+            codex.close()
+            print(_claim_refusal(error), file=sys.stderr)
+            return 1
     confirmed: bool | None = None  # None: _run raised before the backend reported
     try:
         code, confirmed = _run(args, codex, settings)
@@ -165,6 +173,8 @@ def _claim_refusal(error: Exception) -> str:
     code = error.args[0] if error.args else None
     if code == "APP_ALREADY_RUNNING":
         return "MCP Runtime Guard가 이미 실행 중이라 시작하지 않는다"
+    if code == "APP_DB_INVALID":
+        return "제품 DB 파일이 링크이거나 권한이 달라 앱을 시작하지 않음(APP_DB_INVALID)"
     if type(code) is str and _APP_CODE.fullmatch(code):
         return f"앱 폴더를 준비하지 못해 시작하지 않는다({code})"
     return "앱 폴더를 준비하지 못해 시작하지 않는다"
@@ -211,7 +221,8 @@ def _run(
         from guard_app.services.session_runtime import bootstrap_product
 
         # A101: C's app folders and launcher behind each Task's Codex session.
-        # A106: the DB is the one fixed in the folder `codex` claimed (C2.17).
+        # A106: the DB is the one fixed in the folder `codex` claimed (C2.17),
+        # checked again by C's `db_path()` right before the backend opens it.
         preparation = codex.preparation()
         db_file = str(codex.db_file)
         bridge = BackendBridge(
