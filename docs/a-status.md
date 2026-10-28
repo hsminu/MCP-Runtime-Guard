@@ -131,7 +131,8 @@
 - [ ] A49 등록·출처 규칙 연결 — 막힘: C Registry·safe_path·설정 로딩 담당(#19)
 - [x] A89 Codex 로그인 화면·`account/read`·기기 코드 로그인/취소/로그아웃 · [기록](archive/a/A89-codex-login-panel.md)
 - [x] A89 API 키 로그인 입력란(2026-10-18 결정, PR #31) · [기록](archive/a/A89-api-key-field.md)
-- [ ] A52 실제 app-server로 로그인 — 막힘: C launcher·T43 검증(#21)
+- [x] A52 로그인 화면 전용 app-server, 로그아웃 뒤 자격증명 정리, 세션 중 로그아웃 막기([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) · [기록](archive/a/A52-account-app-server-logout.md)
+- [ ] A52 실제 codex.exe로 로그인·로그아웃 정리 확인 — C와 함께(T43)
 - [x] A54 등록 화면 서버 ID 즉시 안내·bridge에서 B 검사 결과 전달 · [기록](archive/a/A54-server-id-bridge-validation.md)
 - [x] A81 서버 활성화 단계의 도구별 허용 체크박스·Task 정지 안내(정책 화면) · [기록](archive/a/A91-policy-screen.md)
 - [x] A91 정책 화면(Profile·정책 버전·TTL·taint·접근 규칙 읽기 전용) · [기록](archive/a/A91-policy-screen.md)
@@ -196,7 +197,7 @@
 - [x] A112 1단계: `SessionRuntime` 책임 분리(생성·정리·정책 변경·시작 게이트) · [기록](archive/a/A112-session-runtime-split.md)
 - [x] A113 2단계: `mcp_transport`를 같은 이름의 패키지로 나누고 긴 함수 정리 · [기록](archive/a/A113-mcp-transport-package.md)
   - B 리뷰 받음([#40](https://github.com/hsminu/MCP-Runtime-Guard/issues/40), 고칠 점 없음). 의견대로 `ResultTooLarge`의 N818 이유 주석에 감사 값 일치 이유를 더함
-  - 남은 것: 개발문서·team-workflow의 파일 경로 갱신(main PR 제안)
+  - 개발문서·team-workflow의 파일 경로는 [#39](https://github.com/hsminu/MCP-Runtime-Guard/pull/39)로 main에 반영됨
 - [x] A118 A113에서 찾은 mcp_transport 테스트 빈틈 9개 중 7개를 테스트로 메움(나머지 2개는 관찰 불가) · [기록](archive/a/A118-mcp-transport-test-gaps.md)
 - [x] A114 3단계: Codex 계층(`codex_session`·`jsonrpc_client`·`codex_stream`·`guard_relay`) 정리 · [기록](archive/a/A114-codex-layer-cleanup.md)
 - [x] A119 A114에서 찾은 Codex 세션 테스트 빈틈 4개와 멈춤 1개를 메움 · [기록](archive/a/A119-codex-session-test-gaps.md)
