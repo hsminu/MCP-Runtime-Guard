@@ -13,8 +13,8 @@
 | 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
 | 동기 `AccessChecker` 포트(ACCESS-01, B2.9)·AGT 코드 제거(B2.11)·계약 합의 | B·A·C | A02·A06, A41, A44, A53 |
 | L2(C6.14, C 브랜치에 있고 main 반영 전)·T43/T46·수신 상한 독립 인수(C5.8)·MCP 서버 실행 파일 해시 출처(C2.6)·ScanReport·Scanner 자격증명(C2.10). launcher·앱 폴더·제품 DB 위치(C2.12·C2.13·C2.17)는 [PR #35](https://github.com/hsminu/MCP-Runtime-Guard/pull/35)로 main에 병합됨 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
-| CFG-01 설정 파일: B 변환 함수([PR #36](https://github.com/hsminu/MCP-Runtime-Guard/pull/36) 병합 대기)·C 파일 연산(C2.14)·경로·실행 파일 검증 ([#33](https://github.com/hsminu/MCP-Runtime-Guard/issues/33)) | B·C | A24–A27, A49 |
-| Profile 저장 연결(C2.14)·Registry 활성화(C4.10). B `activate_server`는 #32로 main 반영 | C | A81 |
+| 제품 Guard 조립용 영속 `next_call_seq`·실패 감사(B6.8). 설정 파일 읽기·저장과 Registry 로드는 A129로 연결됨 | B | A24–A27, A81, A129 |
+| stdio 서버 실행 파일 고정(EXE-01): B 설정 필드 `command_sha256`·`command_size`, C 지문 계산·서버 실행 입구(C2.6). HTTP URL 검증(C2.5, [PR #50](https://github.com/hsminu/MCP-Runtime-Guard/pull/50)) | B·C | A24–A27, A49, A128 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 
 **A가 막고 있는 것**: 없음. B1.7·B2.11·C2.10·C5.8이 기다리던 A 브랜치는 [PR #29](https://github.com/hsminu/MCP-Runtime-Guard/pull/29)로 main에 병합됐다. #36 A 리뷰와 #37 A 회신은 게시했다.
@@ -52,7 +52,8 @@
 - [x] A97 MCP 도구 오류(`is_error`)를 Codex에 실패로 전달 · [기록](archive/a/A97-released-tool-error.md)
 - [x] A100 대조 뒤 `tools/list_changed`를 받으면 그 서버를 이번 실행 동안 PENDING 취급, 새 세션 도구 목록에서 제외(LIST-01, PR #34 결정) · [기록](archive/a/A100-tools-list-changed.md)
 - [ ] A100 서버별 목록 수신 뒤·대조 전 알림 처리 — 막힘: 사용자 결정(현재는 결정 문구대로 차단하지 않음)
-- [ ] A15·A16 실제 Registry·launcher 연결 — 막힘: C Registry. 지문 계산 기준(SDK 재구성 dict) C 확인 필요
+- [x] A15·A16 연결 직후 목록을 C `ServerRegistry.observe`로 기록(정의 변경은 PENDING으로 저장, 기록 실패는 이번 실행 차단) · [기록](archive/a/A129-settings-file-registry-connection.md)
+- [ ] A15·A16 실제 launcher 연결 — 막힘: C2.6·EXE-01 B 설정 필드
 
 ## 접근 규칙·모델·Runner
 
@@ -111,7 +112,8 @@
 - [x] A24–A27 프로세스 시작 게이트(W1)·옛 Task 실행/제어 거부(W2)·`--store sqlite` 연결·시작 실패 처리
 - [x] A24–A27 제품 SQLite 기본 시작·새 Task 연결부 · [기록](archive/a/A65-codex-only-concurrent-tasks.md)
 - [x] A24–A27 Profile 로딩·Guard 조립을 제품 시작에 연결(A86, 주입형 설정 문서·Registry) · [기록](archive/a/A86-profile-guard-assembly.md)
-- [ ] A24–A27 설정 파일 읽기·실제 Registry·시작 복구 — 막힘: #36 병합·C2.14·C Registry·B6.8
+- [x] A129 시작 때 설정 파일 읽기(C2.14·B3.11)·Registry 로드(C4.10)·Profile 확인, 미설정·오류 상태 표시와 새 Task 거부, 정책 저장을 파일 교체에 연결(결과 불명은 재시작) · [기록](archive/a/A129-settings-file-registry-connection.md)
+- [ ] A24–A27 제품 Guard 조립·시작 복구 — 막힘: B6.8(영속 call_seq·실패 감사)·C2.6·C2.5
 - [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
 - [ ] A33·A34 과거 승인·제품 목록 통합 — 막힘: B-SQL-02/03
@@ -140,7 +142,7 @@
 - [x] A117 겹친 서버 접근 변경이 앞 변경이 저장한 문서에서 시작함(정책 잠금 안에서 문서를 읽음, A112 발견) · [기록](archive/a/A117-overlapping-policy-changes.md)
 - [x] A106 제품 DB를 앱 폴더 고정 경로(`data\guard.sqlite3`, C2.17)로 옮기고 `--db-path`는 시연 전용으로, `--demo`는 앱 폴더 안을 열지 못하게 함(#35 B 리뷰 1번) · [기록](archive/a/A106-product-db-path.md)
 - [ ] A106 C `AppFolders.db_path()`(DB·`-wal`·`-shm` 링크 확인)로 교체 — 막힘: C 다음 PR(#37 C 회신)
-- [ ] A81·A91 실제 Profile 저장·서버 목록 활성화 흐름 — 막힘: #36 병합·C2.14·C Registry 활성화(C4.10)
+- [ ] A81·A91 제품 화면에서 Profile 저장·서버 활성화 — 저장은 A129로 파일에 연결됨. 막힘: 제품 Guard 조립(B6.8)·서버 실행(C2.6)
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
@@ -162,7 +164,7 @@
 - [x] A126 정책 화면 표가 폭을 다 쓰고 Codex 제외 도구 이름·이유가 잘리지 않음 · [기록](archive/a/A126-policy-table-width.md)
 - [x] A127 현황 화면을 줄 목록·막대그래프로 줄임(시연 기준 5075px → 1673px) · [기록](archive/a/A127-overview-rows.md)
 - [x] A128 MCP 서버 추가: '초안' 표기 제거, 설정 붙여넣기로 칸 채우기, 표시 이름·ID 추천·찾아보기·명령줄 인자, `.exe`만 통과(EXE-01) · [기록](archive/a/A128-server-add-paste.md)
-- [ ] A128 실제 Registry 등록·EXE-01 지문 확인 화면 — 막힘: C 지문 계산 입구(C2.6)·Registry 활성화(C4.10)·C2.14
+- [ ] A128 실제 Registry 등록·EXE-01 지문 확인 화면 — 막힘: C 지문 계산·서버 실행 입구(C2.6)·EXE-01 B 설정 필드·Scanner(C2.10)
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 
