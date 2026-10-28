@@ -43,6 +43,8 @@ class McpTransport:
     a requested close (#61).
     ``on_listing_received`` marks each tools/list response in SDK receive order,
     before a later change notice, even while other servers are still starting.
+    ``on_tools_changed`` and ``on_listing_received`` run inside the SDK receive
+    loop, so they must only record and never raise.
     """
 
     def __init__(

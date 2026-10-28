@@ -88,6 +88,10 @@ class _UnvalidatedClientSession(ClientSession):
         # mcp 1.29.0 calls this in receive order, before the next notification.
         # Mark the first page here, not after list_tools/collection resumes:
         # a response and a change notice can arrive in the same read batch.
+        # This is an SDK-internal hook. On an mcp upgrade, recheck that
+        # _receive_loop still routes responses here in receive order, together
+        # with _DeliveryCheckedStream's premise; if it stops being called,
+        # change notices before seal are silently ignored again.
         root = message.message.root
         if isinstance(root, JSONRPCResponse | JSONRPCError) and (
             type(root.id) is int and root.id == self._listing_request_id
@@ -192,6 +196,8 @@ def sdk_session_factory(
 
     C's connection validation and isolated output sinks precede wiring. SDK
     logger containment covers the streams, session and their child tasks.
+    Both callbacks run inside the SDK receive loop, where an exception ends
+    that server's receive loop: they must only record a fact and never raise.
     """
 
     install_sdk_log_containment()
