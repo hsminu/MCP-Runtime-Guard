@@ -28,6 +28,7 @@ ACCOUNT_ACTIONS = frozenset(
         "account_read",
         "account_login_api_key",
         "account_login_device",
+        "account_login_browser",
         "account_cancel_login",
         "account_logout",
     }

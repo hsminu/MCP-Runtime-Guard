@@ -39,7 +39,7 @@ from guard_app.services.codex_account import AccountError, AccountView, CodexAcc
 from guard_app.services.policy_view import PolicyView
 from guard_app.services.runner import RunUpdate, TaskExecution
 
-# A device-code login left unfinished is abandoned after this long.
+# A browser/device login left unfinished is cancelled after this long.
 DEVICE_LOGIN_TIMEOUT_S = 15 * 60
 
 _STOPS = (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT)
@@ -143,42 +143,76 @@ class AccountCommands:
         self._stopped = stopped
         self._consume = consume
         self._waits: set[asyncio.Future[None]] = set()
+        self._account_lock = asyncio.Lock()
+        self._pending_view: AccountView | None = None
+        self._login_generation = 0
+        self._browser_available = False
 
     def cancel_waits(self) -> None:
+        self._login_generation += 1
+        self._pending_view = None
         for waiter in tuple(self._waits):
             waiter.cancel()
 
     async def account(self, bindings: BackendBindings, command: BridgeCommand) -> str:
+        # Only the RPC is serialized; the human wait never holds this lock or
+        # a control worker. A second click cannot start a second callback.
+        async with self._account_lock:
+            return await self._account_request(bindings, command)
+
+    async def _account_request(self, bindings: BackendBindings, command: BridgeCommand) -> str:
         account = bindings.account
         if account is None:
             self._out.account_changed(AccountView("UNAVAILABLE"))
             return "ACCOUNT_UNAVAILABLE"
         try:
-            if command.action == "account_read":
+            if self._pending_view is not None and command.action not in (
+                "account_cancel_login",
+                "account_logout",
+            ):
+                view = self._pending_view
+            elif command.action == "account_read":
                 view = await account.read()
             elif command.action == "account_login_api_key":
                 view = await account.login_api_key(command.user_text or "")
-            elif command.action == "account_login_device":
-                view = await account.start_device_login()
-                if view.state == "PENDING_DEVICE" and view.login_id is not None:
-                    # Waiting for the user must not hold a control worker:
-                    # cancel and approvals run on the same lane (A89 QA).
-                    waiter = asyncio.ensure_future(self._await_login(account, view.login_id))
-                    self._waits.add(waiter)
-                    waiter.add_done_callback(self._waits.discard)
-                    waiter.add_done_callback(self._consume)
+            elif command.action in ("account_login_device", "account_login_browser"):
+                view = await self._start_login(account, browser=command.action.endswith("browser"))
             elif command.action == "account_cancel_login":
-                view = await account.cancel_login(command.target_id)
+                view = await self._cancel_login(account, command.target_id)
             else:
+                if self._pending_view is not None:
+                    await self._cancel_login(account, self._pending_view.login_id or "")
                 try:
                     view = await account.logout()
                 finally:
                     # New sessions were refused while the logout ran (#21).
                     self._views.publish_capability()
         except AccountError:
-            view = AccountView("FAILED")
+            view = AccountView("FAILED", browser_available=self._browser_available)
+        self._browser_available = view.browser_available
         self._out.account_changed(view)
         return f"ACCOUNT_{view.state}"
+
+    async def _start_login(self, account: CodexAccountPort, *, browser: bool) -> AccountView:
+        view = await (account.start_browser_login() if browser else account.start_device_login())
+        self._login_generation += 1
+        if view.state in ("PENDING_DEVICE", "PENDING_BROWSER") and view.login_id is not None:
+            self._pending_view = view
+            waiter = asyncio.ensure_future(
+                self._await_login(account, view.login_id, self._login_generation)
+            )
+            self._waits.add(waiter)
+            waiter.add_done_callback(self._waits.discard)
+            waiter.add_done_callback(self._consume)
+        return view
+
+    async def _cancel_login(self, account: CodexAccountPort, login_id: str) -> AccountView:
+        pending = self._pending_view
+        if pending is None or pending.login_id != login_id:
+            return pending if pending is not None else await account.read()
+        view = await account.cancel_login(login_id)
+        self.cancel_waits()
+        return replace(view, notice="LOGIN_CANCELLED")
 
     async def policy_access(self, bindings: BackendBindings, command: BridgeCommand) -> str:
         change = bindings.policy_access
@@ -196,15 +230,31 @@ class AccountCommands:
         self._out.policy_changed(view)
         return "POLICY_CHANGED"
 
-    async def _await_login(self, account: CodexAccountPort, login_id: str) -> None:
+    async def _await_login(self, account: CodexAccountPort, login_id: str, generation: int) -> None:
+        expired = False
         try:
             async with asyncio.timeout(DEVICE_LOGIN_TIMEOUT_S):
                 view = await account.wait_login(login_id)
         except TimeoutError:
-            view = AccountView("LOGIN_NOT_COMPLETED")
+            expired = True
+            view = AccountView("LOGIN_NOT_COMPLETED", notice="LOGIN_TIMEOUT")
         except AccountError:
             view = AccountView("FAILED")
-        if not self._stopped():
+        async with self._account_lock:
+            # Cancelling the waiter under this lock is the first guard. The
+            # generation also drops a wait that returns after its cancel, for a
+            # port whose wait absorbs cancellation (a shielded inner wait).
+            if self._stopped() or generation != self._login_generation:
+                return
+            pending = self._pending_view
+            if expired:
+                try:
+                    await account.cancel_login(login_id)
+                except AccountError:
+                    view = AccountView("FAILED")
+            self._pending_view = None
+            if pending is not None:
+                view = replace(view, browser_available=pending.browser_available)
             self._out.account_changed(view)
 
 

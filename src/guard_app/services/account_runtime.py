@@ -20,7 +20,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Protocol
 
-from guard_app.services.codex_account import AccountError, AccountView, CodexAccountClient
+from guard_app.services.codex_account import (
+    AccountError,
+    AccountView,
+    BrowserLoginOpener,
+    CodexAccountClient,
+)
 from guard_app.services.codex_session import CodexPipes
 
 LOGOUT_SESSIONS_RUNNING = "LOGOUT_SESSIONS_RUNNING"
@@ -52,6 +57,8 @@ class AccountAccess:
 
     launch: Callable[[], Awaitable[AccountProcess]]
     clear_credentials: Callable[[], Awaitable[bool]]
+    # A109: C's validated browser opener; absent until the C entry point exists.
+    open_browser: BrowserLoginOpener | None = None
 
 
 class ProductAccount:
@@ -88,6 +95,9 @@ class ProductAccount:
 
     async def start_device_login(self) -> AccountView:
         return await self._request(lambda client: client.start_device_login())
+
+    async def start_browser_login(self) -> AccountView:
+        return await self._request(lambda client: client.start_browser_login())
 
     async def wait_login(self, login_id: str) -> AccountView:
         # Waiting for the user takes no lock. An app-server that ends meanwhile
@@ -132,7 +142,16 @@ class ProductAccount:
                 client = await self._connect()
             except AccountUnavailableError:
                 return AccountView("UNAVAILABLE")
-            return await call(client)
+            returned = False
+            try:
+                view = await call(client)
+                returned = True
+                return view
+            finally:
+                # A109: a lost/malformed login reply or cancellation may leave
+                # a callback alive. End its process before another account RPC.
+                if not returned:
+                    await self._disconnect()
 
     async def _sign_out(self) -> AccountView:
         await (await self._connect()).sign_out()
@@ -152,7 +171,9 @@ class ProductAccount:
             raise AccountError()
         process = await self._access.launch()
         self._process = process
-        client = CodexAccountClient(process.pipes, version=self._version)
+        client = CodexAccountClient(
+            process.pipes, version=self._version, open_browser=self._access.open_browser
+        )
         self._client = client
         try:
             await client.start()

@@ -19,8 +19,14 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QHideEvent
 from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
-from guard_app.services.bridge import CODEX_MODEL_ID, AccountView
+from guard_app.services.bridge import (
+    CODEX_MODEL_ID,
+    AccountView,
+    CommandEvent,
+    CommandStage,
+)
 
+from .presentation import CODEX_LOGIN_NOTICES, CODEX_LOGIN_TEXT
 from .widgets import KeyboardActionButton, plain_label
 
 UNAVAILABLE = "Codex 실행 기능이 아직 준비 중이라 지금은 로그인하거나 실행할 수 없음."
@@ -31,11 +37,13 @@ _STATES = {
     "CHATGPT": "ChatGPT 계정으로 로그인되어 있음.",
     "OTHER": "다른 방식으로 로그인되어 있음.",
     "PENDING_DEVICE": "아래 주소에서 코드를 입력해 로그인을 마치세요. 끝나면 상태가 바뀜.",
+    "PENDING_BROWSER": CODEX_LOGIN_TEXT["browser_pending"],
     "LOGIN_NOT_COMPLETED": "로그인이 완료되지 않음. 다시 시도하세요.",
     "FAILED": "Codex 계정 요청을 처리하지 못함. 잠시 뒤 다시 확인하세요.",
     "UNAVAILABLE": UNAVAILABLE,
 }
 _NOTICES = {
+    **CODEX_LOGIN_NOTICES,
     "LOGOUT_SESSIONS_RUNNING": (
         "실행 중인 세션이 있어 로그아웃하지 않음. 세션을 모두 끝낸 뒤 다시 시도하세요."
     ),
@@ -63,6 +71,7 @@ def _suffix(key: str) -> str:
 class CodexLoginInfo(QWidget):
     read_requested = Signal()
     device_login_requested = Signal()
+    browser_login_requested = Signal()
     cancel_requested = Signal(str)
     logout_requested = Signal()
 
@@ -77,11 +86,13 @@ class CodexLoginInfo(QWidget):
         layout.addWidget(plain_label(f"사용 모델: {CODEX_MODEL_ID}", name="secondary"))
         layout.addWidget(
             plain_label(
-                "ChatGPT 기기 코드와 API 키는 모두 Codex 안에서 로그인하는 방식임. "
-                "자격증명은 Codex가 Windows 자격증명 관리자에 직접 저장함.",
+                CODEX_LOGIN_TEXT["purpose"],
                 name="secondary",
             )
         )
+        layout.addWidget(plain_label(CODEX_LOGIN_TEXT["device_help"], name="secondary"))
+        self.browser_hint = plain_label(CODEX_LOGIN_TEXT["browser_unavailable"], name="secondary")
+        layout.addWidget(self.browser_hint)
         self.status = plain_label(UNAVAILABLE, name="runtimeMessage")
         layout.addWidget(self.status)
         self.device = plain_label("", name="secondary")
@@ -90,14 +101,22 @@ class CodexLoginInfo(QWidget):
         layout.addWidget(self.device)
         buttons = QHBoxLayout()
         self.read_button = KeyboardActionButton("상태 확인")
-        self.login_button = KeyboardActionButton("ChatGPT로 로그인")
+        self.login_button = KeyboardActionButton(CODEX_LOGIN_TEXT["device_button"])
+        self.browser_button = KeyboardActionButton(CODEX_LOGIN_TEXT["browser_button"])
         self.cancel_button = KeyboardActionButton("로그인 취소")
         self.logout_button = KeyboardActionButton("로그아웃")
         self.read_button.clicked.connect(self.read_requested.emit)
         self.login_button.clicked.connect(self._login)
+        self.browser_button.clicked.connect(self._browser_login)
         self.cancel_button.clicked.connect(self._cancel)
         self.logout_button.clicked.connect(self.logout_requested.emit)
-        for button in (self.read_button, self.login_button, self.cancel_button, self.logout_button):
+        for button in (
+            self.read_button,
+            self.browser_button,
+            self.login_button,
+            self.cancel_button,
+            self.logout_button,
+        ):
             buttons.addWidget(button)
         buttons.addStretch(1)
         layout.addLayout(buttons)
@@ -144,15 +163,18 @@ class CodexLoginInfo(QWidget):
         if notice is not None:
             text = f"{text}\n{notice}"
         self.status.setText(text)
-        pending = view.state == "PENDING_DEVICE"
-        self.device.setVisible(pending)
+        pending = view.state in ("PENDING_DEVICE", "PENDING_BROWSER")
+        device_pending = view.state == "PENDING_DEVICE"
+        self.device.setVisible(device_pending)
         self.device.setText(
-            f"주소: {view.verification_url}\n코드: {view.user_code}" if pending else ""
+            f"주소: {view.verification_url}\n코드: {view.user_code}" if device_pending else ""
         )
         available = view.state != "UNAVAILABLE"
         signed_in = view.state in ("API_KEY", "CHATGPT", "OTHER")
         self.read_button.setEnabled(available and not pending)
         self.login_button.setEnabled(available and not pending and not signed_in)
+        self.browser_button.setEnabled(self.login_button.isEnabled() and view.browser_available)
+        self.browser_hint.setVisible(not view.browser_available)
         self.cancel_button.setEnabled(pending)
         self.logout_button.setEnabled(available and (signed_in or view.notice in _RETRY_LOGOUT))
         self._refresh_key()
@@ -162,6 +184,7 @@ class CodexLoginInfo(QWidget):
         return self._api_key_sender is not None and state not in (
             "UNAVAILABLE",
             "PENDING_DEVICE",
+            "PENDING_BROWSER",
             "API_KEY",
             "CHATGPT",
             "OTHER",
@@ -185,6 +208,7 @@ class CodexLoginInfo(QWidget):
         self._sent_suffix = _suffix(key)
         self.status.setText(API_KEY_SENT)
         self.login_button.setEnabled(False)
+        self.browser_button.setEnabled(False)
         self.api_key_button.setEnabled(False)
         sender(key)
 
@@ -193,8 +217,32 @@ class CodexLoginInfo(QWidget):
         super().hideEvent(event)
 
     def _login(self) -> None:
-        self.login_button.setEnabled(False)
+        self._disable_login()
         self.device_login_requested.emit()
+
+    def _browser_login(self) -> None:
+        self._disable_login()
+        self.browser_login_requested.emit()
+
+    def _disable_login(self) -> None:
+        self.status.setText(CODEX_LOGIN_TEXT["starting"])
+        self.login_button.setEnabled(False)
+        self.browser_button.setEnabled(False)
+        self.api_key_button.setEnabled(False)
+
+    def account_command_changed(self, event: object) -> None:
+        if (
+            type(event) is CommandEvent
+            and event.action.startswith("account_")
+            and event.stage in (CommandStage.REJECTED, CommandStage.UNCONFIRMED)
+        ):
+            self.set_view(
+                AccountView(
+                    "FAILED",
+                    notice="LOGIN_REQUEST_UNCONFIRMED",
+                    browser_available=self._view.browser_available,
+                )
+            )
 
     def _cancel(self) -> None:
         if self._view.login_id:

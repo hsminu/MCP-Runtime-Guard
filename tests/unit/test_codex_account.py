@@ -247,10 +247,11 @@ def test_device_login_wait_does_not_hold_the_only_control_worker(app) -> None:
             app,
             lambda: any(e.stage.value == "backend_returned" for e in receiver.stages(cancel)),
         )
-        pump_until(app, lambda: "LOGIN_NOT_COMPLETED" in [view.state for view in views])
+        pump_until(app, lambda: views[-1].notice == "LOGIN_CANCELLED")
         states = [view.state for view in views]
         assert "SIGNED_OUT" in states[states.index("PENDING_DEVICE") :]
         assert "CHATGPT" not in states
+        assert states[-1] == "SIGNED_OUT"  # cancelled waiter cannot overwrite account/read
     finally:
         close_bridge(app, bridge)
 
