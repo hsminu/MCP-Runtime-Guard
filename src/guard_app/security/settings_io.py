@@ -23,11 +23,11 @@ import contextlib
 import hashlib
 import os
 import sys
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from guard_app.security.ids import new_suffix
 from guard_app.security.paths import SETTINGS_FILE, AppFolders, AppPathError, is_private_file
 
 _GENERIC_READ = 0x80000000
@@ -155,7 +155,7 @@ def replace_settings_file(
     if before != expected:
         raise SettingsIOError("SETTINGS_FILE_CHANGED")
     written = _generation(len(data), data)
-    temporary = target.with_name(f"{SETTINGS_FILE}.{uuid.uuid4().hex}.tmp")
+    temporary = target.with_name(f"{SETTINGS_FILE}.{new_suffix()}.tmp")
     try:
         with temporary.open("xb") as output:
             output.write(data)

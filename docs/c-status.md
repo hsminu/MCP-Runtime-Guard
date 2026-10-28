@@ -31,7 +31,7 @@
 - [ ] C2.4 검사-열기 TOCTOU 한계와 no-follow 옵션 확인
 - [x] C2.5 URL 검증(URL-01, `security/endpoints.py`): 등록 화면은 `normalize_endpoint`로 정규형을 만들고, 설정 로더(`ServerSettings.url`)와 transport는 `canonical_endpoint`로 정규형만 받는다. https 원칙, http는 루프백 IP 리터럴만, 사용자 정보·쿼리·fragment·끝 점·`%`·숫자 IP 변형·특수 주소 거부, IDNA 2008 · [기록](archive/c/C2.5-endpoint-validation.md)
 - [x] C2.6 stdio MCP 서버 실행 입구(EXE-01, `security/launcher.py`): `check_stdio_values`(command·args·env_allow 검사), `pin_executable`(등록 지문), `launch_mcp_server`(연결마다 재검사·지문 대조, 지문 없으면 `LAUNCH_EXECUTABLE_UNPINNED`, 서버별 폴더 `AppFolders.server_folder`·연결별 stderr·기본 환경 5개와 서버 폴더 TEMP·`env_allow`만). A 화면·연결과 B 지문 필드(#48)는 각 담당 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.6-mcp-server-launch.md)
-- [ ] C2.7 ids: 암호학적 난수, 비밀값 누락은 전용 예외
+- [x] C2.7 ids(`security/ids.py`): `new_id`·`new_suffix`·`new_token`·`token_matches`, `secrets`만 사용. C 파일 6개의 직접 생성을 옮기고 L2 가짜 모델 인증 비교를 `compare_digest`로. `src`의 `random` import와 C 모듈의 직접 생성을 `test_ids.py`가 막음(Semgrep은 C2.9). 비밀값 누락은 기존 고정 코드(`SCAN_LLM_KEY_MISSING_OR_INVALID`, 대체값 없음). A 모듈 전환은 A 요청 · [기록](archive/c/C2.7-ids.md)
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
 - [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
 - [x] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용(`secrets.store_scanner_key`·`save_scanner_key`(A `KeySaver`)·`load_scanner_key`·`scanner_key_tail`·`delete_scanner_key`·`scanner_key_environ`). A 화면 연결과 #59 뒤 검사기 연결은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.10-scanner-key-store.md)

@@ -38,6 +38,7 @@ from guard_app.security.codex_home import (
     load_codex_pins,
     verify_codex_home,
 )
+from guard_app.security.ids import new_suffix
 from guard_app.security.paths import RESERVED_DEVICE_NAMES
 
 # 10-18 결정(개발문서 10.4절)의 허용 목록. CODEX_HOME은 부모 환경이 아니라 앱 경로로 채운다.
@@ -533,7 +534,7 @@ async def launch_mcp_server(
         args=values.args,
         env=env,
         cwd=folder,
-        stderr_path=folder / f"stderr-{os.urandom(16).hex()}.log",
+        stderr_path=folder / f"stderr-{new_suffix()}.log",
     )
     return await launch_process(spec)
 

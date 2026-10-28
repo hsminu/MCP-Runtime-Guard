@@ -18,9 +18,10 @@ import json
 import os
 import re
 import sys
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
+from guard_app.security.ids import new_suffix
 
 CODEX_CONFIG_DIR = Path(__file__).resolve().parents[3] / "config" / "codex"
 LOCK_FILE = "codex.lock.json"
@@ -177,7 +178,7 @@ def _checked_home(codex_home: Path) -> Path:
 
 
 def _replace_file(home: Path, name: str, data: bytes) -> None:
-    temporary = home / f"{name}.{uuid.uuid4().hex}.tmp"
+    temporary = home / f"{name}.{new_suffix()}.tmp"
     try:
         with temporary.open("xb") as output:
             output.write(data)
