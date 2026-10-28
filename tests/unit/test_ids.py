@@ -32,6 +32,7 @@ C_MODULES = (
     "security/redact.py",
     "security/secrets.py",
     "security/settings_io.py",
+    "servers/file_server.py",
     "services/registry.py",
     "services/scanner.py",
 )
