@@ -670,6 +670,7 @@ class LoadedProfile:
     access_rules: AccessRules
     guard_settings: GuardSettings
     servers: tuple[ServerSettings, ...]
+    _profile_registry: _ProfileRegistry | None = None
 
     @property
     def policy_version(self) -> str:
@@ -679,6 +680,16 @@ class LoadedProfile:
     def selected_servers(self) -> tuple[ServerSettings, ...]:
         """전체 설정 순서를 유지하면서 이 Profile이 선택한 서버만 반환한다."""
         return tuple(server for server in self.servers if server.id in self.profile.server_ids)
+
+    def server_issue(self, server_id: str) -> str | None:
+        """선택된 서버의 재확인 문제를 조회한다. 이 값은 실행 허가가 아니다.
+
+        A가 저장된 값과 파일 값을 보여 준 뒤 record_settings_change, 설정 저장,
+        정책 적용, 다시 활성화 순서로 처리한다.
+        """
+        if self._profile_registry is None:
+            return None
+        return self._profile_registry.server_issue(server_id)
 
     def __repr__(self) -> str:
         return "LoadedProfile(<redacted>)"
@@ -785,23 +796,21 @@ class _ProfileRegistry:
         self._registry = registry
         self._servers = {server.id: server for server in servers if server.id in allowed}
 
-    def registration(self, server_id: str) -> RegisteredServer | None:
+    def _matching_registration(self, server_id: str) -> tuple[RegisteredServer | None, bool]:
         settings = self._servers.get(server_id)
         if settings is None:
-            return None
+            return None, False
         record = self._registry.registration(server_id)
         if record is None:
-            return None
+            return None, False
         try:
             record = RegisteredServer.model_validate(record)
         except ValidationError:
             raise CatalogConfigError("Registry 등록 모델이 유효하지 않다") from None
-        if (
-            record.server_id != server_id
-            or record.boundary.tier != settings.tier
-            or record.boundary.max_label != settings.max_label
-        ):
-            raise CatalogConfigError("Registry와 서버 설정이 일치하지 않는다")
+        if record.server_id != server_id:
+            raise CatalogConfigError("Registry 조회 ID와 등록 서버 ID가 다르다")
+        if record.boundary.tier != settings.tier or record.boundary.max_label != settings.max_label:
+            return None, True
         configured = {tool.name: tool for tool in settings.tools}
         tools = tuple(tool for tool in record.tools if tool.tool_name in configured)
         for tool in tools:
@@ -811,8 +820,15 @@ class _ProfileRegistry:
                 or tool.resource_arg != expected.resource_arg
                 or tool.destination_arg != expected.destination_arg
             ):
-                raise CatalogConfigError("Registry와 도구 설정이 일치하지 않는다")
-        return record.model_copy(update={"tools": tools})
+                return None, True
+        return record.model_copy(update={"tools": tools}), False
+
+    def registration(self, server_id: str) -> RegisteredServer | None:
+        return self._matching_registration(server_id)[0]
+
+    def server_issue(self, server_id: str) -> str | None:
+        _, mismatch = self._matching_registration(server_id)
+        return "REG_SETTINGS_MISMATCH" if mismatch else None
 
     def status(self, server_id: str) -> RegStatus | None:
         return self._registry.status(server_id)
@@ -859,8 +875,9 @@ def load_profile_settings(
             destination_ids=selected.destinations,
             source_rules=tuple(source.as_rule() for source in selected.sources),
         )
+        profile_registry = _ProfileRegistry(registry, config.servers, profile.server_ids)
         catalog = Catalog(
-            _ProfileRegistry(registry, config.servers, profile.server_ids),
+            profile_registry,
             profile_id=profile.profile_id,
             destinations=tuple(
                 item.as_boundary()
@@ -878,7 +895,7 @@ def load_profile_settings(
         )
     except (ValidationError, JcsCanonicalizationError, SourceConfigError):
         raise CatalogConfigError("Profile 설정이 유효하지 않다") from None
-    return LoadedProfile(profile, catalog, rules, guard_settings, config.servers)
+    return LoadedProfile(profile, catalog, rules, guard_settings, config.servers, profile_registry)
 
 
 def _check_configuration(config: _Configuration) -> None:

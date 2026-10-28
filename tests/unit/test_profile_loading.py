@@ -191,11 +191,14 @@ def test_registry_fingerprint_remains_live():
     assert error.value.reason is Reason.TOOL_FINGERPRINT_CHANGED
 
 
-@pytest.mark.parametrize("change", ["tier", "max_label", "kind", "resource_arg", "id"])
-def test_registry_metadata_mismatch_fails_closed(change):
+@pytest.mark.parametrize("status", [RegStatus.ACTIVE, RegStatus.PENDING, RegStatus.BLOCKED])
+@pytest.mark.parametrize("change", ["tier", "max_label", "kind", "resource_arg", "destination_arg"])
+def test_registry_metadata_mismatch_hides_only_affected_server(change, status):
     registry = _Registry()
     loaded = load_profile_settings(_document(), registry)
-    record = registry.records["docs"]
+    server = "remote" if change == "destination_arg" else "docs"
+    other = "docs" if server == "remote" else "remote"
+    record = registry.records[server].model_copy(update={"status": status})
     if change in {"tier", "max_label"}:
         boundary = Boundary(
             boundary_id="different-id-is-allowed",
@@ -203,16 +206,45 @@ def test_registry_metadata_mismatch_fails_closed(change):
             max_label=Label.INTERNAL,
         )
         record = record.model_copy(update={"boundary": boundary})
-    elif change == "id":
-        record = registry.records["remote"]
     else:
         tool = record.tools[0].model_copy(
             update={change: ToolKind.OTHER if change == "kind" else "another"}
         )
         record = record.model_copy(update={"tools": (tool,)})
-    registry.records["docs"] = record
-    with pytest.raises(CatalogConfigError, match="일치하지 않는다"):
-        loaded.catalog.resolve_tool("docs__read")
+    registry.records[server] = record
+    assert loaded.server_issue(server) == "REG_SETTINGS_MISMATCH"
+    assert loaded.server_issue(other) is None
+    with pytest.raises(ResolutionError) as error:
+        loaded.catalog.resolve_tool(f"{server}__{'send' if server == 'remote' else 'read'}")
+    assert error.value.reason is Reason.UNKNOWN_SERVER
+    assert [view.tool_ref for view in loaded.catalog.tool_views(("docs", "remote"))] == [
+        f"{other}__{'send' if other == 'remote' else 'read'}"
+    ]
+    assert loaded.catalog.resolve_tool(f"{other}__{'send' if other == 'remote' else 'read'}")
+
+
+def test_registry_wrong_id_and_invalid_record_remain_configuration_errors():
+    registry = _Registry()
+    loaded = load_profile_settings(_document(), registry)
+    registry.records["docs"] = registry.records["remote"]
+    for get in (loaded.server_issue, loaded.catalog.resolve_tool):
+        with pytest.raises(CatalogConfigError):
+            get("docs" if get == loaded.server_issue else "docs__read")
+    registry.records["docs"] = {"invalid": "record"}
+    with pytest.raises(CatalogConfigError):
+        loaded.server_issue("docs")
+
+
+def test_server_issue_ignores_absent_and_unselected_registration():
+    document = _document()
+    document["profile"]["servers"] = ["remote"]
+    document["profile"]["sources"] = []
+    registry = _Registry()
+    del registry.records["remote"]
+    loaded = load_profile_settings(document, registry)
+    assert loaded.server_issue("docs") is None
+    assert loaded.server_issue("remote") is None
+    assert loaded.server_issue("unknown") is None
 
 
 def test_unconfigured_discovered_tools_are_hidden():
