@@ -107,6 +107,7 @@ class RuntimePanel(QWidget):
 
         approval = QFrame()
         approval.setObjectName("approvalCard")
+        self.approval_section = approval
         approval_layout = QVBoxLayout(approval)
         approval_layout.setContentsMargins(0, 16, 0, 16)
         approval_layout.setSpacing(12)
@@ -293,6 +294,7 @@ class RuntimePanel(QWidget):
             self.detail.setFocus(Qt.FocusReason.OtherFocusReason)
         for button, value in enabled.items():
             button.setEnabled(value)
+        self._mark_approval(waiting)
         self.state_changed.emit()
         self.selected_snapshot_changed.emit(self.current)
 
@@ -347,12 +349,29 @@ class RuntimePanel(QWidget):
         self.detail.clear()
         self._fit_detail()
 
+    def _mark_approval(self, waiting: bool) -> None:
+        """Tint the approval section only while this Task waits on a person;
+        the tint needs side room, so the section is inset only then."""
+        section = self.approval_section
+        if section.property("attention") == waiting:
+            return
+        section.setProperty("attention", waiting)
+        layout = section.layout()
+        if layout is not None:
+            layout.setContentsMargins(12 if waiting else 0, 16, 12 if waiting else 0, 16)
+        section.style().unpolish(section)
+        section.style().polish(section)
+        self._fit_detail()
+
     def _fit_detail(self) -> None:
-        """Empty, the copy box is a two-line hint so the stop controls below
-        stay in view; a loaded copy gets room to read and scrolls inside.
-        It is never hidden: focus parks here when a button is disabled."""
+        """With no approval waiting, the copy box is a two-line hint so the
+        stop controls below stay in view. A waiting approval opens it to its
+        reading height before the copy loads, so loading never moves the page;
+        the copy scrolls inside. It is never hidden: focus parks here when a
+        button is disabled."""
         self.detail.ensurePolished()
-        lines = 12 if self.detail.toPlainText() else 2
+        waiting = self.approval_section.property("attention") is True
+        lines = 12 if waiting or self.detail.toPlainText() else 2
         self.detail.setFixedHeight(lines * self.detail.fontMetrics().lineSpacing() + 24)
 
     def _run(self) -> None:
@@ -448,13 +467,14 @@ class RuntimePanel(QWidget):
             or (self._scope_enabled and self._scope != (self.current.task_id, self.current.epoch))
         ):
             return
-        self.detail.setPlainText(
-            visible_review_text(
-                review.receiving_boundaries
-                + "\n전체 인자:\n"
-                + review.arguments_bytes.decode("utf-8")
-            )
-        )
+        # One field per line, each escaped on its own. A newline inside a
+        # value keeps its visible \n mark, so a line it starts can never pass
+        # as a field or as the real 전체 인자 heading.
+        lines = [visible_review_text(f"{label}: {value}") for label, value in review.fields]
+        if not lines:
+            lines = [visible_review_text(review.receiving_boundaries)]
+        lines += ["", "전체 인자:", visible_review_text(review.arguments_bytes.decode("utf-8"))]
+        self.detail.setPlainText("\n".join(lines))
         self._fit_detail()
         self._reviewed = review.approval_id
         self._refresh()

@@ -69,7 +69,7 @@ from .presentation import (
 from .style import TOKENS, ui_font
 from .task_status import FINAL_STATUSES, status_code, status_title
 from .untrusted_text import untrusted_display_text
-from .widgets import KeyboardActionButton, StatusPill, plain_label
+from .widgets import IconMark, KeyboardActionButton, StatusPill, plain_label
 
 TRANSCRIPT_BODY_MARK = "│ "
 USER_LABEL = "나"
@@ -77,6 +77,8 @@ ANSWER_LABEL = "Guard · 모델 답변 (검증되지 않은 내용)"
 PARTIAL_ANSWER_LABEL = "Guard · 모델 답변 작성 중 (검증되지 않은 내용)"
 STOPPED_ANSWER_LABEL = "Guard · 모델 답변 중단됨 (완료되지 않은 내용)"
 MEMORY_NOTICE = "대화·초안은 메모리에만 있음. Task 종료나 앱 종료 시 원문을 지움."
+APPROVAL_BAND_TITLE = "승인이 필요한 도구 호출이 있음"
+APPROVAL_BAND_DETAIL = "수신처와 전체 인자를 확인한 뒤 승인하거나 거절하세요."
 
 # The conversation column width shared by header, transcript and composer.
 _COLUMN_WIDTH = 720
@@ -355,7 +357,8 @@ class _SessionRowDelegate(QStyledItemDelegate):
         status_font = ui_font(11)
         status_width = max(0, int(right - left))
         painter.setFont(status_font)
-        painter.setPen(QColor(TOKENS["mute"]))
+        # Only a pending approval colors its words; other states stay gray.
+        painter.setPen(QColor(TOKENS["warn" if row.tone == "approval" else "mute"]))
         painter.drawText(
             QRectF(left, rect.top() + 22, status_width, 15),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -384,7 +387,7 @@ class _SessionRowDelegate(QStyledItemDelegate):
         elif tone == "idle":
             painter.setPen(QPen(QColor(TOKENS["ok"]), 1.6))
             painter.drawEllipse(center, 3.8, 3.8)
-        elif tone == "attention":
+        elif tone in ("attention", "approval"):
             painter.setBrush(QColor(TOKENS["warn"]))
             painter.drawPolygon(
                 [QPointF(x, y - 5), QPointF(x + 5, y), QPointF(x, y + 5), QPointF(x - 5, y)]
@@ -515,6 +518,8 @@ class SessionView:
     epoch: QLabel
     grade: QLabel
     facts: QBoxLayout
+    approval: QFrame
+    band: QBoxLayout
     snapshot: TaskProjection | None = None
     updated: datetime = field(default_factory=datetime.now)
     pending_command: str | None = None
@@ -537,6 +542,7 @@ class SessionWorkspace(QWidget):
     # task_id, epoch, text, command_id, reasoning effort or None
     message_requested = Signal(str, int, str, str, object)
     results_requested = Signal()
+    approval_review_requested = Signal()
     selection_changed = Signal(str)
     new_session_requested = Signal(str, object, str)
 
@@ -652,6 +658,34 @@ class SessionWorkspace(QWidget):
         bottom_layout.setSpacing(8)
         notice = plain_label("", name="sessionNotice")
         bottom_layout.addWidget(notice)
+        # A pending approval is the one thing here that waits on a person, so
+        # it gets a tinted band over the composer instead of the gray notice.
+        # Shown only while Guard reports WAITING_APPROVAL, so it never becomes
+        # background decoration that readers learn to skip.
+        approval = QFrame()
+        approval.setObjectName("approvalBand")
+        approval.setAccessibleName("승인 요청 안내")
+        band = QBoxLayout(QBoxLayout.Direction.LeftToRight, approval)
+        band.setContentsMargins(12, 8, 8, 8)
+        band.setSpacing(12)
+        band.addWidget(
+            IconMark("approvals", "warn", 20, 16, name="approvalMark"),
+            0,
+            Qt.AlignmentFlag.AlignTop,
+        )
+        words = QVBoxLayout()
+        words.setSpacing(2)
+        words.addWidget(plain_label(APPROVAL_BAND_TITLE, name="approvalBandTitle"))
+        words.addWidget(plain_label(APPROVAL_BAND_DETAIL, name="approvalBandDetail"))
+        band.addLayout(words, 1)
+        review = KeyboardActionButton("승인 사본 확인")
+        review.setObjectName("approvalBandButton")
+        review.set_visual(icon="eye")
+        review.setToolTip("활동 패널에서 요청 사본을 엶")
+        review.clicked.connect(self.approval_review_requested.emit)
+        band.addWidget(review, 0, Qt.AlignmentFlag.AlignVCenter)
+        approval.hide()
+        bottom_layout.addWidget(approval)
         compose = QFrame()
         compose.setObjectName("composer")
         compose.setToolTip(MEMORY_NOTICE)
@@ -707,6 +741,8 @@ class SessionWorkspace(QWidget):
             epoch,
             grade,
             facts,
+            approval,
+            band,
         )
         self.sessions[key] = view
         self.stack.addWidget(page)
@@ -743,6 +779,7 @@ class SessionWorkspace(QWidget):
         for view in self.sessions.values():
             view.header.setDirection(direction)
             view.controls.setDirection(direction)
+            view.band.setDirection(direction)
             view.facts.setDirection(direction)
             view.facts.setSpacing(4 if compact else 16)
             view.header.setContentsMargins(edge, 8, edge - 8, 8)
@@ -935,6 +972,10 @@ class SessionWorkspace(QWidget):
                 note = "도구 없는 대화 · " + note
         view.status.setText(text)
         view.notice.setText(note)
+        waiting = snapshot is not None and snapshot.status is TaskStatus.WAITING_APPROVAL
+        view.approval.setVisible(waiting)
+        # The band says it; a failure notice still shows above it.
+        view.notice.setVisible(not waiting or bool(failure_notice))
 
     def _send(self, view: SessionView) -> None:
         if not view.send.isEnabled() or view.snapshot is None or view is not self.current:
@@ -1089,7 +1130,7 @@ class SessionWorkspace(QWidget):
             elif view.snapshot.connection_code == "CODEX_CLEANUP_UNCONFIRMED":
                 status, tone = "정리 완료 미확인", "attention"
             elif view.snapshot.status is TaskStatus.WAITING_APPROVAL:
-                status, tone = "승인 필요 · 대기 중", "attention"
+                status, tone = "승인 필요 · 대기 중", "approval"
             elif view.snapshot.status not in FINAL_STATUSES and not view.snapshot.model_ready:
                 status, tone = "연결 필요", "attention"
             else:

@@ -24,9 +24,15 @@ from guard_app.services.bridge import (
     SessionCreated,
     TaskProjection,
 )
+from guard_app.ui.approval_detail import visible_review_text
 from guard_app.ui.presentation import APPROVAL_RESULTS, PAGES
 from guard_app.ui.runtime import RuntimePanel
-from guard_app.ui.sessions import PARTIAL_ANSWER_LABEL, STOPPED_ANSWER_LABEL
+from guard_app.ui.sessions import (
+    _ROW_ROLE,
+    APPROVAL_BAND_TITLE,
+    PARTIAL_ANSWER_LABEL,
+    STOPPED_ANSWER_LABEL,
+)
 from guard_app.ui.style import current_theme, style_sheet
 from guard_app.ui.task_status import status_detail, status_title
 from guard_app.ui.window import GuardWindow
@@ -1045,3 +1051,91 @@ def test_run_ending_without_an_answer_keeps_the_stream_marked_as_stopped(window)
     text = view.transcript.toPlainText()
     assert text.index("중단됨") < text.index("작성 중")
     assert all(kept in text for kept in ("│ half", "│ next"))
+
+
+def test_approval_band_shows_only_while_guard_waits_on_a_person(window, app):
+    shell, panel, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True))
+    view = shell.sessions.current
+    band = view.approval
+    assert band.isHidden()
+    assert not view.notice.isHidden()
+    assert panel.approval_section.property("attention") is False
+    bridge.task_changed.emit(
+        replace(snapshot(), status=TaskStatus.WAITING_APPROVAL, approval_id="approval-one")
+    )
+    app.processEvents()
+    assert not band.isHidden()
+    assert any(label.text() == APPROVAL_BAND_TITLE for label in band.findChildren(QLabel))
+    # The band carries the message, so the gray notice line steps aside.
+    assert view.notice.isHidden()
+    assert panel.approval_section.property("attention") is True
+    row = shell.sessions.list.item(0).data(_ROW_ROLE)
+    assert (row.status, row.tone) == ("승인 필요 · 대기 중", "approval")
+    for status in (TaskStatus.RUNNING, TaskStatus.HALTED):
+        bridge.task_changed.emit(replace(snapshot(), status=status, approval_id=None))
+        assert band.isHidden()
+        assert not view.notice.isHidden()
+        assert panel.approval_section.property("attention") is False
+        assert shell.sessions.list.item(0).data(_ROW_ROLE).tone != "approval"
+    sheet = style_sheet("light")
+    assert "QFrame#approvalBand" in sheet
+    assert 'QFrame#approvalCard[attention="true"]' in sheet
+
+
+def test_approval_band_opens_the_activity_and_asks_for_this_approval_copy(window, app, monkeypatch):
+    shell, panel, bridge = window
+    calls = []
+    monkeypatch.setattr(
+        bridge,
+        "request_control",
+        lambda action, target, *, command_id, epoch: calls.append((action, target, epoch)),
+    )
+    bridge.task_changed.emit(
+        replace(snapshot(), status=TaskStatus.WAITING_APPROVAL, approval_id="approval-one")
+    )
+    shell.set_activity_docked(False)
+    app.processEvents()
+    assert shell.activity_pane.isHidden()
+    button = next(
+        child
+        for child in shell.sessions.current.approval.findChildren(QPushButton)
+        if child.text() == "승인 사본 확인"
+    )
+    button.click()
+    app.processEvents()
+    assert not shell.activity_pane.isHidden()
+    assert [(action.value, target, epoch) for action, target, epoch in calls] == [
+        ("review", "approval-one", 1)
+    ]
+    assert panel.review_button.hasFocus() or not panel.review_button.isEnabled()
+
+
+def test_review_copy_puts_each_field_on_its_own_line_and_values_cannot_fake_one(window):
+    shell, panel, bridge = window
+    bridge.task_changed.emit(
+        replace(snapshot(), status=TaskStatus.WAITING_APPROVAL, approval_id="approval-one")
+    )
+    panel._review_command = "review-command"
+    forged = "send_doc\n전체 인자:\n{}"
+    fields = (("도구", forged + " (SEND)"), ("만료", "2026-10-13 12:05:00 UTC"))
+    bridge.review_ready.emit(
+        ApprovalReview(
+            "review-command", "approval-one", "task-one", 1, "one line", b'{"a":1}', fields
+        )
+    )
+    text = panel.detail.toPlainText()
+    assert text == "\n".join(
+        (
+            visible_review_text(f"도구: {forged} (SEND)"),
+            "만료: 2026-10-13 12:05:00 UTC",
+            "",
+            "전체 인자:",
+            '{"a":1}',
+        )
+    )
+    lines = text.split("\n")
+    # The forged heading keeps the visible \n mark; only the real one is bare.
+    assert lines.count("전체 인자:") == 1
+    assert "전체 인자:\\n" in lines
+    assert lines[0] == "도구: send_doc\\n"

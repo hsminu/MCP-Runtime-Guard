@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -351,6 +351,7 @@ class GuardWindow(QMainWindow):
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
         self._update_shell_layout()
         self.sessions.results_requested.connect(self._toggle_activity)
+        self.sessions.approval_review_requested.connect(self._open_approval_review)
         self.sessions.selection_changed.connect(self._session_selected)
         self.navigate("runs", "")
         # Open on the message box, as messengers do.
@@ -407,6 +408,31 @@ class GuardWindow(QMainWindow):
             self.navigate("results")
         else:
             self.set_activity_docked(not self._activity_docked)
+
+    def _open_approval_review(self) -> None:
+        """The conversation's approval band opens the activity block at its
+        approval section and asks for the copy, as 승인 사본 확인 there does."""
+        if self._compact_navigation:
+            self.navigate("results")
+        elif not self._activity_docked:
+            self.set_activity_docked(True)
+        panel = self._runtime_panel
+        if panel is None:
+            return
+        button = panel.review_button
+        if button.isEnabled():
+            button.setFocus(Qt.FocusReason.OtherFocusReason)
+            button.click()
+        # Once the dock has laid out at its new size, bring the section's top
+        # to the top so the copy below it has the most room.
+        QTimer.singleShot(0, lambda: self._scroll_results_to(panel.approval_section))
+
+    def _scroll_results_to(self, section: QWidget) -> None:
+        content = self._results_scroll.widget()
+        if content is None or not content.isAncestorOf(section):
+            return
+        top = section.mapTo(content, QPoint(0, 0)).y()
+        self._results_scroll.verticalScrollBar().setValue(top)
 
     def set_activity_docked(self, docked: bool) -> None:
         self._activity_docked = docked

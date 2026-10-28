@@ -15,7 +15,12 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPlainTextEdit
 
 from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus, ToolKind
-from guard_app.services.bridge import ApprovalReview, TaskProjection, _review_header
+from guard_app.services.bridge import (
+    ApprovalReview,
+    TaskProjection,
+    _review_fields,
+    _review_header,
+)
 from guard_app.ui.approval_detail import (
     ApprovalDetailDialog,
     ApprovalDetailValue,
@@ -128,24 +133,30 @@ def test_all_approval_fields_are_literal_and_never_open_links(app, monkeypatch, 
         panel.set_snapshot(TaskProjection(payload, 1, TaskStatus.WAITING_APPROVAL, payload))
         panel._review_command = "review"
         boundary = SimpleNamespace(boundary_id=payload)
-        header = _review_header(
-            SimpleNamespace(
-                request=SimpleNamespace(
-                    tool=SimpleNamespace(tool_name=payload, server_id=payload, kind=ToolKind.SEND),
-                    server_boundary=boundary,
-                    destination=boundary,
-                ),
-                effective_label=Label.INTERNAL,
-                expires_at_utc=now,
-            )
+        approval = SimpleNamespace(
+            request=SimpleNamespace(
+                tool=SimpleNamespace(tool_name=payload, server_id=payload, kind=ToolKind.SEND),
+                server_boundary=boundary,
+                destination=boundary,
+            ),
+            effective_label=Label.INTERNAL,
+            expires_at_utc=now,
         )
+        header = _review_header(approval)
+        fields = _review_fields(approval)
         assert header.count(payload) == 4
         bridge.review_ready.emit(
-            ApprovalReview("review", payload, payload, 1, header, payload.encode())
+            ApprovalReview("review", payload, payload, 1, header, payload.encode(), fields)
         )
-        assert panel.detail.toPlainText() == visible_review_text(
-            header + "\n전체 인자:\n" + payload
-        )
+        shown = panel.detail.toPlainText().split("\n")
+        assert shown == [
+            *(visible_review_text(f"{label}: {value}") for label, value in fields),
+            "",
+            "전체 인자:",
+            visible_review_text(payload),
+        ]
+        # Four in the fields, one as the arguments; none split across lines.
+        assert sum(line.count(visible_review_text(payload)) for line in shown) == 5
         assert payload in panel.summary.text()
         card = AttentionRow(
             AttentionItem(

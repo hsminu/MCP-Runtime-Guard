@@ -177,6 +177,10 @@ QPlainTextEdit#untrustedBody { background: $untrusted_bg; border: 1px dashed $li
     border-radius: 8px; font-family: $sans; font-size: 12px; }
 QLabel#untrustedOmission { color: $mute; font-size: 11px; }
 QLabel#sessionNotice { color: $mute; font-size: 12px; padding: 0 2px; }
+QFrame#approvalBand { background: $warn_soft; border: 1px solid $warn_line;
+    border-left: 3px solid $warn; border-radius: 8px; }
+QLabel#approvalBandTitle { font-size: 13px; font-weight: 600; color: $ink; }
+QLabel#approvalBandDetail { font-size: 12px; color: $body; }
 QLabel#sessionFootnote { color: $subtle; font-size: 11px; padding: 0 2px; }
 QFrame#composer { border: 1px solid $hairline_strong; background: $surface; border-radius: 12px; }
 QPlainTextEdit#messageDraft { border: none; padding: 0; background: transparent;
@@ -224,6 +228,7 @@ QFrame#placeholderCard {
 }
 QFrame#taskStatusSection, QFrame#runtimeCard, QFrame#approvalCard {
     background: transparent; border: none; border-bottom: 1px solid $hairline_strong; }
+QFrame#approvalCard[attention="true"] { background: $warn_soft; border-left: 3px solid $warn; }
 QFrame#stopCard { background: transparent; border: none; }
 QFrame#resultsFooter { border-top: 1px solid $hairline_strong; }
 QFrame#activityPane { border-left: 1px solid $hairline; }

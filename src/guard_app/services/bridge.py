@@ -238,6 +238,8 @@ class ApprovalReview:
     epoch: int
     receiving_boundaries: str
     arguments_bytes: bytes
+    # The same metadata as (label, value) pairs, shown one field per line.
+    fields: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1297,6 +1299,7 @@ class BackendBridge(QObject):
                     snapshot.request.epoch,
                     _review_header(snapshot),
                     snapshot.arguments_bytes,
+                    _review_fields(snapshot),
                 )
             )
             return "REVIEW_READY"
@@ -1469,22 +1472,25 @@ _ACCOUNT_ACTIONS = frozenset(
 )
 
 
-def _review_header(snapshot: ApprovalSnapshot) -> str:
-    """Trusted request metadata on one line.
+def _review_fields(snapshot: ApprovalSnapshot) -> tuple[tuple[str, str], ...]:
+    """Trusted request metadata as (fixed label, value) pairs.
 
-    The UI renders every newline in review text as a visible escape, so the
-    fields use a separator. Tool, kind and expiry tell apart two pending
-    approvals with the same server and arguments.
+    Tool, kind and expiry tell apart two pending approvals with the same
+    server and arguments. Values come from the snapshot and are escaped by
+    the UI one line at a time.
     """
     req = snapshot.request
     destination = req.destination.boundary_id if req.destination else "없음"
     expires = snapshot.expires_at_utc.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-    return " · ".join(
-        (
-            f"도구: {req.tool.tool_name} ({req.tool.kind.name})",
-            f"MCP 서버: {req.tool.server_id} (경계 {req.server_boundary.boundary_id})",
-            f"목적지 경계: {destination}",
-            f"Task 등급: {snapshot.effective_label.name}",
-            f"만료: {expires}",
-        )
+    return (
+        ("도구", f"{req.tool.tool_name} ({req.tool.kind.name})"),
+        ("MCP 서버", f"{req.tool.server_id} (경계 {req.server_boundary.boundary_id})"),
+        ("목적지 경계", destination),
+        ("Task 등급", snapshot.effective_label.name),
+        ("만료", expires),
     )
+
+
+def _review_header(snapshot: ApprovalSnapshot) -> str:
+    """The same metadata on one line, with a separator instead of newlines."""
+    return " · ".join(f"{label}: {value}" for label, value in _review_fields(snapshot))
