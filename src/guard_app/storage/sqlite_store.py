@@ -82,6 +82,7 @@ _METHOD_WRITES = {
     "request_review": True,
     "save_reviewed_descriptions": True,
     "create_task": True,
+    "allocate_call_seq": True,
     "load_task": False,
     "set_task_status": True,
     "list_tasks": False,
@@ -101,6 +102,7 @@ _METHOD_WRITES = {
 _EXECUTION_GATED_METHODS = frozenset(
     {
         "create_task",
+        "allocate_call_seq",
         "record_decision",
         "reserve_dispatch",
         "create_approval",
@@ -1116,6 +1118,10 @@ class SQLiteStore:
                     timestamp,
                 ),
             )
+            connection.execute(
+                "INSERT INTO task_call_sequences (task_id,last_issued) VALUES (?,0)",
+                (valid.task_id,),
+            )
             connection.executemany(
                 """INSERT INTO escalations (task_id, at_seq, source_id, from_label, to_label)
                     VALUES (?, ?, ?, ?, ?)""",
@@ -1130,6 +1136,74 @@ class SQLiteStore:
                     for item in valid.escalations
                 ),
             )
+
+    async def allocate_call_seq(self, task_id: str) -> int:
+        """Task별 순번과 감사를 원자 커밋하고 ACK된 값만 반환한다(SEQ-01/02).
+
+        배정 후 실패·취소·ACK 유실에서도 값은 회수하지 않는다. 정상 실행 여부와
+        계수 무결성은 동일 writer 트랜잭션에서 확인한다.
+        """
+        return await self._submit(
+            lambda: self._allocate_call_seq(task_id), method="allocate_call_seq"
+        )
+
+    def _allocate_call_seq(self, task_id: str) -> int:
+        try:
+            _identifier(task_id)
+        except (TypeError, ValueError, OverflowError):
+            raise StoreError(Reason.INVALID_ARGUMENTS) from None
+
+        with self._transaction(write=True, failure_reason=Reason.STATE_COMMIT_FAILED) as connection:
+            state = self._load_task_locked(connection, task_id)
+            if state.status is not TaskStatus.RUNNING:
+                raise StoreError(Reason.TASK_NOT_RUNNING)
+            if state.unclassified:
+                raise StoreError(Reason.TASK_UNCLASSIFIED)
+            row = connection.execute(
+                """SELECT last_issued,
+                    coalesce((SELECT max(call_seq) FROM requests WHERE task_id=?),0),
+                    coalesce((SELECT max(at_seq) FROM escalations WHERE task_id=?),0)
+                FROM task_call_sequences WHERE task_id=?""",
+                (task_id, task_id, task_id),
+            ).fetchone()
+            if row is None or any(type(value) is not int for value in row):
+                self.halt_execution(Reason.INTERNAL_ERROR)
+                raise StoreError(Reason.INTERNAL_ERROR)
+            last, request_max, escalation_max = (int(value) for value in row)
+            if (
+                not 0 <= last <= MAX_SAFE_SEQUENCE
+                or not 0 <= request_max <= MAX_SAFE_SEQUENCE
+                or not 0 <= escalation_max <= MAX_SAFE_SEQUENCE
+                or last < max(request_max, escalation_max)
+            ):
+                self.halt_execution(Reason.INTERNAL_ERROR)
+                raise StoreError(Reason.INTERNAL_ERROR)
+            if last == MAX_SAFE_SEQUENCE:
+                raise StoreError(Reason.INVALID_ARGUMENTS)
+            value = last + 1
+            if (
+                connection.execute(
+                    """UPDATE task_call_sequences SET last_issued=?
+                    WHERE task_id=? AND last_issued=?""",
+                    (value, task_id, last),
+                ).rowcount
+                != 1
+            ):
+                self.halt_execution(Reason.INTERNAL_ERROR)
+                raise StoreError(Reason.INTERNAL_ERROR)
+            if self._audit_id_factory is None:
+                raise StoreError(Reason.STATE_COMMIT_FAILED)
+            try:
+                event_id = _identifier(self._audit_id_factory())
+                timestamp = _utc_text(self._fresh_utc())
+            except (StoreError, TypeError, ValueError, OverflowError):
+                raise StoreError(Reason.STATE_COMMIT_FAILED) from None
+            connection.execute(
+                """INSERT INTO audit_events (event_id,request_id,task_id,event_type,reason_code,
+                    label,detail,at_utc) VALUES (?,NULL,?,'CALL_SEQ_ALLOCATED',NULL,NULL,?,?)""",
+                (event_id, task_id, json.dumps({"call_seq": value, "run_id": None}), timestamp),
+            )
+        return value
 
     async def load_task(self, task_id: str) -> TaskState:
         """같은 읽기 트랜잭션에서 Task와 승격 근거를 조회. 없는 Task는 STATE_MISSING."""
@@ -2354,7 +2428,9 @@ class SQLiteStore:
             return False
         return True
 
-    def _rollback(self, connection: sqlite3.Connection) -> None:
+    def _rollback(
+        self, connection: sqlite3.Connection, *, failure_reason: Reason = Reason.INTERNAL_ERROR
+    ) -> None:
         failed = False
         try:
             if connection.in_transaction:
@@ -2365,10 +2441,12 @@ class SQLiteStore:
             # COMMIT을 아직 보내지 않았으므로 rollback 실패여도 해당 작업은 미커밋이다.
             self._connection_fault(CommitOutcome.ROLLED_BACK)
             self._discard_connection()
-            raise StoreError()
+            raise StoreError(failure_reason)
 
     @contextmanager
-    def _transaction(self, *, write: bool) -> Iterator[sqlite3.Connection]:
+    def _transaction(
+        self, *, write: bool, failure_reason: Reason = Reason.INTERNAL_ERROR
+    ) -> Iterator[sqlite3.Connection]:
         connection = self._owned_connection()
         failed = False
         try:
@@ -2376,8 +2454,8 @@ class SQLiteStore:
         except sqlite3.Error:
             failed = True
         if failed:
-            self._rollback(connection)
-            raise StoreError()
+            self._rollback(connection, failure_reason=failure_reason)
+            raise StoreError(failure_reason)
         completed = False
         reason: Reason | None = None
         try:
@@ -2386,12 +2464,12 @@ class SQLiteStore:
             except StoreError as error:
                 reason = error.reason
             except sqlite3.Error:
-                reason = Reason.INTERNAL_ERROR
+                reason = failure_reason
             else:
                 completed = True
         finally:
             if not completed:
-                self._rollback(connection)
+                self._rollback(connection, failure_reason=failure_reason)
         if reason is not None:
             raise StoreError(reason)
         try:
@@ -2410,7 +2488,7 @@ class SQLiteStore:
                 pass
             self._connection_fault(outcome)
             self._discard_connection()
-            raise StoreError()
+            raise StoreError(failure_reason)
 
     def _migrate(self) -> None:
         with self._transaction(write=True) as connection:

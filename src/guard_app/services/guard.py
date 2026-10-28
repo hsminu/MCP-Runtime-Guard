@@ -60,6 +60,16 @@ from guard_app.services.state_checks import (
     preserve_task_context,
 )
 
+# Task 생애·입력에 한정된 순번 실패는 다른 Task의 실행 권한을 닫지 않는다.
+_TASK_LOCAL_SEQUENCE_REASONS = frozenset(
+    {
+        Reason.TASK_NOT_RUNNING,
+        Reason.TASK_UNCLASSIFIED,
+        Reason.STATE_MISSING,
+        Reason.INVALID_ARGUMENTS,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class FailureEvent:
@@ -642,11 +652,21 @@ class GuardService:
         if state.status is not TaskStatus.RUNNING:
             return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
         call = ProposedCall.model_validate(call)
+        request_id = self._request_id_factory()
+        try:
+            call_seq = await self._next_call_seq(task_id)
+        except StoreError as error:
+            if type(error) is not StoreError or error.reason not in _TASK_LOCAL_SEQUENCE_REASONS:
+                raise
+            if error.reason is Reason.INVALID_ARGUMENTS:
+                # 현재 Task ID는 위에서 검증했으므로 B allocator의 이 사유는 상한이다.
+                await self._halt_task(task_id, error.reason, expected_epoch=state.epoch)
+            raise ResolutionError(error.reason) from None
         req = self._catalog.resolve(
             state,
             call,
-            request_id=self._request_id_factory(),
-            call_seq=await self._next_call_seq(task_id),
+            request_id=request_id,
+            call_seq=call_seq,
         )
         decision = await self._evaluate_request(req, state, phase="submit")
         await self._store.record_decision(
