@@ -42,7 +42,12 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from guard_app.domain.contracts import FingerprintChange, RegisteredServer, RegistryEntry
+from guard_app.domain.contracts import (
+    FingerprintChange,
+    RegisteredServer,
+    RegistryEntry,
+    ScanReport,
+)
 from guard_app.domain.enums import RegStatus, ToolKind
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ToolSpec
@@ -263,6 +268,23 @@ class ServerRegistry:
                     at_utc=self._clock(),
                     reviewed_scan_id=reviewed_scan_id,
                 ),
+            )
+
+    async def record_scan(self, scan_id: str, report: ScanReport) -> RegistryEntry:
+        """검사 보고서를 저장하고 그 서버의 `last_scan_id`를 캐시에 반영한다(C4.9).
+
+        검사는 상태를 바꾸지 않는다. 사용자가 이 보고서를 보고 확인하면 A가 `activate`에
+        `reviewed_scan_id=scan_id`로 넘긴다. 저장소가 서버와 지문 집합을 등록과 대조한다.
+        """
+        if type(report) is not ScanReport:
+            raise RegistryError("REG_SCAN_INVALID")
+        async with self._lock:
+            await self._reread_if_stale(report.server_id)
+            if report.server_id not in self._entries:
+                raise RegistryError("REG_SERVER_UNKNOWN")
+            return await self._write(
+                report.server_id,
+                self._store.record_scan_report(scan_id, report, at_utc=self._clock()),
             )
 
     async def block(self, server_id: str, *, expected_row_revision: int) -> RegistryEntry:
