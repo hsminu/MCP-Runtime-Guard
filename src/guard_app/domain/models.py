@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
@@ -19,7 +20,9 @@ from guard_app.domain.enums import (
     CommitOutcome,
     Decision,
     Label,
+    RecoveryCategory,
     RegStatus,
+    RequestStatus,
     StorePhase,
     TaskStatus,
     ToolKind,
@@ -35,11 +38,17 @@ __all__ = [
     "Boundary",
     "BoundaryVerdict",
     "Escalation",
+    "FailureAuditRecord",
     "Frozen",
     "FrozenJsonObject",
+    "MAX_SAFE_SEQUENCE",
+    "MigrationReport",
     "PolicyDecision",
     "PolicyInput",
     "ProposedCall",
+    "RecoveryItem",
+    "RecoveryItemPage",
+    "RecoveryReport",
     "ResolvedRequest",
     "StrictDecision",
     "StrictLabel",
@@ -47,6 +56,8 @@ __all__ = [
     "TaskState",
     "ToolSpec",
 ]
+
+MAX_SAFE_SEQUENCE = 2**53 - 1
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
@@ -101,6 +112,94 @@ class StoreExecutionState(Frozen):
     commit_outcome: CommitOutcome | None
     last_committed_run_state: str | None = Field(repr=False)
     requires_restart: bool
+
+
+class MigrationReport(Frozen):
+    """경로·원문 없이 스키마 준비의 완료 사실만 전달한다."""
+
+    from_version: NonNegativeInt
+    to_version: Annotated[int, Field(ge=3, le=3)]
+    backup_published: bool
+    migrated: bool
+
+
+class RecoveryReport(Frozen):
+    """성공한 복구 TX의 원문 없는 결과(REC-04)."""
+
+    schema_version: Annotated[int, Field(ge=3, le=3)]
+    recovery_version: Annotated[int, Field(ge=1, le=1)]
+    run_id: NonEmptyString = Field(repr=False)
+    committed_at_utc: datetime
+    changed_task_count: NonNegativeInt
+    changed_request_count: NonNegativeInt
+    changed_approval_count: NonNegativeInt
+    unknown_outcome_count: NonNegativeInt
+    quarantined_count: NonNegativeInt
+    unresolved_count: Annotated[int, Field(ge=0, le=0)]
+
+    @field_validator("committed_at_utc")
+    @classmethod
+    def validate_committed_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError("복구 시각은 UTC여야 한다")
+        return value
+
+
+class RecoveryItem(Frozen):
+    """격리된 요청의 검증된 저장 메타데이터(REC-02)."""
+
+    run_id: NonEmptyString = Field(repr=False)
+    task_id: NonEmptyString = Field(repr=False)
+    request_id: NonEmptyString = Field(repr=False)
+    original_status: RequestStatus
+    category: RecoveryCategory
+    at_utc: datetime
+    server_id: NonEmptyString = Field(repr=False)
+    tool_name: NonEmptyString = Field(repr=False)
+    destination_id: NonEmptyString | None = Field(repr=False)
+    kind: ToolKind | None
+    epoch: Annotated[int, Field(ge=0, le=MAX_SAFE_SEQUENCE)] | None
+
+    @field_validator("at_utc")
+    @classmethod
+    def validate_at_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError("격리 시각은 UTC여야 한다")
+        return value
+
+
+class RecoveryItemPage(Frozen):
+    """request_id 순서의 격리 항목과 다음 페이지 커서."""
+
+    items: tuple[RecoveryItem, ...]
+    next_after: NonEmptyString | None = Field(repr=False)
+
+
+class FailureAuditRecord(Frozen):
+    """원문 없이 실패 종류와 신뢰된 식별자만 전달하는 내구성 감사 입력."""
+
+    task_id: NonEmptyString = Field(repr=False)
+    request_id: NonEmptyString | None = Field(default=None, repr=False)
+    phase: Literal["before_dispatch", "after_dispatch"]
+    reason: Reason
+    exception_type: str = Field(repr=False)
+    at_utc: datetime
+    run_id: NonEmptyString | None = Field(default=None, repr=False)
+    epoch: Annotated[int, Field(ge=0, le=MAX_SAFE_SEQUENCE)] | None = None
+
+    @field_validator("exception_type")
+    @classmethod
+    def validate_exception_type(cls, value: str) -> str:
+        if not value.isascii() or not value.isidentifier() or len(value) > 64:
+            raise ValueError("예외 형식은 64자 이하 ASCII 식별자여야 한다")
+        return value
+
+    @field_validator("at_utc")
+    @classmethod
+    def validate_at_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError("감사 시각은 UTC여야 한다")
+        return value
 
 
 class ProposedCall(Frozen):
