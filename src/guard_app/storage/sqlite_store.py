@@ -125,6 +125,20 @@ _EXECUTION_GATED_METHODS = frozenset(
         "activate_server",
     }
 )
+_RECOVERED_WRITES = frozenset(
+    {
+        "create_task",
+        "set_task_status",
+        "record_session_event",
+        "record_failure_audit",
+        "register_server",
+        "record_scan_report",
+        "record_fingerprint_change",
+        "block_server",
+        "request_review",
+        "save_reviewed_descriptions",
+    }
+)
 # B6-06 제안 한계: UTF-8 정규화 후 크기. 등록 UI/검사 결과의 메모리·DB 폭주 제한.
 _MAX_SCHEMA_BYTES = 256 * 1024
 _MAX_TOOLS_BYTES = 8 * 1024 * 1024
@@ -473,6 +487,8 @@ class SQLiteStore:
         self._connection_faulted = False
         self._prepare_started = False
         self._recovery_started = False
+        self._activation_started = False
+        self._close_requested = False
         self._state = StoreExecutionState(
             run_id=None,
             phase=StorePhase.MIGRATING,
@@ -577,11 +593,17 @@ class SQLiteStore:
         """접수를 즉시 닫고 writer가 진행 중 작업을 끝낸 후 연결을 닫는다."""
         with self._state_lock:
             reason = self._state.reason or Reason.INTERNAL_ERROR
+            self._close_requested = True
         # writer 큐의 시작 판정과 접수 종료를 같은 Condition으로 직렬화한다.
         # 이미 dequeue된 작업은 완료하고, 대기 중 작업은 시작하지 않는다.
         self._writer.close(reason)
         with self._state_lock:
-            if self._state.phase in (StorePhase.READY, StorePhase.MIGRATING, StorePhase.RECOVERING):
+            if self._state.phase in (
+                StorePhase.READY,
+                StorePhase.MIGRATING,
+                StorePhase.RECOVERING,
+                StorePhase.RECOVERED,
+            ):
                 self._state = self._state.model_copy(
                     update={
                         "phase": StorePhase.CLOSED,
@@ -631,16 +653,37 @@ class SQLiteStore:
                 }
             )
 
-    def _check_execution_gate(self, *, grants_execution: bool, started: bool = False) -> None:
+    def _check_execution_gate(
+        self, *, grants_execution: bool, started: bool = False, method: str | None = None
+    ) -> None:
         with self._state_lock:
             state = self._state
+            recovered = self._startup == "explicit" and state.phase is StorePhase.RECOVERED
+            allowed_bootstrap = recovered and (
+                method is None
+                or method in _RECOVERED_WRITES
+                or (method in _METHOD_WRITES and not _METHOD_WRITES[method])
+            )
+            allowed_cleanup = (
+                self._startup == "explicit"
+                and state.phase is StorePhase.FAULTED
+                and state.run_id is not None
+                and not grants_execution
+            )
             if (
                 (state.phase is StorePhase.CLOSED and not started)
                 or self._connection_faulted
-                or (self._startup == "explicit" and state.phase is not StorePhase.READY)
+                or (self._startup == "explicit" and self._close_requested)
+                or (
+                    self._startup == "explicit"
+                    and state.phase is not StorePhase.READY
+                    and not allowed_bootstrap
+                    and not allowed_cleanup
+                )
                 or (
                     grants_execution
                     and not state.execution_enabled
+                    and not allowed_bootstrap
                     and not (started and state.phase is StorePhase.CLOSED)
                 )
             ):
@@ -854,7 +897,7 @@ class SQLiteStore:
             if report is None:
                 raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
             with self._state_lock:
-                if self._state.phase is not StorePhase.RECOVERING:
+                if self._close_requested or self._state.phase is not StorePhase.RECOVERING:
                     raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
                 self._state = self._state.model_copy(
                     update={
@@ -869,9 +912,85 @@ class SQLiteStore:
             if not completed:
                 self._prepare_fault()
 
+    async def activate_run(self) -> StoreExecutionState:
+        """복구한 회차의 ACTIVE 커밋을 확인한 뒤에만 실행을 연다."""
+        with self._state_lock:
+            if (
+                self._startup != "explicit"
+                or self._state.phase is not StorePhase.RECOVERED
+                or self._state.run_id is None
+                or self._close_requested
+                or self._activation_started
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+            run_id = self._state.run_id
+            self._activation_started = True
+
+        completed = False
+        try:
+
+            def activate() -> None:
+                self._check_activation(run_id)
+                with self._transaction(write=True) as connection:
+                    row = connection.execute(
+                        "SELECT recovery_committed_at_utc FROM store_runs "
+                        "WHERE run_id=? AND state='RECOVERY_COMMITTED'",
+                        (run_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise StoreError()
+                    timestamp = _utc_text(max(self._fresh_utc(), _utc_value(row[0])))
+                    changed = connection.execute(
+                        "UPDATE store_runs SET state='ACTIVE',activated_at_utc=? "
+                        "WHERE run_id=? AND state='RECOVERY_COMMITTED'",
+                        (timestamp, run_id),
+                    ).rowcount
+                    if changed != 1:
+                        raise StoreError()
+                    self._check_activation(run_id)
+
+            await self._writer.submit(lambda: _store_result(activate), write=True)
+            with self._state_lock:
+                if (
+                    self._close_requested
+                    or self._connection_faulted
+                    or self._state.phase is not StorePhase.RECOVERED
+                    or self._state.run_id != run_id
+                ):
+                    raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+                self._state = self._state.model_copy(
+                    update={
+                        "phase": StorePhase.READY,
+                        "execution_enabled": True,
+                        "state_revision": self._state.state_revision + 1,
+                        "last_committed_run_state": "ACTIVE",
+                    }
+                )
+                state = self._state
+            completed = True
+            return state
+        finally:
+            if not completed:
+                # 시작된 쓰기의 취소와 ACK 유실도 같은 객체에서 다시 열지 않는다.
+                self.halt_execution(Reason.INTERNAL_ERROR)
+
+    def _check_activation(self, run_id: str) -> None:
+        with self._state_lock:
+            if (
+                self._close_requested
+                or self._connection_faulted
+                or self._state.phase is not StorePhase.RECOVERED
+                or self._state.run_id != run_id
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+
     def _check_recovering(self) -> None:
         with self._state_lock:
-            if self._state.phase is not StorePhase.RECOVERING or self._connection_faulted:
+            if (
+                self._close_requested
+                or self._state.phase is not StorePhase.RECOVERING
+                or self._connection_faulted
+            ):
                 raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
 
     def _recover_locked(self, run_id: str, deadline: float) -> RecoveryReport:
@@ -1212,9 +1331,14 @@ class SQLiteStore:
 
     def _check_recovery_query(self) -> None:
         with self._state_lock:
-            if self._connection_faulted or self._state.phase not in (
-                StorePhase.RECOVERED,
-                StorePhase.READY,
+            if (
+                self._close_requested
+                or self._connection_faulted
+                or self._state.phase
+                not in (
+                    StorePhase.RECOVERED,
+                    StorePhase.READY,
+                )
             ):
                 raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
 
@@ -1467,11 +1591,13 @@ class SQLiteStore:
     ) -> T:
         if grants_execution is None:
             grants_execution = method in _EXECUTION_GATED_METHODS
-        self._check_execution_gate(grants_execution=grants_execution)
+        self._check_execution_gate(grants_execution=grants_execution, method=method)
 
         def execute() -> T:
             # 큐에 든 뒤 전역 정지 또는 연결 폐기가 된 작업도 시작하지 않는다.
-            self._check_execution_gate(grants_execution=grants_execution, started=True)
+            self._check_execution_gate(
+                grants_execution=grants_execution, started=True, method=method
+            )
             return _store_result(operation)
 
         return await self._writer.submit(execute, write=_METHOD_WRITES[method])
@@ -1990,6 +2116,30 @@ class SQLiteStore:
         """Task와 제공된 승격 근거를 함께 저장. 중복 ID는 기존 행을 변경하지 않는다."""
         await self._submit(lambda: self._create_task(state, created_at_utc), method="create_task")
 
+    def _current_run_id(self) -> str | None:
+        if self._startup == "immediate":
+            return None
+        with self._state_lock:
+            if (
+                self._close_requested
+                or self._connection_faulted
+                or self._state.phase
+                not in (StorePhase.RECOVERED, StorePhase.READY, StorePhase.FAULTED)
+                or self._state.run_id is None
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+            return self._state.run_id
+
+    def _require_current_task_owner(self, connection: sqlite3.Connection, task_id: str) -> None:
+        run_id = self._current_run_id()
+        if run_id is None:
+            return
+        row = connection.execute(
+            "SELECT run_id FROM task_run_owners WHERE task_id=?", (task_id,)
+        ).fetchone()
+        if row is None or row[0] != run_id:
+            raise StoreError(Reason.TASK_NOT_RUNNING)
+
     def _create_task(self, state: TaskState, created_at_utc: datetime) -> None:
         self._owned_connection()
         valid: TaskState | None = None
@@ -2002,7 +2152,10 @@ class SQLiteStore:
             valid = None
         if valid is None or timestamp is None:
             raise StoreError()
+        if self._startup == "explicit" and valid.epoch != 1:
+            raise StoreError(Reason.INVALID_ARGUMENTS)
         with self._transaction(write=True) as connection:
+            run_id = self._current_run_id()
             connection.execute(
                 """INSERT INTO tasks (task_id, epoch, profile_id, policy_version,
                     high_watermark, last_read_label, unclassified, status,
@@ -2026,6 +2179,11 @@ class SQLiteStore:
                 "INSERT INTO task_call_sequences (task_id,last_issued) VALUES (?,0)",
                 (valid.task_id,),
             )
+            if run_id is not None:
+                connection.execute(
+                    "INSERT INTO task_run_owners (task_id,run_id) VALUES (?,?)",
+                    (valid.task_id, run_id),
+                )
             connection.executemany(
                 """INSERT INTO escalations (task_id, at_seq, source_id, from_label, to_label)
                     VALUES (?, ?, ?, ?, ?)""",
@@ -2059,6 +2217,7 @@ class SQLiteStore:
 
         with self._transaction(write=True, failure_reason=Reason.STATE_COMMIT_FAILED) as connection:
             state = self._load_task_locked(connection, task_id)
+            self._require_current_task_owner(connection, task_id)
             if state.status is not TaskStatus.RUNNING:
                 raise StoreError(Reason.TASK_NOT_RUNNING)
             if state.unclassified:
@@ -2105,7 +2264,12 @@ class SQLiteStore:
             connection.execute(
                 """INSERT INTO audit_events (event_id,request_id,task_id,event_type,reason_code,
                     label,detail,at_utc) VALUES (?,NULL,?,'CALL_SEQ_ALLOCATED',NULL,NULL,?,?)""",
-                (event_id, task_id, json.dumps({"call_seq": value, "run_id": None}), timestamp),
+                (
+                    event_id,
+                    task_id,
+                    json.dumps({"call_seq": value, "run_id": self._current_run_id()}),
+                    timestamp,
+                ),
             )
         return value
 
@@ -2282,6 +2446,7 @@ class SQLiteStore:
         if not isinstance(status, TaskStatus) or not isinstance(reason, Reason):
             raise StoreError()
         with self._transaction(write=True) as connection:
+            self._require_current_task_owner(connection, task_id)
             current = self._load_task_locked(connection, task_id)
             if current.row_revision != expected_revision:
                 raise StoreError(Reason.STATE_COMMIT_FAILED)
@@ -2365,8 +2530,9 @@ class SQLiteStore:
             timestamp = _utc_text(valid.at_utc)
         except (TypeError, ValueError, OverflowError):
             raise StoreError(Reason.INVALID_ARGUMENTS) from None
-        # 이번 단계에는 실행 회차의 신뢰 binding이 없어 임의의 값은 거부한다.
-        if valid.run_id is not None or valid.epoch is not None:
+        run_id = self._current_run_id()
+        # 공급된 회차는 현재 Store가 확인한 값과 일치해야 한다. epoch는 아직 결속하지 않는다.
+        if (valid.run_id is not None and valid.run_id != run_id) or valid.epoch is not None:
             raise StoreError(Reason.INVALID_ARGUMENTS)
         event_type = (
             "FAILURE_BEFORE_DISPATCH"
@@ -2374,7 +2540,7 @@ class SQLiteStore:
             else "FAILURE_AFTER_DISPATCH"
         )
         detail = json.dumps(
-            {"exception_type": valid.exception_type, "run_id": valid.run_id, "epoch": valid.epoch},
+            {"exception_type": valid.exception_type, "run_id": run_id, "epoch": valid.epoch},
             separators=(",", ":"),
             ensure_ascii=True,
         )
@@ -2545,6 +2711,7 @@ class SQLiteStore:
             ).fetchone()
             if row is None:
                 raise StoreError(Reason.STATE_MISSING)
+            self._require_current_task_owner(connection, _identifier(row["task_id"]))
             allowed = self._allowed_decisions.get(request_id)
             if (
                 allowed is None
@@ -2890,6 +3057,7 @@ class SQLiteStore:
         _utc_text(now_utc)
         try:
             with self._transaction(write=True) as connection:
+                self._require_current_task_owner(connection, task_id)
                 record = self._approval_locked(connection, approval_id)
                 context = self._approval_contexts.get(approval_id)
                 if (
