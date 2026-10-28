@@ -1,16 +1,27 @@
-"""C 내부 LLM·YARA 집계(I6·I9, T17·T19). B ScanReport·등록 판정은 별도다.
+"""C 내부 LLM·YARA 집계(I6·I9, T17·T19)와 B ScanReport 번역(C4.9). 등록 판정은 별도다.
 
 수집 완료 여부를 추정하지 않고 전달받은 정의 집합만 검사한다. 위험·진단 실패는
 경고 자료이며 Guard 판정을 생성하지 않는다. 원문·SDK evidence는 결과에 복사하지 않는다.
+예외는 LLM의 자체 평가(`overall_risk`)와 설명(`threat_summary`)이다(2026-10-15 결정,
+C4.15·C4.17). 검사 대상 설명이 조작할 수 있는 텍스트라 `defang_scanner_text`로 무해화해
+표시 전용으로만 보존하고, 위험도·판정·정렬에 쓰지 않는다.
+
+`scan_report`는 집계 결과를 B `ScanReport`(SCAN-01)로 옮긴다. 지문 집합은 등록에 쓴 목록의
+지문(C4.12)이라 활성화 때 등록과 대조된다. 필수 분석기는 LLM·YARA 둘이고, 모든 도구에서
+끝난 분석기만 완료다. 준비 실패는 분석기 진단 하나, 도구별 실패·미검사는 그 도구의 진단으로
+남긴다. 완료가 아닌 분석기가 끝내지 못한 도구에는 반드시 진단이 있다. severity는 SDK 값
+그대로이고, 분류 코드는 영문·숫자·`_`·공백 64자 밖이면 `SCAN_CODE_UNRECOGNIZED`다.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -18,6 +29,7 @@ from time import monotonic
 from typing import Literal, Protocol, cast
 
 import httpx
+from pydantic import ValidationError
 
 from guard_app.adapters.cisco import (
     CiscoMetadataAdapter,
@@ -30,9 +42,18 @@ from guard_app.adapters.cisco import (
     prepare_tool_definition,
 )
 from guard_app.adapters.cisco_llm import CiscoFinding, ScannerLLMError, connect_luna_scanner
+from guard_app.domain.contracts import AnalyzerDiagnostic, Finding, ScanReport
+from guard_app.domain.enums import ScanErrorCode
+from guard_app.domain.text import defang_scanner_text
 from guard_app.security.secrets import scanner_sdk_import_environment
 
 DEFAULT_MAX_DEFINITION_BYTES = 65_536
+# ScanReport.scanner_version. pyproject의 고정 버전과 같다(테스트가 설치본과 대조한다).
+SCANNER_VERSION = "cisco-ai-mcp-scanner-4.8.6"
+_RISK_MAX_CHARS = 64
+# Finding.code 형식(#57 B 리뷰). LLM 분석기에서는 모델 응답에서 온 값일 수 있다.
+_FINDING_CODE = re.compile(r"[A-Za-z0-9_ ]{1,64}")
+UNRECOGNIZED_FINDING_CODE = "SCAN_CODE_UNRECOGNIZED"
 type AnalyzerName = Literal["LLM", "YARA"]
 type AnalyzerStatus = Literal["completed", "failed", "not_run"]
 type Completion = Literal["completed", "partial", "failed", "not_scanned"]
@@ -88,6 +109,9 @@ class FindingSummary:
     severity: str
     category: str = field(repr=False)
     code: str | None = field(repr=False)
+    # LLM의 자체 평가·설명(C4.15·C4.17). 무해화한 표시 전용 값이다.
+    overall_risk: str | None = field(default=None, repr=False)
+    threat_summary: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,11 +216,37 @@ def _copy_findings(
         if category == "ANALYZER INFRASTRUCTURE":
             invalid = True
             continue
-        copied.append(FindingSummary(name, severity, category, code))
+        risk, summary = _self_assessment(details) if name == "LLM" else (None, "")
+        copied.append(FindingSummary(name, severity, category, code, risk, summary))
         invalid |= severity == "UNKNOWN"
     if invalid:
         return tuple(copied) if copied else None, "SCAN_ANALYZER_RESULT_INVALID"
     return tuple(copied), None
+
+
+def _self_assessment(details: object) -> tuple[str | None, str]:
+    """SDK가 버리는 LLM 응답의 `threat_analysis.overall_risk`·`threat_summary`를 꺼낸다.
+
+    SDK 4.8.6은 응답 전체를 `details["raw_response"]`에 둔다. 두 값만 무해화해 가져오고,
+    모양이 다르거나 무해화가 실패하면 비운다. finding과 실패 사실은 그대로 둔다.
+    """
+    raw = details.get("raw_response") if type(details) is dict else None
+    analysis = raw.get("threat_analysis") if type(raw) is dict else None
+    if type(analysis) is not dict:
+        return None, ""
+    return (
+        _defanged(analysis.get("overall_risk"), _RISK_MAX_CHARS) or None,
+        _defanged(analysis.get("threat_summary"), 300),
+    )
+
+
+def _defanged(value: object, max_length: int) -> str:
+    if type(value) is not str:
+        return ""
+    try:
+        return defang_scanner_text(value, max_length=max_length)
+    except ValueError:
+        return ""
 
 
 def _completion(results: Sequence[AnalyzerResult]) -> Completion:
@@ -368,6 +418,107 @@ class InternalMetadataScanner:
             tools,
             duration,
         )
+
+
+class ScanReportError(ValueError):
+    """번역 실패의 고정 코드. 입력·SDK 원문을 싣지 않는다."""
+
+
+def scan_report(
+    result: MetadataScanResult,
+    tools: Sequence[tuple[str, str]],
+    *,
+    scanned_at_utc: datetime,
+) -> ScanReport:
+    """집계 결과를 B ScanReport로 옮긴다(C4.9·C4.15·C4.17).
+
+    `tools`는 검사에 넘긴 목록 순서의 (도구 이름, 등록 지문)이다(`listing_fingerprints`).
+    개수·이름이 결과와 맞지 않으면 `SCAN_REPORT_INPUT_MISMATCH`, B 검증을 통과하지 못하면
+    `SCAN_REPORT_INVALID`다. 실패해도 일부만 담은 보고서를 만들지 않는다.
+    """
+    if (
+        type(result) is not MetadataScanResult
+        or type(tools) not in (tuple, list)
+        or len(tools) != len(result.tools)
+        or any(
+            type(item) is not tuple
+            or len(item) != 2
+            or not all(type(part) is str for part in item)
+            or scanned.index != index
+            or scanned.tool_name not in (None, item[0])
+            for index, (item, scanned) in enumerate(zip(tools, result.tools, strict=True))
+        )
+    ):
+        raise ScanReportError("SCAN_REPORT_INPUT_MISMATCH")
+    completed: list[str] = []
+    failed: list[str] = []
+    diagnostics: list[AnalyzerDiagnostic] = []
+    findings: list[Finding] = []
+    for name in _NAMES:
+        setup = next(
+            item.setup_error_code for item in result.analyzer_summary if item.analyzer == name
+        )
+        if setup is not None:
+            diagnostics.append(AnalyzerDiagnostic(analyzer=name, code=_scan_code(setup, name)))
+        complete = setup is None
+        for (tool_name, fingerprint), scanned in zip(tools, result.tools, strict=True):
+            analyzed = next(item for item in scanned.analyzers if item.analyzer == name)
+            if analyzed.status != "completed":
+                complete = False
+                # 준비 실패가 아니면 끝내지 못한 도구마다 진단을 남긴다(#57 B 리뷰 조건).
+                code = scanned.input_error_code or analyzed.error_code or f"SCAN_{name}_FAILED"
+                if setup is None:
+                    diagnostics.append(
+                        AnalyzerDiagnostic(
+                            analyzer=name,
+                            code=_scan_code(code, name),
+                            tool_name=tool_name,
+                            tool_fingerprint=fingerprint,
+                        )
+                    )
+            findings.extend(
+                Finding(
+                    analyzer=name,
+                    code=_finding_code(summary.code or summary.category),
+                    severity=summary.severity,
+                    tool_fingerprint=fingerprint,
+                    tool_name=tool_name,
+                    source=name,
+                    overall_risk=summary.overall_risk,
+                    threat_summary=summary.threat_summary,
+                )
+                for summary in analyzed.findings or ()
+            )
+        (completed if complete else failed).append(name)
+    try:
+        return ScanReport(
+            server_id=result.server_id,
+            fingerprint_set=tuple(fingerprint for _, fingerprint in tools),
+            analyzers_required=_NAMES,
+            analyzers_completed=tuple(completed),
+            analyzers_skipped=(),
+            analyzers_failed=tuple(failed),
+            max_severity=result.summary.maximum_observed_severity,
+            findings=tuple(findings),
+            scanned_at_utc=scanned_at_utc,
+            scanner_version=SCANNER_VERSION,
+            analyzer_diagnostics=tuple(diagnostics),
+        )
+    except ValidationError:
+        raise ScanReportError("SCAN_REPORT_INVALID") from None
+
+
+def _finding_code(code: str) -> str:
+    """영문·숫자·`_`·공백 64자 밖의 분류 코드는 고정값으로 바꾼다. 원문은 싣지 않는다."""
+    return code if _FINDING_CODE.fullmatch(code) else UNRECOGNIZED_FINDING_CODE
+
+
+def _scan_code(code: str, name: AnalyzerName) -> ScanErrorCode:
+    """B가 허용하는 고정 코드로만 옮긴다. 모르는 코드는 그 분석기의 일반 실패다."""
+    try:
+        return ScanErrorCode(code)
+    except ValueError:
+        return ScanErrorCode(f"SCAN_{name}_FAILED")
 
 
 class _ThreadedYara:
