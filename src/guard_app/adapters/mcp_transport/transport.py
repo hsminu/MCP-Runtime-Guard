@@ -23,6 +23,12 @@ from guard_app.domain.models import ResolvedRequest
 _MAX_CONCURRENT_STARTS = 4
 
 
+def _for_server(
+    callback: Callable[[str], None] | None, server_id: str
+) -> Callable[[], None] | None:
+    return None if callback is None else partial(callback, server_id)
+
+
 class McpTransport:
     """Guard Transport backed by one worker per prevalidated server stream.
 
@@ -32,7 +38,9 @@ class McpTransport:
     The composition root should set ``max_result_copy_bytes`` high enough for
     its ResponseGate limit plus envelope overhead, within the 8 MiB ceiling.
     ``on_tools_changed`` receives only the server ID of each
-    ``notifications/tools/list_changed`` (LIST-01).
+    ``notifications/tools/list_changed`` (LIST-01). ``on_server_failed``
+    receives only the server ID, once, when its session stops serving outside
+    a requested close (#61).
     """
 
     def __init__(
@@ -47,21 +55,22 @@ class McpTransport:
         on_dispatch: Callable[[str], None] | None = None,
         tool_list_limits: ToolListLimits | None = None,
         on_tools_changed: Callable[[str], None] | None = None,
+        on_server_failed: Callable[[str], None] | None = None,
     ) -> None:
         if not isinstance(server_streams, Mapping):
             raise TypeError("server stream mapping required")
         if on_tools_changed is not None and not callable(on_tools_changed):
             raise TypeError("tools changed callback must be callable")
+        if on_server_failed is not None and not callable(on_server_failed):
+            raise TypeError("server failed callback must be callable")
         if any(type(server_id) is not str or not server_id for server_id in server_streams):
             raise ValueError("nonempty server IDs required")
         require_result_copy_budget(max_result_copy_bytes)
         require_pending_limit(max_pending_commands)
+
         self._workers = {
             server_id: ServerWorker(
-                sdk_session_factory(
-                    stream_factory,
-                    None if on_tools_changed is None else partial(on_tools_changed, server_id),
-                ),
+                sdk_session_factory(stream_factory, _for_server(on_tools_changed, server_id)),
                 call_timeout_s=call_timeout_s,
                 startup_timeout_s=startup_timeout_s,
                 close_timeout_s=close_timeout_s,
@@ -69,6 +78,7 @@ class McpTransport:
                 max_pending_commands=max_pending_commands,
                 on_dispatch=on_dispatch,
                 tool_list_limits=tool_list_limits,
+                on_failed=_for_server(on_server_failed, server_id),
             )
             for server_id, stream_factory in server_streams.items()
         }

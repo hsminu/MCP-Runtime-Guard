@@ -20,7 +20,7 @@ from guard_app.ui.models import (
     ServerSummary,
     Surface,
 )
-from guard_app.ui.overview import AttentionCard, RecentCallCard, ServerCard
+from guard_app.ui.overview import AttentionRow, RecentCallRow, ServerRow
 from guard_app.ui.presentation import public_display_text
 from guard_app.ui.servers import ServerDetailDialog, ServerListPage
 
@@ -55,19 +55,19 @@ def test_public_display_text_marks_hidden_and_blank_lookalike_chars() -> None:
     assert public_display_text("") == "미제공"
 
 
-def test_overview_cards_escape_ids_and_names(app: QApplication) -> None:
-    server = ServerCard(ServerSummary(_EVIL_ID, _EVIL_NAME))
-    attention = AttentionCard(
+def test_overview_rows_escape_ids_and_names(app: QApplication) -> None:
+    server = ServerRow(ServerSummary(_EVIL_ID, _EVIL_NAME))
+    attention = AttentionRow(
         AttentionItem(
             "item", "approval", server_id=_EVIL_ID, task_id="task\r1", request_id="r\u202e"
         )
     )
-    recent = RecentCallCard(RecentCall("call\n1", _EVIL_ID, "send\u200b\nmail"))
+    recent = RecentCallRow(RecentCall("call\n1", _EVIL_ID, "send\u200b\nmail"))
     try:
         for card in (server, attention, recent):
             _assert_widget_texts_escaped(card)
         labels = {label.text() for label in server.findChildren(QLabel)}
-        assert public_display_text(_EVIL_ID) in labels
+        assert any(public_display_text(_EVIL_ID) in label for label in labels)
         assert public_display_text(_EVIL_NAME) in labels
         assert server.link.accessibleName().startswith(public_display_text(_EVIL_ID))
     finally:

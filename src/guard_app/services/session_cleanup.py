@@ -33,6 +33,10 @@ class CleanupLimits:
     # slow disk or a file scanner, so a successful delete is not reported
     # unconfirmed. Not measured on real Codex Task folders.
     task_folder_s: float = 5.0
+    # Guard records a session stop under its Task lock (STOP-01). Shutdown waits
+    # this long for it after the transport has settled reserved calls, before
+    # Guard and the Store close; what remains is then reported unconfirmed.
+    stop_record_s: float = 5.0
 
 
 class BackgroundWork:
@@ -46,6 +50,17 @@ class BackgroundWork:
         self._operations.add(future)
         future.add_done_callback(self._consume)
         return future
+
+    async def wait(self, timeout_s: float) -> bool:
+        """Wait for every operation, including ones started meanwhile. False on timeout."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while pending := {operation for operation in self._operations if not operation.done()}:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            await asyncio.wait(pending, timeout=remaining)
+        return True
 
     def _consume(self, operation: asyncio.Future[object]) -> None:
         self._operations.discard(operation)

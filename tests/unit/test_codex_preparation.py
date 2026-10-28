@@ -10,6 +10,10 @@ not start without it (REC-01, C2.13 part).
 
 A106: that DB is fixed in the app folder (C2.17), and the demo, which takes no
 lock, cannot open it or anything else in that folder.
+
+A52 (#21): the login screen's app-server goes through the same launcher in a
+folder of its own, and logout cleanup calls C's `clear_codex_credentials` on the
+app's CODEX_HOME. The real keyring deletion is C's test.
 """
 
 from __future__ import annotations
@@ -40,8 +44,10 @@ from guard_app.security.codex_home import (
 )
 from guard_app.security.launcher import LaunchError
 from guard_app.security.paths import AppPathError, prepare_app_folders
-from guard_app.services import session_runtime
+from guard_app.services import codex_preparation, session_runtime
+from guard_app.services.account_runtime import AccountAccess, AccountUnavailableError
 from guard_app.services.bridge import SessionOptions
+from guard_app.services.codex_account import AccountError
 from guard_app.services.codex_preparation import (
     CodexPreparationError,
     CodexProcessPreparation,
@@ -224,6 +230,80 @@ def test_a_refused_launch_removes_its_task_folder(tmp_path, pin) -> None:
     assert not (tmp_path / "app" / "tasks" / TASK_ID).exists()
 
 
+def test_account_app_server_runs_in_its_own_folder_removed_after_exit(tmp_path, pin) -> None:
+    owner = preparation(tmp_path, pin)
+    access = owner.account_access()
+    tasks = tmp_path / "app" / "tasks"
+
+    async def run() -> None:
+        # Before startup there is no launcher: unavailable, and no folder is left.
+        with pytest.raises(AccountUnavailableError):
+            await access.launch()
+        assert not list(tasks.glob("account-*"))
+        await owner.preparation().prepare_startup()
+        process = await access.launch()
+        assert isinstance(process.pipes, CodexPipes)
+        [folder] = tasks.glob("account-*")
+        assert await process.close() is True
+        assert not folder.exists()
+
+    try:
+        asyncio.run(run())
+    finally:
+        owner.close()
+
+
+def test_a_refused_account_launch_removes_its_folder(tmp_path, pin) -> None:
+    owner = preparation(tmp_path, (pin[0], "0" * 64))
+
+    async def run() -> None:
+        await owner.preparation().prepare_startup()
+        with pytest.raises(AccountError, match="^CODEX_ACCOUNT_FAILED$") as refused:
+            await owner.account_access().launch()
+        # The launcher refused this executable; a later launch may still pass.
+        assert type(refused.value) is AccountError
+
+    try:
+        asyncio.run(run())
+    finally:
+        owner.close()
+    assert not list((tmp_path / "app" / "tasks").glob("account-*"))
+
+
+def test_logout_cleanup_calls_c_on_the_app_codex_home_off_the_loop(
+    tmp_path, pin, monkeypatch
+) -> None:
+    calls: list[tuple[Path, int]] = []
+    failure: list[CodexConfigError] = []
+
+    def clear(codex_home: Path) -> None:
+        calls.append((codex_home, threading.get_ident()))
+        if failure:
+            raise failure[0]
+
+    monkeypatch.setattr(codex_preparation, "clear_codex_credentials", clear)
+    owner = preparation(tmp_path, pin, claim=False)
+    access = owner.account_access()
+
+    async def run() -> tuple[bool, bool, int]:
+        cleared = await access.clear_credentials()
+        failure.append(CodexConfigError("CODEX_CREDENTIAL_DELETE_FAILED"))
+        return cleared, await access.clear_credentials(), threading.get_ident()
+
+    # Without the claimed folders there is no CODEX_HOME to clean.
+    assert asyncio.run(access.clear_credentials()) is False
+    assert calls == []
+    owner.claim()
+    try:
+        cleared, failed, loop_thread = asyncio.run(run())
+    finally:
+        owner.close()
+    assert (cleared, failed) == (True, False)
+    home = tmp_path / "app" / "codex_home"
+    assert [path for path, _ in calls] == [home, home]
+    assert all(thread != loop_thread for _, thread in calls)
+
+
 @pytest.mark.parametrize(
     ("executable", "size", "code"),
     [
@@ -356,7 +436,7 @@ def test_main_keeps_the_lock_until_the_process_ends_when_cleanup_is_unconfirmed(
         claim(self)
         claimed.append(self)
 
-    def ran(_args: object, codex: object) -> tuple[int, bool]:
+    def ran(_args: object, codex: object, settings: object = None) -> tuple[int, bool]:
         assert_lock_held(root)
         return 0, confirmed
 
@@ -393,6 +473,7 @@ def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
     db = root / "data" / "guard.sqlite3"
     seen: list[bool] = []
     opened: list[str] = []
+    accounts: list[object] = []
 
     class StoppedError(Exception):
         pass
@@ -405,6 +486,7 @@ def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
 
     def recording_bootstrap(db_path: str, **kwargs: object) -> None:
         opened.append(db_path)
+        accounts.append(kwargs.get("account"))
 
     monkeypatch.setattr(paths, "app_root", lambda: root)
     monkeypatch.setattr(entry, "BackendBridge", bridge)
@@ -420,6 +502,9 @@ def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
         app.setQuitOnLastWindowClosed(quit_on_close)
     assert seen == [False]
     assert opened == [str(db)]
+    # A52: the login screen reaches C's launcher through the same claimed owner.
+    assert len(accounts) == 1
+    assert isinstance(accounts[0], AccountAccess)
     prepare_app_folders(root).close()
 
 
@@ -436,6 +521,39 @@ def test_db_file_is_the_product_db_in_the_claimed_folder(tmp_path, pin) -> None:
         owner.close()
     with pytest.raises(CodexPreparationError, match="^CODEX_FOLDERS_UNCLAIMED$"):
         _ = owner.db_file
+
+
+def test_db_file_refuses_a_db_with_a_second_hard_link(tmp_path, pin) -> None:
+    """A106: the path comes from C's `db_path()` (C2.19), so a DB file that is
+    also reachable from elsewhere is refused instead of opened."""
+    owner = preparation(tmp_path, pin)
+    try:
+        db = tmp_path / "app" / "data" / "guard.sqlite3"
+        db.write_bytes(b"SQLite format 3\x00")
+        os.link(db, tmp_path / "elsewhere.sqlite3")
+        with pytest.raises(AppPathError, match="^APP_DB_INVALID$"):
+            _ = owner.db_file
+    finally:
+        owner.close()
+
+
+def test_main_does_not_start_when_the_db_file_is_refused(monkeypatch, capsys, tmp_path) -> None:
+    """A106: a refused product DB stops the start before the backend or the
+    window, with fixed text and no path, and the lock is released."""
+    root = tmp_path / "app"
+    prepared = prepare_app_folders(root)
+    db = prepared.paths.db_file
+    prepared.close()
+    db.write_bytes(b"SQLite format 3\x00")
+    os.link(db, tmp_path / "elsewhere.sqlite3")
+    monkeypatch.setattr(paths, "app_root", lambda: root)
+    monkeypatch.setattr(entry, "_run", lambda *_args: pytest.fail("the window must not open"))
+    monkeypatch.setattr(sys, "argv", ["guard-app"])
+    assert entry.main() == 1
+    error = capsys.readouterr().err
+    assert "제품 DB 파일이 링크이거나 권한이 달라 앱을 시작하지 않음(APP_DB_INVALID)" in error
+    assert str(tmp_path) not in error
+    prepare_app_folders(root).close()  # the lock was released
 
 
 def _junction(target: Path, link: Path) -> None:

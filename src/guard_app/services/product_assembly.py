@@ -9,7 +9,10 @@ Right after `tools/list` the live definitions are compared with the registered
 fingerprints (A15/A16, FP-01 via B's `tool_fingerprint`). A mismatching or
 missing tool is reported through the Registry view handed to Catalog/Guard, so
 Guard denies it with TOOL_FINGERPRINT_CHANGED and it is left out of the model's
-tool list. Moving the registration back to PENDING is C's Registry path (I10).
+tool list. Moving the registration back to PENDING is C's Registry path (I10):
+when the Registry is C's `ServerRegistry`, each selected server's listing is
+also handed to its `observe`, which records a change durably. A server whose
+listing it cannot record or does not accept is blocked for this run too.
 
 A `notifications/tools/list_changed` received after that comparison makes its
 server PENDING for the rest of this run (LIST-01): new calls are denied with
@@ -17,6 +20,12 @@ REG_NOT_ACTIVE, pending approvals fail their recheck, and new Codex sessions do
 not list its tools. Nothing is written to the Registry; the next connection
 compares again. A notice received before the comparison is not blocking, since
 that comparison already reads the newer listing.
+
+A server whose session stops serving during the run (an HTTP request error, a
+broken stream, a call past its watchdog) is PENDING for the rest of the run in
+the same way (#61). There is no reconnection during a run, so later calls are
+denied before they are reserved instead of each locking its Task with an
+unknown outcome. A call already reserved when it failed keeps its outcome.
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.mcp_transport import McpTransport, StreamFactory, ToolListLimits
 from guard_app.domain.contracts import RegisteredServer, ToolView
 from guard_app.domain.enums import RegStatus
+from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ToolSpec
 from guard_app.ports import Registry, Store
@@ -39,9 +49,11 @@ from guard_app.services.catalog import (
     GuardSettings,
     LoadedProfile,
     ResourceResolver,
+    ServerSettings,
     load_profile_settings,
 )
 from guard_app.services.guard import FailureEvent, GuardService
+from guard_app.services.registry import RegistryError, ServerRegistry
 
 # Never equal to a SHA-256 hex digest, so Catalog/Guard see a changed fingerprint.
 _LIVE_MISMATCH = "live-definition-mismatch"
@@ -79,8 +91,9 @@ class LiveCheckedRegistry:
     matches the definitions this session actually received.
 
     A server whose tool list changed after the comparison is PENDING too
-    (LIST-01). Its fingerprints stay the live values, so REG_NOT_ACTIVE is the
-    only reason Guard reports for it.
+    (LIST-01), and so is one whose session stopped serving (#61). Their
+    fingerprints stay the live values, so REG_NOT_ACTIVE is the only reason
+    Guard reports for them.
     """
 
     def __init__(self, registry: Registry) -> None:
@@ -89,6 +102,7 @@ class LiveCheckedRegistry:
         self._blocked: frozenset[str] = frozenset()
         self._mismatched: frozenset[tuple[str, str]] = frozenset()
         self._changed: set[str] = set()
+        self._failed: set[str] = set()
         self._early_changes = 0
         self._sealed = False
 
@@ -106,11 +120,16 @@ class LiveCheckedRegistry:
 
     @property
     def blocked_servers(self) -> frozenset[str]:
-        return self._blocked | self._changed
+        return self._blocked | self._changed | self._failed
 
     @property
     def listing_changed(self) -> frozenset[str]:
         return frozenset(self._changed)
+
+    @property
+    def unavailable(self) -> frozenset[str]:
+        """Servers that became PENDING during the run: no new session lists their tools."""
+        return frozenset(self._changed | self._failed)
 
     @property
     def early_list_changes(self) -> int:
@@ -124,11 +143,18 @@ class LiveCheckedRegistry:
             return
         self._changed.add(server_id)
 
+    def server_failed(self, server_id: str) -> None:
+        """Only the fact that the server's session stopped serving (#61); no error text."""
+
+        self._failed.add(server_id)
+
     def registration(self, server_id: str) -> RegisteredServer | None:
         return self._registry.registration(server_id)
 
     def status(self, server_id: str) -> RegStatus | None:
-        if self._sealed and (server_id in self._blocked or server_id in self._changed):
+        if server_id in self._failed or (
+            self._sealed and (server_id in self._blocked or server_id in self._changed)
+        ):
             return RegStatus.PENDING
         return self._registry.status(server_id)
 
@@ -197,6 +223,32 @@ def live_fingerprints(
     return LiveFingerprints(live, frozenset(mismatched), frozenset(blocked))
 
 
+async def _record_listings(
+    registry: Registry, servers: tuple[ServerSettings, ...], transport: McpTransport
+) -> frozenset[str]:
+    """C4.10: record each registered server's live listing; the servers that failed.
+
+    No Guard exists yet, so there are no pending approvals to invalidate.
+    """
+    if not isinstance(registry, ServerRegistry):
+        return frozenset()
+    failed: set[str] = set()
+    for server in servers:
+        if registry.registration(server.id) is None:
+            continue  # not registered: Guard denies its tools anyway
+        listing = transport.tool_listing(server.id)
+        if listing is None:
+            failed.add(server.id)
+            continue
+        try:
+            await registry.observe(server, listing)
+        except (RegistryError, StoreError):
+            # Incomplete listing, settings that differ from the registration,
+            # or a write that failed: ServerRegistry keeps it PENDING as well.
+            failed.add(server.id)
+    return frozenset(failed)
+
+
 @dataclass(slots=True, repr=False)
 class AssembledGuard:
     loaded: LoadedProfile
@@ -212,25 +264,31 @@ class AssembledGuard:
         return self.loaded.guard_settings
 
     def offers_tool(self, tool_ref: str) -> bool:
-        """False once the tool's server changed its tool list this run (LIST-01).
+        """False once the tool's server changed its tool list (LIST-01) or
+        stopped serving (#61) this run.
 
         Server IDs never contain "__", so the namespace prefix is the server ID.
         """
 
-        return tool_ref.partition("__")[0] not in self.registry.listing_changed
+        return tool_ref.partition("__")[0] not in self.registry.unavailable
 
     def offered_tool_views(self) -> tuple[ToolView, ...]:
         """Tools a new Codex session may list."""
 
         return tuple(view for view in self.tool_views if self.offers_tool(view.tool_ref))
 
-    async def aclose(self) -> None:
+    async def aclose(self, *, settle: Callable[[], Awaitable[object]] | None = None) -> None:
         # NOTIFY-01: end transport work first so reserved calls settle, then Guard
-        # refuses new approvals and drops unconsumed released text.
+        # refuses new approvals and drops unconsumed released text. `settle` runs
+        # in between, while Guard still records (a session stop, STOP-01).
         try:
             await self.transport.close()
         finally:
-            await self.guard.aclose()
+            try:
+                if settle is not None:
+                    await settle()
+            finally:
+                await self.guard.aclose()
 
 
 async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
@@ -253,11 +311,17 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         call_timeout_s=inputs.call_timeout_s,
         tool_list_limits=inputs.tool_list_limits,
         on_tools_changed=registry.tools_changed,
+        on_server_failed=registry.server_failed,
     )
     adopted = False
     try:
         await transport.start()
-        registry.seal(live_fingerprints(inputs.registry, transport, server_ids))
+        # Compare first: observe rewrites the registration it compares against.
+        live = live_fingerprints(inputs.registry, transport, server_ids)
+        unrecorded = await _record_listings(inputs.registry, loaded.selected_servers, transport)
+        registry.seal(
+            LiveFingerprints(live.live, live.mismatched, live.blocked_servers | unrecorded)
+        )
         settings = loaded.guard_settings
         guard = GuardService(
             store,

@@ -136,18 +136,19 @@ class ProtocolProbe:
         await send({"type": "http.response.body", "body": body})
 
 
-def transport_for(endpoint, dispatches, *, call_timeout=0.5):
+def transport_for(endpoint, dispatches, *, call_timeout=0.5, failed=None):
     return McpTransport(
         {"docs": http_stream_factory(endpoint, io_timeout_s=0.3)},
         call_timeout_s=call_timeout,
         close_timeout_s=2,
         on_dispatch=dispatches.append,
+        on_server_failed=None if failed is None else failed.append,
     )
 
 
 async def close_failed_channel(transport):
-    # The SDK can tear down a session by raising a task-group HTTP failure.
-    # The worker honestly reports that exceptional context exit as unconfirmed.
+    # A session that ended raising only HTTP request errors closed completely
+    # (#61); any other exceptional context exit is still reported unconfirmed.
     try:
         await transport.close()
     except DispatchError as error:
@@ -170,12 +171,41 @@ async def close_failed_channel(transport):
         "/mcp",
         "https://[bad",
         "https://example/" + "x" * 2048,
+        # C2.5 canonical form only (URL-01): no silent normalization here.
+        "HTTPS://example.test/mcp",
+        "https://Example.test/mcp",
+        "https://example.test",
+        "https://example.test:443/mcp",
+        "http://127.0.0.1:80/mcp",
+        "https://example.test/a/../mcp",
+        "https://example.test/%2e%2e/mcp",
+        # Addresses C forbids even over HTTPS.
+        "https://169.254.169.254/latest",
+        "https://[::ffff:127.0.0.1]/mcp",
+        "https://0x7f.1/mcp",
+        "https://2130706433/mcp",
     ],
 )
 def test_endpoint_envelope_rejects_unsupported_urls_without_echo(endpoint):
     with pytest.raises(ValueError) as caught:
         http_stream_factory(endpoint)
+    assert str(caught.value) == "Invalid HTTP MCP endpoint"
     assert "RAW_SECRET" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://example.test/mcp",
+        "https://xn--fa-hia.de/mcp",
+        "http://127.0.0.2:9000/mcp",
+        "http://[::1]:9000/mcp",
+        "https://example.test/",
+    ],
+)
+def test_endpoint_is_cs_canonical_form_and_requested_unchanged(endpoint):
+    """A08 second line: C's `canonical_endpoint` decides, and httpx keeps the string."""
+    assert str(streams._endpoint_url(endpoint)) == endpoint
 
 
 @pytest.mark.parametrize("timeout", [0, -1, True, "5", float("nan"), float("inf"), 301, 10**400])
@@ -334,6 +364,121 @@ async def test_http_failure_never_replays_send_or_releases_unknown_result(mode, 
             probe.release.set()
             await close_failed_channel(transport)
     assert "RAW_RESPONSE_MARKER" not in caplog.text and "RAW_COOKIE" not in caplog.text
+
+
+@pytest.mark.asyncio
+# 404 is not here: the SDK answers the waiting request as "session terminated"
+# and the session lives on.
+@pytest.mark.parametrize("mode", ["307", "308", "401", "500"])
+async def test_http_status_failure_fails_the_worker_but_its_teardown_is_complete(mode):
+    """#61 A follow-up: the SDK re-raises the request's HTTPStatusError only after
+    the session is torn down, so closing reports no failure. The worker still
+    refuses later calls for the rest of the run."""
+    probe, redirect_target = ProtocolProbe(mode), ProtocolProbe()
+    async with serve_loopback(redirect_target) as redirect_url, serve_loopback(probe) as endpoint:
+        probe.redirect_url = redirect_url
+        dispatches, failed = [], []
+        transport = transport_for(endpoint, dispatches, failed=failed)
+        await transport.start()
+        worker = transport._workers["docs"]
+        with pytest.raises(DispatchError):
+            await transport.call(_request("docs", seq=1))
+        await asyncio.wait_for(worker._stopped.wait(), 2)
+        assert worker._state.name == "FAILED"
+        assert failed == ["docs"]  # the owner can refuse the server's next calls (#61)
+        with pytest.raises(DispatchError) as refused:
+            await transport.call(_request("docs", seq=2))
+        assert refused.value.exception_type == "WorkerClosed"
+        await transport.close()
+        assert worker._owner is not None and worker._owner.done()
+        assert len(dispatches) == probe.wire_calls == 1
+        assert redirect_target.requests == []
+        assert failed == ["docs"]
+
+
+class _FailingPost(httpx.AsyncBaseTransport):
+    """initialize succeeds; tools/call fails with an error that is not an HTTP error."""
+
+    async def handle_async_request(self, request):
+        if request.method != "POST":
+            return httpx.Response(405 if request.method == "GET" else 200)
+        message = json.loads(request.content)
+        if message.get("method") == "tools/call":
+            raise RuntimeError("PRIVATE_TRANSPORT_TEXT")
+        if message.get("method") != "initialize":
+            return httpx.Response(202)
+        result = {
+            "protocolVersion": message["params"]["protocolVersion"],
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "unit", "version": "1"},
+        }
+        body = json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}).encode()
+        return httpx.Response(200, headers={"content-type": "application/json"}, content=body)
+
+
+@pytest.mark.asyncio
+async def test_a_session_ending_with_another_error_is_still_unconfirmed(monkeypatch, caplog):
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kwargs: _FailingPost())
+    transport = McpTransport({"docs": http_stream_factory("http://127.0.0.1:9999/mcp")})
+    await transport.start()
+    worker = transport._workers["docs"]
+    with pytest.raises(DispatchError):
+        await transport.call(_request("docs", seq=1))
+    await asyncio.wait_for(worker._stopped.wait(), 2)
+    assert worker._state.name == "FAILED"
+    with pytest.raises(DispatchError) as close_failed:
+        await transport.close()
+    assert close_failed.value.exception_type == "SessionCloseFailed"
+    assert "PRIVATE_TRANSPORT_TEXT" not in caplog.text
+
+
+def _status_error() -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "http://127.0.0.1:9999/mcp")
+    return httpx.HTTPStatusError(
+        "500", request=request, response=httpx.Response(500, request=request)
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "completed"),
+    [
+        (ExceptionGroup("sdk", [_status_error()]), True),
+        (ExceptionGroup("sdk", [_status_error(), httpx.ReadError("read")]), True),
+        (ExceptionGroup("outer", [ExceptionGroup("inner", [httpx.ReadError("read")])]), True),
+        (ExceptionGroup("sdk", [_status_error(), OSError("other")]), False),
+        (BaseExceptionGroup("sdk", [_status_error(), asyncio.CancelledError()]), False),
+        (_status_error(), False),
+        (OSError("other"), False),
+    ],
+)
+def test_only_a_group_of_http_errors_counts_as_a_completed_teardown(error, completed):
+    assert streams.http_teardown_completed(error) is completed
+
+
+@pytest.mark.asyncio
+async def test_an_owner_being_cancelled_keeps_the_http_exit_unconfirmed():
+    """The tracker never swallows a group while someone outside cancels the owner."""
+
+    class Context:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *exc_info):
+            asyncio.current_task().cancel()
+            raise ExceptionGroup("sdk", [_status_error()])
+
+    seen = []
+
+    async def owner():
+        tracker = server_worker._SessionExitTracker(Context())
+        await tracker.__aenter__()
+        try:
+            await tracker.__aexit__(None, None, None)
+        except ExceptionGroup:
+            seen.append(("raised", tracker.exited))
+
+    await asyncio.gather(asyncio.create_task(owner()), return_exceptions=True)
+    assert seen == [("raised", False)]
 
 
 @pytest.mark.asyncio

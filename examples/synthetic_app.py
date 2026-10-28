@@ -1,6 +1,7 @@
-"""Source-checkout-only composition: real stdio/HTTP MCP, explicit B unit doubles.
+"""Source-checkout-only composition: real stdio/HTTP MCP, B SQLiteStore, fixed synthetic registry.
 
-선택적 B SQLite Store를 연결한 합성 앱이다. Registry와 모델은 대역이다.
+B SQLite Store를 연결한 합성 앱이다. 메모리 모드는 임시 DB 파일을 쓴다. Registry와 모델은
+대역이다.
 Every dependency is constructed on the backend loop. The fixed server is the
 only launch target; the UI accepts no command, environment, or real document.
 """
@@ -26,19 +27,60 @@ from guard_app.adapters.mcp_transport import (
     stdio_stream_factory,
 )
 from guard_app.core.access_rules import AccessRules
-from guard_app.domain.contracts import ModelTurn
-from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus, TrustTier
+from guard_app.domain.contracts import ModelTurn, RegisteredServer
+from guard_app.domain.enums import ApprovalStatus, Label, RegStatus, TaskStatus, ToolKind, TrustTier
 from guard_app.domain.errors import StoreError
-from guard_app.domain.models import Boundary, ProposedCall, TaskState
+from guard_app.domain.models import Boundary, ProposedCall, TaskState, ToolSpec
 from guard_app.services.bridge import BackendBindings, BackendCleanupError, TaskProjection
 from guard_app.services.catalog import Catalog
 from guard_app.services.catalog_sources import SourceRule
 from guard_app.services.guard import GuardService
 from examples.legacy_runner import TaskRunner
 from guard_app.storage.sqlite_store import SQLiteStore
-from tests.unit.test_guard import _Registry, _Store
 
 from .http_spike_server import http_spike
+
+
+class SyntheticRegistry:
+    """Registry port with one fixed, ACTIVE synthetic server; nothing is registered or stored."""
+
+    FINGERPRINT = "a" * 64
+
+    def __init__(self):
+        read = ToolSpec(
+            server_id="docs",
+            tool_name="read",
+            kind=ToolKind.READ,
+            input_schema={"type": "object", "properties": {}},
+            destination_arg=None,
+            resource_arg=None,
+            fingerprint=self.FINGERPRINT,
+        )
+        send = read.model_copy(
+            update={
+                "tool_name": "send",
+                "kind": ToolKind.SEND,
+                "input_schema": {"type": "object", "properties": {"dest": {"type": "string"}}},
+                "destination_arg": "dest",
+            }
+        )
+        self._record = RegisteredServer(
+            server_id="docs",
+            status=RegStatus.ACTIVE,
+            boundary=Boundary(
+                boundary_id="docs", tier=TrustTier.INTERNAL, max_label=Label.CONFIDENTIAL
+            ),
+            tools=(read, send),
+        )
+
+    def registration(self, server_id):
+        return self._record if server_id == "docs" else None
+
+    def status(self, server_id):
+        return self._record.status if server_id == "docs" else None
+
+    def fingerprint(self, tool):
+        return self.FINGERPRINT
 
 
 class SyntheticModel:
@@ -78,19 +120,25 @@ async def bootstrap(
     if (store_kind == "sqlite") != (db_path is not None):
         raise ValueError("저장소 종류와 DB 경로 설정이 일치하지 않는다")
     async with AsyncExitStack() as lifetime:
-        if store_kind == "sqlite":
-            # 시작 복구 전에는 이전 Task·승인 권한을 복원하거나 요청을 재전송하지 않는다.
-            # 기존 행은 조회·수정하지 않고 새 실행만 허용한다. 실패 시 Guard도 만들지 않는다.
-            store = SQLiteStore(os.fspath(db_path), audit_id_factory=lambda: f"audit-{uuid4().hex}")
+        if store_kind == "memory":
+            # 메모리 모드도 B SQLiteStore를 쓴다. 이 실행만의 임시 폴더에 두고 Store를 닫은 뒤
+            # 지운다. 지우기 실패가 Store 정리 실패를 가리지 않게 한다.
+            folder = lifetime.enter_context(
+                TemporaryDirectory(prefix="guard-a-demo-db-", ignore_cleanup_errors=True)
+            )
+            db_path = Path(folder) / "guard.sqlite3"
+        # 시작 복구 전에는 이전 Task·승인 권한을 복원하거나 요청을 재전송하지 않는다.
+        # 기존 행은 조회·수정하지 않고 새 실행만 허용한다. 실패 시 Guard도 만들지 않는다.
+        store = SQLiteStore(os.fspath(db_path), audit_id_factory=lambda: f"audit-{uuid4().hex}")
 
-            def close_store():
-                try:
-                    store.close()
-                except StoreError:
-                    # bootstrap 도중 실패해도 bridge가 정리 확인으로 오인하지 않게 한다.
-                    raise BackendCleanupError() from None
+        def close_store():
+            try:
+                store.close()
+            except StoreError:
+                # bootstrap 도중 실패해도 bridge가 정리 확인으로 오인하지 않게 한다.
+                raise BackendCleanupError() from None
 
-            lifetime.callback(close_store)  # 가장 먼저 등록해 같은 백엔드 스레드에서 마지막 종료.
+        lifetime.callback(close_store)  # 임시 폴더 다음으로 등록해 같은 백엔드 스레드에서 종료.
         state = TaskState(
             task_id=f"synthetic-{uuid4().hex}" if store_kind == "sqlite" else "synthetic-task",
             epoch=1,
@@ -98,12 +146,9 @@ async def bootstrap(
             policy_version="v1",
             status=TaskStatus.RUNNING,
         )
-        if store_kind == "sqlite":
-            await store.create_task(state, created_at_utc=datetime.now(UTC))
-            if await store.load_task(state.task_id) != state:
-                raise StoreError()
-        else:
-            store = _Store(state)
+        await store.create_task(state, created_at_utc=datetime.now(UTC))
+        if await store.load_task(state.task_id) != state:
+            raise StoreError()
         # Fixed, synthetic metadata rules; no arbitrary policy expressions/files.
         allowed = []
         if access_policy != "deny-all":
@@ -148,7 +193,7 @@ async def bootstrap(
         )
         lifetime.push_async_callback(transport.close)
         await transport.start()
-        registry = _Registry()
+        registry = SyntheticRegistry()
         catalog = Catalog(
             registry,
             profile_id="synthetic",

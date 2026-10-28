@@ -38,6 +38,7 @@ class StreamingRunner:
         self.final = final
         self.listener = None
         self._input: str | None = None
+        self.efforts: list[str | None] = []
 
     @property
     def can_accept_message(self) -> bool:
@@ -51,8 +52,9 @@ class StreamingRunner:
     def runtime_status(self) -> str:
         return "idle"
 
-    def add_user_message(self, content: str) -> None:
+    def add_user_message(self, content: str, effort: str | None = None) -> None:
         self._input = content
+        self.efforts.append(effort)
 
     async def advance(self) -> RunUpdate:
         self._input = None
@@ -104,7 +106,7 @@ def start(app, final):
     bridge.conversation_ready.connect(lambda event: seen.append(("final", event)))
     bridge.start()
     pump_until(app, lambda: bridge.state is BridgeState.READY and runner.listener is not None)
-    return bridge, receiver, seen
+    return bridge, receiver, seen, runner
 
 
 def returned(receiver, command):
@@ -112,7 +114,7 @@ def returned(receiver, command):
 
 
 def test_streamed_answer_is_coalesced_bound_to_the_command_and_precedes_the_final(app):
-    bridge, receiver, seen = start(app, "Hello final")
+    bridge, receiver, seen, _ = start(app, "Hello final")
     try:
         command = bridge.request_message("task-1", 1, "question")
         pump_until(app, lambda: returned(receiver, command))
@@ -136,12 +138,24 @@ def test_streamed_answer_is_coalesced_bound_to_the_command_and_precedes_the_fina
 
 
 def test_run_without_a_final_answer_still_publishes_the_rest_of_its_stream(app):
-    bridge, receiver, seen = start(app, None)
+    bridge, receiver, seen, _ = start(app, None)
     try:
         command = bridge.request_message("task-1", 1, "question")
         pump_until(app, lambda: returned(receiver, command))
         app.processEvents()
         assert [kind for kind, _ in seen] == ["final", "partial", "partial"]
         assert seen[-1][1].text == "Hello\n<b>x"
+    finally:
+        close_bridge(app, bridge)
+
+
+def test_picked_reasoning_level_reaches_the_runner_and_unknown_levels_never_queue(app):
+    bridge, receiver, _, runner = start(app, "ok")
+    try:
+        with pytest.raises(ValueError, match="Reasoning effort is invalid"):
+            bridge.request_message("task-1", 1, "question", effort="ultra")
+        command = bridge.request_message("task-1", 1, "question", effort="high")
+        pump_until(app, lambda: returned(receiver, command))
+        assert runner.efforts == ["high"]
     finally:
         close_bridge(app, bridge)

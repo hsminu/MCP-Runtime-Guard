@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
 
+from guard_app.adapters.codex_protocol import REASONING_EFFORTS
 from guard_app.core.snapshot import ApprovalSnapshot
 from guard_app.domain.contracts import (
     Denied,
@@ -137,6 +138,9 @@ class BackendBindings:
     policy_access: (
         Callable[[str, tuple[str, ...], tuple[str, ...]], Awaitable[PolicyView]] | None
     ) = None
+    # Fixed code of what the start made of the CFG-01 settings file
+    # (product_settings); None when this run reads no file (demo, tests).
+    settings_status: str | None = None
 
 
 # Streamed answer text is republished at most this often (A90).
@@ -149,6 +153,12 @@ DEVICE_LOGIN_TIMEOUT_S = 15 * 60
 
 # The only model pinned by C's config/codex/codex.lock.json (allowed_models).
 CODEX_MODEL_ID = "gpt-6.1-sol"
+# The model picker lists these; adding one needs C's lock and L2 first.
+CODEX_MODELS = (CODEX_MODEL_ID,)
+# Offered in the composer; the wire builder checks the same tuple again.
+CODEX_REASONING_EFFORTS = REASONING_EFFORTS
+# The model's own default in config/codex/model_catalog.json.
+CODEX_DEFAULT_EFFORT = "low"
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +167,7 @@ class SessionOptions:
     model: str = CODEX_MODEL_ID
 
     def __post_init__(self) -> None:
-        if self.mode != "codex" or self.model != CODEX_MODEL_ID:
+        if self.mode != "codex" or self.model not in CODEX_MODELS:
             raise ValueError("Invalid Codex selection")
 
 
@@ -228,6 +238,8 @@ class ApprovalReview:
     epoch: int
     receiving_boundaries: str
     arguments_bytes: bytes
+    # The same metadata as (label, value) pairs, shown one field per line.
+    fields: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +252,7 @@ class _Command:
     user_text: str | None = field(default=None, repr=False)
     options: SessionOptions | None = None
     access: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+    effort: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,6 +328,7 @@ class BackendBridge(QObject):
     session_capability_changed = Signal(str)
     account_changed = Signal(object)
     policy_changed = Signal(object)
+    settings_changed = Signal(object)
 
     def __init__(
         self,
@@ -477,16 +491,33 @@ class BackendBridge(QObject):
         return command.command_id
 
     def request_message(
-        self, task_id: str, epoch: int, text: str, *, command_id: str | None = None
+        self,
+        task_id: str,
+        epoch: int,
+        text: str,
+        *,
+        command_id: str | None = None,
+        effort: str | None = None,
     ) -> str:
-        """Queue a user turn through the existing Runner, without new sessions."""
+        """Queue a user turn through the existing Runner, without new sessions.
+
+        `effort` is the reasoning level picked in the composer; None keeps the
+        session's current level."""
         self._require_qt_thread()
         if type(epoch) is not int or epoch < 0:
             raise ValueError("Message epoch is invalid")
         if type(text) is not str or not text.strip() or len(text) > 32768:
             raise ValueError("Message text is invalid")
+        if effort is not None and effort not in CODEX_REASONING_EFFORTS:
+            raise ValueError("Reasoning effort is invalid")
         command = _Command(
-            self._id(command_id, generate=True), "run", "message", self._id(task_id), epoch, text
+            self._id(command_id, generate=True),
+            "run",
+            "message",
+            self._id(task_id),
+            epoch,
+            text,
+            effort=effort,
         )
         self._submit(command)
         return command.command_id
@@ -962,6 +993,8 @@ class BackendBridge(QObject):
             AccountView("UNAVAILABLE" if bindings.account is None else "UNKNOWN")
         )
         self.policy_changed.emit(bindings.policy)
+        status = bindings.settings_status
+        self.settings_changed.emit(status if type(status) is str else None)
         if bindings.task_events is not None:
             bindings.task_events(self._task_event)
         if bindings.answer_partials is not None:
@@ -1202,7 +1235,7 @@ class BackendBridge(QObject):
                         return "MESSAGE_UNAVAILABLE"
                     if command.user_text is None:
                         return "MESSAGE_UNAVAILABLE"
-                    runner.add_user_message(command.user_text)
+                    runner.add_user_message(command.user_text, command.effort)
                     self.conversation_ready.emit(
                         ConversationEvent(
                             command.target_id,
@@ -1266,6 +1299,7 @@ class BackendBridge(QObject):
                     snapshot.request.epoch,
                     _review_header(snapshot),
                     snapshot.arguments_bytes,
+                    _review_fields(snapshot),
                 )
             )
             return "REVIEW_READY"
@@ -1309,7 +1343,11 @@ class BackendBridge(QObject):
             elif command.action == "account_cancel_login":
                 view = await account.cancel_login(command.target_id)
             else:
-                view = await account.logout()
+                try:
+                    view = await account.logout()
+                finally:
+                    # New sessions were refused while the logout ran (#21).
+                    self._publish_session_capability()
         except AccountError:
             view = AccountView("FAILED")
         self.account_changed.emit(view)
@@ -1438,22 +1476,25 @@ _ACCOUNT_ACTIONS = frozenset(
 )
 
 
-def _review_header(snapshot: ApprovalSnapshot) -> str:
-    """Trusted request metadata on one line.
+def _review_fields(snapshot: ApprovalSnapshot) -> tuple[tuple[str, str], ...]:
+    """Trusted request metadata as (fixed label, value) pairs.
 
-    The UI renders every newline in review text as a visible escape, so the
-    fields use a separator. Tool, kind and expiry tell apart two pending
-    approvals with the same server and arguments.
+    Tool, kind and expiry tell apart two pending approvals with the same
+    server and arguments. Values come from the snapshot and are escaped by
+    the UI one line at a time.
     """
     req = snapshot.request
     destination = req.destination.boundary_id if req.destination else "없음"
     expires = snapshot.expires_at_utc.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-    return " · ".join(
-        (
-            f"도구: {req.tool.tool_name} ({req.tool.kind.name})",
-            f"MCP 서버: {req.tool.server_id} (경계 {req.server_boundary.boundary_id})",
-            f"목적지 경계: {destination}",
-            f"Task 등급: {snapshot.effective_label.name}",
-            f"만료: {expires}",
-        )
+    return (
+        ("도구", f"{req.tool.tool_name} ({req.tool.kind.name})"),
+        ("MCP 서버", f"{req.tool.server_id} (경계 {req.server_boundary.boundary_id})"),
+        ("목적지 경계", destination),
+        ("Task 등급", snapshot.effective_label.name),
+        ("만료", expires),
     )
+
+
+def _review_header(snapshot: ApprovalSnapshot) -> str:
+    """The same metadata on one line, with a separator instead of newlines."""
+    return " · ".join(f"{label}: {value}" for label, value in _review_fields(snapshot))

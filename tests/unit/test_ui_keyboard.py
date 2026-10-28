@@ -24,7 +24,7 @@ from guard_app.ui.widgets import KeyboardActionButton, PlainDetailDialog
 from guard_app.ui.window import GuardWindow
 
 # Absolute on this OS and ASCII-only; the form never touches the file.
-SYNTHETIC_COMMAND = r"C:\synthetic-server" if os.name == "nt" else "/synthetic-server"
+SYNTHETIC_COMMAND = r"C:\synthetic-server.exe" if os.name == "nt" else "/synthetic-server.exe"
 
 
 @pytest.fixture(scope="module")
@@ -65,7 +65,7 @@ def test_small_window_keeps_navigation_and_runtime_status_available(
         app.processEvents()
         assert window._page == "approvals"
         assert window.width() == 320
-        assert window.breadcrumb.text() == "Workspace / 승인 대기"
+        assert window.breadcrumb.text() == "승인 대기"
 
         window.resize(1100, 700)
         app.processEvents()
@@ -119,12 +119,12 @@ def test_overview_metric_enter_navigates_to_server_page(app: QApplication) -> No
     window = GuardWindow()
     window.show()
     app.processEvents()
-    link = window.overview.metric_cards[0].findChild(QPushButton)
+    link = window.overview.metric_rows[0].findChild(QPushButton)
     assert link is not None
     link.setFocus()
     QTest.keyClick(link, Qt.Key.Key_Return)
     assert window._page == "servers"
-    assert window.breadcrumb.text() == "Workspace / MCP 서버"
+    assert window.breadcrumb.text() == "MCP 서버"
     window.close()
 
 
@@ -270,7 +270,7 @@ def test_keyboard_filter_preserves_visible_selection_and_clears_missing_row(
     assert page.table.rowCount() == 0
     assert page._selected_id() is None
     assert not page.detail_button.isEnabled()
-    assert "일치하는 서버가 없어" in page.state_message.message.text()
+    assert "일치하는 서버가 없음" in page.state_message.message.text()
 
 
 def test_plain_detail_escape_returns_focus_to_opener(app: QApplication) -> None:
@@ -315,12 +315,12 @@ def test_add_form_keyboard_reaches_fields_and_prepares_only_local_draft(
     form.show()
     app.processEvents()
     try:
-        form.server_id.setFocus()
-        QTest.keyClicks(form.server_id, "keyboard-server")
-        QTest.keyClick(form.server_id, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.display_name
+        form.display_name.setFocus()
         QTest.keyClicks(form.display_name, "Keyboard Server")
         QTest.keyClick(form.display_name, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.server_id
+        assert form.server_id.text() == "keyboard-server"
+        QTest.keyClick(form.server_id, Qt.Key.Key_Tab)
         assert form.focusWidget() is form.transport
         QTest.keyClick(form.transport, Qt.Key.Key_Tab)
         assert form.focusWidget() is form.command
@@ -328,6 +328,8 @@ def test_add_form_keyboard_reaches_fields_and_prepares_only_local_draft(
         # non-ASCII character, so never type a path derived from the checkout.
         QTest.keyClicks(form.command, SYNTHETIC_COMMAND)
         QTest.keyClick(form.command, Qt.Key.Key_Tab)
+        assert form.focusWidget() is form.browse_button
+        QTest.keyClick(form.browse_button, Qt.Key.Key_Tab)
         assert form.focusWidget() is form.args_json
         before = form.args_json.toPlainText()
         QTest.keyClick(form.args_json, Qt.Key.Key_Tab)

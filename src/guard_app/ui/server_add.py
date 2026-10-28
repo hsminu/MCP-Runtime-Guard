@@ -1,8 +1,10 @@
-"""Local-only MCP registration draft form.
+"""MCP server add form: paste a config entry or fill a few fields, checked locally.
 
 This widget performs convenience syntax checks. It neither registers a server
 nor checks whether an executable or endpoint is safe. C's Registry and
 security modules must validate every field again before creating PENDING.
+A pasted entry fills the fields and is cleared at once; environment values
+and headers in it are never kept, only environment variable names.
 """
 
 from __future__ import annotations
@@ -10,15 +12,17 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import tomllib
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QDir, Qt, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -33,14 +37,20 @@ from PySide6.QtWidgets import (
 
 from guard_app.services.bridge import valid_server_id
 
-from .presentation import is_hidden_char
+from .presentation import LABELS, TIER_NAMES, is_hidden_char
 from .widgets import KeyboardActionButton, SelectionBox, plain_label
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_ENV_SEPARATORS = re.compile(r"[\s,]+")
 _MAX_ARGS_JSON_CHARS = 65_536
 _MAX_ARGS_COUNT = 256
 _MAX_SERVER_ID_CHARS = 128
 _MAX_DISPLAY_NAME_CHARS = 256
+_MAX_PASTE_CHARS = 65_536
+# Codex takes server IDs of ASCII letters, digits, _ and -, at most 64 long.
+_MAX_SUGGESTED_ID_CHARS = 64
+_SLUG_GAP = re.compile(r"[^a-z0-9]+")
+_CODEX_TOML_SERVER = re.compile(r"^\s*\[mcp_servers\.", re.MULTILINE)
 # Numeric host spellings (decimal, octal, hex, dotted or not) that resolvers
 # may accept as an IPv4 address even though they are not dotted-quad text.
 _NUMERIC_HOST = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*\.?\Z")
@@ -56,24 +66,83 @@ def _id_key(value: str) -> str:
     return unicodedata.normalize("NFKC", value).casefold()
 
 
+def suggested_server_id(name: str) -> str:
+    """An ASCII ID from a display name, or "" when the name gives none.
+
+    A leading "mcp" is dropped because Codex refuses server IDs that start
+    with it; "MCP Docs" suggests "docs"."""
+
+    slug = _SLUG_GAP.sub("-", unicodedata.normalize("NFKC", name).casefold()).strip("-")
+    if slug == "mcp" or slug.startswith("mcp-"):
+        slug = slug[3:].lstrip("-")
+    slug = slug[:_MAX_SUGGESTED_ID_CHARS].rstrip("-")
+    return slug if slug and valid_server_id(slug) else ""
+
+
+def split_command_line(text: str) -> list[str] | None:
+    """Split on blanks; double quotes keep blanks. Backslashes stay literal.
+
+    Windows paths keep their backslashes. None when a quote is left open."""
+
+    tokens: list[str] = []
+    current: list[str] = []
+    quoted = in_token = False
+    for char in text:
+        if char == '"':
+            quoted = not quoted
+            in_token = True
+        elif char.isspace() and not quoted:
+            if in_token:
+                tokens.append("".join(current))
+                current = []
+                in_token = False
+        else:
+            current.append(char)
+            in_token = True
+    if quoted:
+        return None
+    if in_token:
+        tokens.append("".join(current))
+    return tokens
+
+
+def join_command_line(args: tuple[str, ...]) -> str:
+    """The inverse of split_command_line; JSON when an argument holds a quote."""
+
+    if any('"' in arg for arg in args):
+        return json.dumps(list(args), ensure_ascii=False)
+    return " ".join(
+        f'"{arg}"' if not arg or any(char.isspace() for char in arg) else arg for arg in args
+    )
+
+
 def _command_error(command: str) -> str | None:
     if _has_hidden_char(command):
-        return "실행 파일 경로에 보이지 않는 문자나 제어 문자(NUL·방향 전환 등)를 넣지 마."
+        return "실행 파일 경로에 보이지 않는 문자나 제어 문자(NUL·방향 전환 등)를 넣지 마세요."
     if command[:2] in ("\\\\", "//", "\\/", "/\\"):
         return (
-            "네트워크 공유(UNC)·장치 경로의 실행 파일은 쓸 수 없어. "
-            "이 PC의 로컬 드라이브 경로를 입력해."
+            "네트워크 공유(UNC)·장치 경로의 실행 파일은 쓸 수 없음. "
+            "이 PC의 로컬 드라이브 경로를 입력하세요."
         )
     if not Path(command).is_absolute():
-        return "실행 파일은 절대 경로여야 해."
+        return "실행 파일은 절대 경로여야 함. 찾아보기로 고를 수 있음."
+    # C's launcher starts only .exe files; a batch file would be re-read by cmd.exe.
+    suffix = Path(command).suffix.casefold()
+    if suffix in (".cmd", ".bat"):
+        return (
+            "배치 파일(.cmd·.bat)은 실행할 수 없음. node.exe 같은 실제 실행 파일을 고르고 "
+            "스크립트 경로는 인자에 넣으세요."
+        )
+    if suffix != ".exe":
+        return "실행 파일은 .exe여야 함."
     return None
 
 
 def _url_error(url: str) -> str | None:
     if any(char.isspace() for char in url) or _has_hidden_char(url):
-        return "URL에는 공백, 제어 문자, 보이지 않는 문자를 넣지 마."
+        return "URL에는 공백, 제어 문자, 보이지 않는 문자를 넣지 마세요."
     if "\\" in url:
-        return "URL에 역슬래시(\\)를 넣지 마. 주소창에서는 다른 호스트로 해석될 수 있어."
+        return "URL에 역슬래시(\\)를 넣지 마세요. 주소창에서는 다른 호스트로 해석될 수 있음."
     try:
         parts = urlsplit(url)
         port = parts.port
@@ -88,41 +157,157 @@ def _url_error(url: str) -> str | None:
     except ValueError:
         valid = False
     if not valid:
-        return "http(s) 전체 URL만 입력해. 계정·암호·쿼리·fragment는 제외해."
+        return "http(s) 전체 URL만 입력하세요. 계정·암호·쿼리·fragment는 제외하세요."
     if port == 0:
-        return "포트는 1–65535 사이로 입력해."
+        return "포트는 1–65535 사이로 입력하세요."
     if not host.isascii():
-        return "호스트 이름은 ASCII로 입력해. 국제화 도메인은 xn-- 형식으로 바꿔 입력해."
+        return "호스트 이름은 ASCII로 입력하세요. 국제화 도메인은 xn-- 형식으로 바꿔 입력하세요."
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
         if _NUMERIC_HOST.fullmatch(host):
-            return "IP 주소는 점으로 구분한 네 개의 십진수(예: 10.0.0.1)로 입력해."
+            return "IP 주소는 점으로 구분한 네 개의 십진수(예: 10.0.0.1)로 입력하세요."
         return None
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         address = address.ipv4_mapped
     if address.is_link_local or address.is_unspecified or address.is_multicast:
         return (
             "링크 로컬·클라우드 메타데이터(169.254.x.x 등)·미지정·멀티캐스트 주소는 "
-            "MCP endpoint로 쓸 수 없어."
+            "MCP endpoint로 쓸 수 없음."
         )
     return None
 
 
 def _parse_stdio_args(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
-    """Bound the local preview parser and require a flat string array."""
+    """A command line (serve --root "C:\\My Docs") or a JSON string array, bounded."""
 
     if len(raw) > _MAX_ARGS_JSON_CHARS:
-        return None, "인자 JSON은 65536자 이하로 입력해."
-    try:
-        parsed = json.loads(raw)
-    except (TypeError, ValueError, RecursionError):
-        return None, "JSON 문자열 배열 형식으로 입력해."
-    if not isinstance(parsed, list) or not all(isinstance(value, str) for value in parsed):
-        return None, "인자는 문자열만 담은 JSON 배열이어야 해."
-    if len(parsed) > _MAX_ARGS_COUNT:
-        return None, "인자는 256개 이하로 입력해."
-    return tuple(parsed), None
+        return None, "인자는 65536자 이하로 입력하세요."
+    text = raw.strip()
+    if text[:1] in ("[", "{"):
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError, RecursionError):
+            return None, "JSON 문자열 배열 형식으로 입력하세요."
+        if not isinstance(parsed, list) or not all(isinstance(value, str) for value in parsed):
+            return None, "인자는 문자열만 담은 JSON 배열이어야 함."
+        args = tuple(parsed)
+    else:
+        split = split_command_line(text)
+        if split is None:
+            return None, '따옴표(")가 닫히지 않았음.'
+        args = tuple(split)
+    if len(args) > _MAX_ARGS_COUNT:
+        return None, "인자는 256개 이하로 입력하세요."
+    return args, None
+
+
+class PasteError(ValueError):
+    """A fixed message for a paste the form could not read; never its content."""
+
+
+@dataclass(frozen=True, slots=True)
+class PastedServer:
+    """What one pasted entry fills in. Environment values and headers are dropped."""
+
+    server_id: str
+    transport: str
+    command: str = ""
+    args: tuple[str, ...] = ()
+    env_names: tuple[str, ...] = ()
+    url: str = ""
+    dropped_values: int = 0
+    skipped_servers: int = 0
+
+
+def read_pasted_server(text: str) -> PastedServer:
+    """Read a config entry (Claude/VS Code JSON, Codex TOML), a URL or a command.
+
+    Only the first server of a config is read; the count of the rest is kept
+    so the form can say so."""
+
+    text = text.strip()
+    if not text:
+        raise PasteError("붙여 넣은 내용이 없음.")
+    if len(text) > _MAX_PASTE_CHARS:
+        raise PasteError("붙여 넣은 내용이 너무 김. 서버 하나의 항목만 넣으세요.")
+    if _CODEX_TOML_SERVER.search(text):
+        try:
+            data: object = tomllib.loads(text)
+        except (tomllib.TOMLDecodeError, RecursionError):
+            raise PasteError("TOML 형식을 읽지 못함. 대괄호와 따옴표를 확인하세요.") from None
+        return _server_from_config(data)
+    if text[0] in "{[":
+        try:
+            data = json.loads(text)
+        except (ValueError, RecursionError):
+            raise PasteError("JSON 형식을 읽지 못함. 괄호와 따옴표를 확인하세요.") from None
+        return _server_from_config(data)
+    if re.match(r"https?://", text, re.IGNORECASE):
+        return PastedServer(server_id="", transport="streamable_http", url=text)
+    tokens = split_command_line(text)
+    if tokens is None:
+        raise PasteError('따옴표(")가 닫히지 않았음.')
+    return PastedServer(server_id="", transport="stdio", command=tokens[0], args=tuple(tokens[1:]))
+
+
+def _is_entry(value: object) -> bool:
+    return isinstance(value, dict) and ("command" in value or "url" in value)
+
+
+def _server_from_config(data: object) -> PastedServer:
+    entries: dict[object, object] | None = None
+    if isinstance(data, dict):
+        for key in ("mcpServers", "mcp_servers", "servers"):
+            if isinstance(data.get(key), dict):
+                entries = data[key]
+                break
+        else:
+            if _is_entry(data):
+                return _server_from_entry("", data, 0)
+            if data and all(_is_entry(value) for value in data.values()):
+                entries = data
+    if not entries:
+        raise PasteError("서버 항목(command 또는 url)을 찾지 못함.")
+    name, entry = next(iter(entries.items()))
+    if not isinstance(entry, dict) or not _is_entry(entry):
+        raise PasteError("첫 서버 항목에 command나 url이 없음.")
+    return _server_from_entry(str(name), entry, len(entries) - 1)
+
+
+def _server_from_entry(name: str, entry: dict[object, object], skipped: int) -> PastedServer:
+    env = entry.get("env")
+    headers = entry.get("headers")
+    env_names = tuple(key for key in env if isinstance(key, str)) if isinstance(env, dict) else ()
+    dropped = (len(env) if isinstance(env, dict) else 0) + (
+        len(headers) if isinstance(headers, dict) else 0
+    )
+    url = entry.get("url")
+    if url is not None:
+        if not isinstance(url, str):
+            raise PasteError("url은 문자열이어야 함.")
+        return PastedServer(
+            server_id=name,
+            transport="streamable_http",
+            url=url,
+            dropped_values=dropped,
+            skipped_servers=skipped,
+        )
+    command = entry.get("command")
+    args = entry.get("args", [])
+    if not isinstance(command, str):
+        raise PasteError("command는 문자열이어야 함.")
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        raise PasteError("args는 문자열 배열이어야 함.")
+    return PastedServer(
+        server_id=name,
+        transport="stdio",
+        command=command,
+        args=tuple(args),
+        env_names=env_names,
+        dropped_values=dropped,
+        skipped_servers=skipped,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,8 +333,28 @@ class LocalDraftPreview:
     text: str
 
 
+# One label column for every form on the page, so fields line up across the
+# common, transport and boundary groups; inputs stop at a readable width.
+_LABEL_WIDTH = 128
+_CONTENT_MAX_WIDTH = 808
+PASTE_HINT = (
+    "Claude·VS Code 설정의 서버 항목(JSON), Codex config.toml의 [mcp_servers.이름] 항목, "
+    "MCP URL, 또는 실행 명령 한 줄을 붙여 넣으세요."
+)
+STATUS_IDLE = "Registry 등록은 아직 연결되지 않아 여기서는 입력 형식만 확인함."
+STATUS_CHECKED = "입력 확인 완료 · Registry에 등록되지 않음."
+
+
+def _form_label(title: str) -> QLabel:
+    label = plain_label(title)
+    label.setMinimumWidth(_LABEL_WIDTH)
+    return label
+
+
 class ServerAddForm(QWidget):
-    """Prepare one local draft without calling Registry or changing status."""
+    """Fill one server's fields from a paste or by hand and check them locally.
+
+    Nothing here calls Registry or changes status."""
 
     local_draft_prepared = Signal(object)
 
@@ -159,6 +364,7 @@ class ServerAddForm(QWidget):
         self._validated_draft: LocalServerDraft | None = None
         self._prepared = False
         self._boundary_adjusted = False
+        self._id_from_name = False
         self._errors: dict[str, QLabel] = {}
         self._forms: list[QFormLayout] = []
         self._compact_form: bool | None = None
@@ -169,27 +375,49 @@ class ServerAddForm(QWidget):
         scroll.setObjectName("serverAddScroll")
         scroll.setWidgetResizable(True)
         content = QWidget()
+        content.setMaximumWidth(_CONTENT_MAX_WIDTH)
         self._outer = QVBoxLayout(content)
         outer = self._outer
-        outer.setContentsMargins(26, 28, 26, 28)
-        outer.setSpacing(14)
-        outer.addWidget(plain_label("MCP 서버 추가 초안", name="pageTitle"))
-        outer.addWidget(
-            plain_label(
-                "여기서는 입력 형식만 확인해. 등록과 PENDING 상태는 Registry 확인 뒤에만 확정돼.",
-                name="secondary",
-            )
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.setSpacing(16)
+        outer.addWidget(plain_label("MCP 서버 추가", name="pageTitle"))
+
+        paste = QVBoxLayout()
+        paste.setSpacing(8)
+        paste.addWidget(plain_label("설정 붙여넣기", name="sectionTitle"))
+        paste.addWidget(plain_label(PASTE_HINT, name="secondary"))
+        self.quick_input = QPlainTextEdit()
+        self.quick_input.setObjectName("quickInput")
+        self.quick_input.setAccessibleName("붙여 넣을 서버 설정 항목, URL 또는 실행 명령")
+        self.quick_input.setPlaceholderText(
+            '{"mcpServers": {"docs": {"command": "C:\\\\tools\\\\docs.exe", "args": ["serve"]}}}'
         )
+        self.quick_input.setMaximumHeight(84)
+        self.quick_input.setTabChangesFocus(True)
+        paste.addWidget(self.quick_input)
+        paste_actions = QHBoxLayout()
+        paste_actions.setSpacing(12)
+        self.fill_button = KeyboardActionButton("칸 채우기")
+        self.fill_button.set_visual(icon="compose", variant="soft")
+        self.fill_button.setObjectName("fillFromPasteButton")
+        self.fill_button.setAccessibleName("붙여 넣은 설정으로 아래 칸 채우기")
+        paste_actions.addWidget(self.fill_button)
+        self.paste_status = plain_label(name="secondary")
+        paste_actions.addWidget(self.paste_status, 1)
+        paste.addLayout(paste_actions)
+        outer.addLayout(paste)
 
         common = self._new_form()
+        self.display_name = QLineEdit()
+        self.display_name.setObjectName("displayNameInput")
+        self.display_name.setAccessibleName("표시 이름, 비우면 서버 ID")
+        self.display_name.setPlaceholderText("비우면 서버 ID를 씀")
+        self._add_field(common, "표시 이름", self.display_name, "display_name")
         self.server_id = QLineEdit()
         self.server_id.setObjectName("serverIdInput")
         self.server_id.setAccessibleName("서버 ID")
+        self.server_id.setPlaceholderText("영문 표시 이름을 쓰면 자동으로 채움")
         self._add_field(common, "서버 ID", self.server_id, "server_id")
-        self.display_name = QLineEdit()
-        self.display_name.setObjectName("displayNameInput")
-        self.display_name.setAccessibleName("표시 이름")
-        self._add_field(common, "표시 이름", self.display_name, "display_name")
 
         self.transport = SelectionBox()
         self.transport.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -197,7 +425,7 @@ class ServerAddForm(QWidget):
         self.transport.setAccessibleName("연결 방식")
         self.transport.addItem("stdio", "stdio")
         self.transport.addItem("Streamable HTTP", "streamable_http")
-        common.addRow("연결 방식", self.transport)
+        common.addRow(_form_label("연결 방식"), self.transport)
         outer.addLayout(common)
 
         self.transport_fields = QStackedWidget()
@@ -215,45 +443,43 @@ class ServerAddForm(QWidget):
         self.tier.setObjectName("tierSelect")
         self.tier.setAccessibleName("신뢰 경계")
         self.tier.addItem("신뢰 경계 선택", None)
-        self.tier.addItem("내부 · internal", "internal")
-        self.tier.addItem("승인된 외부 · approved_external", "approved_external")
-        self.tier.addItem("일반 외부 · general_external", "general_external")
+        for value, title in TIER_NAMES.items():
+            _add_coded_item(self.tier, title, value, value)
         self._add_field(boundary, "신뢰 경계", self.tier, "tier")
         self.max_label = SelectionBox()
         self.max_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.max_label.setObjectName("maxLabelSelect")
         self.max_label.setAccessibleName("최대 수신 등급")
         self.max_label.addItem("최대 수신 등급 선택", None)
-        self.max_label.addItem("공개 · PUBLIC", "PUBLIC")
-        self.max_label.addItem("내부 · INTERNAL", "INTERNAL")
-        self.max_label.addItem("기밀 · CONFIDENTIAL", "CONFIDENTIAL")
+        for value, (title, code, _tone) in LABELS.items():
+            _add_coded_item(self.max_label, title, value, code)
         self._add_field(boundary, "최대 수신 등급", self.max_label, "max_label")
         outer.addLayout(boundary)
         self.boundary_notice = plain_label(name="boundaryNotice")
         outer.addWidget(self.boundary_notice)
 
-        outer.addWidget(plain_label("등록 초안 미리보기", name="sectionTitle"))
+        outer.addWidget(plain_label("등록할 내용", name="sectionTitle"))
         self.preview = QPlainTextEdit()
         self.preview.setObjectName("draftPreview")
-        self.preview.setAccessibleName("비밀값을 숨긴 현재 방식의 등록 초안")
+        self.preview.setAccessibleName("비밀값을 숨긴 현재 방식의 등록 내용")
         self.preview.setReadOnly(True)
         self.preview.setUndoRedoEnabled(False)
-        self.preview.setMinimumHeight(150)
+        self.preview.setMinimumHeight(132)
         outer.addWidget(self.preview)
         outer.addWidget(
             plain_label(
-                "env_allow에는 환경변수 이름만 적어. "
-                "인자와 URL에 인증값을 넣지 말고 별도 비밀 주입 계약을 사용해야 해.",
+                "환경변수는 이름만 적으세요. "
+                "인자와 URL에 인증값을 넣지 말고 별도 비밀 주입 계약을 사용해야 함.",
                 name="secondary",
             )
         )
         self.status = plain_label(name="draftStatus")
         outer.addWidget(self.status)
         actions = QHBoxLayout()
-        self.prepare_button = KeyboardActionButton("로컬 초안 확인")
+        self.prepare_button = KeyboardActionButton("입력 확인")
         self.prepare_button.set_visual(icon="check", variant="primary")
         self.prepare_button.setObjectName("prepareDraftButton")
-        self.prepare_button.setAccessibleName("입력 형식 확인 후 로컬 초안 준비")
+        self.prepare_button.setAccessibleName("입력 형식 확인")
         actions.addWidget(self.prepare_button)
         actions.addStretch(1)
         outer.addLayout(actions)
@@ -261,7 +487,9 @@ class ServerAddForm(QWidget):
         shell.addWidget(scroll)
 
         self.server_id.textChanged.connect(self._input_changed)
+        self.server_id.textEdited.connect(self._id_edited)
         self.display_name.textChanged.connect(self._input_changed)
+        self.display_name.textEdited.connect(self._name_edited)
         self.command.textChanged.connect(self._input_changed)
         self.args_json.textChanged.connect(self._input_changed)
         self.env_allow.textChanged.connect(self._input_changed)
@@ -270,6 +498,8 @@ class ServerAddForm(QWidget):
         self.tier.currentIndexChanged.connect(self._tier_changed)
         self.max_label.currentIndexChanged.connect(self._label_changed)
         self.prepare_button.clicked.connect(self._prepare_local_draft)
+        self.fill_button.clicked.connect(self.fill_from_paste)
+        self.browse_button.clicked.connect(self._browse_executable)
         self._refresh()
 
     @property
@@ -297,11 +527,76 @@ class ServerAddForm(QWidget):
         )
         for form in self._forms:
             form.setRowWrapPolicy(policy)
-        margin = 12 if compact else 26
-        self._outer.setContentsMargins(margin, 16 if compact else 28, margin, 20 if compact else 28)
+        margin = 12 if compact else 24
+        self._outer.setContentsMargins(margin, 16 if compact else 24, margin, 20 if compact else 24)
+
+    def add_section(self, widget: QWidget, title: str) -> None:
+        """Append a related form below, folded behind a toggle until opened."""
+        toggle = KeyboardActionButton(f"{title} ▸")
+        toggle.setObjectName("linkButton")
+        toggle.setCheckable(True)
+        toggle.setAccessibleName(f"{title} 펼치기")
+        widget.setVisible(False)
+
+        def flip(opened: bool) -> None:
+            widget.setVisible(opened)
+            toggle.setText(f"{title} {'▾' if opened else '▸'}")
+            toggle.setAccessibleName(f"{title} {'접기' if opened else '펼치기'}")
+
+        toggle.toggled.connect(flip)
+        self._outer.addSpacing(8)
+        self._outer.addWidget(toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        self._outer.addWidget(widget)
+
+    def fill_from_paste(self) -> None:
+        """Fill the fields from the paste box, then empty it.
+
+        The paste may hold secrets (environment values, headers, tokens in
+        arguments); none of it stays in the box once read."""
+        try:
+            pasted = read_pasted_server(self.quick_input.toPlainText())
+        except PasteError as error:
+            self.paste_status.setText(str(error))
+            return
+        self.quick_input.clear()
+        if pasted.server_id:
+            self.server_id.setText(pasted.server_id)
+            self._id_from_name = False
+        self.transport.setCurrentIndex(self.transport.findData(pasted.transport))
+        if pasted.transport == "stdio":
+            self.command.setText(pasted.command)
+            self.args_json.setPlainText(join_command_line(pasted.args))
+            self.env_allow.setPlainText("\n".join(pasted.env_names))
+        else:
+            self.url.setText(pasted.url)
+        notes = ["칸을 채움. 신뢰 경계와 최대 수신 등급은 직접 고르세요."]
+        if pasted.dropped_values:
+            notes.append(f"환경변수 값·헤더 {pasted.dropped_values}개는 가져오지 않음.")
+        if pasted.skipped_servers:
+            notes.append(f"첫 서버만 채움. 나머지 {pasted.skipped_servers}개는 따로 추가하세요.")
+        self.paste_status.setText(" ".join(notes))
+
+    def _browse_executable(self) -> None:
+        path, _filter = QFileDialog.getOpenFileName(self, "실행 파일 선택", "", "실행 파일 (*.exe)")
+        if path:
+            self.command.setText(QDir.toNativeSeparators(path))
+
+    def _name_edited(self, name: str) -> None:
+        """Follow the display name with an ID until the ID is typed by hand."""
+        if self.server_id.text() and not self._id_from_name:
+            return
+        suggestion = suggested_server_id(name)
+        self._id_from_name = bool(suggestion)
+        self.server_id.setText(suggestion)
+
+    def _id_edited(self, _text: str) -> None:
+        self._id_from_name = False
 
     def _new_form(self, parent: QWidget | None = None) -> QFormLayout:
         form = QFormLayout(parent)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(12)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self._forms.append(form)
@@ -310,26 +605,34 @@ class ServerAddForm(QWidget):
     def _stdio_fields(self) -> QWidget:
         page = QWidget()
         form = self._new_form(page)
+        command_row = QWidget()
+        command_layout = QHBoxLayout(command_row)
+        command_layout.setContentsMargins(0, 0, 0, 0)
+        command_layout.setSpacing(8)
         self.command = QLineEdit()
         self.command.setObjectName("commandInput")
         self.command.setAccessibleName("stdio 실행 파일 절대 경로")
-        self.command.setPlaceholderText("실행 파일의 절대 경로")
-        self._add_field(form, "실행 파일", self.command, "command")
+        self.command.setPlaceholderText("C:\\tools\\server.exe")
+        command_layout.addWidget(self.command, 1)
+        self.browse_button = KeyboardActionButton("찾아보기")
+        self.browse_button.setAccessibleName("실행 파일 찾아보기")
+        command_layout.addWidget(self.browse_button)
+        self._add_field(form, "실행 파일", command_row, "command")
         self.args_json = QPlainTextEdit()
         self.args_json.setObjectName("argsInput")
-        self.args_json.setAccessibleName("JSON 문자열 인자 배열")
-        self.args_json.setPlaceholderText('["-m", "server.module"]')
-        self.args_json.setMaximumHeight(76)
+        self.args_json.setAccessibleName("인자, 명령줄처럼 공백으로 구분")
+        self.args_json.setPlaceholderText('serve --root "C:\\My Docs"')
+        self.args_json.setMaximumHeight(60)
         self.args_json.setTabChangesFocus(True)
-        self.args_json.setPlainText("[]")
-        self._add_field(form, "인자 · JSON 문자열 배열", self.args_json, "args")
+        self._add_field(form, "인자", self.args_json, "args")
         self.env_allow = QPlainTextEdit()
         self.env_allow.setObjectName("envAllowInput")
-        self.env_allow.setAccessibleName("전달할 환경변수 이름 목록, 한 줄에 하나")
-        self.env_allow.setPlaceholderText("LANG\nPATH")
-        self.env_allow.setMaximumHeight(76)
+        self.env_allow.setAccessibleName("넘겨줄 환경변수 이름, 쉼표나 줄바꿈으로 구분")
+        self.env_allow.setPlaceholderText("LANG, PATH")
+        self.env_allow.setMaximumHeight(60)
         self.env_allow.setTabChangesFocus(True)
-        self._add_field(form, "env_allow · 한 줄에 이름 하나", self.env_allow, "env_allow")
+        self.env_allow.setToolTip("env_allow · 이름만, 값은 넣지 마세요")
+        self._add_field(form, "환경변수 이름", self.env_allow, "env_allow")
         return page
 
     def _http_fields(self) -> QWidget:
@@ -346,13 +649,13 @@ class ServerAddForm(QWidget):
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
+        layout.setSpacing(4)
         layout.addWidget(control)
         error = plain_label(name=f"{key}Error")
         error.setAccessibleName(f"{title} 입력 오류")
         layout.addWidget(error)
         self._errors[key] = error
-        form.addRow(title, wrapper)
+        form.addRow(_form_label(title), wrapper)
 
     def _input_changed(self, *_args: object) -> None:
         self._prepared = False
@@ -389,33 +692,32 @@ class ServerAddForm(QWidget):
         server_id = self.server_id.text().strip()
         display_name = self.display_name.text().strip()
         if not server_id:
-            errors["server_id"] = "서버 ID를 입력해."
+            errors["server_id"] = "서버 ID를 입력하세요."
         elif len(server_id) > _MAX_SERVER_ID_CHARS:
-            errors["server_id"] = f"서버 ID는 {_MAX_SERVER_ID_CHARS}자 이하로 입력해."
+            errors["server_id"] = f"서버 ID는 {_MAX_SERVER_ID_CHARS}자 이하로 입력하세요."
         elif _has_hidden_char(server_id):
             errors["server_id"] = (
-                "서버 ID에 보이지 않는 문자나 제어 문자(NUL·방향 전환·zero-width 등)를 넣지 마."
+                "서버 ID에 보이지 않는 문자나 제어 문자(NUL·방향 전환·zero-width 등)를 넣지 마세요."
             )
         elif server_id in self._known_ids:
-            errors["server_id"] = "현재 목록에 같은 ID가 있어. Registry에서도 다시 확인해야 해."
+            errors["server_id"] = "현재 목록에 같은 ID가 있음. Registry에서도 다시 확인해야 함."
         elif any(_id_key(server_id) == _id_key(known) for known in self._known_ids):
             errors["server_id"] = (
-                "현재 목록에 대소문자·전각 여부만 다른 같은 ID가 있어. 다른 ID를 입력해."
+                "현재 목록에 대소문자·전각 여부만 다른 같은 ID가 있음. 다른 ID를 입력하세요."
             )
         elif not valid_server_id(server_id):
             errors["server_id"] = (
-                "서버 ID 형식이 맞지 않아. 연속 밑줄(__)과 끝의 밑줄(_)은 쓸 수 없어."
+                "서버 ID 형식이 맞지 않음. 연속 밑줄(__)과 끝의 밑줄(_)은 쓸 수 없음."
             )
-        if not display_name:
-            errors["display_name"] = "표시 이름을 입력해."
-        elif len(display_name) > _MAX_DISPLAY_NAME_CHARS:
-            errors["display_name"] = f"표시 이름은 {_MAX_DISPLAY_NAME_CHARS}자 이하로 입력해."
+        # An empty display name falls back to the ID; a typed one is checked.
+        if len(display_name) > _MAX_DISPLAY_NAME_CHARS:
+            errors["display_name"] = f"표시 이름은 {_MAX_DISPLAY_NAME_CHARS}자 이하로 입력하세요."
         elif _has_hidden_char(display_name):
-            errors["display_name"] = "표시 이름에 보이지 않는 문자나 제어 문자를 넣지 마."
+            errors["display_name"] = "표시 이름에 보이지 않는 문자나 제어 문자를 넣지 마세요."
         if self.tier.currentData() is None:
-            errors["tier"] = "신뢰 경계를 선택해."
+            errors["tier"] = "신뢰 경계를 선택하세요."
         if self.max_label.currentData() is None:
-            errors["max_label"] = "최대 수신 등급을 선택해."
+            errors["max_label"] = "최대 수신 등급을 선택하세요."
 
         transport = str(self.transport.currentData())
         command: str | None = None
@@ -425,10 +727,10 @@ class ServerAddForm(QWidget):
         if transport == "stdio":
             command = self.command.text().strip()
             if not command:
-                errors["command"] = "실행 파일 절대 경로를 입력해."
+                errors["command"] = "실행 파일 절대 경로를 입력하거나 찾아보기로 고르세요."
             elif len(command) >= self.command.maxLength():
                 errors["command"] = (
-                    "실행 파일 경로가 입력 칸 한도를 넘어 잘렸을 수 있어. 경로를 확인해."
+                    "실행 파일 경로가 입력 칸 한도를 넘어 잘렸을 수 있음. 경로를 확인하세요."
                 )
             elif (command_error := _command_error(command)) is not None:
                 errors["command"] = command_error
@@ -436,20 +738,22 @@ class ServerAddForm(QWidget):
             if args_error is not None:
                 errors["args"] = args_error
             names = tuple(
-                line.strip() for line in self.env_allow.toPlainText().splitlines() if line.strip()
+                name for name in _ENV_SEPARATORS.split(self.env_allow.toPlainText()) if name
             )
             if any(_ENV_NAME.fullmatch(name) is None for name in names):
-                errors["env_allow"] = "이름만 한 줄에 하나씩 적어. 값이나 '='은 넣지 마."
+                errors["env_allow"] = (
+                    "이름만 쉼표나 줄바꿈으로 나눠 적으세요. 값이나 '='은 넣지 마세요."
+                )
             elif len(names) != len(set(names)):
-                errors["env_allow"] = "같은 환경변수 이름을 두 번 적지 마."
+                errors["env_allow"] = "같은 환경변수 이름을 두 번 적지 마세요."
             else:
                 env_allow = names
         else:
             url = self.url.text().strip()
             if not url:
-                errors["url"] = "전체 MCP endpoint URL을 입력해."
+                errors["url"] = "전체 MCP endpoint URL을 입력하세요."
             elif len(url) >= self.url.maxLength():
-                errors["url"] = "URL이 입력 칸 한도를 넘어 잘렸을 수 있어. 주소를 확인해."
+                errors["url"] = "URL이 입력 칸 한도를 넘어 잘렸을 수 있음. 주소를 확인하세요."
             elif (url_error := _url_error(url)) is not None:
                 errors["url"] = url_error
 
@@ -458,7 +762,7 @@ class ServerAddForm(QWidget):
         return (
             LocalServerDraft(
                 server_id=server_id,
-                display_name=display_name,
+                display_name=display_name or server_id,
                 transport=transport,
                 tier=str(self.tier.currentData()),
                 max_label=str(self.max_label.currentData()),
@@ -504,21 +808,17 @@ class ServerAddForm(QWidget):
         )
         self.boundary_notice.setVisible(external)
         if external:
-            notice = "외부 경계의 최대 수신 등급은 INTERNAL이야."
+            notice = "외부 경계의 최대 수신 등급은 INTERNAL임."
             if self._boundary_adjusted:
-                notice += " CONFIDENTIAL 선택을 INTERNAL로 조정했어."
+                notice += " CONFIDENTIAL 선택을 INTERNAL로 조정함."
             self.boundary_notice.setText(notice)
         self.prepare_button.setEnabled(draft is not None and not self._prepared)
         self.preview.setPlainText(
             self._preview_for(draft).text
             if draft is not None
-            else "입력 오류를 고치면 미리보기가 표시돼."
+            else "입력 오류를 고치면 등록할 내용이 표시됨."
         )
-        self.status.setText(
-            "로컬 초안 확인 완료 · Registry에 등록되지 않았어."
-            if self._prepared
-            else "입력 형식만 확인해. Registry 등록은 아직 연결되지 않았어."
-        )
+        self.status.setText(STATUS_CHECKED if self._prepared else STATUS_IDLE)
 
     def _prepare_local_draft(self) -> None:
         if self._prepared:
@@ -533,22 +833,22 @@ class ServerAddForm(QWidget):
         self.local_draft_prepared.emit(self._preview_for(draft))
 
 
-# ---- 로컬 파일 MCP 서버의 폴더 등급 초안 (contracts 2026-10-15 로컬 파일 접근 결정) ----
+# ---- 로컬 파일 MCP 서버의 폴더 등급 (contracts 2026-10-15 로컬 파일 접근 결정) ----
 
-_LABELS = (
-    ("공개 · PUBLIC", "PUBLIC"),
-    ("내부 · INTERNAL", "INTERNAL"),
-    ("기밀 · CONFIDENTIAL", "CONFIDENTIAL"),
-)
+
+def _add_coded_item(box: SelectionBox, title: str, value: str, code: str) -> None:
+    """A Korean choice whose config value is shown as its tooltip."""
+    box.addItem(title, value)
+    box.setItemData(box.count() - 1, code, Qt.ItemDataRole.ToolTipRole)
 
 
 def _folder_error(root: str) -> str | None:
     if _has_hidden_char(root):
-        return "폴더 경로에 보이지 않는 문자나 제어 문자를 넣지 마."
+        return "폴더 경로에 보이지 않는 문자나 제어 문자를 넣지 마세요."
     if root[:2] in ("\\\\", "//", "\\/", "/\\"):
-        return "네트워크 공유(UNC)·장치 경로는 쓸 수 없어. 이 PC의 로컬 폴더 경로를 입력해."
+        return "네트워크 공유(UNC)·장치 경로는 쓸 수 없음. 이 PC의 로컬 폴더 경로를 입력하세요."
     if not Path(root).is_absolute():
-        return "루트 폴더는 절대 경로여야 해."
+        return "루트 폴더는 절대 경로여야 함."
     return None
 
 
@@ -558,12 +858,12 @@ def _prefix_parts(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
     if raw == "":
         return (), None
     if _has_hidden_char(raw):
-        return None, "폴더 이름에 보이지 않는 문자나 제어 문자를 넣지 마."
+        return None, "폴더 이름에 보이지 않는 문자나 제어 문자를 넣지 마세요."
     if "\\" in raw:
-        return None, "하위 폴더는 /로 구분해. 역슬래시는 쓰지 마."
+        return None, "하위 폴더는 /로 구분하세요. 역슬래시는 쓰지 마세요."
     parts = tuple(raw.split("/"))
     if any(part in ("", ".", "..") for part in parts):
-        return None, "앞뒤의 /, 빈 이름, 점(.)·점 두 개(..) 없이 루트 기준 상대 경로로 입력해."
+        return None, "앞뒤의 /, 빈 이름, 점(.)·점 두 개(..) 없이 루트 기준 상대 경로로 입력하세요."
     return parts, None
 
 
@@ -591,7 +891,7 @@ class _FolderRuleRow(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
+        layout.setSpacing(4)
         row = QHBoxLayout()
         row.setSpacing(4)
         row.setDirection(QBoxLayout.Direction.TopToBottom)
@@ -603,8 +903,8 @@ class _FolderRuleRow(QWidget):
         self.label = SelectionBox()
         self.label.setAccessibleName("이 폴더의 등급")
         self.label.addItem("등급 선택", None)
-        for title, value in _LABELS:
-            self.label.addItem(title, value)
+        for value, (title, code, _tone) in LABELS.items():
+            _add_coded_item(self.label, title, value, code)
         row.addWidget(self.label)
         self.remove_button = KeyboardActionButton("삭제")
         self.remove_button.setAccessibleName("이 폴더 규칙 삭제")
@@ -645,13 +945,12 @@ class LocalFolderRulesForm(QWidget):
         self.rows: list[_FolderRuleRow] = []
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(10)
-        outer.addWidget(plain_label("로컬 파일 서버 · 폴더 등급", name="sectionTitle"))
+        outer.setSpacing(12)
         outer.addWidget(
             plain_label(
-                "루트 폴더와 하위 폴더별 등급을 정해. 규칙이 겹치면 더 높은 등급이 적용되고, "
-                "어느 규칙에도 맞지 않는 파일을 읽으면 미분류로 작업이 멈춰. "
-                "여기서는 입력 형식만 확인하고, 실제 경로 검증은 등록 단계에서 다시 해.",
+                "루트 폴더와 하위 폴더별 등급을 정하세요. 규칙이 겹치면 더 높은 등급이 적용되고, "
+                "어느 규칙에도 맞지 않는 파일을 읽으면 미분류로 작업이 멈춤. "
+                "여기서는 입력 형식만 확인하고, 실제 경로 검증은 등록 단계에서 다시 함.",
                 name="secondary",
             )
         )
@@ -664,7 +963,7 @@ class LocalFolderRulesForm(QWidget):
         self.root_error.setAccessibleName("루트 폴더 입력 오류")
         outer.addWidget(self.root_error)
         self._rows_layout = QVBoxLayout()
-        self._rows_layout.setSpacing(6)
+        self._rows_layout.setSpacing(8)
         outer.addLayout(self._rows_layout)
         self.rules_error = plain_label(name="folderRulesError")
         outer.addWidget(self.rules_error)
@@ -672,8 +971,8 @@ class LocalFolderRulesForm(QWidget):
         self.add_button = KeyboardActionButton("폴더 규칙 추가")
         self.add_button.setAccessibleName("하위 폴더 등급 규칙 추가")
         actions.addWidget(self.add_button)
-        self.prepare_button = KeyboardActionButton("폴더 등급 초안 확인")
-        self.prepare_button.setAccessibleName("입력 형식 확인 후 폴더 등급 초안 준비")
+        self.prepare_button = KeyboardActionButton("폴더 등급 확인")
+        self.prepare_button.setAccessibleName("입력 형식 확인 후 폴더 등급 준비")
         actions.addWidget(self.prepare_button)
         actions.addStretch(1)
         outer.addLayout(actions)
@@ -716,9 +1015,9 @@ class LocalFolderRulesForm(QWidget):
     def _build_draft(self) -> LocalFolderDraft | None:
         root = self.root.text().strip()
         if not root:
-            root_error: str | None = "루트 폴더 절대 경로를 입력해."
+            root_error: str | None = "루트 폴더 절대 경로를 입력하세요."
         elif len(root) >= self.root.maxLength():
-            root_error = "경로가 입력 칸 한도를 넘어 잘렸을 수 있어. 경로를 확인해."
+            root_error = "경로가 입력 칸 한도를 넘어 잘렸을 수 있음. 경로를 확인하세요."
         else:
             root_error = _folder_error(root)
         self.root_error.setText(root_error or "")
@@ -732,9 +1031,9 @@ class LocalFolderRulesForm(QWidget):
             parts, error = _prefix_parts(row.prefix.text().strip())
             key = None if parts is None else tuple(part.casefold() for part in parts)
             if key is not None and key in seen:
-                error = "같은 폴더 규칙을 두 번 적지 마. 대소문자만 다른 이름도 같은 폴더야."
+                error = "같은 폴더 규칙을 두 번 적지 마세요. 대소문자만 다른 이름도 같은 폴더임."
             elif error is None and row.label.currentData() is None:
-                error = "이 폴더의 등급을 선택해."
+                error = "이 폴더의 등급을 선택하세요."
             row.error.setText(error or "")
             row.error.setVisible(error is not None)
             if key is not None:
@@ -743,7 +1042,7 @@ class LocalFolderRulesForm(QWidget):
                 failed = True
                 continue
             rules.append(FolderLabelRule(parts, str(row.label.currentData())))
-        rules_error = None if self.rows else "폴더 규칙을 하나 이상 추가해."
+        rules_error = None if self.rows else "폴더 규칙을 하나 이상 추가하세요."
         self.rules_error.setText(rules_error or "")
         self.rules_error.setVisible(rules_error is not None)
         if failed or rules_error is not None:
@@ -754,9 +1053,9 @@ class LocalFolderRulesForm(QWidget):
         draft = self._build_draft()
         self.prepare_button.setEnabled(draft is not None and not self._prepared)
         self.status.setText(
-            "폴더 등급 초안 확인 완료 · 아직 등록되지 않았어."
+            "폴더 등급 확인 완료 · 아직 등록되지 않음."
             if self._prepared
-            else "입력 형식만 확인해. 등록은 아직 연결되지 않았어."
+            else "입력 형식만 확인하세요. 등록은 아직 연결되지 않음."
         )
 
     def _prepare(self) -> None:

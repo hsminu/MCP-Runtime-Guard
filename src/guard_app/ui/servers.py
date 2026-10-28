@@ -23,11 +23,15 @@ from PySide6.QtWidgets import (
 
 from .models import LoadState, ServerSummary, Surface
 from .presentation import (
+    LABELS,
+    REGISTRY_NAMES,
     REGISTRY_STATUSES,
     SESSION_STATUSES,
+    TIER_NAMES,
     TIERS,
     TRANSPORTS,
     fixed,
+    fixed_code,
     public_display_text,
 )
 from .scan_status import ScanStatusCard, ScanStatusProjection
@@ -38,6 +42,7 @@ from .widgets import (
     StateMessage,
     plain_label,
     size_detail_for_viewport,
+    table_row_height,
 )
 
 
@@ -68,7 +73,7 @@ class ServerDetailDialog(QDialog):
         size_detail_for_viewport(self, 700, 560)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 24, 24, 20)
-        outer.setSpacing(14)
+        outer.setSpacing(16)
         outer.addWidget(plain_label("MCP 서버 등록 상세", name="pageTitle"))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -77,8 +82,8 @@ class ServerDetailDialog(QDialog):
         body.setObjectName("detailBody")
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 8, 0)
-        layout.setSpacing(6)
-        self.max_label_badge = SecurityLabel(server.max_label)
+        layout.setSpacing(8)
+        self.max_label_badge = SecurityLabel(server.max_label, show_code=True)
         layout.addWidget(self.max_label_badge)
         self.registry_status_field, self._registry_status_value = _detail_field(
             "Registry 등록 상태", fixed(REGISTRY_STATUSES, server.registry_status)
@@ -155,16 +160,9 @@ class ServerListPage(QWidget):
         self._stacked_filters: bool | None = None
         self._layout = QVBoxLayout(self)
         layout = self._layout
-        layout.setContentsMargins(26, 28, 26, 42)
+        layout.setContentsMargins(24, 24, 24, 40)
         layout.setSpacing(16)
-        layout.addWidget(plain_label("SERVER REGISTRY", name="eyebrow"))
         layout.addWidget(plain_label("MCP 서버", name="pageTitle"))
-        layout.addWidget(
-            plain_label(
-                "등록 상태, 세션 연결, 신뢰 경계와 최대 수신 등급을 각각 확인해.",
-                name="secondary",
-            )
-        )
         self.state_message = StateMessage()
         layout.addWidget(self.state_message)
 
@@ -189,17 +187,17 @@ class ServerListPage(QWidget):
         self.status_filter.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.status_filter.addItem("전체 등록 상태", None)
         for status in ("active", "pending", "blocked"):
-            self.status_filter.addItem(REGISTRY_STATUSES[status], status)
+            self.status_filter.addItem(REGISTRY_NAMES[status], status)
         self.status_filter.setAccessibleName("등록 상태 필터")
         self.status_filter.currentIndexChanged.connect(self._apply_filters)
         self._choices.addWidget(self.status_filter)
         filters.addLayout(self._choices)
         layout.addLayout(filters)
         layout.addWidget(
-            plain_label("필터는 현재 전달된 Registry 조회 결과에만 적용돼.", name="secondary")
+            plain_label("필터는 현재 전달된 Registry 조회 결과에만 적용됨.", name="secondary")
         )
         self.table_hint = plain_label(
-            "좁은 화면에서는 연결 방식·신뢰 경계·세션을 서버 상세에서 확인해.",
+            "좁은 화면에서는 연결 방식·신뢰 경계·세션을 서버 상세에서 확인하세요.",
             name="secondary",
         )
         layout.addWidget(self.table_hint)
@@ -254,9 +252,9 @@ class ServerListPage(QWidget):
             self._choices.setDirection(
                 QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
             )
-            margin = 12 if stacked else 26
+            margin = 12 if stacked else 24
             self._layout.setContentsMargins(
-                margin, 16 if stacked else 28, margin, 24 if stacked else 42
+                margin, 16 if stacked else 24, margin, 24 if stacked else 40
             )
         if (compact, tiny) == self._compact_columns:
             return
@@ -268,15 +266,17 @@ class ServerListPage(QWidget):
         if first_header is not None:
             first_header.setText("서버 ID" if compact else "서버 ID / 표시 이름")
         header = self.table.horizontalHeader()
+        # Wide tables end flush with the card: the last column takes the slack.
+        header.setStretchLastSection(not compact)
         if compact:
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         else:
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
             self.table.setColumnWidth(0, 250)
         self.table_hint.setText(
-            "좁은 화면에서는 최대 수신 등급·연결 방식·신뢰 경계·세션을 서버 상세에서 확인해."
+            "좁은 화면에서는 최대 수신 등급·연결 방식·신뢰 경계·세션을 서버 상세에서 확인하세요."
             if tiny
-            else "좁은 화면에서는 연결 방식·신뢰 경계·세션을 서버 상세에서 확인해."
+            else "좁은 화면에서는 연결 방식·신뢰 경계·세션을 서버 상세에서 확인하세요."
         )
         self.table_hint.setVisible(compact)
 
@@ -326,17 +326,21 @@ class ServerListPage(QWidget):
                 f"{public_display_text(server.display_name or server.server_id)}"
             )
             columns = (
-                label,
-                fixed(TRANSPORTS, server.transport),
-                fixed(TIERS, server.tier),
-                self._label_text(server.max_label),
-                fixed(REGISTRY_STATUSES, server.registry_status),
-                fixed(SESSION_STATUSES, server.session_status),
+                (label, ""),
+                (fixed(TRANSPORTS, server.transport), ""),
+                (fixed(TIER_NAMES, server.tier), fixed_code(TIERS, server.tier)),
+                (self._label_text(server.max_label), fixed_code(LABELS, server.max_label)),
+                (
+                    fixed(REGISTRY_NAMES, server.registry_status),
+                    fixed_code(REGISTRY_STATUSES, server.registry_status).upper(),
+                ),
+                (fixed(SESSION_STATUSES, server.session_status), ""),
             )
-            for column, value in enumerate(columns):
+            for column, (value, code) in enumerate(columns):
                 item = QTableWidgetItem(value)
+                item.setToolTip(code)
                 self.table.setItem(row, column, item)
-            self.table.setRowHeight(row, 62)
+            self.table.setRowHeight(row, table_row_height(self.table, 2))
             if server.server_id == previous_id:
                 self.table.selectRow(row)
         self._selection_changed()
@@ -345,17 +349,13 @@ class ServerListPage(QWidget):
         if self._state == LoadState.READY:
             self.state_message.setVisible(not self._visible_servers)
             if self._servers and not self._visible_servers:
-                self.state_message.set_message("현재 조회 결과와 일치하는 서버가 없어")
+                self.state_message.set_message("현재 조회 결과와 일치하는 서버가 없음")
             elif not self._servers:
-                self.state_message.set_message("등록된 MCP 서버가 없어")
+                self.state_message.set_message("등록된 MCP 서버가 없음")
 
     @staticmethod
     def _label_text(label: str | None) -> str:
-        return {
-            "PUBLIC": "공개 · PUBLIC",
-            "INTERNAL": "내부 · INTERNAL",
-            "CONFIDENTIAL": "기밀 · CONFIDENTIAL",
-        }.get(label or "", "미지정 · 미제공")
+        return LABELS[label][0] if label in LABELS else "미지정"
 
     def _selected_id(self) -> str | None:
         selected_rows = self.table.selectionModel().selectedRows()
