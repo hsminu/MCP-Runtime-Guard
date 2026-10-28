@@ -35,7 +35,7 @@ from guard_app.services.catalog import (
     parse_settings_bytes,
     prepare_server_access_change,
 )
-from guard_app.services.product_assembly import ProductAssemblyError, assemble_guard
+from guard_app.services.product_assembly import assemble_guard
 from guard_app.services.product_settings import (
     REGISTRY_UNAVAILABLE,
     SETTINGS_FILE_MISSING,
@@ -529,12 +529,34 @@ def test_listing_that_cannot_be_recorded_blocks_the_server_for_this_run(
 
 
 def test_settings_that_differ_from_the_registration_stop_the_assembly(tmp_path) -> None:
-    """B's Catalog refuses a boundary that differs from the registration; nothing runs."""
+    """A differing boundary hides this server without refusing the whole assembly."""
     registered_doc = document()
     run_doc = json.loads(json.dumps(registered_doc))
     run_doc["servers"][0]["max_label"] = "INTERNAL"
-    with pytest.raises(ProductAssemblyError, match="^PROFILE_TOOL_INVALID$"):
-        run(assemble_and_reload(tmp_path, Peer([READ_DEFINITION]), registered_doc, run_doc))
+
+    async def scenario():
+        db = tmp_path / "mismatched.db"
+        with SQLiteStore(db, audit_id_factory=lambda: f"audit-{uuid4().hex}") as store:
+            registry = await registered(store, registered_doc)
+            assembled = await assemble_guard(
+                store, inputs(Peer([READ_DEFINITION]), registry, run_doc)
+            )
+            try:
+                return (
+                    assembled.loaded.server_issue("docs"),
+                    assembled.offered_tool_views(),
+                    assembled.registry.blocked_servers,
+                    registry.registration("docs"),
+                )
+            finally:
+                await assembled.aclose()
+
+    issue, views, blocked, stored = run(scenario())
+    assert issue == "REG_SETTINGS_MISMATCH"
+    assert views == ()
+    assert blocked == frozenset({"docs"})
+    assert stored is not None
+    assert stored.status is RegStatus.ACTIVE
 
 
 # Settings screen and the entry point
