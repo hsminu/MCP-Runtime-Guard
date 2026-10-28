@@ -57,6 +57,7 @@ from guard_app.adapters.cisco_aggregation import (
 from guard_app.domain.contracts import RegistryEntry, ScanReport
 from guard_app.domain.errors import StoreError
 from guard_app.domain.reasons import Reason
+from guard_app.security.secrets import scanner_key_environ
 from guard_app.services.registry import (
     RegistryError,
     ServerRegistry,
@@ -90,15 +91,28 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def cisco_connector(environ: Mapping[str, str] | None = None) -> ConnectScanner:
-    """제품 검사기 연결. 키는 `environ`으로만 받고 `.env`·프로세스 환경을 읽지 않는다.
+def cisco_connector(
+    environ: Mapping[str, str] | Callable[[], Mapping[str, str]] | None = None,
+) -> ConnectScanner:
+    """제품 검사기 연결. 키는 넘긴 값으로만 받고 `.env`·프로세스 환경을 읽지 않는다.
 
-    C2.10(자격증명 관리자) 전에는 빈 값이라 LLM은 키 없음으로 준비 실패, YARA만 돈다.
+    기본(None)은 검사를 열 때마다 Windows 자격증명 관리자에서 읽는다(`scanner_key_environ`,
+    C2.10·C2.20). 그래서 화면에서 바꾼 키가 다음 검사부터 쓰이고, 키가 없으면 LLM은
+    `SCAN_LLM_KEY_MISSING_OR_INVALID`로 준비 실패하고 YARA만 돈다. 테스트는 고정 값(mapping)이나
+    읽는 함수를 넘긴다.
     """
-    values = dict(environ or {})
+    if environ is None:
+        source: Callable[[], Mapping[str, str]] = scanner_key_environ
+    elif callable(environ):
+        source = environ
+    else:
+        fixed = dict(environ)
+
+        def source() -> Mapping[str, str]:
+            return fixed
 
     def connect(worker: Executor) -> AbstractAsyncContextManager[InternalMetadataScanner]:
-        return connect_metadata_scanner(environ=values, yara_executor=worker)
+        return connect_metadata_scanner(environ=dict(source()), yara_executor=worker)
 
     return connect
 
@@ -106,7 +120,8 @@ def cisco_connector(environ: Mapping[str, str] | None = None) -> ConnectScanner:
 class ScanService:
     """앱 전체 검사 대기열과 예산. `connect`는 YARA 작업자를 받아 검사기를 여는 함수다.
 
-    제품은 `cisco_connector(environ)`을 넘긴다. 끝낼 때 `close`로 YARA 작업자를 정리한다.
+    제품은 `cisco_connector()`를 넘긴다(키는 검사마다 자격증명 관리자에서). 끝낼 때 `close`로 YARA
+    작업자를 정리한다.
     """
 
     def __init__(
