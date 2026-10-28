@@ -33,6 +33,10 @@ TABLES = {
     "registration_tools",
     "scan_reports",
     "task_call_sequences",
+    "store_runs",
+    "recovery_reports",
+    "recovery_quarantine",
+    "task_run_owners",
 }
 
 

@@ -336,11 +336,59 @@ _TASK_CALL_SEQUENCES_V3 = f"""CREATE TABLE task_call_sequences (
             task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
             last_issued INTEGER NOT NULL CHECK (last_issued BETWEEN 0 AND {MAX_SAFE_SEQUENCE})
         ) STRICT"""
+_RECOVERY_SCHEMA: tuple[tuple[str, str], ...] = (
+    (
+        "store_runs",
+        """CREATE TABLE store_runs (
+            run_id TEXT PRIMARY KEY CHECK (length(run_id) > 0),
+            state TEXT NOT NULL CHECK (state IN ('RECOVERY_COMMITTED','ACTIVE','CLOSED')),
+            started_at_utc TEXT NOT NULL,
+            recovery_committed_at_utc TEXT NOT NULL,
+            activated_at_utc TEXT,
+            closed_at_utc TEXT
+        ) STRICT""",
+    ),
+    (
+        "recovery_reports",
+        """CREATE TABLE recovery_reports (
+            run_id TEXT PRIMARY KEY REFERENCES store_runs(run_id),
+            schema_version INTEGER NOT NULL CHECK (schema_version = 3),
+            recovery_version INTEGER NOT NULL CHECK (recovery_version = 1),
+            committed_at_utc TEXT NOT NULL,
+            changed_task_count INTEGER NOT NULL CHECK (changed_task_count >= 0),
+            changed_request_count INTEGER NOT NULL CHECK (changed_request_count >= 0),
+            changed_approval_count INTEGER NOT NULL CHECK (changed_approval_count >= 0),
+            unknown_outcome_count INTEGER NOT NULL CHECK (unknown_outcome_count >= 0),
+            quarantined_count INTEGER NOT NULL CHECK (quarantined_count >= 0),
+            unresolved_count INTEGER NOT NULL CHECK (unresolved_count = 0)
+        ) STRICT""",
+    ),
+    (
+        "recovery_quarantine",
+        """CREATE TABLE recovery_quarantine (
+            request_id TEXT PRIMARY KEY REFERENCES requests(request_id),
+            run_id TEXT NOT NULL REFERENCES store_runs(run_id),
+            task_id TEXT NOT NULL REFERENCES tasks(task_id),
+            original_status TEXT NOT NULL,
+            category TEXT NOT NULL CHECK (category IN
+                ('LEGACY_METADATA_MISSING','TERMINAL_TASK_DISPATCHING')),
+            at_utc TEXT NOT NULL
+        ) STRICT""",
+    ),
+    (
+        "task_run_owners",
+        """CREATE TABLE task_run_owners (
+            task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
+            run_id TEXT NOT NULL REFERENCES store_runs(run_id)
+        ) STRICT""",
+    ),
+)
 _SCHEMA = (
     _SCHEMA_V2[:2]
     + (("requests", _REQUESTS_V3),)
     + _SCHEMA_V2[3:]
     + (("task_call_sequences", _TASK_CALL_SEQUENCES_V3),)
+    + _RECOVERY_SCHEMA
 )
 
 
@@ -3086,6 +3134,8 @@ def _migrate_to_v3(connection: sqlite3.Connection, from_version: int) -> None:
                 coalesce((SELECT max(e.at_seq) FROM escalations AS e WHERE e.task_id=t.task_id),0)
             ) FROM tasks AS t"""
         )
+        for _, statement in _RECOVERY_SCHEMA:
+            connection.execute(statement)
         connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise StoreError()
