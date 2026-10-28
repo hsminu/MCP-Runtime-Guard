@@ -36,6 +36,7 @@ from guard_app.domain.models import (
     AccessResult,
     PolicyDecision,
     ResolvedRequest,
+    StoreExecutionState,
     TaskState,
     ToolSpec,
 )
@@ -69,6 +70,28 @@ class PendingFinals(Protocol):
     async def cancel_pending(self, task_id: str, *, expected_epoch: int) -> int: ...
 
     async def aclose(self) -> None: ...
+
+
+class StoreLifecycle(Protocol):
+    """Store 실행 권한과 종료 상태를 SQL 큐를 기다리지 않고 조회한다(SEQ-02).
+
+    execution_enabled=True는 Store 전체의 조건일 뿐 개별 Task의 run·epoch·상태·
+    정책·승인 검사를 대신하지 않는다. A는 Denied 하나나 DB의 RUNNING 행만으로
+    실행 가능을 판단하지 않는다. 종료 요청은 비차단이며 어느 스레드에서든 안전하고
+    반복해도 된다. wait_closed는 timeout 내 연결 종료를 확인한 경우만 True다.
+    """
+
+    def execution_state(self) -> StoreExecutionState: ...
+
+    def halt_execution(self, reason: Reason) -> None:
+        """실행 권한을 멱등으로 닫는다. 예외를 내지 않는다."""
+        ...
+
+    def close(self) -> None:
+        """비차단으로 종료를 요청한다. 예외를 내지 않는다."""
+        ...
+
+    async def wait_closed(self, timeout: float) -> bool: ...  # noqa: ASYNC109
 
 
 class SessionAudit(Protocol):
@@ -156,7 +179,10 @@ class RegistryStore(Protocol):
     실제 변경 쓰기는 등록 revision +1·정의/검사·원문 없는 감사를 같은 트랜잭션에
     커밋하고 전체 사본을 반환한다. 무변경 지문 관측은 쓰지 않고 저장 사본을 반환한다.
     실패는 StoreError이며 원문을 담지 않는다.
-    지문은 C가 tools/list 원본으로 계산한다. 저장소는 형식만 검사한다.
+    C는 A transport의 SDK 재구성 정의 dict
+    (`model_dump(mode="json", by_alias=True, exclude_unset=True)`)로
+    `tool_fingerprint`를 계산한다(FP-01). 원본 수신 JSON은 쓰지 않는다.
+    저장소는 형식만 검사한다.
 
     C: 연결 직후 실제 정의 대조 → record_fingerprint_change 커밋 → 반환 사본으로
     동기 Registry 캐시 즉시 교체(동일 사본이면 생략, 반환과 교체 사이 await 금지) →

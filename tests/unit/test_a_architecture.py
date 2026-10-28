@@ -69,6 +69,7 @@ OTHER_SERVICES = frozenset(
         "guard",
         "registry",
         "response_gate",
+        "scanner",
         "state_checks",
     }
 )

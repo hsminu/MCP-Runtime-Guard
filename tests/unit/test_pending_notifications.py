@@ -426,10 +426,10 @@ def test_sqlite_audit_distinguishes_guard_expiry_from_human_expiry(tmp_path, rea
         asyncio.run(store.create_task(task(), created_at_utc=STORE_NOW))
         pending(store)
         transition(store, ApprovalStatus.EXPIRED, reason=reason)
-        rows = (
-            store._owned_connection()
-            .execute("SELECT detail FROM audit_events WHERE event_type='APPROVAL_EXPIRED'")
-            .fetchall()
+        rows = store._run_on_writer(
+            lambda connection: connection.execute(
+                "SELECT detail FROM audit_events WHERE event_type='APPROVAL_EXPIRED'"
+            ).fetchall()
         )
         assert len(rows) == 1
         if reason is Reason.APPROVAL_STALE:
@@ -571,10 +571,10 @@ def test_real_sqlite_and_guard_finalize_same_pending_once(tmp_path, action):
             assert not store._request_contexts
             assert not guard._approvals._memory_snapshots
             if action == "expiry":
-                row = (
-                    store._owned_connection()
-                    .execute("SELECT detail FROM audit_events WHERE event_type='APPROVAL_EXPIRED'")
-                    .fetchone()
+                row = await store._run_on_writer_async(
+                    lambda connection: connection.execute(
+                        "SELECT detail FROM audit_events WHERE event_type='APPROVAL_EXPIRED'"
+                    ).fetchone()
                 )
                 assert json.loads(row[0]) == {"source": "guard_expiry"}
             await guard.aclose()

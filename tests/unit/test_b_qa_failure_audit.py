@@ -60,11 +60,15 @@ async def _assert_committed(runtime, name):
     assert state.high_watermark == h.store.states["task"].high_watermark
     assert state.escalations == h.store.states["task"].escalations
     assert not state.unclassified
-    connection = store._owned_connection()
-    assert connection.execute("SELECT status FROM requests").fetchall()[0][0] == status.value
-    events = connection.execute(
-        "SELECT * FROM audit_events WHERE event_type=?", ("REQUEST_" + status.name,)
-    ).fetchall()
+    requests, events = await store._run_on_writer_async(
+        lambda connection: (
+            connection.execute("SELECT status FROM requests").fetchall(),
+            connection.execute(
+                "SELECT * FROM audit_events WHERE event_type=?", ("REQUEST_" + status.name,)
+            ).fetchall(),
+        )
+    )
+    assert requests[0][0] == status.value
     assert len(events) == 1
     assert "EXCEPTION_SECRET_MARKER" not in repr(tuple(events[0]))
     assert "RAW_SECRET_MARKER" not in repr(tuple(events[0]))
@@ -198,19 +202,27 @@ def test_unverified_failure_return_skips_extra_audit_and_halts_t36(
 def test_failure_transaction_error_skips_extra_audit_and_halts_t36(runtime, name):
     async def scenario():
         h, store, guard = runtime
-        connection = store._owned_connection()
-        connection.execute(
-            """CREATE TEMP TRIGGER reject_failure_audit BEFORE INSERT ON audit_events
+        await store._run_on_writer_async(
+            lambda connection: connection.execute(
+                """CREATE TEMP TRIGGER reject_failure_audit BEFORE INSERT ON audit_events
             WHEN NEW.event_type IN ('REQUEST_WITHHELD','REQUEST_UNKNOWN_OUTCOME')
             BEGIN SELECT RAISE(ABORT,'AUDIT_SECRET_MARKER'); END"""
+            ).close(),
+            write=True,
         )
         outcome = await guard.submit("task", _call(name))
         _assert_outcome(outcome, name)
         assert guard._global_halt
         assert h.audit == []
         assert (await store.load_task("task")).status is TaskStatus.RUNNING
-        assert connection.execute("SELECT status FROM requests").fetchone()[0] == "DISPATCHING"
-        assert connection.execute("SELECT count(*) FROM audit_events").fetchone()[0] == 2
+        request_status, audit_count = await store._run_on_writer_async(
+            lambda connection: (
+                connection.execute("SELECT status FROM requests").fetchone()[0],
+                connection.execute("SELECT count(*) FROM audit_events").fetchone()[0],
+            )
+        )
+        assert request_status == "DISPATCHING"
+        assert audit_count == 2
         assert isinstance(await guard.submit("task", _call(name)), Denied)
         assert len(h.transport.calls) == 1
 

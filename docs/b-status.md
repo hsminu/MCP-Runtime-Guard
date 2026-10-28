@@ -17,7 +17,6 @@
 | Registry 영속화 B 제안 완료·C 검토·C4.10 연결 대기(B6-06) | A·C | B6.18 |
 | 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 합의 | A·B·C | B6.19 |
 | 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
-| 모델 고정 문구표 검토·세션 관리자 연결 | A | B5.12 |
 | NOTIFY-01 DTO·포트·종료 의미 합의와 A/C 연결·독립 검증 | A·B·C | B5.13 |
 | STOP-01 TaskIdentity·사유·감사 포트 합의와 A 세션 관리자 연결·T41/T42 독립 검증 | A·B·C | B5.14 |
 | SCAN-01 필드·고정 오류 코드 합의와 C Scanner 번역·A 경고 표시 | A·B·C | B1.9 |
@@ -47,7 +46,7 @@
 - [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증
 - [x] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계) · [기록](archive/b/B2.8-access-rules.md)
 - [x] B2.9 AccessChecker 동기 포트·Guard 대기 장치 제거 구현 완료, 합의 전 제안(ACCESS-01 결정 이행) · A·C 리뷰·3인 합의 대기 · PR 미정 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
-- [ ] B2.10 AGT-04 reason code·AccessResult 정리 제안 작성 — 막힘: 3인 합의 · [제안](archive/b/B2.10-agt04-reason-proposal.md)
+- [ ] B2.10 AGT-04 reason code·AccessResult 정리 제안 작성 — 막힘: 3인 합의 · `AGT_*`를 `ACCESS_*`로 바꿀 때 `MODEL_REASON_MESSAGES` 키도 함께 변경 · [제안](archive/b/B2.10-agt04-reason-proposal.md)
 - [x] B2.11 기존 AGT 코드 제거 구현 완료 · A 소유 파일 리뷰 대기 · PR 미정 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
 
 ## B3 · Catalog와 요청 해석
@@ -65,6 +64,7 @@
 - [x] B3.11 CFG-01 B 변환 함수 완료, C 파일 연산(C2.14)·A 시작/저장 연결(B3.12) 대기 · [기록](archive/b/B3.11-settings-file.md)
 - [ ] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 — 막힘: C2.14 파일 연산·A 연결
 - [ ] B3.13 DESC-01 A 검토 입력·C Registry 원본 분리/저장·설명 변경 적용 의미 합의 — 막힘: 3인 합의·A/C 연결
+- [x] B3.14 EXE-01 실행 파일 고정 설정 필드 B 구현 · A 등록 화면·launcher 연결 대기 · [기록](archive/b/B3.14-exe01-settings-fields.md)
 
 ## B4 · Guard와 응답 게이트
 
@@ -91,7 +91,7 @@
 - [x] B5.9 NOTIFY-01 만료 타이머·최종 결과 알림 B 구현·합의 전 제안 · [기록](archive/b/B5.9-pending-notifications.md)
 - [x] B5.10 STOP-01 시스템 정지·사실 감사 B 구현·합의 전 제안 · [기록](archive/b/B5.10-system-stop.md)
 - [x] B5.11 모델에 돌려줄 고정 문구표 · [기록](archive/b/B5.11-model-messages.md)
-- [ ] B5.12 모델 고정 문구표 A 검토·세션 관리자 연결 — 막힘: A 검토
+- [x] B5.12 모델 고정 문구표 A 검토·세션 관리자 연결 · [#20 A 검토 댓글(2026-10-28)](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6464059746)
 - [ ] B5.13 NOTIFY-01 DTO·포트·종료 의미 합의·A 대기/종료·C 지문 변경 연결·T45 독립 검증 — 막힘: 3인 합의·A/C 연결
 - [ ] B5.14 STOP-01 TaskIdentity·정지 사유·SessionAudit 합의·A 세션 관리자 연결·C T41/T42 계수 검증 — 막힘: 3인 합의·A/C 연결
 
@@ -109,7 +109,7 @@
 - [ ] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 — 막힘: B6-02
 - [ ] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 — 막힘: B6-03·B6-04
 - [ ] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙과 예산(잠금 대기 1000ms는 미측정 제안값) — 막힘: B6-03
-- [ ] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — SEQ·REC 사용자 결정 반영 후 B 구현·C 측정 필요
+- [ ] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — B 단위 구현·C 독립 검증 및 측정 완료, A 연결·#55와 C 기록 PR 대기 · [기록](archive/b/B6.13-sqlite-writer.md) · [C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468999539)
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.15 규칙 버전 감사(AGT-02) — 막힘: 판정·감사 버전 추적 범위와 직접 저장·간접 조회 합의 · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
 - [ ] B6.16 A 시작 게이트·조회 요구와 C 인수 기준을 대조해 API 합의 기록 — 막힘: A·C 회신
