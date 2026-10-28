@@ -18,10 +18,12 @@ import pytest
 from guard_app.adapters.cisco_aggregation import InternalMetadataScanner
 from guard_app.adapters.mcp_transport import ToolListing
 from guard_app.domain.enums import RegStatus, ScanErrorCode
+from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
+from guard_app.domain.reasons import Reason
 from guard_app.services import scanner as scanner_module
 from guard_app.services.catalog import ServerSettings
-from guard_app.services.registry import ServerRegistry
+from guard_app.services.registry import RegistryError, ServerRegistry
 from guard_app.services.scanner import ScanError, ScanService
 from guard_app.storage import SQLiteStore
 
@@ -351,6 +353,109 @@ def test_stuck_scanner_connection_is_stopped_without_a_record(store, monkeypatch
             service.close()
         assert str(raised.value) == "SCAN_JOB_TIMEOUT"
         assert harness.registry.entry("docs").last_scan_id is None
+
+    asyncio.run(scenario())
+
+
+def test_closed_service_refuses_new_and_waiting_scans_without_records(store):
+    """#59 A 리뷰 1번: 닫힌 뒤와 닫히는 도중의 오류도 고정 코드다."""
+
+    async def scenario():
+        harness = Harness(store)
+        harness.connect_gate = asyncio.Event()
+        await harness.register()
+        service = harness.service()
+        running = asyncio.create_task(service.scan("docs", listing()))
+        waiting = asyncio.create_task(service.scan("docs", listing()))
+        await _settle()
+        service.close()
+        service.close()  # 여러 번 불러도 된다
+        harness.connect_gate.set()
+        results = await asyncio.gather(running, waiting, return_exceptions=True)
+        assert [str(result) for result in results] == ["SCAN_SERVICE_CLOSED"] * 2
+        assert all(type(result) is ScanError for result in results)
+        with pytest.raises(ScanError) as raised:
+            await service.scan("docs", listing())
+        assert str(raised.value) == "SCAN_SERVICE_CLOSED"
+        assert harness.registry.entry("docs").last_scan_id is None
+
+    asyncio.run(scenario())
+
+
+def test_scan_closed_after_its_analyzers_finished_is_not_recorded(store):
+    async def scenario():
+        harness = Harness(store, Llm(hold={"tool_0"}))
+        await harness.register()
+        service = harness.service()
+        task = asyncio.create_task(service.scan("docs", listing()))
+        await asyncio.wait_for(harness.llm.holding.wait(), 5)
+        service.close()
+        harness.llm.release.set()
+        with pytest.raises(ScanError) as raised:
+            await task
+        assert str(raised.value) == "SCAN_SERVICE_CLOSED"
+        assert harness.registry.entry("docs").last_scan_id is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (StoreError(Reason.TOOL_FINGERPRINT_CHANGED), "SCAN_LISTING_NOT_REGISTERED"),
+        (StoreError(), "SCAN_RECORD_UNKNOWN"),
+        (RegistryError("REG_SERVER_UNKNOWN"), "SCAN_SERVER_UNKNOWN"),
+        (RegistryError("REG_SCAN_INVALID"), "SCAN_REPORT_INVALID"),
+    ],
+    ids=["fingerprint-changed", "store-unknown", "server-unknown", "report-invalid"],
+)
+def test_record_failures_become_scan_errors(store, monkeypatch, error, code):
+    """#59 A 리뷰 2번·B 리뷰 2번: `scan`이 올리는 것은 `ScanError`뿐이다."""
+
+    async def scenario():
+        harness = Harness(store)
+        await harness.register()
+
+        async def failing(scan_id, report):
+            raise error
+
+        monkeypatch.setattr(harness.registry, "record_scan", failing)
+        service = harness.service()
+        try:
+            with pytest.raises(ScanError) as raised:
+                await service.scan("docs", listing())
+        finally:
+            service.close()
+        assert str(raised.value) == code
+        assert raised.value.__cause__ is None
+
+    asyncio.run(scenario())
+
+
+def test_on_started_marks_the_turn_not_the_request(store):
+    """#59 A 리뷰 3번: 대기 중과 검사 중을 화면이 나눌 수 있게 차례가 온 때만 알린다."""
+
+    async def scenario():
+        harness = Harness(store)
+        harness.connect_gate = asyncio.Event()
+        await harness.register()
+        service = harness.service()
+        started = []
+        try:
+            first = asyncio.create_task(
+                service.scan("docs", listing(), on_started=lambda: started.append("first"))
+            )
+            second = asyncio.create_task(
+                service.scan("docs", listing(), on_started=lambda: started.append("second"))
+            )
+            await _settle()
+            assert started == ["first"]
+            assert service.waiting == 1
+            harness.connect_gate.set()
+            await asyncio.gather(first, second)
+        finally:
+            service.close()
+        assert started == ["first", "second"]
 
     asyncio.run(scenario())
 

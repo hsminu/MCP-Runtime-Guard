@@ -12,8 +12,26 @@ A 등록 화면은 그 보고서로 경고를 보여 주고, 사용자가 확인
 - LLM 호출은 동시에 4개, YARA는 전용 작업자 1개에서 도구마다 native 5초 상한으로 돈다.
 - 자동 재시도·주기 재검사·결과 캐시는 없다.
 
-사용자 취소나 앱 종료로 검사가 취소되면 보고서를 기록하지 않는다. 그 검사로는 활성화할 수 없고,
-다시 검사하면 된다. 진행 중인 LLM 요청은 바로 끊기고, YARA는 native 상한 안에 끝난다.
+기록을 시작하기 전에 사용자 취소나 앱 종료로 검사가 취소되면 보고서를 기록하지 않는다. 그 검사로는
+활성화할 수 없고, 다시 검사하면 된다. 진행 중인 LLM 요청은 바로 끊기고, YARA는 native 상한 안에
+끝난다. 기록 중에 취소되면 기록이 남을 수 있다(B6.13 뒤 저장소는 시작한 쓰기를 끝낸다). 그 서버는
+결과 불명 표시가 되므로(C4.19) 화면은 `ServerRegistry.refresh`로 다시 읽는다.
+
+`scan`이 올리는 오류는 `ScanError`(고정 코드)와 취소뿐이다.
+
+| 코드 | 뜻 | 화면 |
+| --- | --- | --- |
+| `SCAN_QUEUE_FULL` | 대기 8건이 참. 접수하지 않음 | 나중에 다시 |
+| `SCAN_SERVICE_CLOSED` | 앱 종료로 닫힘. 기록하지 않음 | 없음(종료 중) |
+| `SCAN_SERVER_UNKNOWN` | 등록되지 않은 서버 | 등록부터 |
+| `SCAN_LISTING_NOT_REGISTERED` | 목록이 지금 등록과 다름 | 목록을 다시 받음 |
+| `REG_LISTING_*` | 목록을 지문으로 만들 수 없음 | 연결 문제 |
+| `SCAN_JOB_TIMEOUT` | 검사기 연결이 멈춤. 기록하지 않음 | 다시 검사 |
+| `SCAN_RECORD_UNKNOWN` | 저장 결과를 모름 | `refresh` 뒤 다시 검사(새 `scan_id`) |
+| 그 밖의 `SCAN_*` | 번역·입력 오류 | 다시 검사 |
+
+`asyncio.Lock`·`Semaphore`는 처음 쓰인 이벤트 루프에 묶인다. 앱의 백엔드 루프 안에서 하나 만들고
+그 루프에서만 부른다.
 
 목록 지문이 지금 등록과 다르면 검사하지 않는다(`SCAN_LISTING_NOT_REGISTERED`). 그 보고서로는
 활성화 대조를 통과할 수 없기 때문이다. 오류는 고정 코드이고 서버 텍스트를 싣지 않는다.
@@ -37,6 +55,8 @@ from guard_app.adapters.cisco_aggregation import (
     scan_report,
 )
 from guard_app.domain.contracts import RegistryEntry, ScanReport
+from guard_app.domain.errors import StoreError
+from guard_app.domain.reasons import Reason
 from guard_app.services.registry import (
     RegistryError,
     ServerRegistry,
@@ -118,9 +138,21 @@ class ScanService:
         self._yara_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="guard-yara")
         self._turn = asyncio.Lock()
         self._waiting = 0
+        self._closed = False
 
-    async def scan(self, server_id: str, listing: ToolListingView) -> ScanOutcome:
-        """목록을 검사하고 기록한다. 대기열이 차면 `SCAN_QUEUE_FULL`, 기록 전 오류는 고정 코드다."""
+    async def scan(
+        self,
+        server_id: str,
+        listing: ToolListingView,
+        *,
+        on_started: Callable[[], None] | None = None,
+    ) -> ScanOutcome:
+        """목록을 검사하고 기록한다. 오류는 모듈 설명의 `ScanError` 코드다.
+
+        `on_started`는 대기가 끝나 검사를 시작할 때 한 번 부른다(대기 중·검사 중 표시용). 예외를
+        내지 않는 동기 함수여야 한다.
+        """
+        self._require_open()
         self._registered_tools(server_id, listing)
         # 깨어난 대기자가 아직 lock을 잡기 전에도 대기 수로 센다.
         if self._waiting >= self._queue_limit and (self._turn.locked() or self._waiting > 0):
@@ -131,7 +163,8 @@ class ScanService:
         finally:
             self._waiting -= 1
         try:
-            return await self._run(server_id, listing)
+            self._require_open()
+            return await self._run(server_id, listing, on_started)
         finally:
             self._turn.release()
 
@@ -141,12 +174,29 @@ class ScanService:
         return self._waiting
 
     def close(self) -> None:
-        """YARA 작업자를 정리한다. 진행 중인 native 검사는 상한 안에 끝난다."""
+        """닫고 YARA 작업자를 정리한다. 여러 번 불러도 된다.
+
+        뒤의 `scan`과 대기 중이던 검사는 `SCAN_SERVICE_CLOSED`다. 진행 중인 검사도 기록하지 않고
+        같은 코드로 끝난다. 진행 중인 native YARA는 상한(5초) 안에 끝나며, 그 스레드 때문에
+        프로세스 종료가 그만큼 늦어질 수 있다.
+        """
+        self._closed = True
         self._yara_worker.shutdown(wait=False, cancel_futures=True)
 
-    async def _run(self, server_id: str, listing: ToolListingView) -> ScanOutcome:
+    def _require_open(self) -> None:
+        if self._closed:
+            raise ScanError("SCAN_SERVICE_CLOSED")
+
+    async def _run(
+        self,
+        server_id: str,
+        listing: ToolListingView,
+        on_started: Callable[[], None] | None,
+    ) -> ScanOutcome:
         # 기다리는 사이 정의가 바뀌었을 수 있다.
         tools = self._registered_tools(server_id, listing)
+        if on_started is not None:
+            on_started()
         deadline = asyncio.get_running_loop().time() + self._job_seconds
         try:
             async with (
@@ -164,12 +214,31 @@ class ScanService:
             raise ScanError("SCAN_JOB_TIMEOUT") from None
         except ScannerAggregationError as error:
             raise ScanError(str(error)) from None
+        except RuntimeError:
+            # 닫힌 작업자에 YARA를 맡기면 executor가 RuntimeError를 낸다.
+            self._require_open()
+            raise
+        self._require_open()
         try:
             report = scan_report(result, list(tools.items()), scanned_at_utc=self._clock())
         except ScanReportError as error:
             raise ScanError(str(error)) from None
         scan_id = f"scan-{secrets.token_hex(16)}"
-        entry = await self._registry.record_scan(scan_id, report)
+        try:
+            entry = await self._registry.record_scan(scan_id, report)
+        except RegistryError as error:
+            code = (
+                "SCAN_SERVER_UNKNOWN"
+                if str(error) == "REG_SERVER_UNKNOWN"
+                else "SCAN_REPORT_INVALID"
+            )
+            raise ScanError(code) from None
+        except StoreError as error:
+            # 활성화 대조와 같은 기준으로 B가 지문 다름을 거부한다. 그 밖에는 써졌는지 모른다.
+            changed = error.reason is Reason.TOOL_FINGERPRINT_CHANGED
+            raise ScanError(
+                "SCAN_LISTING_NOT_REGISTERED" if changed else "SCAN_RECORD_UNKNOWN"
+            ) from None
         return ScanOutcome(scan_id, report, entry)
 
     def _registered_tools(self, server_id: str, listing: ToolListingView) -> dict[str, str]:
