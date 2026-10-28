@@ -8,8 +8,11 @@ v1의 요청 결속 필드 한계 때문에 실행 권한은 같은 인스턴스
 
 from __future__ import annotations
 
+import inspect
 import json
+import math
 import sqlite3
+import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -17,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock, get_ident
 from types import TracebackType
-from typing import Literal
+from typing import Literal, cast
 
 from guard_app.core.approval_time import approval_event_time
 from guard_app.core.taint import merge
@@ -39,18 +42,21 @@ from guard_app.domain.enums import (
     RequestStatus,
     SessionEvent,
     StorePhase,
+    StorePrepareStep,
+    StoreStartFailure,
     SystemStopReason,
     TaskStatus,
     ToolKind,
     TrustTier,
 )
-from guard_app.domain.errors import StoreError
+from guard_app.domain.errors import StoreError, StorePrepareError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
     MAX_SAFE_SEQUENCE,
     Boundary,
     Escalation,
     FailureAuditRecord,
+    MigrationReport,
     PolicyDecision,
     ResolvedRequest,
     StoreExecutionState,
@@ -58,6 +64,7 @@ from guard_app.domain.models import (
     ToolSpec,
 )
 from guard_app.domain.reasons import Reason
+from guard_app.ports import BackupDestination
 from guard_app.security.digest import jcs_canonicalize, json_digest
 from guard_app.services.catalog_sources import valid_server_id
 from guard_app.storage.sqlite_writer import SQLiteWriter
@@ -410,6 +417,7 @@ class SQLiteStore:
         self._connection_close_ok = True
         self._state_lock = Lock()
         self._connection_faulted = False
+        self._prepare_started = False
         self._state = StoreExecutionState(
             run_id=None,
             phase=StorePhase.MIGRATING,
@@ -441,7 +449,7 @@ class SQLiteStore:
         ):
             raise StoreError()
         self._startup: Literal["immediate", "explicit"] = startup
-        self._busy_timeout_ms = busy_timeout_ms
+        self._busy_timeout_ms: int = busy_timeout_ms
         self._writer: SQLiteWriter = SQLiteWriter(
             lambda: self._open_connection(path, busy_timeout_ms),
             self._discard_connection,
@@ -456,6 +464,13 @@ class SQLiteStore:
     def _open_connection(self, path: str | Path, busy_timeout_ms: int) -> None:
         self._owner_thread = get_ident()
         failed = False
+        no_close_checkpoint = getattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE", None)
+        if self._startup == "explicit" and (
+            type(no_close_checkpoint) is not int
+            or not callable(getattr(sqlite3.Connection, "setconfig", None))
+            or not callable(getattr(sqlite3.Connection, "getconfig", None))
+        ):
+            raise StoreError()
         try:
             self._connection = sqlite3.connect(
                 path,
@@ -463,10 +478,15 @@ class SQLiteStore:
                 isolation_level=None,
                 check_same_thread=True,
             )
+            if self._startup == "explicit":
+                option = cast(int, no_close_checkpoint)
+                self._connection.setconfig(option, True)
+                if not self._connection.getconfig(option):
+                    raise StoreError()
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys=ON")
             self._connection.execute("PRAGMA synchronous=FULL")
-        except (sqlite3.Error, OSError, ValueError, OverflowError, UnicodeError):
+        except (sqlite3.Error, OSError, ValueError, OverflowError, UnicodeError, StoreError):
             failed = True
         if failed:
             self._discard_connection()
@@ -570,6 +590,313 @@ class SQLiteStore:
     async def wait_closed(self, timeout: float) -> bool:  # noqa: ASYNC109
         """writer의 연결 종료를 이벤트 루프를 막지 않고 기다린다."""
         return await self._writer.wait_closed(timeout)
+
+    async def prepare_schema(
+        self,
+        *,
+        deadline: float,
+        begin_backup: Callable[[str], BackupDestination],
+        on_step: Callable[[StorePrepareStep], None] | None = None,
+    ) -> MigrationReport:
+        """time.monotonic 기준 바깥 deadline 안에 스키마를 준비한다.
+
+        on_step은 이벤트 루프에서 호출하는 예외 없는 동기 함수다. 성공은 이관 ACK이며,
+        이후 복구 ACK 및 실행 회차 활성화는 별도다. 이 객체에서는 재시도하지 않는다.
+        """
+        with self._state_lock:
+            if (
+                self._startup != "explicit"
+                or self._state.phase is not StorePhase.MIGRATING
+                or self._prepare_started
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+            self._prepare_started = True
+
+        completed = False
+        close_unsupported = False
+        try:
+            if (
+                type(deadline) not in (int, float)
+                or not math.isfinite(deadline)
+                or not callable(begin_backup)
+                or inspect.iscoroutinefunction(begin_backup)
+                or (on_step is not None and not callable(on_step))
+                or (on_step is not None and inspect.iscoroutinefunction(on_step))
+            ):
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+
+            async def step[T](
+                kind: StorePrepareStep,
+                operation: Callable[[], T],
+                *,
+                write: bool,
+                failure: StoreStartFailure,
+            ) -> T:
+                if on_step is not None:
+                    callback = SQLiteWriter._execute(lambda: on_step(kind))
+                    if callback.error is not None or _close_async_result(callback.value):
+                        raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+                self._prepare_deadline(deadline)
+                self._check_preparing()
+
+                def execute() -> tuple[T | None, StoreStartFailure | None]:
+                    self._check_preparing()
+
+                    def checked() -> T:
+                        self._prepare_deadline(deadline)
+                        return operation()
+
+                    return _prepare_operation(checked, failure)
+
+                try:
+                    value, code = await self._writer.submit(execute, write=write)
+                except StoreError:
+                    raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED) from None
+                if code is not None:
+                    raise StorePrepareError(code)
+                self._prepare_deadline(deadline)
+                self._check_preparing()
+                return cast(T, value)
+
+            try:
+                version = await step(
+                    StorePrepareStep.STORE_CHECK,
+                    self._check_schema_plan,
+                    write=False,
+                    failure=StoreStartFailure.STORE_INTEGRITY_FAILED,
+                )
+            except StorePrepareError as error:
+                close_unsupported = error.code in (
+                    StoreStartFailure.STORE_SCHEMA_UNSUPPORTED,
+                    StoreStartFailure.STORE_INTEGRITY_FAILED,
+                )
+                raise
+
+            backup_published = False
+            if version in (1, 2):
+                await step(
+                    StorePrepareStep.STORE_BACKUP,
+                    lambda: self._backup_schema(version, deadline, begin_backup),
+                    write=True,
+                    failure=StoreStartFailure.STORE_BACKUP_FAILED,
+                )
+                backup_published = True
+
+            # 원본을 검사하고 기존 DB를 백업하기 전에는 journal_mode를 바꾸지 않는다.
+            self._prepare_deadline(deadline)
+
+            def enable_wal() -> tuple[None, StoreStartFailure | None]:
+                self._check_preparing()
+
+                def checked() -> None:
+                    self._prepare_deadline(deadline)
+                    self._enable_prepare_wal()
+
+                return _prepare_operation(checked, StoreStartFailure.STORE_IO_FAILED)
+
+            try:
+                _, code = await self._writer.submit(enable_wal, write=True)
+            except StoreError:
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED) from None
+            if code is not None:
+                raise StorePrepareError(code)
+            self._prepare_deadline(deadline)
+            self._check_preparing()
+
+            migrated = version != SCHEMA_VERSION
+            if migrated:
+                await step(
+                    StorePrepareStep.STORE_MIGRATE,
+                    lambda: self._prepare_migration(version),
+                    write=True,
+                    failure=StoreStartFailure.STORE_MIGRATION_FAILED,
+                )
+            await step(
+                StorePrepareStep.STORE_VERIFY,
+                self._verify_prepared_schema,
+                write=False,
+                failure=StoreStartFailure.STORE_INTEGRITY_FAILED,
+            )
+            with self._state_lock:
+                if self._state.phase is not StorePhase.MIGRATING:
+                    raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+                self._state = self._state.model_copy(update={"phase": StorePhase.RECOVERING})
+            completed = True
+            return MigrationReport(
+                from_version=version,
+                to_version=SCHEMA_VERSION,
+                backup_published=backup_published,
+                migrated=migrated,
+            )
+        finally:
+            if not completed:
+                self._prepare_fault()
+                if close_unsupported:
+                    self.close()
+
+    @staticmethod
+    def _prepare_deadline(deadline: float) -> None:
+        if time.monotonic() >= deadline:
+            raise StorePrepareError(StoreStartFailure.STORE_DEADLINE_EXCEEDED)
+
+    def _check_preparing(self) -> None:
+        with self._state_lock:
+            if self._state.phase is not StorePhase.MIGRATING:
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+
+    def _prepare_fault(self) -> None:
+        with self._state_lock:
+            if self._state.phase is not StorePhase.FAULTED:
+                self._state = self._state.model_copy(
+                    update={
+                        "phase": StorePhase.FAULTED,
+                        "execution_enabled": False,
+                        "state_revision": self._state.state_revision
+                        + int(self._state.execution_enabled),
+                        "reason": self._state.reason or Reason.INTERNAL_ERROR,
+                        "requires_restart": True,
+                    }
+                )
+
+    def _check_schema_plan(self) -> int:
+        """query_only로 스키마를 검사하고 원본 journal_mode를 바꾸지 않는다."""
+        connection = self._owned_connection()
+        connection.execute("PRAGMA query_only=ON")
+        try:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            application = connection.execute("PRAGMA application_id").fetchone()[0]
+            entries = connection.execute(
+                "SELECT name,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
+            ).fetchall()
+            if version == 0 and application == 0 and not entries:
+                return 0
+            if version not in (1, 2, SCHEMA_VERSION) or application != APPLICATION_ID:
+                raise StorePrepareError(StoreStartFailure.STORE_SCHEMA_UNSUPPORTED)
+            expected = {1: _SCHEMA_V1, 2: _SCHEMA_V2, SCHEMA_VERSION: _SCHEMA}[version]
+            if {row[0]: row[1] for row in entries} != dict(expected):
+                raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
+            if version == 1 and (
+                connection.execute("SELECT 1 FROM registrations LIMIT 1").fetchone() is not None
+                or connection.execute("SELECT 1 FROM scan_reports LIMIT 1").fetchone() is not None
+            ):
+                raise StorePrepareError(StoreStartFailure.STORE_SCHEMA_UNSUPPORTED)
+            if [row[0] for row in connection.execute("PRAGMA quick_check").fetchall()] != [
+                "ok"
+            ] or connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
+            return cast(int, version)
+        finally:
+            connection.execute("PRAGMA query_only=OFF")
+
+    def _backup_schema(
+        self,
+        version: int,
+        deadline: float,
+        begin_backup: Callable[[str], BackupDestination],
+    ) -> None:
+        """원본 연결을 SQLite 백업으로 복사하고 독립 연결로 검사한 뒤 발행한다."""
+        outcome = SQLiteWriter._execute(lambda: begin_backup(f"v{version}-to-v3"))
+        if outcome.error is not None or _close_async_result(outcome.value):
+            raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED)
+        target = cast(BackupDestination, outcome.value)
+        published = False
+        try:
+            path_result = SQLiteWriter._execute(lambda: target.path)
+            if path_result.error is not None or not isinstance(path_result.value, Path):
+                raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED)
+            destination_path = path_result.value
+
+            def progress(_status: int, _remaining: int, _total: int) -> None:
+                self._prepare_deadline(deadline)
+
+            try:
+                destination = sqlite3.connect(destination_path, isolation_level=None)
+                try:
+                    self._owned_connection().backup(destination, pages=128, progress=progress)
+                finally:
+                    destination.close()
+                self._prepare_deadline(deadline)
+                verification = sqlite3.connect(destination_path, isolation_level=None)
+                try:
+                    quick = verification.execute("PRAGMA quick_check").fetchall()
+                    application = verification.execute("PRAGMA application_id").fetchone()[0]
+                    copied_version = verification.execute("PRAGMA user_version").fetchone()[0]
+                    if (
+                        quick != [("ok",)]
+                        or application != APPLICATION_ID
+                        or copied_version != version
+                    ):
+                        raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED)
+                finally:
+                    verification.close()
+            except sqlite3.Error:
+                raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED) from None
+            self._prepare_deadline(deadline)
+            result = SQLiteWriter._execute(lambda: target.publish())
+            if (
+                result.error is not None
+                or _close_async_result(result.value)
+                or not isinstance(result.value, Path)
+            ):
+                raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED)
+            published = True
+        finally:
+            if not published:
+                # 실패한 discard도 기존 writer 오류 정제 경계를 거쳐 고정 오류만 남긴다.
+                result = SQLiteWriter._execute(lambda: target.discard())
+                _close_async_result(result.value)
+
+    def _enable_prepare_wal(self) -> None:
+        connection = self._owned_connection()
+        journal = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+        synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
+        timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
+        if (journal, foreign_keys, synchronous, timeout) != ("wal", 1, 2, self._busy_timeout_ms):
+            raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+        option = sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE
+        connection.setconfig(option, False)
+        if connection.getconfig(option):
+            raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+
+    def _prepare_migration(self, version: int) -> None:
+        if version != 0:
+            try:
+                _migrate_to_v3(self._owned_connection(), version)
+            except _MigrationFailureError as error:
+                if error.discard_connection:
+                    self._connection_fault(error.outcome)
+                    self._discard_connection()
+                raise
+            return
+        try:
+            self._migrate(prepare=True)
+        except _MigrationFailureError:
+            raise
+        except StoreError:
+            if self.execution_state().commit_outcome is CommitOutcome.UNKNOWN:
+                raise StorePrepareError(StoreStartFailure.STORE_COMMIT_UNKNOWN) from None
+            raise
+
+    def _verify_prepared_schema(self) -> None:
+        connection = self._owned_connection()
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        application = connection.execute("PRAGMA application_id").fetchone()[0]
+        journal = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        entries = connection.execute(
+            "SELECT name,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
+        ).fetchall()
+        foreign_key = connection.execute("PRAGMA foreign_key_check").fetchall()
+        quick = connection.execute("PRAGMA quick_check").fetchall()
+        if (
+            version != SCHEMA_VERSION
+            or application != APPLICATION_ID
+            or journal != "wal"
+            or {row[0]: row[1] for row in entries} != dict(_SCHEMA)
+            or foreign_key
+            or [row[0] for row in quick] != ["ok"]
+        ):
+            raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
 
     async def _submit[T](
         self, operation: Callable[[], T], *, method: str, grants_execution: bool | None = None
@@ -2495,16 +2822,37 @@ class SQLiteStore:
 
     @contextmanager
     def _transaction(
-        self, *, write: bool, failure_reason: Reason = Reason.INTERNAL_ERROR
+        self,
+        *,
+        write: bool,
+        failure_reason: Reason = Reason.INTERNAL_ERROR,
+        prepare: bool = False,
     ) -> Iterator[sqlite3.Connection]:
         connection = self._owned_connection()
         failed = False
+        io_failure = False
         try:
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             failed = True
+            io_failure = _sqlite_io_failure(error)
         if failed:
-            self._rollback(connection, failure_reason=failure_reason)
+            try:
+                self._rollback(connection, failure_reason=failure_reason)
+            except StoreError:
+                if prepare:
+                    raise _MigrationFailureError(
+                        outcome=CommitOutcome.ROLLED_BACK,
+                        io_failure=True,
+                        discard_connection=True,
+                    ) from None
+                raise
+            if prepare:
+                raise _MigrationFailureError(
+                    outcome=CommitOutcome.ROLLED_BACK,
+                    io_failure=io_failure,
+                    discard_connection=False,
+                ) from None
             raise StoreError(failure_reason)
         completed = False
         reason: Reason | None = None
@@ -2513,19 +2861,36 @@ class SQLiteStore:
                 yield connection
             except StoreError as error:
                 reason = error.reason
-            except sqlite3.Error:
+            except sqlite3.Error as error:
                 reason = failure_reason
+                io_failure = _sqlite_io_failure(error)
             else:
                 completed = True
         finally:
             if not completed:
-                self._rollback(connection, failure_reason=failure_reason)
+                try:
+                    self._rollback(connection, failure_reason=failure_reason)
+                except StoreError:
+                    if prepare:
+                        raise _MigrationFailureError(
+                            outcome=CommitOutcome.ROLLED_BACK,
+                            io_failure=True,
+                            discard_connection=True,
+                        ) from None
+                    raise
         if reason is not None:
+            if prepare:
+                raise _MigrationFailureError(
+                    outcome=CommitOutcome.ROLLED_BACK,
+                    io_failure=io_failure,
+                    discard_connection=False,
+                ) from None
             raise StoreError(reason)
         try:
             connection.execute("COMMIT")
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             failed = True
+            io_failure = _sqlite_io_failure(error)
         if failed:
             # COMMIT 뒤 이미 TX가 없으면 실제 커밋인지 ACK 유실인지 구분할 수 없다.
             outcome = CommitOutcome.UNKNOWN
@@ -2538,10 +2903,16 @@ class SQLiteStore:
                 pass
             self._connection_fault(outcome)
             self._discard_connection()
+            if prepare:
+                raise _MigrationFailureError(
+                    outcome=outcome,
+                    io_failure=io_failure,
+                    discard_connection=True,
+                ) from None
             raise StoreError(failure_reason)
 
-    def _migrate(self) -> None:
-        with self._transaction(write=True) as connection:
+    def _migrate(self, *, prepare: bool = False) -> None:
+        with self._transaction(write=True, prepare=prepare) as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             application = connection.execute("PRAGMA application_id").fetchone()[0]
             entries = connection.execute(
@@ -2583,6 +2954,61 @@ class SQLiteStore:
             raise StoreError()
 
 
+class _MigrationFailureError(StoreError):
+    """원문 없이 이관 커밋의 불명 여부와 I/O 분류만 보존한다."""
+
+    def __init__(
+        self, *, outcome: CommitOutcome, io_failure: bool, discard_connection: bool
+    ) -> None:
+        super().__init__()
+        self.outcome = outcome
+        self.io_failure = io_failure
+        self.discard_connection = discard_connection
+
+
+def _close_async_result(value: object) -> bool:
+    """동기 콜백의 잘못된 awaitable 결과를 거부하고 코루틴 누출을 막는다."""
+    if not inspect.isawaitable(value):
+        return False
+    if inspect.iscoroutine(value):
+        SQLiteWriter._execute(value.close)
+    return True
+
+
+def _sqlite_io_failure(error: sqlite3.Error) -> bool:
+    """SQLite 오류 코드로만 디스크·I/O 계열을 분류한다."""
+    code = getattr(error, "sqlite_errorcode", None)
+    return type(code) is int and (code & 0xFF) in {
+        sqlite3.SQLITE_IOERR,
+        sqlite3.SQLITE_FULL,
+        sqlite3.SQLITE_CANTOPEN,
+        sqlite3.SQLITE_READONLY,
+        sqlite3.SQLITE_NOMEM,
+    }
+
+
+def _prepare_operation[T](
+    operation: Callable[[], T], failure: StoreStartFailure
+) -> tuple[T | None, StoreStartFailure | None]:
+    """writer 경계에 예외 원문 대신 시작 실패 코드만 전달한다."""
+    try:
+        return operation(), None
+    except StorePrepareError as error:
+        return None, error.code
+    except _MigrationFailureError as error:
+        if error.outcome is CommitOutcome.UNKNOWN:
+            return None, StoreStartFailure.STORE_COMMIT_UNKNOWN
+        if error.io_failure or error.outcome is CommitOutcome.COMMITTED:
+            return None, StoreStartFailure.STORE_IO_FAILED
+        return None, failure
+    except sqlite3.Error as error:
+        if _sqlite_io_failure(error):
+            return None, StoreStartFailure.STORE_IO_FAILED
+        return None, failure
+    except StoreError:
+        return None, failure
+
+
 def _migrate_to_v3(connection: sqlite3.Connection, from_version: int) -> None:
     """정확한 v1/v2를 한 트랜잭션으로 v3로 이관한다.
 
@@ -2596,6 +3022,12 @@ def _migrate_to_v3(connection: sqlite3.Connection, from_version: int) -> None:
     original_foreign_keys: int | None = None
     failed = False
     began = False
+    commit_attempted = False
+    commit_succeeded = False
+    commit_unknown = False
+    io_failure = False
+    rollback_failed = False
+    restore_failed = False
     try:
         if connection.in_transaction:
             raise StoreError()
@@ -2657,24 +3089,54 @@ def _migrate_to_v3(connection: sqlite3.Connection, from_version: int) -> None:
         connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise StoreError()
+        commit_attempted = True
         connection.execute("COMMIT")
-    except (sqlite3.Error, StoreError, TypeError, ValueError, OverflowError):
+        commit_succeeded = True
+    except (sqlite3.Error, StoreError, TypeError, ValueError, OverflowError) as error:
         failed = True
+        if isinstance(error, sqlite3.Error):
+            io_failure = _sqlite_io_failure(error)
+        if commit_attempted:
+            try:
+                commit_unknown = not connection.in_transaction
+            except sqlite3.Error:
+                commit_unknown = True
     finally:
         try:
             if began and connection.in_transaction:
                 connection.execute("ROLLBACK")
+                if connection.in_transaction:
+                    rollback_failed = True
+                    failed = True
+                    if commit_attempted:
+                        commit_unknown = True
         except sqlite3.Error:
             failed = True
+            rollback_failed = True
+            if commit_attempted:
+                commit_unknown = True
         if original_foreign_keys is not None:
             try:
                 connection.execute(f"PRAGMA foreign_keys={original_foreign_keys}")
                 if connection.execute("PRAGMA foreign_keys").fetchone()[0] != original_foreign_keys:
                     failed = True
+                    restore_failed = True
             except sqlite3.Error:
                 failed = True
+                restore_failed = True
     if failed:
-        raise StoreError() from None
+        outcome = (
+            CommitOutcome.UNKNOWN
+            if commit_unknown
+            else CommitOutcome.COMMITTED
+            if commit_succeeded
+            else CommitOutcome.ROLLED_BACK
+        )
+        raise _MigrationFailureError(
+            outcome=outcome,
+            io_failure=io_failure or rollback_failed or restore_failed,
+            discard_connection=commit_attempted or rollback_failed or restore_failed,
+        ) from None
 
 
 def _registry_input[T](operation: Callable[[], T]) -> T:
