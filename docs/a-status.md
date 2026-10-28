@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-28 · main `8e5ffdf` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-28 · main `1423bd1` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -11,19 +11,19 @@
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
 | `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22, A50 |
 | 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
-| T43/T46·수신 상한 독립 인수(C5.8)·Scanner 자격증명(C2.10, [PR #60](https://github.com/hsminu/MCP-Runtime-Guard/pull/60))·검사 예산(C4.14, [PR #59](https://github.com/hsminu/MCP-Runtime-Guard/pull/59)). L2(C6.14, #41)·설정 파일(C2.14, #44)·`secrets` 허용(#35)·서버 실행 입구(C2.6, #54)·ScanReport 번역(C4.9, #57)은 main에 병합됨 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A47, A48, A52 |
+| T43/T46·수신 상한 독립 인수(C5.8). L2(C6.14, #41)·설정 파일(C2.14, #44)·`secrets` 허용(#35)·서버 실행 입구(C2.6, #54)·ScanReport 번역(C4.9, #57)·Scanner 자격증명(C2.10, [PR #60](https://github.com/hsminu/MCP-Runtime-Guard/pull/60))·검사 예산(C4.14, [PR #59](https://github.com/hsminu/MCP-Runtime-Guard/pull/59))은 main에 병합됨 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A47, A52 |
 | 제품 Guard 조립용 영속 `next_call_seq`·실패 감사(B6.8). 설정 파일 읽기·저장과 Registry 로드는 A129로 연결됨 | B | A24–A27, A81, A129 |
-| stdio 서버 실행 파일 고정(EXE-01): B 설정 필드 `command_sha256`·`command_size`(#48 답변, PR 미정). C 지문 계산·서버 실행 입구(C2.6, [PR #54](https://github.com/hsminu/MCP-Runtime-Guard/pull/54))와 HTTP URL 검증(C2.5, [PR #50](https://github.com/hsminu/MCP-Runtime-Guard/pull/50))은 main에 병합됨 | B | A09·A10, A15·A16, A24–A27, A49, A128 |
+| stdio 서버 실행 파일 고정(EXE-01): B 설정 필드 `command_sha256`·`command_size`(#48 답변, [#58](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468080908)에 추가 예정). C 지문 계산·서버 실행 입구(C2.6, [PR #54](https://github.com/hsminu/MCP-Runtime-Guard/pull/54))와 HTTP URL 검증(C2.5, [PR #50](https://github.com/hsminu/MCP-Runtime-Guard/pull/50))은 main에 병합됨 | B | A09·A10, A15·A16, A24–A27, A49, A128 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 
-**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.10 키 입력 화면 연결(#60 병합 뒤), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드 뒤), C6.20 설치판 리소스 위치(패키징). #61 A 리뷰는 게시했다.
+**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.10 키 입력 화면 연결(#60 main 병합됨, A 브랜치에 main 병합 뒤), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드 뒤), C6.20 설치판 리소스 위치(패키징). #61 A 리뷰와 A132에 맞춘 HTTP `CLOSE_ERRORS` 기대값 변경 요청([댓글](https://github.com/hsminu/MCP-Runtime-Guard/pull/61#issuecomment-6470235928))은 게시했다.
 
 ## 계약·환경
 
 - [x] A01·A03 B ref·테스트 동기화, Runner epoch 전달
 - [ ] A01·A03 domain/ports 합의 — 막힘: 3인 합의
 - [x] A02·A06 AGT core 5.0.0 포함 lock, Python 3.12 새 환경 설치 재현
-- [ ] A02·A06 AGT 제거 뒤 lock·새 환경 설치 재확인 — A 차례(#47 병합)
+- [x] A02·A06 AGT 제거 뒤 lock·새 환경 설치 재확인 · [기록](archive/a/A02-A06-lock-recheck-after-agt-removal.md)
 - [ ] A02·A06 Scanner 포함 공통 제품 조합 인수 — 막힘: C 조합 인수(main lock에는 Scanner 포함, #6)
 - [ ] A04 C 연결: 요구사항은 전달 — 막힘: C Registry
 - [x] A05 앱 내부 Task projection·사람 review 연결
@@ -34,7 +34,9 @@
 - [x] A07·A11 stdio 실제 SDK·Guard 왕복 스파이크
 - [ ] A07·A11 정식 C 수신 fixture로 인수 — 막힘: C fixture
 - [x] A08·A12 Streamable HTTP adapter·loopback 왕복·JSON/SSE·재전송 차단 · [기록](archive/tasks/a-http-integration.md)
-- [ ] A08·A12 C endpoint 검증·독립 fixture 인수·인증 확장 — 막힘: C
+- [x] A08 HTTP 연결 직전 endpoint를 C `canonical_endpoint`(C2.5, #50)로 다시 검사 · [기록](archive/a/A08-canonical-endpoint.md)
+- [ ] A08 등록 화면·A128 붙여넣기의 URL 확인을 C `normalize_endpoint`·거부 코드별 문구로 — A 차례(#52 C 리뷰)
+- [ ] A08·A12 독립 fixture 인수·인증 확장 — 막힘: C
 - [x] A09·A10 worker 구현·회귀 검증
 - [x] A09·A10 `tools/list` 수집과 도구 수·페이지·깊이·시간 상한 · [기록](archive/a/A09-A10-tools-list-collection.md)
 - [x] A57 수집 시간 기준(연결 포함·초기화 시작부터)·반복 cursor·중복 이름·수집 중 종료 보정 · [기록](archive/a/A57-tools-list-timing-and-loop-rules.md)
@@ -51,6 +53,9 @@
 - [x] A97 MCP 도구 오류(`is_error`)를 Codex에 실패로 전달 · [기록](archive/a/A97-released-tool-error.md)
 - [x] A100 대조 뒤 `tools/list_changed`를 받으면 그 서버를 이번 실행 동안 PENDING 취급, 새 세션 도구 목록에서 제외(LIST-01, PR #34 결정) · [기록](archive/a/A100-tools-list-changed.md)
 - [ ] A100 서버별 목록 수신 뒤·대조 전 알림 처리 — 막힘: 사용자 결정(현재는 결정 문구대로 차단하지 않음)
+- [x] A132 HTTP 세션이 요청 오류(`httpx.HTTPError`)만으로 끝나면 종료를 완료로 봄(#61 A 후속 2) · [기록](archive/a/A132-http-teardown-completed.md)
+- [ ] A132 #61 HTTP `CLOSE_ERRORS` 기대값 변경 — C 차례([요청](https://github.com/hsminu/MCP-Runtime-Guard/pull/61#issuecomment-6470235928))
+- [x] A133 세션이 끊긴 서버를 이번 실행 동안 PENDING으로 보고 다음 호출을 예약 전 `REG_NOT_ACTIVE`로 거부(#61 A 후속 3) · [기록](archive/a/A133-failed-server-pending.md)
 - [x] A15·A16 연결 직후 목록을 C `ServerRegistry.observe`로 기록(정의 변경은 PENDING으로 저장, 기록 실패는 이번 실행 차단) · [기록](archive/a/A129-settings-file-registry-connection.md)
 - [ ] A15·A16 실제 launcher 연결 — 막힘: EXE-01 B 설정 필드(C2.6은 #54로 병합)
 
@@ -70,6 +75,8 @@
 - [x] A102 단일 실행 잠금을 DB 열기 전으로 옮기고, 잠금을 못 잡으면 앱을 시작하지 않음(REC-01의 C2.13 몫, #35 질문) · [기록](archive/a/A102-app-lock-before-db.md)
 - [x] A103 Task 폴더 삭제를 작업 스레드로 옮기고 삭제 상한을 따로 둠(PR #35 B 리뷰) · [기록](archive/a/A103-task-folder-removal-thread.md)
 - [x] A110 앱을 닫을 때 정리가 확인되지 않으면 단일 실행 잠금을 쥔 채 프로세스 종료(B6.17 8.1, #37) · [기록](archive/a/A110-unconfirmed-exit-keeps-lock.md)
+- [x] A134 앱 종료가 세션 정지 기록(STOP-01)을 기다린 뒤 Guard·Store를 닫음(#58 B 답변의 `SystemControlError`) · [기록](archive/a/A134-shutdown-waits-for-stop-record.md)
+- [ ] A134 #58 writer로 재현·해소 확인 — B와 함께(#58 병합 뒤)
 - [ ] A19·A20 실제 codex.exe 세션 — C 쪽 막힘은 풀림(L2 C6.14 #41, 설정 파일 CFG-01 #44·A129, CODEX_HOME `secrets` 허용 #35). 남은 것: A `run_l2` 연결, 세션 관리자 공통 계약 합의(막힌 것 표)
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
 - [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
@@ -113,6 +120,8 @@
 - [x] A129 시작 때 설정 파일 읽기(C2.14·B3.11)·Registry 로드(C4.10)·Profile 확인, 미설정·오류 상태 표시와 새 Task 거부, 정책 저장을 파일 교체에 연결(결과 불명은 재시작) · [기록](archive/a/A129-settings-file-registry-connection.md)
 - [x] A130 #52 B·C 리뷰 후속: 저장 중 취소도 Guard를 닫음, 앱 밖에서 바뀐 설정 파일은 저장하지 않고 재시작 안내, `turn/start` 키 집합 고정 테스트 · [기록](archive/a/A130-pr52-review-followups.md)
 - [x] A131 승인 대기 강조: 대화 화면 승인 안내 띠(사본 확인 버튼), 활동 패널 승인 구역 warn 강조, 승인 사본 한 필드 한 줄, 사이드바 승인 대기 행 글자색 · [기록](archive/a/A131-approval-emphasis.md)
+- [x] A135 실행 컨트롤 안내의 내부 코드를 접힌 줄로 내림(#52 C 리뷰 UI 3. UI 1·2는 A131) · [기록](archive/a/A135-internal-code-fold.md)
+- [ ] A135 설정 파일이 없을 때 화면에서 첫 파일 만들기(#52 C 리뷰 참고) — 등록 흐름(A81·A91)에서. 막힘: B6.8·EXE-01 B 필드
 - [ ] A24–A27 제품 Guard 조립·시작 복구 — 막힘: B6.8(영속 call_seq·실패 감사)·C2.6·C2.5
 - [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
@@ -125,7 +134,7 @@
 - [x] A47 모델 대화의 비신뢰 텍스트·일반 텍스트 표시 연결 · [기록](archive/a/A63-session-workspace.md)
 - [ ] A47 등록 화면·Scanner 경고에 연결 — 막힘: UI 이벤트 계약(B1.5)·검토된 설명(#20 3번)·SCAN-01
 - [x] A48 Scanner API 키 입력 화면(가림·끝 4자리·주입형 저장) · [기록](archive/a/A48-scanner-key-form.md)
-- [ ] A48 자격증명 관리자 저장 연결 — 막힘: C2.10([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21) 8번)
+- [ ] A48 자격증명 관리자 저장 연결 — A 차례: C2.10은 [#60](https://github.com/hsminu/MCP-Runtime-Guard/pull/60)으로 main에 병합됨, A 브랜치에 main 병합 뒤
 - [x] A49 로컬 파일 서버 루트·하위 폴더 등급 입력 폼 · [기록](archive/a/A49-local-folder-labels-form.md)
 - [x] A59 폴더 규칙 중복을 대소문자 무시로 검사 · [기록](archive/a/A59-folder-rule-case.md)
 - [ ] A49 등록·출처 규칙 연결 — 막힘: C Registry·safe_path·설정 로딩 담당(#19)
@@ -165,7 +174,7 @@
 - [x] A126 정책 화면 표가 폭을 다 쓰고 Codex 제외 도구 이름·이유가 잘리지 않음 · [기록](archive/a/A126-policy-table-width.md)
 - [x] A127 현황 화면을 줄 목록·막대그래프로 줄임(시연 기준 5075px → 1673px) · [기록](archive/a/A127-overview-rows.md)
 - [x] A128 MCP 서버 추가: '초안' 표기 제거, 설정 붙여넣기로 칸 채우기, 표시 이름·ID 추천·찾아보기·명령줄 인자, `.exe`만 통과(EXE-01) · [기록](archive/a/A128-server-add-paste.md)
-- [ ] A128 실제 Registry 등록·EXE-01 지문 확인 화면 — 막힘: EXE-01 B 설정 필드·Scanner(C2.10 #60, C4.14 #59). C2.6은 #54로 병합
+- [ ] A128 실제 Registry 등록·EXE-01 지문 확인 화면 — 막힘: EXE-01 B 설정 필드(#58에 추가 예정). C2.6(#54)·Scanner(C2.10 #60, C4.14 #59)는 main에 병합됨
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 
