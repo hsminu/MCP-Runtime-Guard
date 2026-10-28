@@ -595,14 +595,12 @@ def test_sqlite_stop_and_fact_audits_are_durable_without_question_or_arguments(t
             await system.record_request_user_input(IDENTITY)
             stopped = await system.stop_task(IDENTITY, STOP)
             assert stopped == await store.load_task("task")
-            rows = (
-                store._owned_connection()
-                .execute(
+            rows = await store._run_on_writer_async(
+                lambda connection: connection.execute(
                     "SELECT event_type,reason_code,detail,at_utc FROM audit_events "
                     "WHERE event_type IN ('SESSION_REQUEST_USER_INPUT','SESSION_STOPPED','HALTED') "
                     "ORDER BY rowid"
-                )
-                .fetchall()
+                ).fetchall()
             )
             assert [row[0] for row in rows] == [
                 SessionEvent.REQUEST_USER_INPUT.value,
@@ -628,10 +626,13 @@ def test_sqlite_session_audit_failure_does_not_ack_stop(tmp_path):
         ) as store:
             await store.create_task(h.store.states["task"], created_at_utc=NOW)
             h.guard = h.build_guard(store)
-            store._owned_connection().execute(
-                "CREATE TRIGGER fail_session BEFORE INSERT ON audit_events "
-                "WHEN NEW.event_type='SESSION_STOPPED' "
-                "BEGIN SELECT RAISE(ABORT, 'PRIVATE_QUESTION'); END"
+            await store._run_on_writer_async(
+                lambda connection: connection.execute(
+                    "CREATE TRIGGER fail_session BEFORE INSERT ON audit_events "
+                    "WHEN NEW.event_type='SESSION_STOPPED' "
+                    "BEGIN SELECT RAISE(ABORT, 'PRIVATE_QUESTION'); END"
+                ).close(),
+                write=True,
             )
             with pytest.raises(SystemControlError) as error:
                 await h.guard.system_control(store).stop_task(IDENTITY, STOP)
@@ -639,9 +640,11 @@ def test_sqlite_session_audit_failure_does_not_ack_stop(tmp_path):
             assert h.guard._global_halt
             assert (await store.load_task("task")).status is TaskStatus.HALTED
             assert (
-                store._owned_connection()
-                .execute("SELECT COUNT(*) FROM audit_events WHERE event_type='SESSION_STOPPED'")
-                .fetchone()[0]
+                await store._run_on_writer_async(
+                    lambda connection: connection.execute(
+                        "SELECT COUNT(*) FROM audit_events WHERE event_type='SESSION_STOPPED'"
+                    ).fetchone()[0]
+                )
                 == 0
             )
             await h.guard.aclose()

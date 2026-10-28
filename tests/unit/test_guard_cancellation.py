@@ -401,12 +401,10 @@ def test_sqlite_cancelled_task_halt_and_audit_survive_restart(tmp_path, cancel_s
             assert (await store.load_task("task")).status is TaskStatus.HALTED
             assert not h.guard._global_halt
             assert h.audit[-1].exception_type == "CancelledError"
-            audits = (
-                store._owned_connection()
-                .execute(
+            audits = await store._run_on_writer_async(
+                lambda connection: connection.execute(
                     "SELECT task_id,reason_code,detail FROM audit_events WHERE event_type='HALTED'"
-                )
-                .fetchall()
+                ).fetchall()
             )
             assert [tuple(row) for row in audits] == [("task", Reason.INTERNAL_ERROR.value, None)]
             assert isinstance(await h.guard.submit("healthy", _call()), Released)

@@ -134,11 +134,12 @@ def activate(store: RegistryStore, entry: RegistryEntry, **updates: object) -> R
 
 
 def rows(store: SQLiteStore) -> dict[str, list[tuple[object, ...]]]:
-    connection = store._owned_connection()
-    return {
-        table: [tuple(row) for row in connection.execute(SELECT_ROWS[table])]
-        for table in ("registrations", "registration_tools", "scan_reports", "audit_events")
-    }
+    return store._run_on_writer(
+        lambda connection: {
+            table: [tuple(row) for row in connection.execute(SELECT_ROWS[table])]
+            for table in ("registrations", "registration_tools", "scan_reports", "audit_events")
+        }
+    )
 
 
 def assert_failure(operation: Coroutine[object, object, object], reason: Reason) -> None:
@@ -161,15 +162,20 @@ def test_empty_queries_and_registration_roundtrip_preserve_all_tool_metadata(
     assert entry.updated_at_utc == NOW
     assert run(store.load_registration("server-1")) == entry
     assert run(store.list_registrations()) == (entry,)
-    schema_json = (
-        store._owned_connection()
-        .execute("SELECT input_schema_json FROM registration_tools ORDER BY tool_position")
-        .fetchall()
+    schema_json = store._run_on_writer(
+        lambda connection: connection.execute(
+            "SELECT input_schema_json FROM registration_tools ORDER BY tool_position"
+        ).fetchall()
     )
     assert [r[0] for r in schema_json] == [
         jcs_canonicalize(t.input_schema.to_dict()).decode() for t in original.tools
     ]
-    assert store._owned_connection().execute("PRAGMA foreign_key_check").fetchall() == []
+    assert (
+        store._run_on_writer(
+            lambda connection: connection.execute("PRAGMA foreign_key_check").fetchall()
+        )
+        == []
+    )
 
 
 def test_pending_scan_warning_and_incomplete_scan_can_be_explicitly_activated(
@@ -523,12 +529,12 @@ def test_identical_observation_and_reordering_preserve_active_review_and_scan(
     active = activate(store, entry, reviewed_scan_id="scan")
     observed = (tool("second"), tool(reviewed_description="원본은 무시"))
     before = rows(store)
-    changes = store._owned_connection().total_changes
+    changes = store._run_on_writer(lambda connection: connection.total_changes)
     changed = run(store.record_fingerprint_change("server-1", observed, at_utc=NOW))
     assert changed.changed_tools == ()
     assert changed.entry == active
     assert rows(store) == before
-    assert store._owned_connection().total_changes == changes
+    assert store._run_on_writer(lambda connection: connection.total_changes) == changes
     assert changed.entry.registration.tools[0].reviewed_description == "검토 완료"
 
 
@@ -543,7 +549,7 @@ def test_identical_observation_never_writes_in_any_registration_state(
     elif status is RegStatus.BLOCKED:
         entry = run(store.block_server("server-1", expected_row_revision=1, at_utc=NOW))
     before = rows(store)
-    changes = store._owned_connection().total_changes
+    changes = store._run_on_writer(lambda connection: connection.total_changes)
     # 무변경 관측은 감사 ID도 소비하지 않는다. 쓰려 하면 기존 ID와 충돌한다.
     store._audit_id_factory = lambda: "audit-0"
     for _ in range(2):
@@ -555,7 +561,7 @@ def test_identical_observation_never_writes_in_any_registration_state(
         assert changed.changed_tools == ()
         assert changed.entry == entry
         assert rows(store) == before
-        assert store._owned_connection().total_changes == changes
+        assert store._run_on_writer(lambda connection: connection.total_changes) == changes
 
 
 def test_empty_tool_set_supports_delete_all_and_explicit_activation(store: SQLiteStore) -> None:
@@ -631,7 +637,7 @@ def test_audit_failure_rolls_back_registration_tools_scan_and_revision(
             )
     assert_failure(coroutine, Reason.INTERNAL_ERROR)
     assert rows(store) == before
-    assert not store._owned_connection().in_transaction
+    assert not store._run_on_writer(lambda connection: connection.in_transaction)
 
 
 def test_report_summary_stays_only_in_report_json_and_reprs_and_audit_are_redacted(
@@ -762,9 +768,12 @@ def test_lost_registry_commit_ack_returns_no_copy_and_closes_writer(
     with SQLiteStore(path, audit_id_factory=lambda: f"audit-{next(sequence)}") as instance:
         if stage != "register":
             add(instance)
-        connection = instance._owned_connection()
-        assert isinstance(connection, FaultConnection)
-        connection.fail_commit = True  # 실제 COMMIT 뒤 ACK만 실패.
+
+        def fail_commit(connection: sqlite3.Connection) -> None:
+            assert isinstance(connection, FaultConnection)
+            connection.fail_commit = True  # 실제 COMMIT 뒤 ACK만 실패.
+
+        instance._run_on_writer(fail_commit)
         match stage:
             case "register":
                 coroutine = instance.register_server(registration(), at_utc=NOW)
@@ -805,7 +814,8 @@ def test_restart_rebuilds_full_copies_without_restoring_execution_authority(tmp_
     with SQLiteStore(path) as instance:
         assert run(instance.list_registrations()) == expected
         assert rows(instance) == facts
-        assert instance._allowed_decisions == instance._dispatch_contexts == {}
+        contexts = instance._test_context_snapshot()
+        assert all(not context for context in contexts)
         assert instance._inspect_startup().schema_version == 2
 
 
@@ -882,11 +892,28 @@ def test_v1_empty_registry_migration_preserves_all_other_table_rows(tmp_path: Pa
     legacy_database(path)
     before = legacy_facts(path)
     with SQLiteStore(path) as instance:
-        connection = instance._owned_connection()
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 2
+        assert (
+            instance._run_on_writer(
+                lambda connection: connection.execute("PRAGMA user_version").fetchone()[0]
+            )
+            == SCHEMA_VERSION
+            == 2
+        )
         assert run(instance.list_registrations()) == ()
-        assert connection.execute("SELECT count(*) FROM registration_tools").fetchone()[0] == 0
-        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert (
+            instance._run_on_writer(
+                lambda connection: connection.execute(
+                    "SELECT count(*) FROM registration_tools"
+                ).fetchone()[0]
+            )
+            == 0
+        )
+        assert (
+            instance._run_on_writer(
+                lambda connection: connection.execute("PRAGMA foreign_key_check").fetchall()
+            )
+            == []
+        )
     after = legacy_facts(path)
     assert after[1] == before[1]
     with sqlite3.connect(path) as connection:
@@ -949,9 +976,11 @@ def test_v1_migration_failure_rolls_back_table_drops_and_version(
 
 def test_scan_server_foreign_key_rejects_orphan_rows(store: SQLiteStore) -> None:
     with pytest.raises(sqlite3.IntegrityError):
-        store._owned_connection().execute(
-            "INSERT INTO scan_reports VALUES (?,?,?,?,?)",
-            ("scan", "absent", "{}", NOW.isoformat(), NOW.isoformat()),
+        store._run_on_writer(
+            lambda connection: connection.execute(
+                "INSERT INTO scan_reports VALUES (?,?,?,?,?)",
+                ("scan", "absent", "{}", NOW.isoformat(), NOW.isoformat()),
+            )
         )
 
 
@@ -970,7 +999,11 @@ def test_corrupt_persisted_registry_is_fixed_error_without_cache_copy(
 ) -> None:
     add(store)
     run(store.record_scan_report("scan", report(), at_utc=NOW))
-    store._owned_connection().execute(mutation)
+
+    def corrupt(connection: sqlite3.Connection) -> None:
+        connection.execute(mutation)
+
+    store._run_on_writer(corrupt)
     before = rows(store)
     assert_failure(store.load_registration("server-1"), Reason.INTERNAL_ERROR)
     assert rows(store) == before
