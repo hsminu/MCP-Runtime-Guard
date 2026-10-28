@@ -85,7 +85,7 @@
 - [x] C5.1 Scanner 목록 수신 경계 합성 fixture(stdio·HTTP 22개 시나리오) · [검증](archive/tasks/c-scanner-operating-validation.md)
 - [ ] C5.2 C2.11 서버를 합성 문서(public·personal·private, TEST_SECRET)로 띄우는 fixture
 - [ ] C5.3 Remote Send HTTP 서버(127.0.0.1, tools/call과 프로토콜 메시지 구분 계수)
-- [ ] C5.4 approval_consumed·host_dispatch·wire tools/call·receiver_effect를 요청별로 연결
+- [x] C5.4 approval_consumed·host_dispatch·wire tools/call·receiver_effect를 요청별로 연결: 공용 하니스 `tests/unit/c_counting.py`(승인 소비·dispatch는 `request_id`, wire·효과는 인자 표지) · [기록](archive/c/C5.4-approval-counts.md)
 - [ ] C5.5 wire_tools_call과 wire_post 대응, 카운터는 테스트 임시 파일
 - [ ] C5.6 공격 fixture: 응답 유실·307/308·재연결·정의 변조·stderr/progress 유출
 - [ ] C5.7 관찰 불가 경로를 검증 불가로 기록
@@ -120,8 +120,8 @@
 
 ## 인수 기준
 
-- [ ] DENY와 승인 전·거절·만료 ASK에서 dispatch·wire·부작용 0
-- [ ] 승인 1회와 더블클릭에서 consumed·dispatch·wire·부작용이 각각 1
+- [x] DENY와 승인 전·거절·만료 ASK에서 dispatch·wire·부작용 0: Guard 입구·실제 stdio·HTTP 서버 기준, 작업 취소 포함(C5.4). Codex 경유는 C6.8 · [기록](archive/c/C5.4-approval-counts.md)
+- [x] 승인 1회와 더블클릭에서 consumed·dispatch·wire·부작용이 각각 1: 연속 2회·동시 2·5회 승인 모두 각 1(C5.4). 화면 쪽 Enter 반복은 A `test_runtime` · [기록](archive/c/C5.4-approval-counts.md)
 - [ ] 쓰기 응답 유실 후 UNKNOWN_OUTCOME, 새 호출 ID·재연결로도 추가 전송 0
 - [ ] READ 커밋 실패·미분류·원시 로그 공격에서 결과·기밀 표지 미공개
 - [ ] 측정 원자료·미실행·검증 불가 항목·약점 조치와 재현 방법 기록
