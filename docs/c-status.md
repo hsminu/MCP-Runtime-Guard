@@ -1,13 +1,12 @@
 # C 현황
 
-갱신: 2026-10-27 · main `a3fc2a1` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-28 · main `02cad41` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
 | Store 계약 회신(B6-01–05) | B·A | C1.8, C3.5 |
-| AGT 제거(구현) | A·B | C2.9, C6.3, C6.4, C6.9 |
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
 | 설치판 리소스 위치(패키징) | A | C6.20 |
@@ -97,13 +96,13 @@
 
 - [x] C6.1 CI 1단계(Windows, Ruff·포맷·mypy·단위) · #4 · [통합 기록](archive/integration-a-b.md)
 - [x] C6.2 contract 테스트 Windows 수정(socket 차단·SDK import 경로·deadline) · #7
-- [ ] C6.3 CI 2단계(import-linter·Bandit·Semgrep·pip-audit, pip-audit 예외 없음) — 막힘: AGT 제거
-- [ ] C6.4 contract 테스트 CI 편입(C6.3과 함께) — 막힘: AGT 제거
+- [ ] C6.3 CI 2단계(import-linter·Bandit·Semgrep·pip-audit, pip-audit 예외 없음)
+- [ ] C6.4 contract 테스트 CI 편입(C6.3과 함께)
 - [ ] C6.5 실험 스크립트 Windows 수정(socket 차단·`PYTHONPATH`·인코딩)과 MCP 정의 수집기 저장소 반영
 - [ ] C6.6 Windows Cisco 실험(2026-10-14~15) 완료 기록 작성
 - [ ] C6.7 Fake·실제 Transport·Store·AccessChecker·Scanner에 같은 계약 테스트
 - [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05
-- [ ] C6.9 자체 접근 규칙의 거절·오류·누락(활성화 때 사용자가 끈 도구)에서 host_dispatch 0 · [결정](contracts.md#사용자-결정) — 막힘: AGT 제거(B 판정·A 연결)
+- [x] C6.9 자체 접근 규칙의 거절·오류·누락(활성화 때 사용자가 끈 도구)에서 전송 0: 제품 조립의 실제 `AccessRulesChecker`·C `ServerRegistry`와 실제 stdio(C2.6)·HTTP 서버로 승인 소비·host_dispatch·wire `tools/call`·수신 효과 4개 계수 확인, 대조군 포함 28개 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C6.9-access-rule-counts.md)
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [ ] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록
