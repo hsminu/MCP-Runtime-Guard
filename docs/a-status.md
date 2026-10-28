@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-28 · main `d5517ee` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-28 · main `8e5ffdf` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -9,22 +9,21 @@
 | Registry·endpoint 검증·fixture·독립 인수 | C | A04, A07–A12, A14–A16, A23, A36–A40 |
 | 시작 복구·영속 call_seq·조회/감사 API (B-SQL-01–06) | B | A13, A24–A27, A33–A35 |
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
-| `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22 |
+| `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22, A50 |
 | 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
-| 동기 `AccessChecker` 포트(ACCESS-01, B2.9)·AGT 코드 제거(B2.11)·계약 합의 | B·A·C | A02·A06, A41, A44, A53 |
-| L2(C6.14, C 브랜치에 있고 main 반영 전)·T43/T46·수신 상한 독립 인수(C5.8)·MCP 서버 실행 파일 해시 출처(C2.6)·ScanReport·Scanner 자격증명(C2.10). launcher·앱 폴더·제품 DB 위치(C2.12·C2.13·C2.17)는 [PR #35](https://github.com/hsminu/MCP-Runtime-Guard/pull/35)로 main에 병합됨 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A19–A22, A47, A48, A50, A52 |
+| T43/T46·수신 상한 독립 인수(C5.8)·Scanner 자격증명(C2.10, [PR #60](https://github.com/hsminu/MCP-Runtime-Guard/pull/60))·검사 예산(C4.14, [PR #59](https://github.com/hsminu/MCP-Runtime-Guard/pull/59)). L2(C6.14, #41)·설정 파일(C2.14, #44)·`secrets` 허용(#35)·서버 실행 입구(C2.6, #54)·ScanReport 번역(C4.9, #57)은 main에 병합됨 ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A47, A48, A52 |
 | 제품 Guard 조립용 영속 `next_call_seq`·실패 감사(B6.8). 설정 파일 읽기·저장과 Registry 로드는 A129로 연결됨 | B | A24–A27, A81, A129 |
-| stdio 서버 실행 파일 고정(EXE-01): B 설정 필드 `command_sha256`·`command_size`, C 지문 계산·서버 실행 입구(C2.6). HTTP URL 검증(C2.5, [PR #50](https://github.com/hsminu/MCP-Runtime-Guard/pull/50)) | B·C | A24–A27, A49, A128 |
+| stdio 서버 실행 파일 고정(EXE-01): B 설정 필드 `command_sha256`·`command_size`(#48 답변, PR 미정). C 지문 계산·서버 실행 입구(C2.6, [PR #54](https://github.com/hsminu/MCP-Runtime-Guard/pull/54))와 HTTP URL 검증(C2.5, [PR #50](https://github.com/hsminu/MCP-Runtime-Guard/pull/50))은 main에 병합됨 | B | A09·A10, A15·A16, A24–A27, A49, A128 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
 
-**A가 막고 있는 것**: 없음. B1.7·B2.11·C2.10·C5.8이 기다리던 A 브랜치는 [PR #29](https://github.com/hsminu/MCP-Runtime-Guard/pull/29)로 main에 병합됐다. #36 A 리뷰와 #37 A 회신은 게시했다.
+**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.10 키 입력 화면 연결(#60 병합 뒤), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드 뒤), C6.20 설치판 리소스 위치(패키징). #61 A 리뷰는 게시했다.
 
 ## 계약·환경
 
 - [x] A01·A03 B ref·테스트 동기화, Runner epoch 전달
 - [ ] A01·A03 domain/ports 합의 — 막힘: 3인 합의
 - [x] A02·A06 AGT core 5.0.0 포함 lock, Python 3.12 새 환경 설치 재현
-- [ ] A02·A06 AGT 제거 뒤 lock·새 환경 설치 재확인 — 막힘: B AGT 코드 제거
+- [ ] A02·A06 AGT 제거 뒤 lock·새 환경 설치 재확인 — A 차례(#47 병합)
 - [ ] A02·A06 Scanner 포함 공통 제품 조합 인수 — 막힘: C 조합 인수(main lock에는 Scanner 포함, #6)
 - [ ] A04 C 연결: 요구사항은 전달 — 막힘: C Registry
 - [x] A05 앱 내부 Task projection·사람 review 연결
@@ -41,7 +40,7 @@
 - [x] A57 수집 시간 기준(연결 포함·초기화 시작부터)·반복 cursor·중복 이름·수집 중 종료 보정 · [기록](archive/a/A57-tools-list-timing-and-loop-rules.md)
 - [x] A76 `tools/list` 파싱 전 페이지 1MiB·조회 누적 8MiB와 주입형 MCP 파이프 연결 · [기록](archive/a/A76-mcp-listing-byte-ingress.md)
 - [x] A77 HTTP JSON·SSE 압축 해제 후 바이트 제한·종료 확인과 실패 격리 · [기록](archive/a/A77-http-listing-byte-ingress.md)
-- [ ] A09·A10 C launcher 파이프 실제 연결·수신 상한 독립 인수 — 막힘: C2.6 MCP 서버 실행 파일 해시 출처·C5.8([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6247463861))
+- [ ] A09·A10 C launcher 파이프 실제 연결·수신 상한 독립 인수 — 막힘: EXE-01 B 설정 필드·C5.8(C2.6은 #54로 병합, [#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6247463861))
 - [x] A13 미종결 거부·정리 미확인 재시작 차단, SQLite 같은 스레드 종료 순서(W1)
 - [ ] A13 이전 Task 종결·시작 복구 — 막힘: B-SQL-02·C 인수
 - [x] A14 errlog 필수·SDK·합성 HTTP 서버 로그 격리
@@ -53,7 +52,7 @@
 - [x] A100 대조 뒤 `tools/list_changed`를 받으면 그 서버를 이번 실행 동안 PENDING 취급, 새 세션 도구 목록에서 제외(LIST-01, PR #34 결정) · [기록](archive/a/A100-tools-list-changed.md)
 - [ ] A100 서버별 목록 수신 뒤·대조 전 알림 처리 — 막힘: 사용자 결정(현재는 결정 문구대로 차단하지 않음)
 - [x] A15·A16 연결 직후 목록을 C `ServerRegistry.observe`로 기록(정의 변경은 PENDING으로 저장, 기록 실패는 이번 실행 차단) · [기록](archive/a/A129-settings-file-registry-connection.md)
-- [ ] A15·A16 실제 launcher 연결 — 막힘: C2.6·EXE-01 B 설정 필드
+- [ ] A15·A16 실제 launcher 연결 — 막힘: EXE-01 B 설정 필드(C2.6은 #54로 병합)
 
 ## 접근 규칙·모델·Runner
 
@@ -64,15 +63,14 @@
 - [ ] A18 영속 agt_mode 감사 — 폐기: AGT 제거(mode 감사 불필요)
 - [ ] A18 dispatch 0 독립 인수 — 폐기: AGT 제거(자체 규칙은 C6.9로 검증)
 - [x] A51 자체 접근 규칙을 `AccessChecker`로 Guard에 연결·규칙 설정 로딩(A86, 현재 async 포트) · [기록](archive/a/A86-profile-guard-assembly.md)
-- [ ] A51 동기 포트 전환 — 막힘: B2.9(ACCESS-01)
-- [ ] A53 B의 AGT 코드 제거 중 A 소유 파일 리뷰 — 막힘: B PR
+- [x] A51·A53 동기 포트 전환과 AGT 제거에서 바뀐 A 소유 파일 리뷰(#47 A 승인) · [기록](archive/a/A51-A53-agt-removal-review.md)
 - [x] A87 Codex 0.162.1 프로토콜 순수 함수·대본형 가짜 app-server · [기록](archive/a/A87-codex-protocol-and-fake-app-server.md)
 - [x] A88 Codex 세션 관리자 A 계층(L3·Guard 중계·FIFO·감시 상한·제품 연결·취소 시 세션 정지) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A101 C launcher(C2.12)·앱 폴더(C2.13)·CODEX_HOME을 세션 준비에 연결, 로컬 codex.exe 지정(`--codex-exe`), 준비 실패는 앱이 아니라 세션만 차단 · [기록](archive/a/A101-codex-launcher-preparation.md)
 - [x] A102 단일 실행 잠금을 DB 열기 전으로 옮기고, 잠금을 못 잡으면 앱을 시작하지 않음(REC-01의 C2.13 몫, #35 질문) · [기록](archive/a/A102-app-lock-before-db.md)
 - [x] A103 Task 폴더 삭제를 작업 스레드로 옮기고 삭제 상한을 따로 둠(PR #35 B 리뷰) · [기록](archive/a/A103-task-folder-removal-thread.md)
 - [x] A110 앱을 닫을 때 정리가 확인되지 않으면 단일 실행 잠금을 쥔 채 프로세스 종료(B6.17 8.1, #37) · [기록](archive/a/A110-unconfirmed-exit-keeps-lock.md)
-- [ ] A19·A20 실제 codex.exe 세션 — 막힘: L2(C6.14)·Profile 설정 파일(CFG-01, B 변환·C 파일 연산)·로그인 뒤 CODEX_HOME `secrets` 허용(C6.19, A108 발견 1)
+- [ ] A19·A20 실제 codex.exe 세션 — C 쪽 막힘은 풀림(L2 C6.14 #41, 설정 파일 CFG-01 #44·A129, CODEX_HOME `secrets` 허용 #35). 남은 것: A `run_l2` 연결, 세션 관리자 공통 계약 합의(막힌 것 표)
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
 - [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
 - [ ] A109 기기 코드 로그인이 막힌 계정 처리(화면 안내 또는 브라우저 로그인 지원) — 막힘: 사용자 결정(A108 발견 2)
@@ -92,7 +90,7 @@
 - [x] A95 Codex에서 빠진 도구를 이유와 함께 정책 화면에 표시(2026-10-18 결정, PR #31) · [기록](archive/a/A95-codex-excluded-tools.md)
 - [x] A92 contracts 10-17 "도구 이름 제한 없음"과 Codex 이름 규칙 충돌 알림([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6251209139) 2절, 사용자 결정 대기) · [기록](archive/a/A92-contract-replies-and-b72-review.md)
 - [x] A120 대화 입력창에서 고른 추론 수준을 그 턴부터 Codex `turn/start`에 전달(`ultra` 제외) · [기록](archive/a/A120-reasoning-effort.md)
-- [ ] A120 실제 codex.exe에서 추론 수준 반영 확인 — 막힘: L2(C6.14)·CFG-01(A19·A20과 같음)
+- [ ] A120 실제 codex.exe에서 추론 수준 반영 확인 — A19·A20과 같음
 - [x] A90 `baseInstructions` 프롬프트 문구·C1.9 관측 지점(`SessionObservations`) · [기록](archive/a/A88-codex-session-manager.md)
 - [x] A90 답변 스트리밍의 대화 화면 연결(bridge `conversation_partial`, 부분 답 교체·중단 표시) · [기록](archive/a/A90-answer-streaming.md)
 - [x] A74 Task 폴더 정리 실제 연결(A101, C2.13 `remove_task_folder`) · [기록](archive/a/A101-codex-launcher-preparation.md)
@@ -103,7 +101,7 @@
 - [x] A99 Codex 원격 제어가 `disabled`가 아니면 Task 정지·로그인 연결 종료(C-CODEX-07, PR #35 A 리뷰) · [기록](archive/a/A99-remote-control-stop.md)
 - [x] A21·A22 Runner expected_epoch·승인 resume 연결
 - [x] A21·A22 Task별 새 세션·thread 격리(가짜 app-server) · [기록](archive/a/A88-codex-session-manager.md)
-- [ ] A21·A22 실제 codex.exe로 T21 — 막힘: L2(C6.14)·Profile(CFG-01). launcher 연결은 A101
+- [ ] A21·A22 실제 codex.exe로 T21 — A19·A20과 같음. launcher 연결은 A101
 - [x] A23 B 리뷰: AGT 지연 중 긴급 차단 수정·회귀 · [기록](archive/tasks/a-b-review.md)
 - [ ] A23 독립 wire 검증 — 막힘: C
 
@@ -143,7 +141,7 @@
 - [ ] A105 서버 활성화도 같은 잠금으로 묶음 — 막힘: C Registry 활성화(C4.10)
 - [x] A117 겹친 서버 접근 변경이 앞 변경이 저장한 문서에서 시작함(정책 잠금 안에서 문서를 읽음, A112 발견) · [기록](archive/a/A117-overlapping-policy-changes.md)
 - [x] A106 제품 DB를 앱 폴더 고정 경로(`data\guard.sqlite3`, C2.17)로 옮기고 `--db-path`는 시연 전용으로, `--demo`는 앱 폴더 안을 열지 못하게 함(#35 B 리뷰 1번) · [기록](archive/a/A106-product-db-path.md)
-- [ ] A106 C `AppFolders.db_path()`(DB·`-wal`·`-shm` 링크 확인)로 교체 — 막힘: C 다음 PR(#37 C 회신)
+- [x] A106 C `AppFolders.db_path()`(DB·`-wal`·`-shm` 링크·권한 확인)로 교체, 거부되면 창을 열기 전에 시작하지 않음 · [기록](archive/a/A106-db-path-check.md)
 - [ ] A81·A91 제품 화면에서 Profile 저장·서버 활성화 — 저장은 A129로 파일에 연결됨. 막힘: 제품 Guard 조립(B6.8)·서버 실행(C2.6)
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
@@ -160,13 +158,13 @@
 - [x] A121 화면 개편: Orca·Paradev 기준 라이트·다크 색, 세션 작업 공간·사이드바, 색·간격·문구 감사 테스트 · [기록](archive/a/A121-gui-redesign.md)
 - [x] A122 결과 · 실행 활동을 대화 옆 패널(대화 머리 "활동")과 전체 화면(사이드바)으로 나눔 · [기록](archive/a/A122-results-dock.md)
 - [x] A123 화면의 AGT 표시 제거(#47과 같은 변경) · [기록](archive/a/A123-agt-display-removal.md)
-- [ ] A123 `RuntimeIdentity.agt_mode`와 그 생성 코드 정리 — `src`에서는 #47(B2.11)로 제거됨. `examples/ui_demo.py`의 호환 코드만 남음, A 차례
+- [x] A123 `RuntimeIdentity.agt_mode`와 그 생성 코드 정리(`src`는 #47, 남은 `examples/ui_demo.py` 호환 코드 제거) · [기록](archive/a/A123-ui-demo-agt-option.md)
 - [x] A124 가짜 조회 데이터로 전 화면을 눌러 보는 시연(`examples/ui_demo.py`) · [기록](archive/a/A124-ui-demo.md)
 - [x] A125 앱 문구를 하세요체(안내)·음슴체(상태)로 통일 · [기록](archive/a/A125-ui-copy-style.md)
 - [x] A126 정책 화면 표가 폭을 다 쓰고 Codex 제외 도구 이름·이유가 잘리지 않음 · [기록](archive/a/A126-policy-table-width.md)
 - [x] A127 현황 화면을 줄 목록·막대그래프로 줄임(시연 기준 5075px → 1673px) · [기록](archive/a/A127-overview-rows.md)
 - [x] A128 MCP 서버 추가: '초안' 표기 제거, 설정 붙여넣기로 칸 채우기, 표시 이름·ID 추천·찾아보기·명령줄 인자, `.exe`만 통과(EXE-01) · [기록](archive/a/A128-server-add-paste.md)
-- [ ] A128 실제 Registry 등록·EXE-01 지문 확인 화면 — 막힘: C 지문 계산·서버 실행 입구(C2.6)·EXE-01 B 설정 필드·Scanner(C2.10)
+- [ ] A128 실제 Registry 등록·EXE-01 지문 확인 화면 — 막힘: EXE-01 B 설정 필드·Scanner(C2.10 #60, C4.14 #59). C2.6은 #54로 병합
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 
@@ -183,7 +181,7 @@
 - [x] A93 A 브랜치 main 병합 PR([#29](https://github.com/hsminu/MCP-Runtime-Guard/pull/29), B·C 리뷰·사용자 병합 대기) · [기록](archive/a/A93-main-merge-pr.md)
 - [x] A71 A 단위 테스트 포맷 제외 대상 정리·AST 동일 검증 · [기록](archive/a/A71-a-unit-format-baseline.md)
 - [x] A43 공통 포맷 제외 목록·타입/린트 예외 축소(A93 PR에서 공통 설정 변경으로 표시) · [기록](archive/a/A43-lint-type-baseline-reduction.md)
-- [ ] A44 시연 앱의 `tests.unit.test_guard` 대역 import 제거 — B AGT 제거 PR(#47)이 병합돼 A 차례
+- [x] A44 시연 앱의 `tests.unit.test_guard` 대역 import 제거(메모리 모드도 임시 파일의 B SQLiteStore, 고정 합성 Registry) · [기록](archive/a/A44-demo-without-test-doubles.md)
 - [x] A45 제품 wheel 외부 설치·콘솔·offscreen 시작/종료·C 미제공 시작 거부 검증 · [기록](archive/a/A45-installed-wheel-product-smoke.md)
 - [x] A46 HTTP transport TLS 문맥을 이벤트 루프 밖에서 생성(반복 연결 정지 해소) · [기록](archive/a/A46-tls-off-loop.md)
 - [ ] A60 SDK HTTP 전체 경고 해소·B 간헐 실패 재현 — SDK 1.30.0 SSE 재현은 해소, 별도 소켓 경고와 B 실패 원인 미확정·공통 버전 검토 대기
@@ -197,9 +195,10 @@
 - [x] A111 0단계: A 모듈 계층·시큐어 코딩 규칙 테스트와 기준선 측정 · [기록](archive/a/A111-refactor-baseline-and-rules.md)
 - [x] A112 1단계: `SessionRuntime` 책임 분리(생성·정리·정책 변경·시작 게이트) · [기록](archive/a/A112-session-runtime-split.md)
 - [x] A113 2단계: `mcp_transport`를 같은 이름의 패키지로 나누고 긴 함수 정리 · [기록](archive/a/A113-mcp-transport-package.md)
-  - 남은 것: B 리뷰, 개발문서·team-workflow의 파일 경로 갱신(main PR 제안)
+  - B 리뷰 받음([#40](https://github.com/hsminu/MCP-Runtime-Guard/issues/40), 고칠 점 없음). 의견대로 `ResultTooLarge`의 N818 이유 주석에 감사 값 일치 이유를 더함
+  - 남은 것: 개발문서·team-workflow의 파일 경로 갱신(main PR 제안)
 - [x] A118 A113에서 찾은 mcp_transport 테스트 빈틈 9개 중 7개를 테스트로 메움(나머지 2개는 관찰 불가) · [기록](archive/a/A118-mcp-transport-test-gaps.md)
 - [x] A114 3단계: Codex 계층(`codex_session`·`jsonrpc_client`·`codex_stream`·`guard_relay`) 정리 · [기록](archive/a/A114-codex-layer-cleanup.md)
 - [x] A119 A114에서 찾은 Codex 세션 테스트 빈틈 4개와 멈춤 1개를 메움 · [기록](archive/a/A119-codex-session-test-gaps.md)
-- [ ] A115 4단계: `BackendBridge` 안쪽 분리(C 리뷰) — 막힘: B AGT 제거(B2.11, 같은 파일)
-- [ ] A116 5단계: UI 화면 조립·`__main__` 정리(C 리뷰) — 막힘: B AGT 제거(B2.11, 같은 파일)
+- [ ] A115 4단계: `BackendBridge` 안쪽 분리(C 리뷰) — A 차례(B2.11 #47 병합)
+- [ ] A116 5단계: UI 화면 조립·`__main__` 정리(C 리뷰) — A 차례(B2.11 #47 병합)
