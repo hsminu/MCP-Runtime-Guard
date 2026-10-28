@@ -11,10 +11,13 @@ from enum import Enum, auto
 from types import TracebackType
 
 import anyio
+from mcp.shared.exceptions import McpError
+from mcp.types import CONNECTION_CLOSED
 
 from guard_app.adapters.mcp_ingress import IngressGate
 from guard_app.adapters.mcp_transport.result_budget import check_result_budget
 from guard_app.adapters.mcp_transport.sdk_session import SessionFactory, ToolSession
+from guard_app.adapters.mcp_transport.streams import http_teardown_completed
 from guard_app.adapters.mcp_transport.tool_listing import (
     ToolListing,
     ToolListLimits,
@@ -42,7 +45,14 @@ class _Command:
 
 
 class _SessionExitTracker:
-    """Observe successful context exit even when the owner was cancelled."""
+    """Observe successful context exit even when the owner was cancelled.
+
+    An HTTP session that died of a request error still tears down completely
+    (`http_teardown_completed`). That exit counts as done and is not raised to
+    the owner; the worker is then FAILED for the rest of the run like any
+    session that ended while serving. It is never applied while the owner
+    itself is being cancelled.
+    """
 
     def __init__(self, context: AbstractAsyncContextManager[ToolSession]) -> None:
         self._context = context
@@ -62,7 +72,16 @@ class _SessionExitTracker:
         tb: TracebackType | None,
     ) -> bool | None:
         self.exit_attempted = True
-        suppressed = await self._context.__aexit__(exc_type, exc, tb)
+        try:
+            suppressed = await self._context.__aexit__(exc_type, exc, tb)
+        except BaseExceptionGroup as group:
+            owner = asyncio.current_task()
+            if not http_teardown_completed(group) or (owner is not None and owner.cancelling()):
+                raise
+            # The body was cancelled by the SDK's own task group, which has
+            # already taken that cancellation back; nothing outside asked for it.
+            self.exited = True
+            return True
         self.exited = True
         return suppressed
 
@@ -101,6 +120,28 @@ def _consume_command_failure(future: asyncio.Future[RawResult]) -> None:
         future.exception()
 
 
+def _session_broken(exc: Exception) -> bool:
+    """The call's failure means the session itself can serve nothing more.
+
+    Besides a closed or broken stream: when its read stream ends, mcp 1.29.0's
+    `BaseSession._receive_loop` answers every request still waiting with this
+    fixed error, then closes its write stream. A server that sends the same
+    code and message only stops its own session for this run.
+    """
+    if isinstance(exc, McpError):
+        return exc.error.code == CONNECTION_CLOSED and exc.error.message == "Connection closed"
+    return isinstance(
+        exc,
+        (
+            anyio.ClosedResourceError,
+            anyio.BrokenResourceError,
+            anyio.EndOfStream,
+            ConnectionError,
+            ExceptionGroup,
+        ),
+    )
+
+
 def _exception_name(exc: Exception) -> str:
     name = type(exc).__name__
     return name if name.isascii() and name.isidentifier() and len(name) <= 64 else "Exception"
@@ -113,6 +154,10 @@ class ServerWorker:
     streams are returned to callers. A cancelled caller abandons its future;
     an already running SDK call continues to a bounded outcome and is never
     re-enqueued. The Guard is responsible for Task status after cancellation.
+
+    `on_failed` is called once, with nothing, when a session that was READY
+    stops serving for any reason other than a requested close (#61): the
+    owner can then refuse new calls before they are reserved.
     """
 
     def __init__(
@@ -126,9 +171,12 @@ class ServerWorker:
         max_pending_commands: int = DEFAULT_PENDING_COMMANDS,
         on_dispatch: Callable[[str], None] | None = None,
         tool_list_limits: ToolListLimits | None = None,
+        on_failed: Callable[[], None] | None = None,
     ) -> None:
         if not callable(session_factory):
             raise TypeError("session factory required")
+        if on_failed is not None and not callable(on_failed):
+            raise TypeError("failure callback must be callable")
         if tool_list_limits is not None and type(tool_list_limits) is not ToolListLimits:
             raise TypeError("tools/list limits have invalid type")
         for timeout in (call_timeout_s, startup_timeout_s, close_timeout_s):
@@ -138,6 +186,8 @@ class ServerWorker:
         require_pending_limit(max_pending_commands)
         self._session_factory = session_factory
         self._on_dispatch = on_dispatch
+        self._on_failed = on_failed
+        self._failure_reported = False
         self._tool_list_limits = tool_list_limits
         self._tool_listing: ToolListing | None = None
         self._call_timeout_s = float(call_timeout_s)
@@ -366,6 +416,7 @@ class ServerWorker:
             self._session_entered = tracker.entered
             self._session_exit_attempted = tracker.exit_attempted
             self._session_exited = tracker.exited
+        serving = self._state is _State.READY
         self._state = (
             _State.FAILED
             if self._unhealthy or self._state in (_State.STARTING, _State.READY)
@@ -374,6 +425,17 @@ class ServerWorker:
         self._ready.set()
         self._reject_queued("WorkerClosed")
         self._stopped.set()
+        if serving:
+            # The session ended on its own while serving (an HTTP request error,
+            # a closed stream); a requested close leaves it CLOSING first.
+            self._report_failed()
+
+    def _report_failed(self) -> None:
+        if self._failure_reported:
+            return
+        self._failure_reported = True
+        if self._on_failed is not None:
+            self._on_failed()
 
     def _quiesce_failed_ingress(self) -> None:
         gate = self._ingress_gate
@@ -417,16 +479,7 @@ class ServerWorker:
                     cmd.future.set_exception(DispatchError("TimeoutError"))
                 return
             except Exception as exc:  # noqa: BLE001 - designated ServerWorker._execute boundary
-                if isinstance(
-                    exc,
-                    (
-                        anyio.ClosedResourceError,
-                        anyio.BrokenResourceError,
-                        anyio.EndOfStream,
-                        ConnectionError,
-                        ExceptionGroup,
-                    ),
-                ):
+                if _session_broken(exc):
                     self._stop_unhealthy()
                 if not cmd.future.done():
                     cmd.future.set_exception(DispatchError(_exception_name(exc)))
@@ -475,10 +528,13 @@ class ServerWorker:
 
     def _stop_unhealthy(self) -> None:
         """A broken session: refuse new commands, reject queued ones, stop the owner loop."""
+        serving = self._state is _State.READY
         self._unhealthy = True
         self._state = _State.CLOSING
         self._reject_queued("WorkerClosed")
         self._queue.put_nowait(_STOP)
+        if serving:
+            self._report_failed()
 
     def _reject_queued(self, name: str) -> None:
         while not self._queue.empty():

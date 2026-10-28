@@ -601,14 +601,15 @@ def test_busy_task_does_not_block_other_task_or_new_session_and_results_stay_sco
     )
     assert panel._busy
     assert not beta_view.send.isEnabled()
-    assert "NOT_READY" not in panel.message.text()
+    assert "NOT_READY" not in panel.internal_code.text()
     assert alpha_view.pending_command is None
     assert beta_view.pending_command == beta_command
 
     shell.sessions.select(alpha_view.key)
     assert not panel._busy
     assert alpha_view.send.isEnabled()
-    assert "NOT_READY" in panel.message.text()
+    assert "NOT_READY" not in panel.message.text()
+    assert panel.internal_code.text() == "내부 코드: NOT_READY"
     shell.new_session_button.click()
     assert shell.sessions.current.start.isEnabled()
     assert beta_view.pending_command == beta_command

@@ -220,6 +220,10 @@ class SessionRuntime:
             ),
         )
         self._work = BackgroundWork()
+        # Guard's records of session stops and user-input requests, apart from
+        # cleanup so shutdown waits for exactly them before the Store closes.
+        self._records = BackgroundWork()
+        self._stops_unconfirmed = False
         self._cleanup = SessionCleanup(
             preparation,
             self._admission,
@@ -228,7 +232,7 @@ class SessionRuntime:
             lambda task_id: self._set_code(task_id, "CODEX_CLEANUP_UNCONFIRMED"),
         )
         system = _system_control(store, assembled) if system_control is None else system_control
-        self._stops = StopChannel(store, system, self._admission, self._work)
+        self._stops = StopChannel(store, system, self._admission, self._records)
         self._events = _TaskEvents(approvals, self._admission)
         self._creations = _Creations(close_store)
         self._running: dict[str, _RunningTask] = {}
@@ -494,6 +498,8 @@ class SessionRuntime:
         if self._admission.closed:
             if self._admission.cleanup_unconfirmed:
                 raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
+            if self._stops_unconfirmed:
+                raise SessionRuntimeError("SESSION_STOP_UNCONFIRMED")
             return
         self._admission.close()
         # Bridge normally cancels creation first; direct callers get the same
@@ -524,10 +530,35 @@ class SessionRuntime:
         finally:
             self._running.clear()
             try:
-                if self._assembled is not None:
-                    await self._assembled.aclose()
+                self._stops_unconfirmed = not await self._close_guard()
             finally:
                 self._creations.close_store()
+        if self._stops_unconfirmed:
+            raise SessionRuntimeError("SESSION_STOP_UNCONFIRMED")
+
+    async def _close_guard(self) -> bool:
+        """Close Guard once the session stops it is recording have ended.
+
+        Guard records a stop under the Task lock (STOP-01), in the background.
+        Closing Guard halts it globally and a closed Store refuses the write, so
+        a stop still waiting then ends as SystemControlError (#58 B review). The
+        stops are waited for after the transport has settled reserved calls,
+        while Guard still records. One that does not end in time fails against
+        the halted Guard, and that too ends before the Store closes. False when
+        a stop did not end within its bound.
+        """
+        recorded = False
+
+        async def settle() -> None:
+            nonlocal recorded
+            recorded = await self._records.wait(self._limits.stop_record_s)
+
+        if self._assembled is None:
+            await settle()
+        else:
+            await self._assembled.aclose(settle=settle)
+        ended = await self._records.wait(self._limits.session_s)
+        return recorded and ended
 
     async def _close_account(self) -> bool:
         """End the login screen's app-server. False when its exit was not confirmed in time."""

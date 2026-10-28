@@ -78,7 +78,9 @@ class RuntimePanel(QWidget):
         self._reviewed: str | None = None
         self._commands: dict[str, ControlAction | str] = {}
         self._command_scopes: dict[str, tuple[str, int]] = {}
-        self._messages: dict[tuple[str, int], str] = {}
+        # Each session keeps its last status line and the internal code under it.
+        self._messages: dict[tuple[str, int], tuple[str, str | None]] = {}
+        self._code: str | None = None
         self._scope_enabled = False
         self._scope: tuple[str, int] | None = None
         self._snapshots: dict[tuple[str, int], TaskProjection] = {}
@@ -97,12 +99,25 @@ class RuntimePanel(QWidget):
         self.summary.setMinimumWidth(0)
         self.summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.message = plain_label("상태 확인 대기", name="runtimeMessage")
+        # Demos and support need the internal code, so it stays one click away
+        # under the message instead of being part of it (#52 C review).
+        self.code_toggle = KeyboardActionButton("내부 코드 ▸")
+        self.code_toggle.setObjectName("linkButton")
+        self.code_toggle.setCheckable(True)
+        self.code_toggle.setAutoDefault(False)
+        self.code_toggle.setAccessibleName("내부 코드 펼치기")
+        self.internal_code = plain_label(name="secondary")
         self.run_button = KeyboardActionButton("실행 / 다음 모델 단계")
         self.run_button.set_visual(icon="play", variant="primary")
         self._session_actions = QGridLayout()
         self._session_actions.setSpacing(12)
         session_layout.addLayout(self._session_actions)
-        session_layout.addWidget(self.message)
+        notice = QVBoxLayout()
+        notice.setSpacing(0)
+        notice.addWidget(self.message)
+        notice.addWidget(self.code_toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        notice.addWidget(self.internal_code)
+        session_layout.addLayout(notice)
         layout.addWidget(session)
 
         approval = QFrame()
@@ -156,6 +171,11 @@ class RuntimePanel(QWidget):
         # Match keyboard order to the visual groups. Reflow never changes focus.
         for previous, following in zip(self.buttons, self.buttons[1:], strict=False):
             QWidget.setTabOrder(previous, following)
+        # The code toggle sits under the run button, before the approval section.
+        QWidget.setTabOrder(self.run_button, self.code_toggle)
+        QWidget.setTabOrder(self.code_toggle, self.review_button)
+        self.code_toggle.toggled.connect(lambda _opened: self._fold_code())
+        self._fold_code()
         self.run_button.clicked.connect(self._run)
         self.review_button.clicked.connect(lambda: self._control(ControlAction.REVIEW))
         self.approve_button.clicked.connect(lambda: self._control(ControlAction.APPROVE))
@@ -298,21 +318,37 @@ class RuntimePanel(QWidget):
         self.state_changed.emit()
         self.selected_snapshot_changed.emit(self.current)
 
-    def _show_message(self, text: str) -> None:
+    def _show_message(self, text: str, code: str | None = None) -> None:
         # An empty status line takes no room in the flat section.
         self.message.setText(text)
         self.message.setVisible(bool(text))
+        self._code = code
+        self.internal_code.setText("" if code is None else f"내부 코드: {code}")
+        self._fold_code()
+
+    def _fold_code(self) -> None:
+        """Show the code toggle only for a message with a code. Once opened,
+        it stays open for the following messages."""
+        shown = self._code is not None
+        opened = shown and self.code_toggle.isChecked()
+        if not shown and self.code_toggle.hasFocus():
+            # Hiding the focused toggle would hand focus to the next button,
+            # which can be 작업 취소. Park it on the read-only detail instead.
+            self.detail.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.code_toggle.setVisible(shown)
+        self.code_toggle.setText(f"내부 코드 {'▾' if opened else '▸'}")
+        self.code_toggle.setAccessibleName(f"내부 코드 {'접기' if opened else '펼치기'}")
+        self.internal_code.setVisible(opened)
 
     def set_scope(self, scope: tuple[str, int] | None) -> None:
         """Approval copies and controls are bound to the selected session."""
         self._scope_enabled = True
         if scope != self._scope:
             self._clear_review()
-            self._show_message(
-                self._messages.get(scope, "")
-                if scope is not None
-                else "새 세션 · 시작을 기다리는 중임."
-            )
+            if scope is None:
+                self._show_message("새 세션 · 시작을 기다리는 중임.")
+            else:
+                self._show_message(*self._messages.get(scope, ("", None)))
         self._scope = scope
         self.current = self._snapshots.get(scope) if scope is not None else None
         if self.current is not None:
@@ -339,7 +375,7 @@ class RuntimePanel(QWidget):
         self._commands[command_id] = "message"
         self._command_scopes[command_id] = (task_id, epoch)
         self._show_message("메시지 요청됨 · 백엔드 결과 대기")
-        self._messages[(task_id, epoch)] = self.message.text()
+        self._messages[(task_id, epoch)] = (self.message.text(), None)
         self._refresh()
         self.bridge.request_message(task_id, epoch, text, command_id=command_id, effort=effort)
 
@@ -382,7 +418,7 @@ class RuntimePanel(QWidget):
         command_id = uuid4().hex
         self._commands[command_id] = _RUN
         self._command_scopes[command_id] = (self.current.task_id, self.current.epoch)
-        self._messages[(self.current.task_id, self.current.epoch)] = self.message.text()
+        self._messages[(self.current.task_id, self.current.epoch)] = (self.message.text(), None)
         self._refresh()
         self.bridge.request_run(self.current.task_id, command_id=command_id)
 
@@ -403,7 +439,7 @@ class RuntimePanel(QWidget):
         command_id = uuid4().hex
         self._commands[command_id] = action
         self._command_scopes[command_id] = (self.current.task_id, self.current.epoch)
-        self._messages[(self.current.task_id, self.current.epoch)] = self.message.text()
+        self._messages[(self.current.task_id, self.current.epoch)] = (self.message.text(), None)
         self._refresh()
         if action is ControlAction.REVIEW:
             self._review_command = command_id
@@ -416,7 +452,7 @@ class RuntimePanel(QWidget):
         text = LIFECYCLE_MESSAGES.get(event.code) or _STATE_MESSAGES.get(
             event.state, "백엔드 상태를 확인하지 못함 · 아직 실행할 수 없음."
         )
-        self._show_message(f"{text}\n내부 코드: {event.code}")
+        self._show_message(text, event.code)
         if self.current is None:
             # Without a Task snapshot the summary is the only status line, so it
             # must follow the backend state instead of staying at "starting".
@@ -507,11 +543,11 @@ class RuntimePanel(QWidget):
                 self._clear_review()
             text = "적용 여부를 확인하지 못함 · 위 Task 상태를 확인하세요."
         # Internal codes stay available for support, never as the message itself.
-        message = f"{text}\n내부 코드: {event.code}"
+        message = (text, event.code)
         if scope is not None:
             self._messages[scope] = message
         if selected:
-            self._show_message(message)
+            self._show_message(*message)
         self._refresh()
 
     def _result_text(

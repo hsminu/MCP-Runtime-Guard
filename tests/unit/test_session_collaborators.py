@@ -147,6 +147,28 @@ def test_background_work_consumes_failures_without_raising_them():
     assert asyncio.run(run()) == []
 
 
+def test_background_work_wait_covers_work_started_meanwhile_and_is_bounded():
+    async def run():
+        work = BackgroundWork()
+        release, finished = asyncio.Event(), []
+
+        async def second():
+            finished.append("second")
+
+        async def first():
+            await release.wait()
+            work.start(second())  # e.g. a session stop starting Guard's record
+            finished.append("first")
+
+        work.start(first())
+        timed_out = await work.wait(0.01)
+        release.set()
+        ended = await work.wait(1)
+        return timed_out, ended, finished, await BackgroundWork().wait(0)
+
+    assert asyncio.run(run()) == (False, True, ["first", "second"], True)
+
+
 class _RowStore:
     def __init__(self, status):
         self.state = TaskState(

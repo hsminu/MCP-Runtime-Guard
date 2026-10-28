@@ -30,6 +30,7 @@ from mcp.types import JSONRPCMessage
 from guard_app.adapters.mcp_http_ingress import BoundedHttpTransport
 from guard_app.adapters.mcp_ingress import IngressError, IngressGate, PipeFrameReader
 from guard_app.adapters.mcp_transport.sdk_logging import SDK_LOG_SCOPE, install_sdk_log_containment
+from guard_app.security.endpoints import EndpointError, canonical_endpoint
 
 type StreamFactory = Callable[[], AbstractAsyncContextManager[tuple[Any, ...]]]
 
@@ -166,9 +167,10 @@ def http_stream_factory(
     """Open a preapproved Streamable HTTP endpoint with no write replay.
 
     The composition root must supply C-validated endpoint/registration data.
-    These checks only bound the supported URL shape: HTTPS, or literal loopback
-    HTTP for a local server. DNS/IP policy and credential provisioning are not
-    implemented here. This initial transport supports unauthenticated servers.
+    The endpoint is checked again here: only C's canonical form (C2.5, URL-01)
+    is accepted, HTTPS or HTTP to a loopback IP literal. Name resolution and
+    credential provisioning are not implemented here. This initial transport
+    supports unauthenticated servers.
 
     ``io_timeout_s`` bounds connect, write and pool waits. ``read_timeout_s``
     bounds response reads separately: in JSON-response mode the server sends
@@ -206,29 +208,38 @@ def http_stream_factory(
     return HttpStreamFactory(connect, float(read_timeout_s))
 
 
+def http_teardown_completed(error: BaseException) -> bool:
+    """An HTTP session context that ended raising only the SDK's request errors (#61).
+
+    mcp 1.29.0 `streamable_http_client` runs each POST in its task group and
+    calls `raise_for_status()` there. A 500 or redirect, or a request still in
+    flight at close, ends that task with `httpx.HTTPError`; the group cancels
+    the session and re-raises the error once every task has finished. Its
+    `finally` has sent the session DELETE by then, and the httpx client this
+    module owns is closed outside the SDK context, so the teardown is complete.
+    Any other exception in the group still means it is unproven.
+    """
+    if not isinstance(error, BaseExceptionGroup):
+        return False
+    _, rest = error.split(httpx.HTTPError)
+    return rest is None
+
+
 def _endpoint_url(endpoint: object) -> httpx.URL:
-    """HTTPS, or literal loopback HTTP, with no credentials, query or fragment."""
-    if (
-        type(endpoint) is not str
-        or not 1 <= len(endpoint) <= 2048
-        or any(ord(char) <= 32 or ord(char) == 127 for char in endpoint)
-        or "\\" in endpoint
-    ):
-        raise ValueError("Invalid HTTP MCP endpoint")
+    """C's canonical endpoint (C2.5, `canonical_endpoint`), as the URL httpx requests.
+
+    Settings and registration are to hold only that form (C2.5); this check
+    refuses anything else at the last step before the network, whoever built
+    the factory. A canonical string that httpx would request in another form is
+    refused too, because each request is compared with this URL. Nothing is
+    echoed.
+    """
     try:
-        url = httpx.URL(endpoint)
-    except httpx.InvalidURL:
+        canonical = canonical_endpoint(endpoint)
+        url = httpx.URL(canonical)
+    except (EndpointError, httpx.InvalidURL):
         raise ValueError("Invalid HTTP MCP endpoint") from None
-    if (
-        not url.is_absolute_url
-        or not url.host
-        or any(char in url.host for char in "[]%")
-        or url.scheme not in {"http", "https"}
-        or url.userinfo
-        or "?" in endpoint
-        or "#" in endpoint
-        or (url.scheme == "http" and url.host not in {"127.0.0.1", "::1"})
-    ):
+    if str(url) != canonical:
         raise ValueError("Invalid HTTP MCP endpoint")
     return url
 

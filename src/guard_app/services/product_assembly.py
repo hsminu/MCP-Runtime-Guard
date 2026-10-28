@@ -20,6 +20,12 @@ REG_NOT_ACTIVE, pending approvals fail their recheck, and new Codex sessions do
 not list its tools. Nothing is written to the Registry; the next connection
 compares again. A notice received before the comparison is not blocking, since
 that comparison already reads the newer listing.
+
+A server whose session stops serving during the run (an HTTP request error, a
+broken stream, a call past its watchdog) is PENDING for the rest of the run in
+the same way (#61). There is no reconnection during a run, so later calls are
+denied before they are reserved instead of each locking its Task with an
+unknown outcome. A call already reserved when it failed keeps its outcome.
 """
 
 from __future__ import annotations
@@ -85,8 +91,9 @@ class LiveCheckedRegistry:
     matches the definitions this session actually received.
 
     A server whose tool list changed after the comparison is PENDING too
-    (LIST-01). Its fingerprints stay the live values, so REG_NOT_ACTIVE is the
-    only reason Guard reports for it.
+    (LIST-01), and so is one whose session stopped serving (#61). Their
+    fingerprints stay the live values, so REG_NOT_ACTIVE is the only reason
+    Guard reports for them.
     """
 
     def __init__(self, registry: Registry) -> None:
@@ -95,6 +102,7 @@ class LiveCheckedRegistry:
         self._blocked: frozenset[str] = frozenset()
         self._mismatched: frozenset[tuple[str, str]] = frozenset()
         self._changed: set[str] = set()
+        self._failed: set[str] = set()
         self._early_changes = 0
         self._sealed = False
 
@@ -112,11 +120,16 @@ class LiveCheckedRegistry:
 
     @property
     def blocked_servers(self) -> frozenset[str]:
-        return self._blocked | self._changed
+        return self._blocked | self._changed | self._failed
 
     @property
     def listing_changed(self) -> frozenset[str]:
         return frozenset(self._changed)
+
+    @property
+    def unavailable(self) -> frozenset[str]:
+        """Servers that became PENDING during the run: no new session lists their tools."""
+        return frozenset(self._changed | self._failed)
 
     @property
     def early_list_changes(self) -> int:
@@ -130,11 +143,18 @@ class LiveCheckedRegistry:
             return
         self._changed.add(server_id)
 
+    def server_failed(self, server_id: str) -> None:
+        """Only the fact that the server's session stopped serving (#61); no error text."""
+
+        self._failed.add(server_id)
+
     def registration(self, server_id: str) -> RegisteredServer | None:
         return self._registry.registration(server_id)
 
     def status(self, server_id: str) -> RegStatus | None:
-        if self._sealed and (server_id in self._blocked or server_id in self._changed):
+        if server_id in self._failed or (
+            self._sealed and (server_id in self._blocked or server_id in self._changed)
+        ):
             return RegStatus.PENDING
         return self._registry.status(server_id)
 
@@ -244,25 +264,31 @@ class AssembledGuard:
         return self.loaded.guard_settings
 
     def offers_tool(self, tool_ref: str) -> bool:
-        """False once the tool's server changed its tool list this run (LIST-01).
+        """False once the tool's server changed its tool list (LIST-01) or
+        stopped serving (#61) this run.
 
         Server IDs never contain "__", so the namespace prefix is the server ID.
         """
 
-        return tool_ref.partition("__")[0] not in self.registry.listing_changed
+        return tool_ref.partition("__")[0] not in self.registry.unavailable
 
     def offered_tool_views(self) -> tuple[ToolView, ...]:
         """Tools a new Codex session may list."""
 
         return tuple(view for view in self.tool_views if self.offers_tool(view.tool_ref))
 
-    async def aclose(self) -> None:
+    async def aclose(self, *, settle: Callable[[], Awaitable[object]] | None = None) -> None:
         # NOTIFY-01: end transport work first so reserved calls settle, then Guard
-        # refuses new approvals and drops unconsumed released text.
+        # refuses new approvals and drops unconsumed released text. `settle` runs
+        # in between, while Guard still records (a session stop, STOP-01).
         try:
             await self.transport.close()
         finally:
-            await self.guard.aclose()
+            try:
+                if settle is not None:
+                    await settle()
+            finally:
+                await self.guard.aclose()
 
 
 async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
@@ -285,6 +311,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         call_timeout_s=inputs.call_timeout_s,
         tool_list_limits=inputs.tool_list_limits,
         on_tools_changed=registry.tools_changed,
+        on_server_failed=registry.server_failed,
     )
     adopted = False
     try:
