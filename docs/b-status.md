@@ -17,7 +17,6 @@
 | Registry 영속화 B 제안 완료·C 검토·C4.10 연결 대기(B6-06) | A·C | B6.18 |
 | 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 합의 | A·B·C | B6.19 |
 | 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
-| 모델 고정 문구표 검토·세션 관리자 연결 | A | B5.12 |
 | NOTIFY-01 DTO·포트·종료 의미 합의와 A/C 연결·독립 검증 | A·B·C | B5.13 |
 | STOP-01 TaskIdentity·사유·감사 포트 합의와 A 세션 관리자 연결·T41/T42 독립 검증 | A·B·C | B5.14 |
 | SCAN-01 필드·고정 오류 코드 합의와 C Scanner 번역·A 경고 표시 | A·B·C | B1.9 |
@@ -47,7 +46,7 @@
 - [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증
 - [x] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계) · [기록](archive/b/B2.8-access-rules.md)
 - [x] B2.9 AccessChecker 동기 포트·Guard 대기 장치 제거 구현 완료, 합의 전 제안(ACCESS-01 결정 이행) · A·C 리뷰·3인 합의 대기 · PR 미정 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
-- [ ] B2.10 AGT-04 reason code·AccessResult 정리 제안 작성 — 막힘: 3인 합의 · [제안](archive/b/B2.10-agt04-reason-proposal.md)
+- [ ] B2.10 AGT-04 reason code·AccessResult 정리 제안 작성 — 막힘: 3인 합의 · `AGT_*`를 `ACCESS_*`로 바꿀 때 `MODEL_REASON_MESSAGES` 키도 함께 변경 · [제안](archive/b/B2.10-agt04-reason-proposal.md)
 - [x] B2.11 기존 AGT 코드 제거 구현 완료 · A 소유 파일 리뷰 대기 · PR 미정 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
 
 ## B3 · Catalog와 요청 해석
@@ -91,7 +90,7 @@
 - [x] B5.9 NOTIFY-01 만료 타이머·최종 결과 알림 B 구현·합의 전 제안 · [기록](archive/b/B5.9-pending-notifications.md)
 - [x] B5.10 STOP-01 시스템 정지·사실 감사 B 구현·합의 전 제안 · [기록](archive/b/B5.10-system-stop.md)
 - [x] B5.11 모델에 돌려줄 고정 문구표 · [기록](archive/b/B5.11-model-messages.md)
-- [ ] B5.12 모델 고정 문구표 A 검토·세션 관리자 연결 — 막힘: A 검토
+- [x] B5.12 모델 고정 문구표 A 검토·세션 관리자 연결 · [#20 A 검토 댓글(2026-10-28)](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6464059746)
 - [ ] B5.13 NOTIFY-01 DTO·포트·종료 의미 합의·A 대기/종료·C 지문 변경 연결·T45 독립 검증 — 막힘: 3인 합의·A/C 연결
 - [ ] B5.14 STOP-01 TaskIdentity·정지 사유·SessionAudit 합의·A 세션 관리자 연결·C T41/T42 계수 검증 — 막힘: 3인 합의·A/C 연결
 
