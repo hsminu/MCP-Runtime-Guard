@@ -34,6 +34,7 @@ from guard_app.domain.enums import (
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
     AccessResult,
+    FailureAuditRecord,
     PolicyDecision,
     ResolvedRequest,
     StoreExecutionState,
@@ -92,6 +93,22 @@ class StoreLifecycle(Protocol):
         ...
 
     async def wait_closed(self, timeout: float) -> bool: ...  # noqa: ASYNC109
+
+
+class SequenceAllocator(Protocol):
+    """SEQ-02: Task별 순번과 감사의 커밋 ACK 뒤에만 값을 반환한다.
+
+    배정 뒤 판정 저장 실패·취소·ACK 유실이 나도 순번을 회수하지 않는다.
+    Task가 다른 경우 계수는 독립적이며 epoch 변경에도 초기화하지 않는다.
+    """
+
+    async def allocate_call_seq(self, task_id: str) -> int: ...
+
+
+class FailureAuditStore(Protocol):
+    """B-SQL-04: 예약 전후의 원문 없는 실패 감사 커밋을 제공한다."""
+
+    async def record_failure_audit(self, record: FailureAuditRecord) -> None: ...
 
 
 class SessionAudit(Protocol):
