@@ -34,6 +34,12 @@ from guard_app.services.guard import PolicyTaskSource, SystemControl
 from guard_app.services.guard_relay import ApprovalOutcomes
 from guard_app.services.policy_view import PolicyView, policy_view
 from guard_app.services.product_assembly import AssembledGuard, ProductInputs, assemble_guard
+from guard_app.services.product_settings import (
+    SETTINGS_LOADED,
+    SettingsFile,
+    SettingsFileSaver,
+    load_settings_profile,
+)
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 from guard_app.services.session_cleanup import BackgroundWork, CleanupLimits, SessionCleanup
@@ -179,11 +185,13 @@ class SessionRuntime:
         approvals: ApprovalOutcomes | None = None,
         profile_document: Mapping[str, object] | None = None,
         profile_saver: ProfileSaver | None = None,
+        settings_status: str | None = None,
         system_control: SystemControl | None = None,
         cleanup_limits: CleanupLimits | None = None,
     ) -> None:
         self.store = store
         self._assembled = assembled
+        self._settings_status = settings_status
         self._approvals = approvals
         self._session_factory = session_factory
         self._limits = CleanupLimits() if cleanup_limits is None else cleanup_limits
@@ -196,6 +204,12 @@ class SessionRuntime:
             document=profile_document,
             saver=profile_saver,
             task_source=_task_source(store),
+            # Without a Profile, a settings-file failure says more than "not connected".
+            missing_code=(
+                settings_status
+                if settings_status is not None and settings_status != SETTINGS_LOADED
+                else "GUARD_PROFILE_UNAVAILABLE"
+            ),
         )
         self._work = BackgroundWork()
         self._cleanup = SessionCleanup(
@@ -506,6 +520,7 @@ class SessionRuntime:
             task_events=self._events.set_task_listener,
             answer_partials=self._events.set_partial_listener,
             policy_access=self.change_server_access if available else None,
+            settings_status=self._settings_status,
         )
 
 
@@ -516,12 +531,33 @@ async def bootstrap_product(
     preparation: SessionPreparation | None = None,
     product: ProductInputs | None = None,
     profile_saver: ProfileSaver | None = None,
+    settings: SettingsFile | None = None,
 ) -> BackendBindings:
-    """Product start. `product` comes from B3.11 file loading and C's launcher/Registry."""
+    """Product start.
+
+    `settings` is the CFG-01 file read at start. Its Profile sets the policy of
+    new Task rows, and policy saves go back to that file. Building Guard from it
+    also needs B's durable call_seq and failure audit (B6.8) and C's MCP server
+    launch (C2.6, EXE-01); until then `product` is supplied only by tests.
+    """
 
     store = SQLiteStore(db_path, audit_id_factory=lambda: f"audit-{uuid4().hex}")
     assembled: AssembledGuard | None = None
     approvals: ApprovalOutcomes | None = None
+    guard_settings: GuardSettings | None = None
+    profile_document: Mapping[str, object] | None = None
+    settings_status: str | None = None
+    if settings is not None:
+        try:
+            settings_status, loaded = await load_settings_profile(settings, store)
+        finally:
+            if settings_status is None:
+                store.close()
+        if loaded is not None:
+            guard_settings = loaded.guard_settings
+            profile_document = settings.document
+            if profile_saver is None:
+                profile_saver = SettingsFileSaver(settings)
     if product is not None:
         try:
             assembled = await assemble_guard(store, product)
@@ -536,10 +572,12 @@ async def bootstrap_product(
         session_factory=session_factory,
         preparation=preparation,
         close_store=store.close,
+        guard_settings=guard_settings,
         assembled=assembled,
         approvals=approvals,
-        profile_document=None if product is None else product.profile_document,
+        profile_document=profile_document if product is None else product.profile_document,
         profile_saver=profile_saver,
+        settings_status=settings_status,
     )
     adopted = False
     try:

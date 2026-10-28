@@ -138,6 +138,9 @@ class BackendBindings:
     policy_access: (
         Callable[[str, tuple[str, ...], tuple[str, ...]], Awaitable[PolicyView]] | None
     ) = None
+    # Fixed code of what the start made of the CFG-01 settings file
+    # (product_settings); None when this run reads no file (demo, tests).
+    settings_status: str | None = None
 
 
 # Streamed answer text is republished at most this often (A90).
@@ -323,6 +326,7 @@ class BackendBridge(QObject):
     session_capability_changed = Signal(str)
     account_changed = Signal(object)
     policy_changed = Signal(object)
+    settings_changed = Signal(object)
 
     def __init__(
         self,
@@ -987,6 +991,8 @@ class BackendBridge(QObject):
             AccountView("UNAVAILABLE" if bindings.account is None else "UNKNOWN")
         )
         self.policy_changed.emit(bindings.policy)
+        status = bindings.settings_status
+        self.settings_changed.emit(status if type(status) is str else None)
         if bindings.task_events is not None:
             bindings.task_events(self._task_event)
         if bindings.answer_partials is not None:

@@ -39,6 +39,7 @@ CHANGE_RESULTS = {
     "POLICY_APPLY_FAILED": (
         "설정은 저장했지만 적용을 확정하지 못해 Guard를 정지함. 앱을 다시 시작하세요."
     ),
+    "POLICY_SAVE_UNKNOWN": "설정 저장 결과를 확인하지 못해 Guard를 정지함. 앱을 다시 시작하세요.",
     "POLICY_CHANGE_INVALID": "선택한 도구 목록이 현재 설정과 맞지 않아 저장하지 않음.",
     "POLICY_CHANGE_UNAVAILABLE": SAVE_UNAVAILABLE,
 }

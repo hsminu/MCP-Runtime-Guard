@@ -203,6 +203,29 @@ _CODEX_FAILURE_DETAILS = {
     "CODEX_CLEANUP_UNCONFIRMED": "Codex 종료·임시 자료 정리 완료를 확인하지 못함.",
     "GUARD_PROFILE_UNAVAILABLE": "Guard 정책(Profile) 설정이 아직 연결되지 않음.",
     "POLICY_APPLY_FAILED": "저장한 정책을 적용하지 못해 Guard를 정지함.",
+    "POLICY_SAVE_UNKNOWN": "정책 저장 결과를 확인하지 못해 Guard를 정지함.",
+    "SETTINGS_FILE_MISSING": "설정 파일이 없어 Guard 정책(Profile)이 없음.",
+    "SETTINGS_PROFILE_INVALID": "설정 파일의 Guard 정책(Profile) 내용이 올바르지 않음.",
+    "REGISTRY_UNAVAILABLE": "서버 등록 기록을 불러오지 못함.",
+}
+# What the start made of the CFG-01 settings file (settings screen). The file
+# location is fixed (C2.13), never a path the backend reported.
+SETTINGS_FILE_LOCATION = r"%LOCALAPPDATA%\MCPRuntimeGuard\config\settings.json"
+SETTINGS_FILE_PENDING = "설정 파일을 아직 확인하지 않음."
+SETTINGS_FILE_NOT_READ = "이 실행은 설정 파일을 읽지 않음(시연)."
+SETTINGS_FILE_STATUS = {
+    "SETTINGS_LOADED": "설정 파일을 읽고 Guard 정책(Profile)을 확인함.",
+    "SETTINGS_FILE_MISSING": (
+        "설정 파일이 없음(첫 실행). Guard 정책이 없어 새 세션을 시작할 수 없음. "
+        "앱을 닫은 상태에서 설정 파일을 만들고 다시 시작하세요."
+    ),
+    "SETTINGS_PROFILE_INVALID": (
+        "설정 파일의 Guard 정책(Profile) 내용이 올바르지 않아 새 세션을 시작할 수 없음. "
+        "앱을 닫은 상태에서 설정 파일을 고치세요."
+    ),
+    "REGISTRY_UNAVAILABLE": (
+        "서버 등록 기록을 불러오지 못해 설정 파일을 확인하지 못함. 앱을 다시 시작하세요."
+    ),
 }
 _CODEX_MISSING_COMPONENTS = frozenset(
     {

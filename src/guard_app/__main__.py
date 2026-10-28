@@ -21,8 +21,19 @@ from guard_app.ui.window import GuardWindow
 
 if TYPE_CHECKING:
     from guard_app.services.codex_preparation import CodexProcessPreparation
+    from guard_app.services.product_settings import SettingsFile
 
 _APP_CODE = re.compile(r"APP_[A-Z_]{1,60}")
+_SETTINGS_CODE = re.compile(r"SETTINGS_[A-Z_]{1,60}")
+# C2.14 file codes; B3.11 parse codes are the other SETTINGS_ ones.
+_SETTINGS_FILE_REFUSALS = {
+    "SETTINGS_FILE_INVALID": (
+        "설정 파일이 링크이거나 다른 사용자에게도 권한이 있어 열지 않음. 앱을 시작하지 않음"
+    ),
+    "SETTINGS_FILE_READ_FAILED": (
+        "설정 파일을 읽지 못해 앱을 시작하지 않음. 다른 프로그램이 파일을 쓰는 중인지 확인하세요"
+    ),
+}
 # B6.17 8.1 (#37): after closing, watch the backend this long past the bridge's
 # own shutdown bound before giving up on a confirmed cleanup (A110).
 CLOSE_OBSERVATION_S = 5.0
@@ -77,9 +88,11 @@ def main() -> int:
         parser.error("--codex-exe는 제품 실행에서 codex.exe의 절대 경로로만 쓸 수 있다")
 
     codex: CodexProcessPreparation | None = None
+    settings: SettingsFile | None = None
     if not args.demo:
         from guard_app.security.paths import AppPathError
         from guard_app.services.codex_preparation import CodexProcessPreparation
+        from guard_app.services.product_settings import SettingsStartError, read_settings
 
         # A102: the single-instance lock comes before the DB, the backend and the
         # window. Without it the app does not start.
@@ -89,9 +102,17 @@ def main() -> int:
         except AppPathError as error:
             print(_claim_refusal(error), file=sys.stderr)
             return 1
+        # CFG-01: a settings file that cannot be read or parsed stops the start
+        # and is left as it is. No file is the first run.
+        try:
+            settings = read_settings(codex.folders)
+        except SettingsStartError as error:
+            codex.close()
+            print(_settings_refusal(error.code), file=sys.stderr)
+            return 1
     confirmed: bool | None = None  # None: _run raised before the backend reported
     try:
-        code, confirmed = _run(args, codex)
+        code, confirmed = _run(args, codex, settings)
     finally:
         # Release the single-instance lock unless the backend left cleanup
         # unconfirmed: then the process ends while it still holds the lock.
@@ -149,7 +170,24 @@ def _claim_refusal(error: Exception) -> str:
     return "앱 폴더를 준비하지 못해 시작하지 않는다"
 
 
-def _run(args: argparse.Namespace, codex: CodexProcessPreparation | None) -> tuple[int, bool]:
+def _settings_refusal(code: str) -> str:
+    """Fixed text for a settings file the start refused. The file is never overwritten."""
+    known = _SETTINGS_FILE_REFUSALS.get(code)
+    if known is not None:
+        return known
+    if _SETTINGS_CODE.fullmatch(code):
+        return (
+            f"설정 파일 형식이 올바르지 않아 앱을 시작하지 않음({code}). "
+            "앱을 닫은 상태에서 파일을 고치세요"
+        )
+    return "설정 파일을 읽지 못해 앱을 시작하지 않음"
+
+
+def _run(
+    args: argparse.Namespace,
+    codex: CodexProcessPreparation | None,
+    settings: SettingsFile | None = None,
+) -> tuple[int, bool]:
     """Window, bridge and Qt loop. Product mode passes its claimed `codex`.
 
     Returns the Qt exit code and whether the backend confirmed its cleanup.
@@ -176,7 +214,9 @@ def _run(args: argparse.Namespace, codex: CodexProcessPreparation | None) -> tup
         # A106: the DB is the one fixed in the folder `codex` claimed (C2.17).
         preparation = codex.preparation()
         db_file = str(codex.db_file)
-        bridge = BackendBridge(lambda: bootstrap_product(db_file, preparation=preparation))
+        bridge = BackendBridge(
+            lambda: bootstrap_product(db_file, preparation=preparation, settings=settings)
+        )
 
     close_limit_s = bridge.shutdown_timeout + CLOSE_OBSERVATION_S
     closing_since: list[float] = []

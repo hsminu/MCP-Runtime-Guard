@@ -35,7 +35,13 @@ from .models import (
 )
 from .overview import OverviewPage
 from .policy import PolicyPage
-from .presentation import PAGES
+from .presentation import (
+    PAGES,
+    SETTINGS_FILE_LOCATION,
+    SETTINGS_FILE_NOT_READ,
+    SETTINGS_FILE_PENDING,
+    SETTINGS_FILE_STATUS,
+)
 from .runtime import RuntimePanel
 from .scan_status import ScanStatusProjection
 from .scanner_key import ScannerKeyForm
@@ -310,6 +316,12 @@ class GuardWindow(QMainWindow):
         settings_layout = QVBoxLayout(settings)
         settings_layout.setContentsMargins(24, 24, 24, 24)
         settings_layout.addWidget(plain_label("설정", name="pageTitle"))
+        settings_layout.addWidget(plain_label("설정 파일", name="cardTitle"))
+        self.settings_file_status = plain_label(SETTINGS_FILE_PENDING, name="secondary")
+        self.settings_file_status.setAccessibleName("설정 파일 상태")
+        settings_layout.addWidget(self.settings_file_status)
+        settings_layout.addWidget(plain_label(SETTINGS_FILE_LOCATION, name="secondary"))
+        settings_layout.addSpacing(12)
         self.scanner_key_form = ScannerKeyForm()
         self.codex_login_info = CodexLoginInfo()
         settings_layout.addWidget(self.codex_login_info)
@@ -444,6 +456,7 @@ class GuardWindow(QMainWindow):
         bridge.account_changed.connect(self.codex_login_info.set_view)
         bridge.policy_changed.connect(self.policy_page.set_view)
         bridge.policy_changed.connect(self._policy_changed)
+        bridge.settings_changed.connect(self.set_settings_status)
         self.policy_page.allow_change_requested.connect(
             lambda server_id, allowed, denied: self.policy_page.set_change_pending(
                 bridge.request_policy_access(server_id, allowed, denied)
@@ -599,6 +612,20 @@ class GuardWindow(QMainWindow):
         """Show only the current server detail's confirmed public scan query."""
 
         return self.server_page.set_scan_snapshot(server_id, token, snapshot)
+
+    def set_settings_status(self, code: object) -> None:
+        """Show the settings file status; with no file, open the settings page (CFG-01)."""
+
+        if code is None:
+            self.settings_file_status.setText(SETTINGS_FILE_NOT_READ)
+            return
+        text = SETTINGS_FILE_STATUS.get(code) if type(code) is str else None
+        self.settings_file_status.setText(
+            text if text is not None else "설정 파일 상태를 확인하지 못함."
+        )
+        # Only from the start page, so a page the user already chose stays.
+        if code == "SETTINGS_FILE_MISSING" and self._page == "runs":
+            self.navigate("settings")
 
     def _policy_changed(self, view: object) -> None:
         ttl = getattr(view, "approval_ttl_seconds", None)

@@ -145,6 +145,13 @@ class CodexProcessPreparation:
             raise CodexPreparationError("CODEX_FOLDERS_UNCLAIMED")
         return self._folders.paths.db_file
 
+    @property
+    def folders(self) -> AppFolders:
+        """The claimed app folders, for the CFG-01 settings file (C2.14)."""
+        if self._folders is None:
+            raise CodexPreparationError("CODEX_FOLDERS_UNCLAIMED")
+        return self._folders
+
     def close(self) -> None:
         """Release the single-instance lock. Safe to call more than once."""
         folders, self._folders = self._folders, None

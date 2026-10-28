@@ -37,6 +37,7 @@ A_SERVICES = frozenset(
         "guard_relay",
         "policy_view",
         "product_assembly",
+        "product_settings",
         "runner",
         "session_admission",
         "session_cleanup",

@@ -356,7 +356,7 @@ def test_main_keeps_the_lock_until_the_process_ends_when_cleanup_is_unconfirmed(
         claim(self)
         claimed.append(self)
 
-    def ran(_args: object, codex: object) -> tuple[int, bool]:
+    def ran(_args: object, codex: object, settings: object = None) -> tuple[int, bool]:
         assert_lock_held(root)
         return 0, confirmed
 

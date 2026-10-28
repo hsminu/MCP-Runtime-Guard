@@ -17,10 +17,12 @@ from guard_app.services.catalog import (
 from guard_app.services.guard import PolicyChangeError, PolicyTaskSource
 from guard_app.services.policy_view import PolicyView, policy_view
 from guard_app.services.product_assembly import AssembledGuard
+from guard_app.services.product_settings import SaveOutcomeUnknownError
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 
-# Stores B's prepared policy document (B3.11/B3.12 file format is A·C, open).
-# True only after the document is durably saved; apply follows only then.
+# Stores B's prepared policy document (CFG-01: product_settings.SettingsFileSaver).
+# True only after the document is durably saved; apply follows only then. A save
+# that may have happened raises SaveOutcomeUnknownError.
 type ProfileSaver = Callable[[PreparedPolicyChange], Awaitable[bool]]
 
 
@@ -64,9 +66,11 @@ class TaskPolicy:
         document: Mapping[str, object] | None = None,
         saver: ProfileSaver | None = None,
         task_source: PolicyTaskSource | None = None,
+        missing_code: str = "GUARD_PROFILE_UNAVAILABLE",
     ) -> None:
         self.lock = asyncio.Lock()
         self._settings = settings
+        self._missing_code = missing_code
         self._admission = admission
         self._assembled = assembled
         self._document = document
@@ -83,13 +87,14 @@ class TaskPolicy:
         )
 
     def blocker(self) -> str | None:
-        return None if type(self._settings) is GuardSettings else "GUARD_PROFILE_UNAVAILABLE"
+        """Why no Profile is in force: no settings file, an invalid one, or none connected."""
+        return None if type(self._settings) is GuardSettings else self._missing_code
 
     def task_state(self, task_id: str) -> TaskState:
         """The first-epoch RUNNING row for a new Task under the Profile in force."""
         settings = self._settings
         if type(settings) is not GuardSettings:
-            raise SessionRuntimeError("GUARD_PROFILE_UNAVAILABLE")
+            raise SessionRuntimeError(self._missing_code)
         return TaskState(
             task_id=task_id,
             epoch=1,
@@ -111,7 +116,9 @@ class TaskPolicy:
         nothing is applied. If Guard refuses or fails to apply a saved change,
         Guard is closed to new tool calls, new sessions and further changes are
         refused, and this raises POLICY_APPLY_FAILED; a restart loads the saved
-        file (A104, #33 B reply).
+        file (A104, #33 B reply). A save whose outcome is unknown is handled the
+        same way with POLICY_SAVE_UNKNOWN: the file may hold either document
+        (C2.14).
         """
         assembled, saver, task_source = self._assembled, self._saver, self._task_source
         if (
@@ -133,7 +140,16 @@ class TaskPolicy:
             document = self._document
             change = _server_access_change(document, assembled, server_id, allowed, denied)
             if change.changed:
-                if await saver(change) is not True:
+                try:
+                    saved = await saver(change)
+                except SaveOutcomeUnknownError:
+                    await self._require_restart(assembled, "POLICY_SAVE_UNKNOWN")
+                    raise SessionRuntimeError("POLICY_SAVE_UNKNOWN") from None
+                except asyncio.CancelledError:
+                    # The write may still finish after the cancel.
+                    self._admission.require_restart("POLICY_SAVE_UNKNOWN")
+                    raise
+                if saved is not True:
                     raise SessionRuntimeError("POLICY_SAVE_FAILED")
                 self._document = change.document
                 await stop_sessions(await self._apply(assembled, change, task_source))
@@ -156,10 +172,14 @@ class TaskPolicy:
             # The file holds the new rules; Guard keeps the old ones when it
             # refused before applying, and halted itself when applying failed.
             # Either way no call runs under rules the screen does not show.
-            self._admission.require_restart("POLICY_APPLY_FAILED")
-            await assembled.guard.aclose()
+            await self._require_restart(assembled, "POLICY_APPLY_FAILED")
             raise SessionRuntimeError("POLICY_APPLY_FAILED") from None
         # New Task rows and the policy screen follow the applied Profile.
         assembled.loaded = change.loaded_profile
         self._settings = change.loaded_profile.guard_settings
         return result.stopped_task_ids
+
+    async def _require_restart(self, assembled: AssembledGuard, code: str) -> None:
+        """Refuse new sessions and changes, and close Guard to new tool calls."""
+        self._admission.require_restart(code)
+        await assembled.guard.aclose()

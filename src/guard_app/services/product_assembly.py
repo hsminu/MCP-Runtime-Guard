@@ -9,7 +9,10 @@ Right after `tools/list` the live definitions are compared with the registered
 fingerprints (A15/A16, FP-01 via B's `tool_fingerprint`). A mismatching or
 missing tool is reported through the Registry view handed to Catalog/Guard, so
 Guard denies it with TOOL_FINGERPRINT_CHANGED and it is left out of the model's
-tool list. Moving the registration back to PENDING is C's Registry path (I10).
+tool list. Moving the registration back to PENDING is C's Registry path (I10):
+when the Registry is C's `ServerRegistry`, each selected server's listing is
+also handed to its `observe`, which records a change durably. A server whose
+listing it cannot record or does not accept is blocked for this run too.
 
 A `notifications/tools/list_changed` received after that comparison makes its
 server PENDING for the rest of this run (LIST-01): new calls are denied with
@@ -30,6 +33,7 @@ from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.mcp_transport import McpTransport, StreamFactory, ToolListLimits
 from guard_app.domain.contracts import RegisteredServer, ToolView
 from guard_app.domain.enums import RegStatus
+from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ToolSpec
 from guard_app.ports import Registry, Store
@@ -39,9 +43,11 @@ from guard_app.services.catalog import (
     GuardSettings,
     LoadedProfile,
     ResourceResolver,
+    ServerSettings,
     load_profile_settings,
 )
 from guard_app.services.guard import FailureEvent, GuardService
+from guard_app.services.registry import RegistryError, ServerRegistry
 
 # Never equal to a SHA-256 hex digest, so Catalog/Guard see a changed fingerprint.
 _LIVE_MISMATCH = "live-definition-mismatch"
@@ -197,6 +203,32 @@ def live_fingerprints(
     return LiveFingerprints(live, frozenset(mismatched), frozenset(blocked))
 
 
+async def _record_listings(
+    registry: Registry, servers: tuple[ServerSettings, ...], transport: McpTransport
+) -> frozenset[str]:
+    """C4.10: record each registered server's live listing; the servers that failed.
+
+    No Guard exists yet, so there are no pending approvals to invalidate.
+    """
+    if not isinstance(registry, ServerRegistry):
+        return frozenset()
+    failed: set[str] = set()
+    for server in servers:
+        if registry.registration(server.id) is None:
+            continue  # not registered: Guard denies its tools anyway
+        listing = transport.tool_listing(server.id)
+        if listing is None:
+            failed.add(server.id)
+            continue
+        try:
+            await registry.observe(server, listing)
+        except (RegistryError, StoreError):
+            # Incomplete listing, settings that differ from the registration,
+            # or a write that failed: ServerRegistry keeps it PENDING as well.
+            failed.add(server.id)
+    return frozenset(failed)
+
+
 @dataclass(slots=True, repr=False)
 class AssembledGuard:
     loaded: LoadedProfile
@@ -257,7 +289,12 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     adopted = False
     try:
         await transport.start()
-        registry.seal(live_fingerprints(inputs.registry, transport, server_ids))
+        # Compare first: observe rewrites the registration it compares against.
+        live = live_fingerprints(inputs.registry, transport, server_ids)
+        unrecorded = await _record_listings(inputs.registry, loaded.selected_servers, transport)
+        registry.seal(
+            LiveFingerprints(live.live, live.mismatched, live.blocked_servers | unrecorded)
+        )
         settings = loaded.guard_settings
         guard = GuardService(
             store,
