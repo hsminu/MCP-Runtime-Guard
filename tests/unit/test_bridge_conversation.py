@@ -233,7 +233,7 @@ def _guarded_codex_bridge(app, stops, resolved):
     control = FakeControl()
 
     class Session:
-        async def send(self, text):
+        async def send(self, text, effort=None):
             return "unused"
 
         async def interrupt(self):

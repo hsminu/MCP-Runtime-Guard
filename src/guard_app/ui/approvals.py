@@ -121,7 +121,7 @@ class ApprovalPage:
 
 
 DEFAULT_APPROVAL_TTL_SECONDS = 300
-SOURCE_NOT_CONNECTED = "승인 목록 조회가 아직 연결되지 않았어 · 승인 요청은 대화 화면에서 처리해."
+SOURCE_NOT_CONNECTED = "승인 목록 조회가 아직 연결되지 않음 · 승인 요청은 대화 화면에서 처리하세요."
 
 
 class ApprovalListPage(QWidget):
@@ -154,13 +154,12 @@ class ApprovalListPage(QWidget):
         self._approval_ttl_seconds = DEFAULT_APPROVAL_TTL_SECONDS
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(26, 28, 26, 42)
-        layout.setSpacing(14)
-        layout.addWidget(plain_label("APPROVALS", name="eyebrow"))
+        layout.setContentsMargins(24, 24, 24, 40)
+        layout.setSpacing(16)
         layout.addWidget(plain_label("승인 대기와 처리 이력", name="pageTitle"))
         layout.addWidget(
             plain_label(
-                "승인 상태와 총건수는 백엔드 조회 결과야. 대기 시간 표시는 참고 정보야.",
+                "승인 상태와 총건수는 백엔드 조회 결과임. 대기 시간 표시는 참고 정보임.",
                 name="secondary",
             )
         )
@@ -496,11 +495,11 @@ class ApprovalListPage(QWidget):
         self.state_message.setVisible(not page.rows)
         if not page.rows:
             if page.query.search or page.query.server_id:
-                self.state_message.set_message("검색·필터 결과가 없어")
+                self.state_message.set_message("검색·필터 결과가 없음")
             elif page.query.lane is ApprovalLane.PENDING:
-                self.state_message.set_message("대기 중인 승인 요청이 없어")
+                self.state_message.set_message("대기 중인 승인 요청이 없음")
             else:
-                self.state_message.set_message("처리 이력이 없어")
+                self.state_message.set_message("처리 이력이 없음")
         return True
 
     def set_error(self, query: ApprovalQuery) -> bool:

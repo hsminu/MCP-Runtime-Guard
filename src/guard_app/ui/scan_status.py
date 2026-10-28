@@ -88,12 +88,12 @@ class ScanStatusCard(QFrame):
         super().__init__(parent)
         self.setObjectName("scanStatusCard")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         layout.addWidget(plain_label("Scanner · Registry 상태", name="sectionTitle"))
         layout.addWidget(
             plain_label(
-                "검사 실행, 등록 활성화, 현재 세션 연결은 각각 다른 상태야.",
+                "검사 실행, 등록 활성화, 현재 세션 연결은 각각 다른 상태임.",
                 name="secondary",
             )
         )

@@ -14,6 +14,13 @@ Codex 로그 DB가 생기고 그 DB는 도구 결과 원문을 담으므로(C-CO
 `remove_task_folder`로 지운다. stdio MCP 서버의 작업 폴더(`server_folder`, C2.6)에는 서버의
 stderr와 임시 파일이 쌓인다. 삭제한 파일의 디스크 복구 가능성은 남는 한계다. 링크·junction은
 따라가지 않는다. Windows 전용이다.
+
+**파일 서버 경로(C2.3).** `safe_path`는 파일 MCP 서버 루트 아래의 요청 경로를 검사해 실제 경로를
+돌려주고, `resource_id`는 그 경로를 루트 기준 POSIX ID로 만든다. Guard는 `file_resource_resolver`로
+요청 인자에서 기대 ID를 계산하고(B Catalog `ResourceResolver`), 서버가 보고한 ID와 대조한다(T33).
+ID는 디스크의 실제 이름(대소문자·긴 이름)이라 표기만 다른 요청도 같은 ID가 되고, 등록 화면에서
+고른 폴더 이름의 출처 규칙과 맞는다. 검사와 열기 사이의 경쟁은 이 함수만으로 막지 못한다(C2.4,
+서버가 연 핸들의 실제 경로를 다시 대조한다).
 """
 
 from __future__ import annotations
@@ -29,6 +36,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from guard_app.domain.errors import ResolutionError
+from guard_app.domain.models import ToolSpec
+from guard_app.domain.reasons import Reason
 
 APP_DIR_NAME = "MCPRuntimeGuard"
 APP_LOCK_FILE = "app.lock"
@@ -71,6 +82,7 @@ _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _ERROR_SHARING_VIOLATION = 32
 _ERROR_ALREADY_EXISTS = 183
 _MOVEFILE_WRITE_THROUGH = 0x00000008
+_DRIVE_FIXED = 3
 
 if sys.platform == "win32":
     import ctypes
@@ -121,6 +133,7 @@ if sys.platform == "win32":
     _CoTaskMemFree = _api(_ole32, "CoTaskMemFree", None, _PVOID)
     _GetCurrentProcess = _api(_kernel32, "GetCurrentProcess", _HANDLE)
     _CloseHandle = _api(_kernel32, "CloseHandle", _BOOL, _HANDLE)
+    _GetDriveTypeW = _api(_kernel32, "GetDriveTypeW", wintypes.UINT, wintypes.LPCWSTR)
     _LocalFree = _api(_kernel32, "LocalFree", _PVOID, _PVOID)
     _CreateDirectoryW = _api(
         _kernel32,
@@ -829,3 +842,133 @@ def _unlink(path: Path) -> None:
     except PermissionError:
         os.chmod(path, stat.S_IWRITE)
         path.unlink()
+
+
+class SafePathError(ValueError):
+    """경로 원문을 싣지 않는 고정 거부 코드."""
+
+
+# Windows가 이름으로 받지 않거나 다르게 읽는 문자. `:`는 드라이브와 ADS, `\`는 다른 구분자다.
+_PATH_FORBIDDEN = frozenset('<>:"|?*\\')
+_MAX_REQUEST_CHARS = 4096
+
+
+def safe_path(root: Path, user_path: str) -> Path:
+    """루트 아래의 파일·폴더 하나를 실제 경로로 돌려준다(C2.3, 개발문서 13.2).
+
+    `user_path`는 `/`로 나눈 상대 경로다. 다음은 `PATH_INVALID`다: 빈 값, 4,096자 초과, 제어 문자,
+    역슬래시·`:`·`<>"|?*`, 절대 경로, `.`·`..`·빈 조각, 끝 점·공백, 장치 이름(`CON`·`NUL.txt` 등),
+    짝 없는 서로게이트. 루트 아래 조각 중 링크·junction이 있으면 `PATH_LINK`, 없으면
+    `PATH_NOT_FOUND`, 풀린 경로가 루트 밖이면 `PATH_OUTSIDE_ROOT`, 일반 파일·폴더가 아니면
+    `PATH_NOT_REGULAR`다. 하드링크가 둘 이상인 파일은 루트 밖 내용을 루트 안 이름으로 읽는 길이 될
+    수 있어 `PATH_HARDLINK`다. 루트가 로컬 고정 드라이브의 실제 폴더가 아니면 `PATH_ROOT_INVALID`다.
+    """
+    root_real = real_root(root)
+    parts = _request_parts(user_path)
+    current = root_real
+    try:
+        for part in parts:
+            current = current / part
+            info = os.lstat(current)
+            if stat.S_ISLNK(info.st_mode) or current.is_junction():
+                raise SafePathError("PATH_LINK")
+        resolved = current.resolve(strict=True)
+        info = os.stat(resolved)
+    except FileNotFoundError:
+        raise SafePathError("PATH_NOT_FOUND") from None
+    except OSError:
+        raise SafePathError("PATH_NOT_FOUND") from None
+    if not resolved.is_relative_to(root_real) or resolved == root_real:
+        raise SafePathError("PATH_OUTSIDE_ROOT")
+    if stat.S_ISREG(info.st_mode):
+        if info.st_nlink != 1:
+            raise SafePathError("PATH_HARDLINK")
+    elif not stat.S_ISDIR(info.st_mode):
+        raise SafePathError("PATH_NOT_REGULAR")
+    return resolved
+
+
+def resource_id(root: Path, user_path: str) -> str:
+    """`safe_path`의 결과를 루트 기준 POSIX ID로 만든다. 조각은 디스크의 실제 이름이다."""
+    resolved = safe_path(root, user_path)
+    return "/".join(resolved.relative_to(real_root(root)).parts)
+
+
+def file_resource_resolver(roots: dict[str, Path]) -> Callable[[ToolSpec, str], str]:
+    """B Catalog의 `ResourceResolver`. 서버 ID별 루트에서 요청 인자의 기대 ID를 계산한다.
+
+    경로가 거부되면 원문 없이 `ResolutionError(INVALID_ARGUMENTS)`다. 루트가 없는 서버나, 부를
+    때 다시 확인한 루트가 사라졌거나 바뀌었으면 모델 인자 탓이 아니므로
+    `ResolutionError(INTERNAL_ERROR)`다.
+    """
+    if type(roots) is not dict or any(
+        type(server_id) is not str or not server_id or not isinstance(root, Path)
+        for server_id, root in roots.items()
+    ):
+        raise SafePathError("PATH_ROOT_INVALID")
+    fixed = dict(roots)
+
+    def resolve(tool: ToolSpec, user_path: str) -> str:
+        root = fixed.get(tool.server_id)
+        if root is None:
+            raise ResolutionError(Reason.INTERNAL_ERROR)
+        try:
+            return resource_id(root, user_path)
+        except SafePathError as error:
+            if str(error) == "PATH_ROOT_INVALID":
+                raise ResolutionError(Reason.INTERNAL_ERROR) from None
+            raise ResolutionError(Reason.INVALID_ARGUMENTS) from None
+
+    return resolve
+
+
+def real_root(root: object) -> Path:
+    """로컬 고정 드라이브의 절대 경로 폴더를 최종 경로로 푼다. 아니면 `PATH_ROOT_INVALID`다.
+
+    파일 서버(C2.11)도 같은 풀이를 쓴다.
+    """
+    if not isinstance(root, Path) or not root.is_absolute() or not _on_fixed_drive(root):
+        raise SafePathError("PATH_ROOT_INVALID")
+    try:
+        real = root.resolve(strict=True)
+        if not real.is_dir() or not _on_fixed_drive(real):
+            raise SafePathError("PATH_ROOT_INVALID")
+    except OSError:
+        raise SafePathError("PATH_ROOT_INVALID") from None
+    return real
+
+
+def _on_fixed_drive(path: Path) -> bool:
+    """드라이브 문자가 있는 로컬 고정 드라이브인지. UNC·네트워크·이동식은 아니다.
+
+    해석기는 Guard 이벤트 루프에서 동기로 디스크를 보므로 느린 드라이브는 받지 않는다. 풀기 전에
+    먼저 봐서 UNC 루트는 네트워크에 닿지 않고 거부한다.
+    """
+    drive = path.drive
+    if len(drive) != 2 or drive[1] != ":":
+        return False
+    return bool(_GetDriveTypeW(drive + "\\") == _DRIVE_FIXED)
+
+
+def _forbidden_path_char(char: str) -> bool:
+    return ord(char) < 0x20 or ord(char) == 0x7F or char in _PATH_FORBIDDEN
+
+
+def _request_parts(user_path: object) -> tuple[str, ...]:
+    if type(user_path) is not str or not 1 <= len(user_path) <= _MAX_REQUEST_CHARS:
+        raise SafePathError("PATH_INVALID")
+    try:
+        user_path.encode("utf-8")
+    except UnicodeEncodeError:
+        raise SafePathError("PATH_INVALID") from None
+    parts = tuple(user_path.split("/"))
+    for part in parts:
+        if (
+            not part
+            or part in (".", "..")
+            or part.endswith((".", " "))
+            or part.split(".", 1)[0].upper() in RESERVED_DEVICE_NAMES
+            or any(_forbidden_path_char(char) for char in part)
+        ):
+            raise SafePathError("PATH_INVALID")
+    return parts

@@ -184,17 +184,17 @@ class CodexAppServerSession:
             # No owner handler exists yet; a stop seen while starting rejects the start.
             raise CodexSessionError(self.stop_code)
 
-    async def send(self, text: str) -> str:
+    async def send(self, text: str, effort: str | None = None) -> str:
         self._sending = True
         try:
-            return await self._send(text)
+            return await self._send(text, effort)
         finally:
             self._sending = False
 
-    async def _send(self, text: str) -> str:
+    async def _send(self, text: str, effort: str | None) -> str:
         thread_id = self._require_running()
         try:
-            params = turn_start_params(thread_id, text)
+            params = turn_start_params(thread_id, text, effort)
         except CodexProtocolError:
             raise CodexSessionError("CODEX_INPUT_INVALID") from None
         try:

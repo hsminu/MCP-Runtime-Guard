@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from guard_app.adapters.codex_protocol import (
     MAX_TURN_TEXT_CHARS,
+    REASONING_EFFORTS,
     CodexProtocolError,
     build_dynamic_tools,
     parse_dynamic_tool_call,
@@ -118,6 +122,30 @@ def test_turn_text_limit_matches_codex() -> None:
     for text in ("", "x" * (MAX_TURN_TEXT_CHARS + 1)):
         with pytest.raises(CodexProtocolError):
             turn_start_params("thread", text)
+
+
+def test_turn_effort_is_sent_only_when_picked_and_only_from_the_offered_levels() -> None:
+    # turn/start can also override the model, sandbox and approval policy for
+    # the turn; any such key would get around L1, so the whole key set is pinned.
+    assert turn_start_params("thread", "hi") == {
+        "threadId": "thread",
+        "input": [{"type": "text", "text": "hi"}],
+    }
+    picked = turn_start_params("thread", "hi", "high")
+    assert set(picked) == {"threadId", "input", "effort"}
+    assert picked["effort"] == "high"
+    for effort in ("ultra", "minimal", "", "HIGH"):
+        with pytest.raises(CodexProtocolError):
+            turn_start_params("thread", "hi", effort)
+
+
+def test_offered_levels_come_from_the_pinned_model_catalog_without_delegation() -> None:
+    catalog = Path(__file__).resolve().parents[2] / "config" / "codex" / "model_catalog.json"
+    (model,) = json.loads(catalog.read_text(encoding="utf-8"))["models"]
+    advertised = [level["effort"] for level in model["supported_reasoning_levels"]]
+    assert set(REASONING_EFFORTS) <= set(advertised)
+    assert "ultra" not in REASONING_EFFORTS  # delegates to sub-agents, off in L1
+    assert model["default_reasoning_level"] in REASONING_EFFORTS
 
 
 @pytest.mark.parametrize(

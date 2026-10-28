@@ -33,6 +33,7 @@ from guard_app.services.bridge import (
     ControlAction,
     LifecycleEvent,
     TaskProjection,
+    _review_fields,
     _review_header,
 )
 from guard_app.services.runner import RunUpdate
@@ -1176,6 +1177,14 @@ def test_review_header_names_tool_kind_and_expiry_on_one_line() -> None:
     )
     assert "send_doc (SEND)" in send and "12:06:00 UTC" in send
     assert read != send
+    # The review panel shows the same fields one per line.
+    assert _review_fields(snapshot("read_doc", ToolKind.READ, 5)) == (
+        ("도구", "read_doc (READ)"),
+        ("MCP 서버", "docs (경계 docs)"),
+        ("목적지 경계", "없음"),
+        ("Task 등급", "INTERNAL"),
+        ("만료", "2026-10-13 12:05:00 UTC"),
+    )
 
 
 @pytest.fixture(autouse=True)

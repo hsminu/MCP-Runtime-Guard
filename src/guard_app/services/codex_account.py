@@ -24,13 +24,18 @@ _PLAN_MAX = 40
 
 @dataclass(frozen=True, slots=True, repr=False)
 class AccountView:
-    """What the settings screen may show. No email, key or token."""
+    """What the settings screen may show. No email, key or token.
+
+    `notice` is a fixed code from trusted A code about the last request, such
+    as a refused or partly cleaned logout (#21).
+    """
 
     state: str
     plan: str | None = None
     login_id: str | None = None
     verification_url: str | None = None
     user_code: str | None = None
+    notice: str | None = None
 
 
 class CodexAccountPort(Protocol):
@@ -61,6 +66,11 @@ class CodexAccountClient:
         self._started = False
         self._completed: dict[str, bool] = {}
         self._changed = asyncio.Event()
+
+    @property
+    def closed(self) -> bool:
+        """The connection ended: the process exited or a remote-control notice closed it."""
+        return self._client.closed_reason is not None
 
     async def start(self) -> None:
         if self._started:
@@ -135,8 +145,12 @@ class CodexAccountClient:
         return await self.read()
 
     async def logout(self) -> AccountView:
-        await self._call("account/logout", None)
+        await self.sign_out()
         return await self.read()
+
+    async def sign_out(self) -> None:
+        """`account/logout` alone; the product owner reads nothing before it ends the process."""
+        await self._call("account/logout", None)
 
     async def aclose(self) -> None:
         await self._client.close()

@@ -8,7 +8,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Self
 
 import pytest
-from mcp.types import CallToolResult, ResourceLink, TextContent
+from mcp.shared.exceptions import McpError
+from mcp.types import CONNECTION_CLOSED, CallToolResult, ErrorData, ResourceLink, TextContent
 
 from guard_app.adapters import mcp_transport
 from guard_app.adapters.mcp_transport import McpTransport, result_budget, sdk_session
@@ -401,16 +402,25 @@ async def test_cancellation_resistant_sdk_call_still_settles_its_future(
 
     session = ResistantSession()
     monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
-    transport = McpTransport({"server": _streams([])}, call_timeout_s=0.01, close_timeout_s=0.2)
+    failed: list[str] = []
+    transport = McpTransport(
+        {"server": _streams([])},
+        call_timeout_s=0.01,
+        close_timeout_s=0.2,
+        on_server_failed=failed.append,
+    )
     await transport.start()
     active = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND)))
     await session.first_call.wait()
     with pytest.raises(DispatchError) as timeout:
         await asyncio.wait_for(active, timeout=0.15)
     assert timeout.value.exception_type == "TimeoutError"
+    # Past its watchdog the session no longer serves this run (#61).
+    assert failed == ["server"]
     session.release_first.set()
     await transport.close()
     assert len(session.calls) == 1
+    assert failed == ["server"]
 
 
 @pytest.mark.asyncio
@@ -770,7 +780,8 @@ async def test_owner_cancelled_mid_call_settles_the_commands_still_queued(
     session = CancelledSession()
     session.block_first = True
     monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
-    transport = McpTransport({"server": _streams([])})
+    failed: list[str] = []
+    transport = McpTransport({"server": _streams([])}, on_server_failed=failed.append)
     await transport.start()
     active = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND, seq=1)))
     await session.first_call.wait()
@@ -787,6 +798,119 @@ async def test_owner_cancelled_mid_call_settles_the_commands_still_queued(
         await transport.close()
     assert closed.value.exception_type == "WorkerOwnerFailed"
     assert len(session.calls) == 1  # the queued call never reached the server
+    assert failed == ["server"]  # the session ended while serving (#61)
+
+
+_CLOSED_BY_SDK = McpError(ErrorData(code=CONNECTION_CLOSED, message="Connection closed"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "broken",
+    [ConnectionError("SECRET connection"), _CLOSED_BY_SDK],
+    ids=["stream", "read-stream-ended"],
+)
+async def test_a_broken_session_is_reported_once_by_server_id_only(
+    monkeypatch: pytest.MonkeyPatch, broken: Exception
+) -> None:
+    """#61: the owner learns which server stopped serving, once, and nothing else.
+
+    The SDK answers a request still waiting when the server's output ends with a
+    fixed CONNECTION_CLOSED error; that ends the session like a broken stream.
+    """
+    first, second = _Session([broken]), _Session()
+    sessions = iter((first, second))
+    monkeypatch.setattr(
+        sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: next(sessions)
+    )
+    failed: list[object] = []
+
+    def record(*args: object) -> None:
+        failed.append(args)
+
+    transport = McpTransport(
+        {"first": _streams([]), "second": _streams([])}, on_server_failed=record
+    )
+    await transport.start()
+    with pytest.raises(DispatchError):
+        await transport.call(_request("first", seq=1))
+    assert failed == [("first",)]
+    with pytest.raises(DispatchError) as refused:
+        await transport.call(_request("first", seq=2))
+    assert refused.value.exception_type == "WorkerClosed"
+    assert (await transport.call(_request("second", seq=3))).payload is not None
+    await transport.close()
+    assert failed == [("first",)]
+    assert len(first.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        McpError(ErrorData(code=CONNECTION_CLOSED, message="tool failed")),
+        McpError(ErrorData(code=-32603, message="Connection closed")),
+    ],
+    ids=["same-code", "same-message"],
+)
+async def test_a_server_error_response_is_not_a_server_failure(
+    monkeypatch: pytest.MonkeyPatch, error: McpError
+) -> None:
+    session = _Session([error, _result("next")])
+    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
+    failed: list[str] = []
+    transport = McpTransport({"server": _streams([])}, on_server_failed=failed.append)
+    await transport.start()
+    with pytest.raises(DispatchError) as answered:
+        await transport.call(_request(seq=1))
+    assert answered.value.exception_type == "McpError"
+    assert (await transport.call(_request(seq=2))).payload is not None
+    await transport.close()
+    assert failed == []
+
+
+@pytest.mark.asyncio
+async def test_close_start_failure_and_a_contained_timeout_report_no_server_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a session that stops serving on its own is a server failure (#61)."""
+    slow, refused = _Session([_result("late"), _result("next")]), _Session()
+    slow.block_first = True
+    refused.initialize_error = ValueError("SECRET initialize")
+    sessions = iter((slow, refused))
+    monkeypatch.setattr(
+        sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: next(sessions)
+    )
+    failed: list[str] = []
+    transport = McpTransport(
+        {"slow": _streams([])}, call_timeout_s=0.25, on_server_failed=failed.append
+    )
+    await transport.start()
+    with pytest.raises(DispatchError) as timeout:
+        await transport.call(_request("slow", kind=ToolKind.SEND))
+    assert timeout.value.exception_type == "TimeoutError"
+    assert (await transport.call(_request("slow", seq=2))).payload is not None
+    await transport.close()
+
+    not_started = McpTransport({"refused": _streams([])}, on_server_failed=failed.append)
+    with pytest.raises(DispatchError):
+        await not_started.start()
+    await not_started.close()
+    assert failed == []
+
+
+def test_server_failure_callbacks_must_be_callable() -> None:
+    with pytest.raises(TypeError, match="server failed callback must be callable"):
+        McpTransport({}, on_server_failed="not callable")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="failure callback must be callable"):
+        mcp_transport.ServerWorker(
+            lambda: _Session(),
+            call_timeout_s=1,
+            startup_timeout_s=1,
+            close_timeout_s=1,
+            max_result_copy_bytes=512 * 1024,
+            on_failed="not callable",  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.asyncio

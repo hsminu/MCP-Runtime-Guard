@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QIcon, QPainter, QPixmap
+from PySide6.QtCore import QByteArray, QRect, QRectF, QSize, Qt
+from PySide6.QtGui import QIcon, QIconEngine, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
+
+from .style import TOKENS
 
 _SHAPES = {
     "send": '<path d="m3 3 18 9-18 9 4-9Z"/><path d="M7 12h14"/>',
@@ -35,24 +37,80 @@ _SHAPES = {
     '<path d="M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/>',
     "menu": '<path d="M4 6h16M4 12h16M4 18h16"/>',
     "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    "chat": '<path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4v-4'
+    'a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"/>',
+    "arrow_up": '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    "chevron_down": '<path d="m6 9 6 6 6-6"/>',
+    "panel": '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/>',
+    "search": '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/>',
+    "compose": '<path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/>'
+    '<path d="m17 3 4 4-8 8H9v-4Z"/>',
+    "sun": '<circle cx="12" cy="12" r="4"/>'
+    '<path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2'
+    'M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    "moon": '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/>',
 }
 
 
-def line_icon(name: str, color: str = "#70798c") -> QIcon:
-    """Render fixed artwork at 2x resolution, including a disabled state."""
-    icon = QIcon()
-    for mode, stroke in ((QIcon.Mode.Normal, color), (QIcon.Mode.Disabled, "#a4aabb")):
-        svg = (
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
-            f'fill="none" stroke="{stroke}" stroke-width="1.7" '
-            f'stroke-linecap="round" stroke-linejoin="round">{_SHAPES[name]}</svg>'
-        )
-        renderer = QSvgRenderer(QByteArray(svg.encode("ascii")))
-        pixmap = QPixmap(40, 40)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        renderer.render(painter)
-        painter.end()
-        pixmap.setDevicePixelRatio(2)
-        icon.addPixmap(pixmap, mode)
-    return icon
+class _LineIconEngine(QIconEngine):
+    """Draw fixed artwork in a palette role resolved at paint time.
+
+    A theme switch updates the shared tokens, so every icon follows it on
+    its next paint without being recreated."""
+
+    def __init__(self, name: str, role: str) -> None:
+        super().__init__()
+        self._name = name
+        self._role = role
+        self._cache: dict[tuple[str, int, int], QPixmap] = {}
+
+    def _stroke(self, mode: QIcon.Mode) -> str:
+        return TOKENS["subtle" if mode is QIcon.Mode.Disabled else self._role]
+
+    def _render(self, size: QSize, stroke: str) -> QPixmap:
+        key = (stroke, size.width(), size.height())
+        cached = self._cache.get(key)
+        if cached is None:
+            svg = (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
+                f'fill="none" stroke="{stroke}" stroke-width="1.7" '
+                f'stroke-linecap="round" stroke-linejoin="round">{_SHAPES[self._name]}</svg>'
+            )
+            renderer = QSvgRenderer(QByteArray(svg.encode("ascii")))
+            cached = QPixmap(size)
+            cached.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(cached)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            renderer.render(painter, QRectF(0, 0, size.width(), size.height()))
+            painter.end()
+            self._cache[key] = cached
+        return cached
+
+    def paint(self, painter: QPainter, rect: QRect, mode: QIcon.Mode, state: QIcon.State) -> None:
+        scale = painter.device().devicePixelRatioF() if painter.device() else 1.0
+        pixmap = self.scaledPixmap(rect.size(), mode, state, scale)
+        painter.drawPixmap(rect, pixmap)
+
+    def pixmap(self, size: QSize, mode: QIcon.Mode, state: QIcon.State) -> QPixmap:
+        return self.scaledPixmap(size, mode, state, 1.0)
+
+    def scaledPixmap(  # noqa: N802 - Qt virtual
+        self, size: QSize, mode: QIcon.Mode, state: QIcon.State, scale: float
+    ) -> QPixmap:
+        pixels = QSize(max(1, round(size.width() * scale)), max(1, round(size.height() * scale)))
+        pixmap = QPixmap(self._render(pixels, self._stroke(mode)))
+        pixmap.setDevicePixelRatio(scale)
+        return pixmap
+
+    def actualSize(self, size: QSize, mode: QIcon.Mode, state: QIcon.State) -> QSize:  # noqa: N802
+        return size
+
+    def clone(self) -> QIconEngine:
+        return _LineIconEngine(self._name, self._role)
+
+
+def line_icon(name: str, role: str = "body") -> QIcon:
+    """Fixed artwork stroked in a palette role, with a disabled state."""
+    _SHAPES[name]  # unknown names are refused, never drawn blank
+    TOKENS[role]
+    return QIcon(_LineIconEngine(name, role))

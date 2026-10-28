@@ -76,7 +76,7 @@ def test_prepared_draft_keeps_segments_and_preview_hides_the_root(
         ),
     )
     assert not form.prepare_button.isEnabled()
-    assert "아직 등록되지 않았어" in form.status.text()
+    assert "아직 등록되지 않음" in form.status.text()
     assert len(previews) == 1
     preview = previews[0]
     assert isinstance(preview, LocalDraftPreview)

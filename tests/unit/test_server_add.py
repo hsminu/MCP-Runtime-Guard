@@ -10,10 +10,20 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication, QScrollArea
+from PySide6.QtCore import QDir
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea
 
 from guard_app.services import catalog_sources
-from guard_app.ui.server_add import LocalDraftPreview, ServerAddForm
+from guard_app.ui import server_add
+from guard_app.ui.server_add import (
+    LocalDraftPreview,
+    PastedServer,
+    PasteError,
+    ServerAddForm,
+    read_pasted_server,
+    suggested_server_id,
+)
 from guard_app.ui.window import GuardWindow
 
 
@@ -35,7 +45,7 @@ def form(app: QApplication) -> ServerAddForm:
 
 
 def _valid_stdio(form: ServerAddForm) -> str:
-    command = str(Path.cwd() / "private-executable")
+    command = str(Path.cwd() / "private-executable.exe")
     form.server_id.setText("local_docs")
     form.display_name.setText("Local Docs")
     form.command.setText(command)
@@ -49,7 +59,7 @@ def _valid_stdio(form: ServerAddForm) -> str:
 def test_trust_boundary_and_max_label_require_explicit_choices(
     form: ServerAddForm,
 ) -> None:
-    command = str(Path.cwd() / "private-executable")
+    command = str(Path.cwd() / "private-executable.exe")
     form.server_id.setText("local_docs")
     form.display_name.setText("Local Docs")
     form.command.setText(command)
@@ -221,7 +231,7 @@ def test_duplicate_local_click_emits_once_without_claiming_registration(
     assert "unshown-value" not in previews[0].text
     assert form.validated_draft is first_draft
     assert not form.prepare_button.isEnabled()
-    assert "Registry에 등록되지 않았어" in form.status.text()
+    assert "Registry에 등록되지 않음" in form.status.text()
 
     with pytest.raises(FrozenInstanceError):
         previews[0].text = "changed"  # type: ignore[misc]
@@ -407,7 +417,7 @@ def test_b_valid_server_ids_remain_accepted_after_existing_ui_checks(
     form.prepare_button.click()
     assert form.validated_draft is not None
     assert form.validated_draft.server_id == server_id
-    assert "Registry에 등록되지 않았어" in form.status.text()
+    assert "Registry에 등록되지 않음" in form.status.text()
 
 
 def test_editing_server_id_clears_prepared_draft_and_updates_errors_immediately(
@@ -423,7 +433,7 @@ def test_editing_server_id_clears_prepared_draft_and_updates_errors_immediately(
     assert "입력 오류" in form.preview.toPlainText()
 
     form.server_id.setText("")
-    assert form._errors["server_id"].text() == "서버 ID를 입력해."
+    assert form._errors["server_id"].text() == "서버 ID를 입력하세요."
     form.server_id.setText("docs_read")
     assert form._errors["server_id"].text() == ""
     assert form._errors["server_id"].isHidden()
@@ -467,6 +477,204 @@ def test_product_window_uses_bridge_validation_without_backend_startup(
         form.server_id.setText("docs_read")
         assert form._errors["server_id"].text() == ""
         assert form.prepare_button.isEnabled()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+# 2026-10-28: paste a config entry instead of typing every field.
+
+
+def _choose_boundary(form: ServerAddForm) -> None:
+    form.tier.setCurrentIndex(form.tier.findData("internal"))
+    form.max_label.setCurrentIndex(form.max_label.findData("PUBLIC"))
+
+
+def test_pasted_config_fills_the_fields_and_keeps_no_values(form: ServerAddForm) -> None:
+    command = str(Path.cwd() / "docs-server.exe")
+    form.quick_input.setPlainText(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "docs": {
+                        "command": command,
+                        "args": ["serve", "--root", "C:\\My Docs"],
+                        "env": {"DOCS_TOKEN": "pasted-secret-value", "LANG": "ko_KR"},
+                    },
+                    "mail": {"url": "https://mail.example.test/mcp"},
+                }
+            }
+        )
+    )
+    form.fill_button.click()
+
+    assert form.quick_input.toPlainText() == ""
+    assert form.server_id.text() == "docs"
+    assert form.transport.currentData() == "stdio"
+    assert form.command.text() == command
+    assert form.args_json.toPlainText() == 'serve --root "C:\\My Docs"'
+    assert form.env_allow.toPlainText() == "DOCS_TOKEN\nLANG"
+    assert "2개는 가져오지 않음" in form.paste_status.text()
+    assert "나머지 1개" in form.paste_status.text()
+    texts = [form.preview.toPlainText(), form.paste_status.text(), form.env_allow.toPlainText()]
+    assert not any("pasted-secret-value" in text or "ko_KR" in text for text in texts)
+    _choose_boundary(form)
+    form.prepare_button.click()
+    draft = form.validated_draft
+    assert draft is not None
+    assert draft.args == ("serve", "--root", "C:\\My Docs")
+    assert draft.env_allow == ("DOCS_TOKEN", "LANG")
+    assert draft.display_name == "docs"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            '[mcp_servers.docs]\ncommand = "C:\\\\tools\\\\docs.exe"\nargs = ["serve"]\n'
+            'env = { DOCS_TOKEN = "secret" }\n',
+            PastedServer(
+                "docs",
+                "stdio",
+                command="C:\\tools\\docs.exe",
+                args=("serve",),
+                env_names=("DOCS_TOKEN",),
+                dropped_values=1,
+            ),
+        ),
+        (
+            '{"url": "https://mail.example.test/mcp", "headers": {"Authorization": "Bearer x"}}',
+            PastedServer(
+                "", "streamable_http", url="https://mail.example.test/mcp", dropped_values=1
+            ),
+        ),
+        (
+            "https://mail.example.test/mcp",
+            PastedServer("", "streamable_http", url="https://mail.example.test/mcp"),
+        ),
+        (
+            'C:\\tools\\node.exe "C:\\My Server\\index.js" --port 3',
+            PastedServer(
+                "",
+                "stdio",
+                command="C:\\tools\\node.exe",
+                args=("C:\\My Server\\index.js", "--port", "3"),
+            ),
+        ),
+    ],
+    ids=("codex-toml", "json-url-with-headers", "bare-url", "command-line"),
+)
+def test_paste_reader_understands_common_forms(text: str, expected: PastedServer) -> None:
+    assert read_pasted_server(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("", "없음"),
+        ('{"mcpServers": {"docs": {', "JSON 형식"),
+        ('{"name": "docs"}', "찾지 못함"),
+        ('{"command": "C:\\\\x.exe", "args": "serve"}', "문자열 배열"),
+        ('C:\\tools\\node.exe "unclosed', "따옴표"),
+    ],
+    ids=("empty", "broken-json", "no-entry", "args-not-array", "open-quote"),
+)
+def test_unreadable_paste_stays_in_the_box_with_a_fixed_reason(
+    form: ServerAddForm, text: str, message: str
+) -> None:
+    form.quick_input.setPlainText(text)
+    form.fill_button.click()
+    assert message in form.paste_status.text()
+    assert form.quick_input.toPlainText() == text
+    assert form.server_id.text() == ""
+    with pytest.raises(PasteError):
+        read_pasted_server(text)
+
+
+def test_arguments_read_like_a_command_line(form: ServerAddForm) -> None:
+    _valid_stdio(form)
+    form.args_json.setPlainText('serve --root "C:\\My Docs" ""')
+    form.prepare_button.click()
+    draft = form.validated_draft
+    assert draft is not None
+    assert draft.args == ("serve", "--root", "C:\\My Docs", "")
+    form.args_json.setPlainText('serve "C:\\My Docs')
+    assert '따옴표(")' in form._errors["args"].text()
+    assert not form.prepare_button.isEnabled()
+    form.env_allow.setPlainText("LANG, PATH")
+    form.args_json.setPlainText("")
+    form.prepare_button.click()
+    draft = form.validated_draft
+    assert draft is not None
+    assert draft.args == ()
+    assert draft.env_allow == ("LANG", "PATH")
+
+
+def test_display_name_is_optional_and_suggests_an_ascii_id(form: ServerAddForm) -> None:
+    QTest.keyClicks(form.display_name, "MCP Docs Server")
+    assert form.server_id.text() == "docs-server"
+    form.display_name.clear()
+    # keyClicks types ASCII only; a Korean name arrives as one edit, like an IME commit.
+    form.display_name.setText("사내 문서")
+    form.display_name.textEdited.emit("사내 문서")
+    assert form.server_id.text() == ""
+    QTest.keyClicks(form.server_id, "intranet")
+    QTest.keyClicks(form.display_name, " v2")
+    assert form.server_id.text() == "intranet"
+    assert suggested_server_id("mcp") == ""
+    assert suggested_server_id("Mail__Box_") == "mail-box"
+
+    form.display_name.clear()
+    form.command.setText(str(Path.cwd() / "intranet.exe"))
+    _choose_boundary(form)
+    form.prepare_button.click()
+    draft = form.validated_draft
+    assert draft is not None
+    assert draft.display_name == "intranet"
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [("npx.cmd", "배치 파일"), ("run.bat", "배치 파일"), ("server.py", ".exe")],
+)
+def test_only_exe_files_pass_like_the_launcher(
+    form: ServerAddForm, name: str, message: str
+) -> None:
+    _valid_stdio(form)
+    form.command.setText(str(Path.cwd() / name))
+    assert message in form._errors["command"].text()
+    assert not form.prepare_button.isEnabled()
+
+
+def test_browse_puts_the_chosen_executable_in_the_field(
+    form: ServerAddForm, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    chosen = str(Path.cwd() / "picked.exe")
+    monkeypatch.setattr(server_add.QFileDialog, "getOpenFileName", lambda *_args: (chosen, ""))
+    form.browse_button.click()
+    assert form.command.text() == QDir.toNativeSeparators(chosen)
+    monkeypatch.setattr(server_add.QFileDialog, "getOpenFileName", lambda *_args: ("", ""))
+    form.browse_button.click()
+    assert form.command.text() == QDir.toNativeSeparators(chosen)
+
+
+def test_folder_rules_stay_folded_until_opened(app: QApplication) -> None:
+    window = GuardWindow()
+    try:
+        window.navigate("server_add")
+        window.show()
+        app.processEvents()
+        assert not window.folder_rules_form.isVisibleTo(window)
+        toggle = next(
+            button
+            for button in window.server_add_form.findChildren(QPushButton)
+            if button.text().startswith("로컬 파일 서버 폴더 등급")
+        )
+        toggle.click()
+        assert window.folder_rules_form.isVisibleTo(window)
+        assert toggle.accessibleName().endswith("접기")
+        toggle.click()
+        assert not window.folder_rules_form.isVisibleTo(window)
     finally:
         window.close()
         app.processEvents()

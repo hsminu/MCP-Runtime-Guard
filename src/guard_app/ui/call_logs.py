@@ -41,7 +41,13 @@ from .presentation import (
     format_kst,
 )
 from .presentation import public_display_text as _public_display_text
-from .widgets import KeyboardActionButton, PlainDetailDialog, StateMessage, plain_label
+from .widgets import (
+    KeyboardActionButton,
+    PlainDetailDialog,
+    StateMessage,
+    plain_label,
+    table_row_height,
+)
 
 _KST = timezone(timedelta(hours=9), name="KST")
 _KINDS = {ToolKind.READ.value: "읽기 · READ", ToolKind.SEND.value: "전송 · SEND"}
@@ -229,7 +235,7 @@ def _detail_text(detail: PublicCallDetail) -> str:
     if detail.stages is None:
         lines.append("단계별 감사 조회 계약 미제공")
     elif not detail.stages:
-        lines.append("확인된 단계가 없어")
+        lines.append("확인된 단계가 없음")
     else:
         for stage in detail.stages:
             name = _STAGES.get(stage.stage_code, "미확인 단계")
@@ -245,7 +251,7 @@ def _detail_text(detail: PublicCallDetail) -> str:
             "",
             "안전한 입출력 요약: 조회 계약 미제공",
             "추가 구조화 메타데이터: 조회 계약 미제공",
-            "본문·전체 인자·인증정보·예외 원문은 표시하지 않아.",
+            "본문·전체 인자·인증정보·예외 원문은 표시하지 않음.",
         )
     )
     return "\n".join(lines)
@@ -271,13 +277,12 @@ class CallLogPage(QWidget):
         self._column_mode: str | None = None
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(26, 28, 26, 42)
-        layout.setSpacing(14)
-        layout.addWidget(plain_label("CALL LOG", name="eyebrow"))
+        layout.setContentsMargins(24, 24, 24, 40)
+        layout.setSpacing(16)
         layout.addWidget(plain_label("도구 호출 로그", name="pageTitle"))
         layout.addWidget(
             plain_label(
-                "감사 조회에서 공개가 허용된 식별자와 처리 상태만 표시해.",
+                "감사 조회에서 공개가 허용된 식별자와 처리 상태만 표시함.",
                 name="secondary",
             )
         )
@@ -328,8 +333,8 @@ class CallLogPage(QWidget):
         layout.addLayout(self._actions_layout)
         layout.addWidget(
             plain_label(
-                "CSV에는 현재 조회·필터 결과의 공개 메타데이터만 들어가. "
-                "파일 저장 경로는 감사 조회·파일 계약 확정 뒤 연결해.",
+                "CSV에는 현재 조회·필터 결과의 공개 메타데이터만 들어감. "
+                "파일 저장 경로는 감사 조회·파일 계약 확정 뒤 연결 예정.",
                 name="secondary",
             )
         )
@@ -415,7 +420,7 @@ class CallLogPage(QWidget):
         if not (mode_changed or force):
             return
         for index, row in enumerate(self._visible_rows):
-            self.table.setRowHeight(index, 72 if mode != "full" else 58)
+            self.table.setRowHeight(index, table_row_height(self.table, 2 if mode == "full" else 3))
             for column, value in enumerate(_cell_texts(row, mode)):
                 item = self.table.item(index, column)
                 if item is not None:
@@ -472,7 +477,7 @@ class CallLogPage(QWidget):
                 if surface.state == LoadState.STALE:
                     text = "이전 조회 결과 · 다시 확인 필요\n\n" + text
             else:
-                text = "호출 상세를 확인할 수 없어"
+                text = "호출 상세를 확인할 수 없음"
         else:
             text = StateMessage._MESSAGES.get(surface.state, "상태 확인 필요")
         dialog.body.setPlainText(text)
@@ -509,14 +514,14 @@ class CallLogPage(QWidget):
             self.table.insertRow(index)
             for column, value in enumerate(_cell_texts(row, self._column_mode)):
                 self.table.setItem(index, column, QTableWidgetItem(value))
-            self.table.setRowHeight(index, 58)
+            self.table.setRowHeight(index, table_row_height(self.table, 2))
             if row.call_id == selected:
                 self.table.selectRow(index)
         if self._state == LoadState.READY:
             if not self._rows:
-                self.state_message.set_message("조회된 호출이 없어")
+                self.state_message.set_message("조회된 호출이 없음")
             elif not self._visible_rows:
-                self.state_message.set_message("현재 조회 결과와 일치하는 호출이 없어")
+                self.state_message.set_message("현재 조회 결과와 일치하는 호출이 없음")
         self.state_message.setVisible(self._state != LoadState.READY or not self._visible_rows)
         self._update_table_columns(force=True)
         self._selection_changed()

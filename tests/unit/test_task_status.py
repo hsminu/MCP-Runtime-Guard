@@ -55,7 +55,7 @@ def test_unknown_outcome_after_running_never_looks_complete_or_runnable(
     assert "결과 불명" in rendered
     assert "실행됐는지 확인되지" in rendered
     assert "수신측" in rendered
-    assert "다시 실행할 수 없어" in rendered
+    assert "다시 실행할 수 없음" in rendered
     assert "성공" not in rendered
     assert "재시도" not in rendered
     assert card.findChildren(QAbstractButton) == []
