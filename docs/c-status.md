@@ -28,7 +28,7 @@
 - [x] C2.1 Scanner 비밀값 로딩(`secrets.py`)·SDK 원문 로그 제한(`redact.py`) · [기록](archive/tasks/c-cisco-luna-connection.md)
 - [x] C2.2 SDK import의 외부 tokenizer 다운로드 차단(C-CISCO-05) · #6 · [대장](weakness_register.md#발견-항목과-조치)
 - [x] C2.3 safe_path(`security/paths.py`): 빈 값·NUL·제어 문자·역슬래시·`:`(드라이브·ADS)·절대·상위·장치 이름·끝 점 거부, 루트 아래 symlink·junction·하드링크 거부, ID는 디스크 실제 이름(대소문자·8.3)의 root 기준 POSIX. B Catalog용 `file_resource_resolver` · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.3-safe-path.md)
-- [ ] C2.4 검사-열기 TOCTOU 한계와 no-follow 옵션 확인
+- [x] C2.4 검사-열기 TOCTOU: 파일 서버가 `safe_path` 뒤 링크 미추적(`OPEN_REPARSE_POINT`) 핸들로 열고 핸들의 실제 경로·reparse·하드링크를 다시 대조(`FILE_CHANGED`). 상위 폴더 junction 바꿔치기 실측 · [기록](archive/c/C2.11-file-server.md)
 - [x] C2.5 URL 검증(URL-01, `security/endpoints.py`): 등록 화면은 `normalize_endpoint`로 정규형을 만들고, 설정 로더(`ServerSettings.url`)와 transport는 `canonical_endpoint`로 정규형만 받는다. https 원칙, http는 루프백 IP 리터럴만, 사용자 정보·쿼리·fragment·끝 점·`%`·숫자 IP 변형·특수 주소 거부, IDNA 2008 · [기록](archive/c/C2.5-endpoint-validation.md)
 - [x] C2.6 stdio MCP 서버 실행 입구(EXE-01, `security/launcher.py`): `check_stdio_values`(command·args·env_allow 검사), `pin_executable`(등록 지문), `launch_mcp_server`(연결마다 재검사·지문 대조, 지문 없으면 `LAUNCH_EXECUTABLE_UNPINNED`, 서버별 폴더 `AppFolders.server_folder`·연결별 stderr·기본 환경 5개와 서버 폴더 TEMP·`env_allow`만). A 화면·연결과 B 지문 필드(#48)는 각 담당 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.6-mcp-server-launch.md)
 - [ ] C2.7 ids: 암호학적 난수, 비밀값 누락은 전용 예외
@@ -37,7 +37,7 @@
 - [x] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용(`secrets.store_scanner_key`·`save_scanner_key`(A `KeySaver`)·`load_scanner_key`·`scanner_key_tail`·`delete_scanner_key`·`scanner_key_environ`). A 화면 연결과 #59 뒤 검사기 연결은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.10-scanner-key-store.md)
 - [x] C2.12 codex.exe 실행 launcher(`security/launcher.py`): 쓰기 금지 핸들로 실행마다 SHA-256 대조, 허용 목록 환경, `-c sqlite_home='<Task 폴더>'`, 멈춘 채 생성 후 Job Object 할당, stdin/stdout은 A `CodexPipes` 형식, stderr는 Task 폴더 격리 파일, `close()`로 종료 확인(#21 2번). stdio MCP 서버도 같은 `launch_process`를 쓴다(#21 5번) · [기록](archive/c/C2.12-codex-launcher.md)
 - [x] C2.13 앱 폴더 경로·권한(`security/paths.py`): `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 codex 설치·CODEX_HOME·Task 폴더·config에 사용자·SYSTEM만의 보호된 DACL, 단일 실행 잠금, Task 폴더 생성·삭제와 앱 시작 때 남은 폴더 삭제(#21 6번) · [기록](archive/c/C2.13-app-folders.md)
-- [ ] C2.11 제품용 읽기 전용 파일 MCP 서버(stdio): 폴더 목록·파일 읽기만, `safe_path`(C2.3) 사용, `structuredContent.resource_id` 보고, UTF-8 텍스트만 · [결정](contracts.md#사용자-결정)
+- [x] C2.11 제품용 읽기 전용 파일 MCP 서버(`guard_app.servers.file_server`, stdio, 표준 라이브러리 JSON-RPC): `list_root`·`list_folder`·`read_file`(모두 READ), `structuredContent.resource_id`(C2.3), UTF-8 텍스트 192KiB, 목록 1,000개, 루트는 레코드 `args`의 `--root`(`file_server_args`·`file_server_root`). A 등록 화면·조립은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.11-file-server.md)
 - [x] C2.14 설정 파일 연산(CFG-01, #33, `security/settings_io.py`): `config\settings.json`을 링크 없이 열어 일반 파일·하드링크 1·사용자·SYSTEM 권한 확인, 상한+1바이트 읽기, 세대(크기·SHA-256)가 같을 때만 같은 폴더 임시 파일·fsync·`MoveFileExW(WRITE_THROUGH)` 교체, 실패와 결과 불명 구분, 앱 시작 때 남은 임시 파일 삭제. 서버 실행 파일·URL 검증은 C2.6·C2.5로 분리 · [기록](archive/c/C2.14-settings-file-io.md)
 - [x] C2.15 로그아웃 정리 함수 `clear_codex_credentials`(`security/codex_home.py`): `secrets/` 암호문과 자격증명 관리자 항목 두 개 삭제, 모르는 항목이 있으면 아무것도 지우지 않음. A가 `account/logout` 성공 뒤 부름 · [기록](archive/c/C2.15-codex-credential-cleanup.md)
 - [x] C2.16 앱 폴더 권한 확인의 SID 비교를 전체 SID로(C2.13 후속): SDDL 약어(`LA` 등) 때문에 CI 러너(내장 Administrator)에서 거부되던 문제 수정, 읽지 못한 ACE는 거부(#35 B 리뷰 3번) · [기록](archive/c/C2.16-sid-alias-compare.md)
