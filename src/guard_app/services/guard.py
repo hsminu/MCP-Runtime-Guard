@@ -129,7 +129,8 @@ class GuardService:
     request_id_factory·approval_id_factory는 C의 ID 공급자이고 next_call_seq는
     기존 Task를 포함해 중복 없는 순번을 공급해야 한다. 기존 Store 초안에 이
     공급 포트가 없어 구성 callback으로 분리했다. 재시작 시 이를 0으로 초기화하면
-    안 된다. failure_audit도 C가 내구성 저장을 연결해야 한다.
+    안 된다. failure_audit도 C가 내구성 저장을 연결해야 한다. on_global_halt는
+    전역 정지로 처음 전환할 때 한 번 호출되며 동기로 실행되고 예외를 내지 않는다.
     """
 
     def __init__(
@@ -153,6 +154,7 @@ class GuardService:
         taint_mode: str = "accumulate",
         max_result_bytes: int = 262144,
         approval_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        on_global_halt: Callable[[Reason], None] | None = None,
     ) -> None:
         for value in (profile_id, policy_version, operator_id):
             if (
@@ -176,6 +178,10 @@ class GuardService:
         )
         if any(not callable(callback) for callback in callbacks):
             raise GuardConfigError("Guard 공급 함수가 유효하지 않다")
+        if on_global_halt is not None and (
+            not callable(on_global_halt) or inspect.iscoroutinefunction(on_global_halt)
+        ):
+            raise GuardConfigError("Guard 전역 정지 함수가 유효하지 않다")
         self._store = store
         self._registry = registry
         self._catalog = catalog
@@ -193,6 +199,7 @@ class GuardService:
         self._max_result_bytes = max_result_bytes
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._global_halt = False
+        self._on_global_halt = on_global_halt
         self._stop_requests: dict[str, _TaskStopSignal] = {}
         self._system_stop_requests: dict[tuple[str, int], _TaskStopSignal] = {}
         self._system_channel_key = object()
@@ -295,11 +302,15 @@ class GuardService:
             if isinstance(exc, _SessionIdentityMismatchError):
                 self._system_stop_requests.pop((identity.task_id, identity.epoch), None)
                 return
-            self._halt_globally()
+            self._halt_globally(
+                exc.reason if isinstance(exc, StoreError) else Reason.INTERNAL_ERROR
+            )
             self._approvals._fail_system_stop(identity.task_id, identity.epoch)
 
         def fallback(exc: BaseException) -> None:
-            self._halt_globally()
+            self._halt_globally(
+                exc.reason if isinstance(exc, StoreError) else Reason.INTERNAL_ERROR
+            )
             self._approvals._fail_system_stop(identity.task_id, identity.epoch)
 
         result = await fail_closed(operation, on_error=on_error, on_containment_error=fallback)
@@ -366,11 +377,15 @@ class GuardService:
             self._policy_ready.clear()
 
             async def on_error(exc: BaseException) -> None:
-                self._halt_globally()
+                self._halt_globally(
+                    exc.reason if isinstance(exc, StoreError) else Reason.INTERNAL_ERROR
+                )
                 self._approvals._fail_policy_change()
 
             def fallback(exc: BaseException) -> None:
-                self._halt_globally()
+                self._halt_globally(
+                    exc.reason if isinstance(exc, StoreError) else Reason.INTERNAL_ERROR
+                )
                 self._approvals._fail_policy_change()
 
             try:
@@ -618,6 +633,8 @@ class GuardService:
         if expected_epoch is not None and state.epoch != expected_epoch:
             return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
         self._check_stop(task_id, epoch=state.epoch)
+        if self._global_halt:
+            return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
         if not self._policy_matches(state):
             await self._halt_task(task_id, Reason.POLICY_CHANGED)
             await self._approvals.invalidate_task(task_id, Reason.POLICY_CHANGED)
@@ -833,8 +850,12 @@ class GuardService:
         self._confirm_terminal_stop(halted)
         return halted
 
-    def _halt_globally(self) -> None:
+    def _halt_globally(self, reason: Reason = Reason.INTERNAL_ERROR) -> None:
+        if self._global_halt:
+            return
         self._global_halt = True
+        if self._on_global_halt is not None:
+            self._on_global_halt(reason)
 
     async def _pre_dispatch_unlocked_failure(
         self, task_id: str, exc: BaseException, *, expected_epoch: int | None
@@ -850,7 +871,7 @@ class GuardService:
         self, task_id: str, exc: BaseException, *, expected_epoch: int | None = None
     ) -> Denied:
         if isinstance(exc, StoreError):
-            self._halt_globally()
+            self._halt_globally(exc.reason)
         reason = (
             exc.reason if isinstance(exc, (ResolutionError, StoreError)) else Reason.INTERNAL_ERROR
         )
@@ -867,7 +888,7 @@ class GuardService:
         return Denied(request_id=None, reasons=(reason,))
 
     def _pre_failure_fallback(self, exc: BaseException) -> Denied:
-        self._halt_globally()
+        self._halt_globally(exc.reason if isinstance(exc, StoreError) else Reason.INTERNAL_ERROR)
         return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
 
     async def _contain_post_dispatch(
@@ -917,7 +938,7 @@ class GuardService:
         return Withheld(request_id=req.request_id, reasons=(reason,))
 
     def _post_failure_fallback(self, req: ResolvedRequest, exc: BaseException) -> Outcome:
-        self._halt_globally()
+        self._halt_globally(exc.reason if isinstance(exc, StoreError) else Reason.INTERNAL_ERROR)
         if req.tool.kind is ToolKind.SEND:
             return OutcomeUnknown(request_id=req.request_id, reasons=(Reason.POST_DISPATCH_ERROR,))
         return Withheld(request_id=req.request_id, reasons=(Reason.POST_DISPATCH_ERROR,))
@@ -944,6 +965,9 @@ class _ApprovalHost:
 
     def policy_matches(self, state: TaskState) -> bool:
         return self._guard._policy_matches(state)
+
+    def policy_mismatch_reason(self) -> Reason:
+        return Reason.INTERNAL_ERROR if self._guard._global_halt else Reason.POLICY_CHANGED
 
     def effective_task_label(self, state: TaskState) -> Label:
         return effective_label(state, self._guard._mode)

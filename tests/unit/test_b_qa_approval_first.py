@@ -257,13 +257,11 @@ def test_direct_sqlite_transition_persists_same_floored_time_as_return_and_audit
         assert after.decided_at_utc == (before.decided_at_utc or before.created_at_utc)
         assert after.expires_at_utc == before.expires_at_utc
         assert asyncio.run(store.get_approval(before.approval_id)) == after
-        audit_at = (
-            store._owned_connection()
-            .execute(
+        audit_at = store._run_on_writer(
+            lambda connection: connection.execute(
                 "SELECT at_utc FROM audit_events WHERE event_type=?",
                 ("APPROVAL_" + target.name,),
-            )
-            .fetchone()[0]
+            ).fetchone()[0]
         )
         assert audit_at == after.decided_at_utc.isoformat(timespec="microseconds")
 

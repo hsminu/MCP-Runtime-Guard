@@ -15,7 +15,16 @@ from pydantic import (
     model_validator,
 )
 
-from guard_app.domain.enums import Decision, Label, RegStatus, TaskStatus, ToolKind, TrustTier
+from guard_app.domain.enums import (
+    CommitOutcome,
+    Decision,
+    Label,
+    RegStatus,
+    StorePhase,
+    TaskStatus,
+    ToolKind,
+    TrustTier,
+)
 from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.reasons import Reason
 from guard_app.domain.text import ReviewedDescription
@@ -34,6 +43,7 @@ __all__ = [
     "ResolvedRequest",
     "StrictDecision",
     "StrictLabel",
+    "StoreExecutionState",
     "TaskState",
     "ToolSpec",
 ]
@@ -78,6 +88,19 @@ class Frozen(BaseModel):
         if update is not None:
             values.update(update)
         return type(self).model_validate(values)
+
+
+class StoreExecutionState(Frozen):
+    """SQL 큐와 독립된 Store 실행 권한의 불변 snapshot(SEQ-02)."""
+
+    run_id: str | None = Field(repr=False)
+    phase: StorePhase
+    execution_enabled: bool
+    state_revision: NonNegativeInt
+    reason: Reason | None
+    commit_outcome: CommitOutcome | None
+    last_committed_run_state: str | None = Field(repr=False)
+    requires_restart: bool
 
 
 class ProposedCall(Frozen):

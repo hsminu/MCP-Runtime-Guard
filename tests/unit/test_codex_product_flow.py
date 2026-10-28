@@ -71,7 +71,9 @@ async def read_then_answer(server: FakeAppServer, turn_id: str, _text: str) -> N
     server.complete(turn_id)
 
 
-async def run_one_turn(tmp_path, script, *, allow: bool = True):
+async def run_one_turn(
+    tmp_path, script, *, allow: bool = True, wait_for_status: TaskStatus | None = None
+):
     peer = Peer([READ_DEFINITION])
     servers: list[FakeAppServer] = []
     bindings = await bootstrap_product(
@@ -90,6 +92,12 @@ async def run_one_turn(tmp_path, script, *, allow: bool = True):
         update = await asyncio.wait_for(runner.advance(), 5)
         assert bindings.snapshot is not None
         after = await bindings.snapshot(created.task_id)
+        if wait_for_status is not None:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 2
+            while after.status is not wait_for_status and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+                after = await bindings.snapshot(created.task_id)
         return update, after, peer, servers
     finally:
         assert bindings.close is not None
@@ -124,7 +132,9 @@ def test_l3_violation_halts_only_this_task_and_interrupts_codex(tmp_path) -> Non
         server.item(turn_id, "commandExecution")
         await asyncio.Event().wait()
 
-    update, after, peer, [server] = asyncio.run(run_one_turn(tmp_path, forbidden))
+    update, after, peer, [server] = asyncio.run(
+        run_one_turn(tmp_path, forbidden, wait_for_status=TaskStatus.HALTED)
+    )
     assert update.status == "halted"
     assert after.status is TaskStatus.HALTED
     assert after.connection_code == "CODEX_L3_VIOLATION"
