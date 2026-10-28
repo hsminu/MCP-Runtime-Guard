@@ -397,6 +397,7 @@ idna==3.20 \
     #   anyio
     #   httpx
     #   httpx2
+    #   mcp-runtime-guard
     #   requests
     #   yarl
 import-linter==2.15 \
