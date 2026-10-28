@@ -1,0 +1,96 @@
+# ruff: noqa
+"""Semgrep rule tests for tools/ci/semgrep.yml. Never imported or run.
+
+CI: semgrep --test --config tools/ci/semgrep.yml tools/ci/semgrep.py
+`# ruleid:` marks the next line as a required finding, `# ok:` as a required non-finding.
+"""
+
+import hashlib
+import os
+import pickle
+import sqlite3
+import subprocess
+
+import yaml
+
+
+def cases(path, data, url, client):
+    # ruleid: no-dynamic-exec
+    eval(data)
+    # ruleid: no-dynamic-exec
+    exec(data)
+
+    # ruleid: subprocess-only-in-launcher
+    subprocess.run(["tool"])
+    # ruleid: subprocess-only-in-launcher
+    os.system("tool")
+    # ruleid: no-shell-true, subprocess-only-in-launcher
+    subprocess.run("tool", shell=True)
+
+    # ruleid: sqlite-only-in-storage
+    sqlite3.connect(path)
+
+    # ruleid: no-assert-for-checks
+    assert data
+
+    # ruleid: no-swallow
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+    # ruleid: no-swallow
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        data = None
+
+    # ok: no-swallow, broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except OSError:
+        data = None
+
+    # ruleid: broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except Exception:
+        data = None
+
+    # ruleid: broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except Exception as error:
+        data = error
+
+    # ruleid: broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except BaseException as error:
+        data = error
+
+    # ruleid: broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except:
+        data = None
+
+    # ruleid: no-unsafe-deserialize
+    pickle.loads(data)
+    # ruleid: no-unsafe-deserialize
+    yaml.load(data)
+    # ok: no-unsafe-deserialize
+    yaml.safe_load(data)
+
+    # ruleid: no-tls-bypass
+    client.get(url, verify=False)
+
+    # ruleid: no-weak-hash
+    hashlib.md5(data)
+    # ruleid: no-weak-hash
+    hashlib.sha1(data)
+    # ok: no-weak-hash
+    hashlib.sha256(data)
+    return data
