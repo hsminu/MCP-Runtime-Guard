@@ -21,7 +21,11 @@ from guard_app.adapters.mcp_transport import validated_stdio_stream_factory as s
 from guard_app.domain.enums import Label, ToolKind
 from guard_app.domain.models import ProposedCall, TaskState
 from guard_app.security.launcher import ExecutablePin, launch_mcp_server
-from guard_app.security.paths import file_resource_resolver, prepare_app_folders
+from guard_app.security.paths import (
+    SafePathError,
+    file_resource_resolver,
+    prepare_app_folders,
+)
 from guard_app.servers import file_server
 from guard_app.servers.file_server import (
     FILE_SERVER_TOOL_SETTINGS,
@@ -30,6 +34,7 @@ from guard_app.servers.file_server import (
     FileServer,
     file_server_args,
     file_server_root,
+    main,
     serve,
 )
 from guard_app.services.catalog import Catalog, ServerSettings
@@ -267,6 +272,21 @@ def test_settings_helpers_round_trip(root, tmp_path):
     assert file_server_root(file_server_args(entry)) == root.resolve()
     for bad in (["-m", "other"], ("-I", "-m", "x", "--root", "C:/r"), [*args[:4], "relative"], "x"):
         assert file_server_root(bad) is None
+
+
+def test_roots_off_local_fixed_drives_are_refused(root, capsys):
+    """루트 풀이는 C2.3 `real_root`(#63 B 리뷰 3): UNC·네트워크·이동식은 등록·시작 모두 거부."""
+    unc = Path("//guard-test-host.invalid/share/docs")
+    with pytest.raises(SafePathError):
+        file_server_args(unc)
+    assert main(["--root", str(unc)]) == 2
+    assert main(["--root", str(root / "top.txt")]) == 2
+    assert main([]) == 2
+    assert capsys.readouterr().err.split() == [
+        "FILE_SERVER_ROOT_INVALID",
+        "FILE_SERVER_ROOT_INVALID",
+        "FILE_SERVER_USAGE",
+    ]
 
 
 # 끝에서 끝까지: C2.6 실행 → A transport → C Registry → B Catalog

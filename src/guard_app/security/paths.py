@@ -82,6 +82,7 @@ _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 _ERROR_SHARING_VIOLATION = 32
 _ERROR_ALREADY_EXISTS = 183
 _MOVEFILE_WRITE_THROUGH = 0x00000008
+_DRIVE_FIXED = 3
 
 if sys.platform == "win32":
     import ctypes
@@ -132,6 +133,7 @@ if sys.platform == "win32":
     _CoTaskMemFree = _api(_ole32, "CoTaskMemFree", None, _PVOID)
     _GetCurrentProcess = _api(_kernel32, "GetCurrentProcess", _HANDLE)
     _CloseHandle = _api(_kernel32, "CloseHandle", _BOOL, _HANDLE)
+    _GetDriveTypeW = _api(_kernel32, "GetDriveTypeW", wintypes.UINT, wintypes.LPCWSTR)
     _LocalFree = _api(_kernel32, "LocalFree", _PVOID, _PVOID)
     _CreateDirectoryW = _api(
         _kernel32,
@@ -859,7 +861,7 @@ def safe_path(root: Path, user_path: str) -> Path:
     짝 없는 서로게이트. 루트 아래 조각 중 링크·junction이 있으면 `PATH_LINK`, 없으면
     `PATH_NOT_FOUND`, 풀린 경로가 루트 밖이면 `PATH_OUTSIDE_ROOT`, 일반 파일·폴더가 아니면
     `PATH_NOT_REGULAR`다. 하드링크가 둘 이상인 파일은 루트 밖 내용을 루트 안 이름으로 읽는 길이 될
-    수 있어 `PATH_HARDLINK`다. 루트가 실제 폴더가 아니면 `PATH_ROOT_INVALID`다.
+    수 있어 `PATH_HARDLINK`다. 루트가 로컬 고정 드라이브의 실제 폴더가 아니면 `PATH_ROOT_INVALID`다.
     """
     root_real = real_root(root)
     parts = _request_parts(user_path)
@@ -895,8 +897,9 @@ def resource_id(root: Path, user_path: str) -> str:
 def file_resource_resolver(roots: dict[str, Path]) -> Callable[[ToolSpec, str], str]:
     """B Catalog의 `ResourceResolver`. 서버 ID별 루트에서 요청 인자의 기대 ID를 계산한다.
 
-    경로가 거부되면 원문 없이 `ResolutionError(INVALID_ARGUMENTS)`, 루트가 없는 서버면
-    `ResolutionError(INTERNAL_ERROR)`다. 루트는 부를 때마다 다시 확인한다.
+    경로가 거부되면 원문 없이 `ResolutionError(INVALID_ARGUMENTS)`다. 루트가 없는 서버나, 부를
+    때 다시 확인한 루트가 사라졌거나 바뀌었으면 모델 인자 탓이 아니므로
+    `ResolutionError(INTERNAL_ERROR)`다.
     """
     if type(roots) is not dict or any(
         type(server_id) is not str or not server_id or not isinstance(root, Path)
@@ -911,23 +914,40 @@ def file_resource_resolver(roots: dict[str, Path]) -> Callable[[ToolSpec, str], 
             raise ResolutionError(Reason.INTERNAL_ERROR)
         try:
             return resource_id(root, user_path)
-        except SafePathError:
+        except SafePathError as error:
+            if str(error) == "PATH_ROOT_INVALID":
+                raise ResolutionError(Reason.INTERNAL_ERROR) from None
             raise ResolutionError(Reason.INVALID_ARGUMENTS) from None
 
     return resolve
 
 
 def real_root(root: object) -> Path:
-    """절대 경로의 실제 폴더를 최종 경로로 푼다. 아니면 `PATH_ROOT_INVALID`다(파일 서버도 쓴다)."""
-    if not isinstance(root, Path) or not root.is_absolute():
+    """로컬 고정 드라이브의 절대 경로 폴더를 최종 경로로 푼다. 아니면 `PATH_ROOT_INVALID`다.
+
+    파일 서버(C2.11)도 같은 풀이를 쓴다.
+    """
+    if not isinstance(root, Path) or not root.is_absolute() or not _on_fixed_drive(root):
         raise SafePathError("PATH_ROOT_INVALID")
     try:
         real = root.resolve(strict=True)
-        if not real.is_dir():
+        if not real.is_dir() or not _on_fixed_drive(real):
             raise SafePathError("PATH_ROOT_INVALID")
     except OSError:
         raise SafePathError("PATH_ROOT_INVALID") from None
     return real
+
+
+def _on_fixed_drive(path: Path) -> bool:
+    """드라이브 문자가 있는 로컬 고정 드라이브인지. UNC·네트워크·이동식은 아니다.
+
+    해석기는 Guard 이벤트 루프에서 동기로 디스크를 보므로 느린 드라이브는 받지 않는다. 풀기 전에
+    먼저 봐서 UNC 루트는 네트워크에 닿지 않고 거부한다.
+    """
+    drive = path.drive
+    if len(drive) != 2 or drive[1] != ":":
+        return False
+    return bool(_GetDriveTypeW(drive + "\\") == _DRIVE_FIXED)
 
 
 def _forbidden_path_char(char: str) -> bool:

@@ -20,6 +20,7 @@ from guard_app.domain.errors import ResolutionError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ProposedCall, TaskState
 from guard_app.domain.reasons import Reason
+from guard_app.security import paths
 from guard_app.security.paths import (
     SafePathError,
     file_resource_resolver,
@@ -167,18 +168,34 @@ def test_root_through_a_junction_gives_the_same_ids(root, tmp_path):
     assert resource_id(entry, "Public/Report.TXT") == "Public/Report.TXT"
 
 
-@pytest.mark.parametrize("bad_root", ["relative", "missing", "file"])
+@pytest.mark.parametrize("bad_root", ["relative", "missing", "file", "unc", "device-path"])
 def test_root_must_be_an_existing_absolute_folder(root, tmp_path, bad_root):
     value = {
         "relative": Path("docs"),
         "missing": tmp_path / "nope",
         "file": root / "Public" / "Report.TXT",
+        "unc": Path("//guard-test-host.invalid/share/docs"),
+        "device-path": Path("//?/" + str(root)),
     }[bad_root]
     with pytest.raises(SafePathError) as raised:
         safe_path(value, "Public/Report.TXT")
     assert str(raised.value) == "PATH_ROOT_INVALID"
     with pytest.raises(SafePathError):
         safe_path("C:/not-a-path-object", "Public/Report.TXT")
+
+
+@pytest.mark.parametrize("drive_type", [0, 1, 2, 4, 5, 6])
+def test_root_must_be_on_a_local_fixed_drive(root, monkeypatch, drive_type):
+    """B 리뷰(#63) 3: 해석기는 이벤트 루프에서 동기로 디스크를 보므로 이동식·네트워크는 받지
+    않는다.
+
+    이 PC에 연결 드라이브가 없어 `GetDriveTypeW` 값만 바꿔 본다. 실제 PC의 C:는 고정(3)이다.
+    """
+    assert paths._GetDriveTypeW(root.drive + "/") == 3
+    monkeypatch.setattr(paths, "_GetDriveTypeW", lambda drive: drive_type)
+    with pytest.raises(SafePathError) as raised:
+        safe_path(root, "Public/Report.TXT")
+    assert str(raised.value) == "PATH_ROOT_INVALID"
 
 
 def test_resolver_validates_its_roots(root):
@@ -282,4 +299,17 @@ def test_server_without_a_root_is_an_internal_error(root):
     tool = type("Tool", (), {"server_id": "docs"})()
     with pytest.raises(ResolutionError) as raised:
         resolver(tool, "Public/Report.TXT")
+    assert raised.value.reason is Reason.INTERNAL_ERROR
+
+
+@pytest.mark.parametrize("change", ["removed", "replaced-by-file"])
+def test_root_broken_after_setup_is_an_internal_error(catalog, root, tmp_path, change):
+    """B 리뷰(#63) 1: 루트 문제는 모델 인자 탓이 아니므로 모델에 보이는 `INVALID_ARGUMENTS`가
+    아니다."""
+    assert _request(catalog, "Public/Report.TXT").resource_id == "Public/Report.TXT"
+    root.rename(tmp_path / "moved")
+    if change == "replaced-by-file":
+        root.write_text("not a folder", encoding="utf-8")
+    with pytest.raises(ResolutionError) as raised:
+        _request(catalog, "Public/Report.TXT")
     assert raised.value.reason is Reason.INTERNAL_ERROR
