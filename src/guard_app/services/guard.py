@@ -41,6 +41,7 @@ from guard_app.domain.enums import (
 from guard_app.domain.errors import DispatchError, ResolutionError, StoreError
 from guard_app.domain.models import (
     AccessResult,
+    FailureAuditRecord,
     PolicyDecision,
     PolicyInput,
     ProposedCall,
@@ -48,7 +49,15 @@ from guard_app.domain.models import (
     TaskState,
 )
 from guard_app.domain.reasons import Reason
-from guard_app.ports import AccessChecker, PendingResult, Registry, SessionAudit, Store, Transport
+from guard_app.ports import (
+    AccessChecker,
+    FailureAuditStore,
+    PendingResult,
+    Registry,
+    SessionAudit,
+    Store,
+    Transport,
+)
 from guard_app.security.digest import json_digest
 from guard_app.security.failclosed import after_dispatch, fail_closed
 from guard_app.services.approvals import ApprovalService, HumanControl, _ApprovalTaskMismatchError
@@ -80,6 +89,35 @@ class FailureEvent:
     phase: Literal["before_dispatch", "after_dispatch"]
     reason: Reason
     exception_type: str
+    at_utc: datetime | None = None
+
+
+def durable_failure_audit(store: FailureAuditStore) -> Callable[[FailureEvent], Awaitable[None]]:
+    """Guard의 UTC를 사용해 실패 이벤트를 원문 없는 내구성 감사로 옮긴다.
+
+    기존 다섯 인자의 수동 이벤트도 만들 수 있지만 UTC가 없는 이벤트는 저장하지
+    않는다. 시각을 추정하면 Guard의 신뢰된 시간 공급자와 다를 수 있기 때문이다.
+    """
+
+    async def persist(event: FailureEvent) -> None:
+        if event.at_utc is None:
+            raise StoreError(Reason.INVALID_ARGUMENTS)
+        try:
+            record = FailureAuditRecord(
+                task_id=event.task_id,
+                request_id=event.request_id,
+                phase=event.phase,
+                reason=event.reason,
+                exception_type=event.exception_type,
+                at_utc=event.at_utc,
+                run_id=None,
+                epoch=None,
+            )
+        except ValidationError:
+            raise StoreError(Reason.INVALID_ARGUMENTS) from None
+        await store.record_failure_audit(record)
+
+    return persist
 
 
 @dataclass(frozen=True, slots=True)
@@ -901,7 +939,14 @@ class GuardService:
             if expected_epoch is None or state.epoch == expected_epoch:
                 await self._halt_task(task_id, reason, expected_epoch=state.epoch)
         await self._failure_audit(
-            FailureEvent(task_id, None, "before_dispatch", reason, _exception_type(exc))
+            FailureEvent(
+                task_id,
+                None,
+                "before_dispatch",
+                reason,
+                _exception_type(exc),
+                at_utc=self._utc_now(),
+            )
         )
         return Denied(request_id=None, reasons=(reason,))
 
@@ -949,6 +994,7 @@ class GuardService:
                 "after_dispatch",
                 reason,
                 _exception_type(exc),
+                at_utc=self._utc_now(),
             )
         )
         if is_send:

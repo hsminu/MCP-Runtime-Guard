@@ -50,6 +50,7 @@ from guard_app.domain.models import (
     MAX_SAFE_SEQUENCE,
     Boundary,
     Escalation,
+    FailureAuditRecord,
     PolicyDecision,
     ResolvedRequest,
     StoreExecutionState,
@@ -87,6 +88,7 @@ _METHOD_WRITES = {
     "set_task_status": True,
     "list_tasks": False,
     "record_session_event": True,
+    "record_failure_audit": True,
     "record_decision": True,
     "reserve_dispatch": True,
     "create_approval": True,
@@ -1431,6 +1433,43 @@ class SQLiteStore:
             lambda: self._record_session_event(identity, event, at_utc, reason),
             method="record_session_event",
         )
+
+    async def record_failure_audit(self, record: FailureAuditRecord) -> None:
+        """예약 전후 실패 사실과 고정 사유만 writer 트랜잭션에서 감사한다."""
+        await self._submit(
+            lambda: self._record_failure_audit(record), method="record_failure_audit"
+        )
+
+    def _record_failure_audit(self, record: FailureAuditRecord) -> None:
+        try:
+            valid = FailureAuditRecord.model_validate(record)
+            task_id = _identifier(valid.task_id)
+            request_id = None if valid.request_id is None else _identifier(valid.request_id)
+            timestamp = _utc_text(valid.at_utc)
+        except (TypeError, ValueError, OverflowError):
+            raise StoreError(Reason.INVALID_ARGUMENTS) from None
+        # 이번 단계에는 실행 회차의 신뢰 binding이 없어 임의의 값은 거부한다.
+        if valid.run_id is not None or valid.epoch is not None:
+            raise StoreError(Reason.INVALID_ARGUMENTS)
+        event_type = (
+            "FAILURE_BEFORE_DISPATCH"
+            if valid.phase == "before_dispatch"
+            else "FAILURE_AFTER_DISPATCH"
+        )
+        detail = json.dumps(
+            {"exception_type": valid.exception_type, "run_id": valid.run_id, "epoch": valid.epoch},
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        with self._transaction(write=True) as connection:
+            if self._audit_id_factory is None:
+                raise StoreError()
+            event_id = _identifier(self._audit_id_factory())
+            connection.execute(
+                """INSERT INTO audit_events (event_id,request_id,task_id,event_type,reason_code,
+                    label,detail,at_utc) VALUES (?,?,?,?,?,NULL,?,?)""",
+                (event_id, request_id, task_id, event_type, valid.reason.value, detail, timestamp),
+            )
 
     def _record_session_event(
         self,
