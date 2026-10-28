@@ -9,7 +9,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Self, cast
 
-from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from guard_app.core.access_rules import AccessRules, normalize_access_rules
 from guard_app.domain.contracts import RegisteredServer, ToolView
@@ -521,10 +528,17 @@ class ToolSettings(_Settings):
 
 
 class ServerSettings(_BoundarySettings):
-    """C의 경로·실행 파일 검증에 넘길 값. 로더는 실행하거나 접근하지 않는다."""
+    """C의 경로·실행 파일 검증에 넘길 값. 로더는 실행하거나 접근하지 않는다.
+
+    command_sha256·command_size는 등록 화면에서 C pin_executable이 계산하고
+    사용자가 확인한 지문과 크기다. A 연결에서 두 값이 있으면
+    ExecutablePin(command_size, command_sha256)으로 바꾸고 없으면 None을 넘긴다.
+    """
 
     transport: Literal["stdio", "streamable_http"]
     command: NonEmptyString | None = None
+    command_sha256: str | None = None
+    command_size: int | None = None
     args: tuple[str, ...] = ()
     env_allow: tuple[NonEmptyString, ...] = ()
     url: NonEmptyString | None = None
@@ -539,14 +553,42 @@ class ServerSettings(_BoundarySettings):
 
     @model_validator(mode="after")
     def check_server(self) -> Self:
+        for name in ("command_sha256", "command_size"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError("실행 파일 고정값에 null을 쓸 수 없다")
+        if self.command_sha256 is not None and (
+            len(self.command_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in self.command_sha256)
+        ):
+            raise ValueError("실행 파일 지문 형식이 유효하지 않다")
+        if self.command_size is not None and not 1 <= self.command_size <= 2**53 - 1:
+            raise ValueError("실행 파일 크기가 유효하지 않다")
+        if (self.command_sha256 is None) != (self.command_size is None):
+            raise ValueError("실행 파일 지문과 크기는 함께 지정해야 한다")
         if self.transport == "stdio":
             if self.command is None or self.url is not None:
                 raise ValueError("stdio 연결 설정이 유효하지 않다")
-        elif self.url is None or self.command is not None or self.args or self.env_allow:
+        elif (
+            self.url is None
+            or self.command is not None
+            or self.args
+            or self.env_allow
+            or self.command_sha256 is not None
+            or self.command_size is not None
+        ):
             raise ValueError("HTTP 연결 설정이 유효하지 않다")
         if len({tool.name for tool in self.tools}) != len(self.tools):
             raise ValueError("도구 이름은 서버 안에서 중복될 수 없다")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_server(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        """미고정 필드만 생략해 기존 설정의 정책 해시를 유지한다."""
+        values = cast(dict[str, object], handler(self))
+        if self.command_sha256 is None:
+            values.pop("command_sha256", None)
+            values.pop("command_size", None)
+        return values
 
 
 class _SourceSettings(_Settings):
