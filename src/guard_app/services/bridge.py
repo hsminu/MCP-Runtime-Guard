@@ -1343,7 +1343,11 @@ class BackendBridge(QObject):
             elif command.action == "account_cancel_login":
                 view = await account.cancel_login(command.target_id)
             else:
-                view = await account.logout()
+                try:
+                    view = await account.logout()
+                finally:
+                    # New sessions were refused while the logout ran (#21).
+                    self._publish_session_capability()
         except AccountError:
             view = AccountView("FAILED")
         self.account_changed.emit(view)

@@ -1,8 +1,10 @@
 """Codex owns model authentication and credential storage (A52, A89).
 
 The panel asks Codex to start or cancel its own ChatGPT device-code login,
-reads the account kind/plan, and logs out. An API key may also be entered
-(contracts 2026-10-18, A89; replaces A65 here) under the Scanner key rules:
+reads the account kind/plan, and logs out. Logout is refused while a session
+runs, and a logout whose saved credentials were not deleted says so (#21).
+An API key may also be entered (contracts 2026-10-18, A89; replaces A65 here)
+under the Scanner key rules:
 a masked field, only the last four characters shown, the field cleared right
 after sending, and the key never logged, emitted as a signal or kept. It goes
 only to an injected sender that hands it to Codex `account/login/start`;
@@ -33,6 +35,20 @@ _STATES = {
     "FAILED": "Codex 계정 요청을 처리하지 못함. 잠시 뒤 다시 확인하세요.",
     "UNAVAILABLE": UNAVAILABLE,
 }
+_NOTICES = {
+    "LOGOUT_SESSIONS_RUNNING": (
+        "실행 중인 세션이 있어 로그아웃하지 않음. 세션을 모두 끝낸 뒤 다시 시도하세요."
+    ),
+    "LOGOUT_EXIT_UNCONFIRMED": (
+        "로그아웃했지만 Codex 종료를 확인하지 못해 저장된 로그인 정보를 지우지 않음. "
+        "앱을 다시 시작하세요."
+    ),
+    "LOGOUT_CLEANUP_FAILED": (
+        "로그아웃했지만 저장된 로그인 정보를 지우지 못함. 로그아웃을 다시 누르세요."
+    ),
+}
+# Logout stays available after these, so the cleanup can be asked again.
+_RETRY_LOGOUT = frozenset({"LOGOUT_CLEANUP_FAILED"})
 API_KEY_SENT = "API 키로 로그인을 요청함. 결과를 기다리는 중임."
 
 # Hands one key to the bridge's Codex login command; never stores it.
@@ -124,6 +140,9 @@ class CodexLoginInfo(QWidget):
             text = f"API 키로 로그인되어 있음 · 끝 4자리 {self._sent_suffix}"
         elif view.state != "API_KEY":
             self._sent_suffix = ""
+        notice = _NOTICES.get(view.notice) if view.notice is not None else None
+        if notice is not None:
+            text = f"{text}\n{notice}"
         self.status.setText(text)
         pending = view.state == "PENDING_DEVICE"
         self.device.setVisible(pending)
@@ -135,7 +154,7 @@ class CodexLoginInfo(QWidget):
         self.read_button.setEnabled(available and not pending)
         self.login_button.setEnabled(available and not pending and not signed_in)
         self.cancel_button.setEnabled(pending)
-        self.logout_button.setEnabled(available and signed_in)
+        self.logout_button.setEnabled(available and (signed_in or view.notice in _RETRY_LOGOUT))
         self._refresh_key()
 
     def _key_allowed(self) -> bool:

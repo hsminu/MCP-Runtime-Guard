@@ -201,6 +201,7 @@ _CODEX_FAILURE_DETAILS = {
     "CODEX_CONFIG_MISMATCH": "Codex 설정이 시작 검사에서 확인한 설정과 다름.",
     "CODEX_PREPARATION_FAILED": "Codex 세션 준비를 완료하지 못함.",
     "CODEX_CLEANUP_UNCONFIRMED": "Codex 종료·임시 자료 정리 완료를 확인하지 못함.",
+    "CODEX_SIGNING_OUT": "Codex 로그아웃이 진행 중임.",
     "GUARD_PROFILE_UNAVAILABLE": "Guard 정책(Profile) 설정이 아직 연결되지 않음.",
     "POLICY_APPLY_FAILED": "저장한 정책을 적용하지 못해 Guard를 정지함.",
     "POLICY_SAVE_UNKNOWN": "정책 저장 결과를 확인하지 못해 Guard를 정지함.",
@@ -286,6 +287,8 @@ def codex_failure_notice(code: str, *, creating: bool = False) -> str:
         return ""
     if code == "CODEX_CLEANUP_UNCONFIRMED":
         return detail + " 자동으로 다시 실행하지 않음. 앱을 종료하고 정리 상태를 확인하세요."
+    if code == "CODEX_SIGNING_OUT":
+        return detail + " 세션을 시작하지 않았음. 로그아웃이 끝난 뒤 다시 시작하세요."
     context = " 세션을 시작하지 않았음." if creating else " 이 Task를 실행할 수 없음."
     if code in _CODEX_MISSING_COMPONENTS:
         # The build lacks the component; restarting or editing settings cannot help.
@@ -316,6 +319,8 @@ def session_blocker_notice(code: str) -> str:
         return "지금은 새 세션을 시작할 수 없음."
     if code == "CODEX_CLEANUP_UNCONFIRMED":
         return detail + " 새 세션을 시작하지 않음. 앱을 종료하고 정리 상태를 확인하세요."
+    if code == "CODEX_SIGNING_OUT":
+        return detail + " 로그아웃이 끝난 뒤 새 세션을 시작하세요."
     if code in _CODEX_MISSING_COMPONENTS:
         return detail + " 이 앱 구성에서는 아직 새 세션을 시작할 수 없음."
     return detail + " 지금은 새 세션을 시작할 수 없음. 앱 설정을 확인하고 앱을 다시 시작하세요."

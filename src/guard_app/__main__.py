@@ -223,10 +223,14 @@ def _run(
         # A101: C's app folders and launcher behind each Task's Codex session.
         # A106: the DB is the one fixed in the folder `codex` claimed (C2.17),
         # checked again by C's `db_path()` right before the backend opens it.
+        # A52: the login screen's app-server and logout cleanup go through it too.
         preparation = codex.preparation()
+        account = codex.account_access()
         db_file = str(codex.db_file)
         bridge = BackendBridge(
-            lambda: bootstrap_product(db_file, preparation=preparation, settings=settings)
+            lambda: bootstrap_product(
+                db_file, preparation=preparation, settings=settings, account=account
+            )
         )
 
     close_limit_s = bridge.shutdown_timeout + CLOSE_OBSERVATION_S

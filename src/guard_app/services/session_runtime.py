@@ -22,6 +22,7 @@ from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import TaskState
 from guard_app.ports import SessionAudit, Store
+from guard_app.services.account_runtime import AccountAccess, ProductAccount
 from guard_app.services.bridge import (
     BackendBindings,
     ControlAction,
@@ -29,7 +30,7 @@ from guard_app.services.bridge import (
     TaskProjection,
 )
 from guard_app.services.catalog import GuardSettings
-from guard_app.services.codex_composition import codex_session_factory
+from guard_app.services.codex_composition import app_version, codex_session_factory
 from guard_app.services.guard import PolicyTaskSource, SystemControl
 from guard_app.services.guard_relay import ApprovalOutcomes
 from guard_app.services.policy_view import PolicyView, policy_view
@@ -127,6 +128,10 @@ class _Creations:
     def owns(self, task_id: str) -> bool:
         return task_id in self._creators.values()
 
+    @property
+    def active(self) -> bool:
+        return bool(self._creators)
+
     async def cancel(self, timeout_s: float) -> bool:
         """Cancel every other creator. False when one still runs after the wait."""
         creating = tuple(task for task in self._creators if task is not asyncio.current_task())
@@ -171,6 +176,8 @@ class SessionRuntime:
     preparation, TaskPolicy the Profile for new rows, SessionCleanup what a Task
     launched, StopChannel where a stop is recorded. `system_control` and
     `cleanup_limits` default to Guard's system channel and the reviewed bounds.
+    `account` gives the login screen its own app-server (A52); logout waits
+    until no session may run and blocks new ones meanwhile (#21).
     """
 
     def __init__(
@@ -188,6 +195,7 @@ class SessionRuntime:
         settings_status: str | None = None,
         system_control: SystemControl | None = None,
         cleanup_limits: CleanupLimits | None = None,
+        account: AccountAccess | None = None,
     ) -> None:
         self.store = store
         self._assembled = assembled
@@ -231,11 +239,23 @@ class SessionRuntime:
             if assembled is None
             else build_dynamic_tools(assembled.tool_views).tool_refs
         )
+        self._account = (
+            None
+            if account is None
+            else ProductAccount(account, version=app_version(), sessions_alive=self._sessions_alive)
+        )
 
     @property
     def pending_cleanup(self) -> frozenset[str]:
         """Tasks whose session or C resources are still owned: cleanup not yet proven."""
         return self._cleanup.pending
+
+    def _sessions_alive(self) -> bool:
+        """Whether any Task app-server may still run: one is being created or not yet cleaned up."""
+        return self._creations.active or bool(self._cleanup.pending)
+
+    def _signing_out(self) -> bool:
+        return self._account is not None and self._account.signing_out
 
     def runner_for_task(self, task_id: str) -> CodexTaskRunner:
         running = self._running.get(task_id)
@@ -251,6 +271,8 @@ class SessionRuntime:
         for blocker in (self._admission.refusal(), self._startup.blocker()):
             if blocker is not None:
                 return blocker
+        if self._signing_out():
+            return "CODEX_SIGNING_OUT"
         if self._session_factory is None:
             return "CODEX_SESSION_UNAVAILABLE"
         return self._policy.blocker()
@@ -273,6 +295,10 @@ class SessionRuntime:
             raise SessionRuntimeError("SESSION_UNAVAILABLE")
         self._creations.enter(creator)
         try:
+            # Checked with nothing awaited since enter: a logout that starts
+            # later sees this creator and is refused (#21).
+            if self._signing_out():
+                raise SessionRuntimeError("CODEX_SIGNING_OUT")
             return await self._create_session(options, creator)
         finally:
             self._creations.leave(creator)
@@ -485,12 +511,13 @@ class SessionRuntime:
                     for task_id in self._cleanup.pending
                     if not self._creations.owns(task_id)
                 ),
+                self._close_account(),
                 return_exceptions=True,
             )
             if (
                 self._admission.cleanup_unconfirmed
                 or not creations_finished
-                or any(isinstance(result, BaseException) for result in results)
+                or any(isinstance(result, BaseException) or result is False for result in results)
             ):
                 self._admission.mark_cleanup_unconfirmed()
                 raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
@@ -501,6 +528,15 @@ class SessionRuntime:
                     await self._assembled.aclose()
             finally:
                 self._creations.close_store()
+
+    async def _close_account(self) -> bool:
+        """End the login screen's app-server. False when its exit was not confirmed in time."""
+        if self._account is None:
+            return True
+        try:
+            return await asyncio.wait_for(self._account.aclose(), self._limits.confirm_exit_s)
+        except TimeoutError:
+            return False
 
     def bindings(self) -> BackendBindings:
         assembled = self._assembled
@@ -521,6 +557,7 @@ class SessionRuntime:
             answer_partials=self._events.set_partial_listener,
             policy_access=self.change_server_access if available else None,
             settings_status=self._settings_status,
+            account=self._account,
         )
 
 
@@ -532,10 +569,12 @@ async def bootstrap_product(
     product: ProductInputs | None = None,
     profile_saver: ProfileSaver | None = None,
     settings: SettingsFile | None = None,
+    account: AccountAccess | None = None,
 ) -> BackendBindings:
     """Product start.
 
-    `settings` is the CFG-01 file read at start. Its Profile sets the policy of
+    `account` is the login screen's access to C's launcher and logout cleanup
+    (A52, #21). `settings` is the CFG-01 file read at start. Its Profile sets the policy of
     new Task rows, and policy saves go back to that file. Building Guard from it
     also needs B's durable call_seq and failure audit (B6.8) and C's MCP server
     launch (C2.6, EXE-01); until then `product` is supplied only by tests.
@@ -578,6 +617,7 @@ async def bootstrap_product(
         profile_document=profile_document if product is None else product.profile_document,
         profile_saver=profile_saver,
         settings_status=settings_status,
+        account=account,
     )
     adopted = False
     try:
