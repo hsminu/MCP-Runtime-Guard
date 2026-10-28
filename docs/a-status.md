@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-28 · main `ba750c4` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-28 · main `d5517ee` · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -16,7 +16,6 @@
 | CFG-01 설정 파일: B 변환 함수([PR #36](https://github.com/hsminu/MCP-Runtime-Guard/pull/36) 병합 대기)·C 파일 연산(C2.14)·경로·실행 파일 검증 ([#33](https://github.com/hsminu/MCP-Runtime-Guard/issues/33)) | B·C | A24–A27, A49 |
 | Profile 저장 연결(C2.14)·Registry 활성화(C4.10). B `activate_server`는 #32로 main 반영 | C | A81 |
 | CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
-| B의 AGT 제거 PR([#47](https://github.com/hsminu/MCP-Runtime-Guard/pull/47), 같은 파일) | B | A44, A123 |
 
 **A가 막고 있는 것**: 없음. B1.7·B2.11·C2.10·C5.8이 기다리던 A 브랜치는 [PR #29](https://github.com/hsminu/MCP-Runtime-Guard/pull/29)로 main에 병합됐다. #36 A 리뷰와 #37 A 회신은 게시했다.
 
@@ -157,9 +156,13 @@
 - [x] A121 화면 개편: Orca·Paradev 기준 라이트·다크 색, 세션 작업 공간·사이드바, 색·간격·문구 감사 테스트 · [기록](archive/a/A121-gui-redesign.md)
 - [x] A122 결과 · 실행 활동을 대화 옆 패널(대화 머리 "활동")과 전체 화면(사이드바)으로 나눔 · [기록](archive/a/A122-results-dock.md)
 - [x] A123 화면의 AGT 표시 제거(#47과 같은 변경) · [기록](archive/a/A123-agt-display-removal.md)
-- [ ] A123 `RuntimeIdentity.agt_mode`와 그 생성 코드 정리 — 막힘: #47(B2.11) 병합
+- [ ] A123 `RuntimeIdentity.agt_mode`와 그 생성 코드 정리 — `src`에서는 #47(B2.11)로 제거됨. `examples/ui_demo.py`의 호환 코드만 남음, A 차례
 - [x] A124 가짜 조회 데이터로 전 화면을 눌러 보는 시연(`examples/ui_demo.py`) · [기록](archive/a/A124-ui-demo.md)
 - [x] A125 앱 문구를 하세요체(안내)·음슴체(상태)로 통일 · [기록](archive/a/A125-ui-copy-style.md)
+- [x] A126 정책 화면 표가 폭을 다 쓰고 Codex 제외 도구 이름·이유가 잘리지 않음 · [기록](archive/a/A126-policy-table-width.md)
+- [x] A127 현황 화면을 줄 목록·막대그래프로 줄임(시연 기준 5075px → 1673px) · [기록](archive/a/A127-overview-rows.md)
+- [x] A128 MCP 서버 추가: '초안' 표기 제거, 설정 붙여넣기로 칸 채우기, 표시 이름·ID 추천·찾아보기·명령줄 인자, `.exe`만 통과(EXE-01) · [기록](archive/a/A128-server-add-paste.md)
+- [ ] A128 실제 Registry 등록·EXE-01 지문 확인 화면 — 막힘: C 지문 계산 입구(C2.6)·Registry 활성화(C4.10)·C2.14
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 
@@ -176,7 +179,7 @@
 - [x] A93 A 브랜치 main 병합 PR([#29](https://github.com/hsminu/MCP-Runtime-Guard/pull/29), B·C 리뷰·사용자 병합 대기) · [기록](archive/a/A93-main-merge-pr.md)
 - [x] A71 A 단위 테스트 포맷 제외 대상 정리·AST 동일 검증 · [기록](archive/a/A71-a-unit-format-baseline.md)
 - [x] A43 공통 포맷 제외 목록·타입/린트 예외 축소(A93 PR에서 공통 설정 변경으로 표시) · [기록](archive/a/A43-lint-type-baseline-reduction.md)
-- [ ] A44 시연 앱의 `tests.unit.test_guard` 대역 import 제거 — 막힘: B AGT 제거 PR과 같은 파일(`examples`)
+- [ ] A44 시연 앱의 `tests.unit.test_guard` 대역 import 제거 — B AGT 제거 PR(#47)이 병합돼 A 차례
 - [x] A45 제품 wheel 외부 설치·콘솔·offscreen 시작/종료·C 미제공 시작 거부 검증 · [기록](archive/a/A45-installed-wheel-product-smoke.md)
 - [x] A46 HTTP transport TLS 문맥을 이벤트 루프 밖에서 생성(반복 연결 정지 해소) · [기록](archive/a/A46-tls-off-loop.md)
 - [ ] A60 SDK HTTP 전체 경고 해소·B 간헐 실패 재현 — SDK 1.30.0 SSE 재현은 해소, 별도 소켓 경고와 B 실패 원인 미확정·공통 버전 검토 대기
