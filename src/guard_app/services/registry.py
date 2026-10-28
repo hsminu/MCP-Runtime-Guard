@@ -11,11 +11,11 @@
 `ports.Registry` 동기 조회에 답한다. 제어 연산은 하나씩 직렬화하고, 저장이 성공하면 반환 사본으로
 캐시를 곧바로 바꾼다(반환과 교체 사이 await 없음, `RegistryStore` 설명).
 
-- 저장 호출이 실패하거나 기다리는 사이 취소되면 DB에 커밋됐는지 알 수 없다(C4.19). 저장 쓰기를
-  writer 스레드로 옮기면 커밋 뒤 반환 전에 취소가 들어올 수 있다. 그 서버의 캐시는 DB와 다를 수
-  있다고 표시하고, 표시된 서버의 ACTIVE는 PENDING으로 본다. 그래서 `block`이 커밋된 뒤 취소돼도
-  ACTIVE가 남지 않는다. 그 서버의 다음 제어 연산이나 `refresh`가 DB 행을 다시 읽어 표시를 푼다.
-  저절로 다시 읽지는 않는다.
+- 저장 호출이 사본을 돌려주지 않으면(실패, 기다리는 사이 취소, 예상 밖 예외) DB에 커밋됐는지
+  알 수 없다(C4.19). 저장 쓰기를 writer 스레드로 옮기면 커밋 뒤 반환 전에 취소가 들어올 수 있다.
+  그 서버의 캐시는 DB와 다를 수 있다고 표시하고, 표시된 서버의 ACTIVE는 PENDING으로 본다.
+  그래서 `block`이 커밋된 뒤 취소돼도 ACTIVE가 남지 않는다. 그 서버의 다음 제어 연산이나
+  `refresh`가 DB 행을 다시 읽어 표시를 푼다. 저절로 다시 읽지는 않는다.
 
 - 등록 레코드는 설정 파일의 서버 레코드(경계·도구 종류·인자)와 실제 목록(스키마·지문)을 합친
   것이다(10.1). 목록에는 있지만 설정에 종류가 없는 도구는 `OTHER`로 등록한다. 정책·Catalog가
@@ -44,7 +44,6 @@ from pydantic import ValidationError
 
 from guard_app.domain.contracts import FingerprintChange, RegisteredServer, RegistryEntry
 from guard_app.domain.enums import RegStatus, ToolKind
-from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ToolSpec
 from guard_app.ports import RegistryStore
@@ -200,8 +199,9 @@ class ServerRegistry:
         바뀌었으면 `record_fingerprint_change`가 ACTIVE를 PENDING으로 내린 사본으로 캐시를 바꾸고,
         바뀐 도구마다 `invalidate_tool`(Guard의 승인 무효화)을 부른다. Guard가 아직 없는 앱 시작
         직후에는 대기 승인도 없으므로 None으로 둔다. 목록이 미완료·형식 오류면 쓰지 않고
-        `RegistryError`다(A의 대조가 그 서버를 이번 실행 동안 막는다). 기록이 실패하거나 취소되면
-        그 서버를 이번 실행 동안 PENDING으로 보고 오류를 그대로 올린다.
+        `RegistryError`다(A의 대조가 그 서버를 이번 실행 동안 막는다). 기록 호출이 결과를 돌려주지
+        않으면(실패·취소·예상 밖 예외) 그 서버를 이번 실행 동안 PENDING으로 보고 오류를 그대로
+        올린다.
 
         무효화 도중 취소되면 남은 도구는 무효화하지 않는다. 캐시는 이미 ACTIVE가 아니고 지문도
         바뀌어서, 그 도구의 대기 승인은 재판정에서 거절된다.
@@ -215,13 +215,15 @@ class ServerRegistry:
             if server.as_boundary() != current.registration.boundary:
                 raise RegistryError("REG_SETTINGS_MISMATCH")
             tools = _tool_specs(server, listing)
+            recorded = False
             try:
                 change = await self._store.record_fingerprint_change(
                     server.id, tools, at_utc=self._clock()
                 )
-            except (StoreError, asyncio.CancelledError):
-                self._unrecorded.add(server.id)
-                raise
+                recorded = True
+            finally:
+                if not recorded:
+                    self._unrecorded.add(server.id)
             if change.changed_tools:
                 self._entries[server.id] = change.entry
                 if invalidate_tool is not None:
@@ -305,11 +307,15 @@ class ServerRegistry:
     # 잠근 상태에서만 부른다.
 
     async def _write(self, server_id: str, write: Awaitable[RegistryEntry]) -> RegistryEntry:
+        # 예외를 잡지 않고 finally로 표시한다. 저장 호출이 사본을 돌려주지 않았다면 실패·취소·
+        # 예상 밖 예외 모두 커밋됐는지 모른다(#53 B 리뷰).
+        written = False
         try:
             entry = await write
-        except (StoreError, asyncio.CancelledError):
-            self._stale.add(server_id)
-            raise
+            written = True
+        finally:
+            if not written:
+                self._stale.add(server_id)
         self._entries[server_id] = entry
         return entry
 

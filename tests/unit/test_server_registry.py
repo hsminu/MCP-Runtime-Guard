@@ -516,6 +516,48 @@ def test_cancel_during_invalidation_leaves_the_rest_to_the_pending_state(registr
     assert registry.status("docs") is RegStatus.ACTIVE
 
 
+class _UnexpectedStoreError(RuntimeError):
+    """B 계약 밖의 예외. 저장소가 커밋한 뒤 던졌다고 본다."""
+
+
+def _commit_then_raise(store, monkeypatch, method: str) -> None:
+    original = getattr(store, method)
+
+    async def write(*args, **kwargs):
+        await original(*args, **kwargs)
+        raise _UnexpectedStoreError
+
+    monkeypatch.setattr(store, method, write)
+
+
+def test_unexpected_store_exception_on_a_write_also_closes_the_server(registry, store, monkeypatch):
+    """#53 B 리뷰 2번: `StoreError`가 아닌 예외에서도 커밋 여부는 모른다."""
+    _active(registry)
+    _commit_then_raise(store, monkeypatch, "block_server")
+    with pytest.raises(_UnexpectedStoreError):
+        run(registry.block("docs", expected_row_revision=_revision(registry)))
+    assert registry.status("docs") is RegStatus.PENDING
+    assert run(registry.refresh("docs")) == run(store.load_registration("docs"))
+    assert registry.status("docs") is RegStatus.BLOCKED
+
+
+def test_unexpected_store_exception_on_observe_keeps_the_server_pending_this_run(
+    registry, store, monkeypatch
+):
+    _active(registry)
+    _commit_then_raise(store, monkeypatch, "record_fingerprint_change")
+    with pytest.raises(_UnexpectedStoreError):
+        run(registry.observe(settings(), listing(edit={"read": {"description": "x"}})))
+    assert registry.status("docs") is RegStatus.PENDING
+    with pytest.raises(RegistryError) as raised:
+        run(
+            registry.activate(
+                "docs", expected_row_revision=_revision(registry), reviewed_by="operator"
+            )
+        )
+    assert str(raised.value) == "REG_SERVER_UNRECORDED"
+
+
 def test_cancel_while_waiting_for_the_lock_marks_nothing(registry, store, monkeypatch):
     _active(registry)
     gate = asyncio.Event()
