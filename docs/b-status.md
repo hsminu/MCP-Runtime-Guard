@@ -103,7 +103,7 @@
 - [x] B6.5 UTC 만료·쓰기 중 만료·ACK 유실, 원문·인자·비밀값 비기록과 고정 오류 코드 · [기록](archive/b6-sqlite-lifecycle.md)
 - [x] B6.6 영속 순번·시작 복구 설계와 검증 시나리오 50개 · [설계](archive/b6-sequence-recovery-design.md) · [시나리오](archive/b6-sequence-recovery-validation.md)
 - [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
-- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — 1단계 v3·순번·실패 감사 B 구현 완료, 2단계 준비·백업·이관 연결·복구·회차 활성화 및 A/C 연결·검증 대기 · [1단계 기록](archive/b/B6.8-1-call-seq-v3.md)
+- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — 1단계 및 2a 명시 준비·백업·이관 B 구현 완료, 2b 복구·회차 활성화 및 A/C 연결·검증 대기 · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md)
 - [ ] B6.9 승인 생성·종결 원자화(현재 두 커밋 간격) — 막힘: B6-01
 - [ ] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 — 막힘: B6-02
 - [ ] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 — 막힘: B6-03·B6-04
