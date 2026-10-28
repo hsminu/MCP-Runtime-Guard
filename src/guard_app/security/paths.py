@@ -863,7 +863,7 @@ def safe_path(root: Path, user_path: str) -> Path:
     `PATH_NOT_REGULAR`다. 하드링크가 둘 이상인 파일은 루트 밖 내용을 루트 안 이름으로 읽는 길이 될
     수 있어 `PATH_HARDLINK`다. 루트가 로컬 고정 드라이브의 실제 폴더가 아니면 `PATH_ROOT_INVALID`다.
     """
-    root_real = _real_root(root)
+    root_real = real_root(root)
     parts = _request_parts(user_path)
     current = root_real
     try:
@@ -891,7 +891,7 @@ def safe_path(root: Path, user_path: str) -> Path:
 def resource_id(root: Path, user_path: str) -> str:
     """`safe_path`의 결과를 루트 기준 POSIX ID로 만든다. 조각은 디스크의 실제 이름이다."""
     resolved = safe_path(root, user_path)
-    return "/".join(resolved.relative_to(_real_root(root)).parts)
+    return "/".join(resolved.relative_to(real_root(root)).parts)
 
 
 def file_resource_resolver(roots: dict[str, Path]) -> Callable[[ToolSpec, str], str]:
@@ -922,7 +922,11 @@ def file_resource_resolver(roots: dict[str, Path]) -> Callable[[ToolSpec, str], 
     return resolve
 
 
-def _real_root(root: object) -> Path:
+def real_root(root: object) -> Path:
+    """로컬 고정 드라이브의 절대 경로 폴더를 최종 경로로 푼다. 아니면 `PATH_ROOT_INVALID`다.
+
+    파일 서버(C2.11)도 같은 풀이를 쓴다.
+    """
     if not isinstance(root, Path) or not root.is_absolute() or not _on_fixed_drive(root):
         raise SafePathError("PATH_ROOT_INVALID")
     try:
