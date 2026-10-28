@@ -81,6 +81,25 @@ def synthetic_preparation(l2=passed_l2):
     return SessionPreparation(startup, verify, prepare, confirm, cleanup)
 
 
+class ObservedStore(SQLiteStore):
+    """The product Store, telling a test when shutdown asks it to close."""
+
+    on_close = None
+
+    def close(self):
+        super().close()
+        if self.on_close is not None:
+            self.on_close()
+
+
+class UnconfirmedStore(ObservedStore):
+    """A Store whose connection close is never confirmed in time (#58)."""
+
+    async def wait_closed(self, timeout):  # noqa: ASYNC109 - the Store port's signature
+        await super().wait_closed(timeout)
+        return False
+
+
 def make_runtime(
     tmp_path,
     *,
@@ -92,7 +111,8 @@ def make_runtime(
     **options,
 ):
     """A runtime over SQLite with synthetic C callbacks; `options` go to SessionRuntime."""
-    store = SQLiteStore(tmp_path / "sessions.db", audit_id_factory=lambda: "unit-audit")
+    store = ObservedStore(tmp_path / "sessions.db", audit_id_factory=lambda: "unit-audit")
+    store.on_close = on_store_close
     sessions = []
 
     async def sessions_factory(state, options, resources):
@@ -103,16 +123,11 @@ def make_runtime(
         sessions.append(session)
         return session
 
-    def close_store():
-        store.close()
-        if on_store_close is not None:
-            on_store_close()
-
     runtime = SessionRuntime(
         store,
         session_factory=factory or sessions_factory,
         preparation=preparation or synthetic_preparation(l2),
-        close_store=close_store,
+        owned_store=store,
         guard_settings=GuardSettings(profile_id="unit-profile", policy_version="unit-policy-v1"),
         **options,
     )
@@ -639,7 +654,7 @@ def test_stop_during_failure_cleanup_adopts_its_result(tmp_path, cleanup_succeed
 def test_creation_blocker_reports_known_refusals_in_creation_order(tmp_path):
     async def run():
         store = SQLiteStore(tmp_path / "blocker.db", audit_id_factory=lambda: "unit-audit")
-        bare = SessionRuntime(store, close_store=store.close)
+        bare = SessionRuntime(store, owned_store=store)
         assert bare.creation_blocker() == "CODEX_CONFIG_UNAVAILABLE"
         await bare.close()
         assert bare.creation_blocker() == "SESSION_UNAVAILABLE"
@@ -786,7 +801,7 @@ def test_missing_guard_profile_refuses_before_any_task_row(tmp_path):
             store,
             session_factory=factory,
             preparation=synthetic_preparation(),
-            close_store=store.close,
+            owned_store=store,
         )
         try:
             assert runtime.creation_blocker() == "GUARD_PROFILE_UNAVAILABLE"
@@ -1025,3 +1040,37 @@ def test_a_stop_that_does_not_end_in_time_is_reported_and_the_store_still_closes
         return events
 
     assert asyncio.run(run()) == [("store-closed",)]
+
+
+def test_shutdown_returns_only_after_the_store_connection_closed(tmp_path):
+    """#58: SQLiteStore.close() only asks its writer to close the connection.
+    Shutdown waits for it, so the app lock is not released over an open DB (A134)."""
+
+    async def run():
+        runtime, _ = make_runtime(tmp_path)
+        await runtime.create_session(SessionOptions())
+        await runtime.close()
+
+    asyncio.run(run())
+    (tmp_path / "sessions.db").unlink()  # Windows refuses to delete an open database
+
+
+def test_a_store_close_not_confirmed_in_time_ends_shutdown_unconfirmed(tmp_path):
+    class Late(UnconfirmedStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.waits = []
+
+        async def wait_closed(self, timeout):  # noqa: ASYNC109 - the Store port's signature
+            self.waits.append(timeout)
+            return await super().wait_closed(timeout)
+
+    async def run():
+        store = Late(tmp_path / "late.db", audit_id_factory=lambda: "unit-audit")
+        runtime = SessionRuntime(store, owned_store=store)
+        for _ in range(2):  # a repeated close reports it again
+            with pytest.raises(SessionRuntimeError, match="^STORE_CLOSE_UNCONFIRMED$"):
+                await runtime.close()
+        return store.waits
+
+    assert asyncio.run(run()) == [CleanupLimits().store_close_s]  # B's 5 s, waited once

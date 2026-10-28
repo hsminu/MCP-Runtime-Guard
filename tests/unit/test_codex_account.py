@@ -256,7 +256,7 @@ def test_device_login_wait_does_not_hold_the_only_control_worker(app) -> None:
 
 
 def test_unfinished_device_login_times_out_as_not_completed(app, monkeypatch) -> None:
-    monkeypatch.setattr("guard_app.services.bridge.DEVICE_LOGIN_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("guard_app.services.bridge_commands.DEVICE_LOGIN_TIMEOUT_S", 0.05)
     fake = FakeAppServer()
     views: list[AccountView] = []
     loops: list[asyncio.AbstractEventLoop] = []
