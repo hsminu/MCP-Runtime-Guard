@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock, get_ident
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import Literal, cast
 from uuid import uuid4
 
@@ -83,6 +83,9 @@ from guard_app.storage.startup_inventory import (
 SCHEMA_VERSION = 3
 APPLICATION_ID = 0x4D435047  # MCPG. 기존 다른 앱의 DB를 자동 채택하지 않는다.
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
+_LEGACY_REASONS = MappingProxyType(
+    {"AGT_DENY": Reason.ACCESS_DENY, "AGT_ERROR": Reason.ACCESS_ERROR}
+)
 # 취소 경계는 각 공개 연산의 트랜잭션 유형으로 고정한다.
 _METHOD_WRITES = {
     "list_registrations": False,
@@ -1000,7 +1003,7 @@ class SQLiteStore:
             if connection.execute("SELECT 1 FROM store_runs WHERE run_id=?", (run_id,)).fetchone():
                 raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
             inventory = self._inspect_startup_rows_locked(
-                connection, inspect_reasons=False, deadline=deadline
+                connection, inspect_reasons=True, deadline=deadline
             )
             tasks = {item.state.task_id: item.state for item in inventory.tasks}
             requests = {item.request_id: item for item in inventory.requests}
@@ -1319,14 +1322,12 @@ class SQLiteStore:
             _utc_value(row["at_utc"])
             if row["event_type"] != "OBSERVED":
                 continue
+            reason = _stored_reason(row["reason_code"])
             label = row["label"]
             if label is None:
-                if row["reason_code"] != Reason.RESULT_UNCLASSIFIED.value or not task.unclassified:
+                if reason is not Reason.RESULT_UNCLASSIFIED or not task.unclassified:
                     raise StoreError()
-            elif (
-                row["reason_code"] != Reason.OK.value
-                or Label(_integer(label)) > task.high_watermark
-            ):
+            elif reason is not Reason.OK or Label(_integer(label)) > task.high_watermark:
                 raise StoreError()
 
     def _check_recovery_query(self) -> None:
@@ -4086,6 +4087,18 @@ def _text(value: object) -> str:
     return value
 
 
+def _stored_reason(value: object) -> Reason:
+    """저장된 기존 사유를 한곳에서 검증하고 현행 사유로 읽는다."""
+    if type(value) is not str:
+        raise StoreError()
+    if value in _LEGACY_REASONS:
+        return _LEGACY_REASONS[value]
+    try:
+        return Reason(value)
+    except ValueError:
+        raise StoreError() from None
+
+
 def _check_task(state: TaskState) -> None:
     for number in (state.epoch, state.security_version, state.row_revision):
         _integer(number)
@@ -4123,7 +4136,7 @@ def _decode_stored_request(row: sqlite3.Row, *, inspect_reasons: bool = True) ->
         if type(reasons) is not list or not reasons:
             raise StoreError()
         for reason in reasons:
-            Reason(_text(reason))
+            _stored_reason(reason)
     return _StoredRequest(
         request_id=_identifier(row["request_id"]),
         task_id=_identifier(row["task_id"]),
