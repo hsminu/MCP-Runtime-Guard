@@ -8,8 +8,11 @@ v1의 요청 결속 필드 한계 때문에 실행 권한은 같은 인스턴스
 
 from __future__ import annotations
 
+import inspect
 import json
+import math
 import sqlite3
+import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -17,7 +20,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock, get_ident
 from types import TracebackType
-from typing import Literal
+from typing import Literal, cast
+from uuid import uuid4
 
 from guard_app.core.approval_time import approval_event_time
 from guard_app.core.taint import merge
@@ -35,27 +39,37 @@ from guard_app.domain.enums import (
     CommitOutcome,
     Decision,
     Label,
+    RecoveryCategory,
     RegStatus,
     RequestStatus,
     SessionEvent,
     StorePhase,
+    StorePrepareStep,
+    StoreStartFailure,
     SystemStopReason,
     TaskStatus,
     ToolKind,
     TrustTier,
 )
-from guard_app.domain.errors import StoreError
+from guard_app.domain.errors import StoreError, StorePrepareError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
+    MAX_SAFE_SEQUENCE,
     Boundary,
     Escalation,
+    FailureAuditRecord,
+    MigrationReport,
     PolicyDecision,
+    RecoveryItem,
+    RecoveryItemPage,
+    RecoveryReport,
     ResolvedRequest,
     StoreExecutionState,
     TaskState,
     ToolSpec,
 )
 from guard_app.domain.reasons import Reason
+from guard_app.ports import BackupDestination
 from guard_app.security.digest import jcs_canonicalize, json_digest
 from guard_app.services.catalog_sources import valid_server_id
 from guard_app.storage.sqlite_writer import SQLiteWriter
@@ -66,7 +80,7 @@ from guard_app.storage.startup_inventory import (
     _StoredTask,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 APPLICATION_ID = 0x4D435047  # MCPG. 기존 다른 앱의 DB를 자동 채택하지 않는다.
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
 # 취소 경계는 각 공개 연산의 트랜잭션 유형으로 고정한다.
@@ -81,10 +95,12 @@ _METHOD_WRITES = {
     "request_review": True,
     "save_reviewed_descriptions": True,
     "create_task": True,
+    "allocate_call_seq": True,
     "load_task": False,
     "set_task_status": True,
     "list_tasks": False,
     "record_session_event": True,
+    "record_failure_audit": True,
     "record_decision": True,
     "reserve_dispatch": True,
     "create_approval": True,
@@ -100,12 +116,27 @@ _METHOD_WRITES = {
 _EXECUTION_GATED_METHODS = frozenset(
     {
         "create_task",
+        "allocate_call_seq",
         "record_decision",
         "reserve_dispatch",
         "create_approval",
         "consume_and_reserve",
         "transition_approval",
         "activate_server",
+    }
+)
+_RECOVERED_WRITES = frozenset(
+    {
+        "create_task",
+        "set_task_status",
+        "record_session_event",
+        "record_failure_audit",
+        "register_server",
+        "record_scan_report",
+        "record_fingerprint_change",
+        "block_server",
+        "request_review",
+        "save_reviewed_descriptions",
     }
 )
 # B6-06 제안 한계: UTF-8 정규화 후 크기. 등록 UI/검사 결과의 메모리·DB 폭주 제한.
@@ -252,7 +283,7 @@ _SCHEMA_V1: tuple[tuple[str, str], ...] = (
 )
 
 
-_SCHEMA = _SCHEMA_V1[:5] + (
+_SCHEMA_V2 = _SCHEMA_V1[:5] + (
     (
         "registrations",
         """CREATE TABLE registrations (
@@ -298,6 +329,87 @@ _SCHEMA = _SCHEMA_V1[:5] + (
     ),
 )
 
+# SQLite가 RENAME 후 sqlite_schema에 남기는 인용 이름과 새 DB의 DDL을 일치시킨다.
+_REQUESTS_V3 = f"""CREATE TABLE "requests" (
+            request_id TEXT PRIMARY KEY CHECK (length(request_id) > 0),
+            task_id TEXT NOT NULL REFERENCES tasks(task_id),
+            call_seq INTEGER NOT NULL CHECK (call_seq BETWEEN 0 AND {MAX_SAFE_SEQUENCE}),
+            server_id TEXT NOT NULL CHECK (length(server_id) > 0),
+            tool_name TEXT NOT NULL CHECK (length(tool_name) > 0),
+            destination_id TEXT,
+            arguments_digest TEXT NOT NULL CHECK
+                (length(arguments_digest) = 64 AND arguments_digest NOT GLOB '*[^0-9a-f]*'),
+            decision INTEGER CHECK (decision IN (0,1,2)),
+            reasons TEXT,
+            status TEXT NOT NULL CHECK (status IN ('DECIDED','WAITING_APPROVAL',
+                'DISPATCHING','SUCCEEDED','WITHHELD','FAILED','UNKNOWN_OUTCOME','DENIED')),
+            dispatch_reserved_at_utc TEXT,
+            epoch INTEGER CHECK (epoch IS NULL OR epoch BETWEEN 0 AND {MAX_SAFE_SEQUENCE}),
+            kind TEXT CHECK (kind IS NULL OR kind IN ('read','send','other')),
+            row_revision INTEGER NOT NULL DEFAULT 0 CHECK (row_revision >= 0),
+            legacy_source TEXT CHECK (legacy_source IS NULL OR legacy_source IN ('v1','v2')),
+            CHECK (legacy_source IS NOT NULL OR (epoch IS NOT NULL AND kind IS NOT NULL)),
+            UNIQUE (task_id, call_seq)
+        ) STRICT"""
+_TASK_CALL_SEQUENCES_V3 = f"""CREATE TABLE task_call_sequences (
+            task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
+            last_issued INTEGER NOT NULL CHECK (last_issued BETWEEN 0 AND {MAX_SAFE_SEQUENCE})
+        ) STRICT"""
+_RECOVERY_SCHEMA: tuple[tuple[str, str], ...] = (
+    (
+        "store_runs",
+        """CREATE TABLE store_runs (
+            run_id TEXT PRIMARY KEY CHECK (length(run_id) > 0),
+            state TEXT NOT NULL CHECK (state IN ('RECOVERY_COMMITTED','ACTIVE','CLOSED')),
+            started_at_utc TEXT NOT NULL,
+            recovery_committed_at_utc TEXT NOT NULL,
+            activated_at_utc TEXT,
+            closed_at_utc TEXT
+        ) STRICT""",
+    ),
+    (
+        "recovery_reports",
+        """CREATE TABLE recovery_reports (
+            run_id TEXT PRIMARY KEY REFERENCES store_runs(run_id),
+            schema_version INTEGER NOT NULL CHECK (schema_version = 3),
+            recovery_version INTEGER NOT NULL CHECK (recovery_version = 1),
+            committed_at_utc TEXT NOT NULL,
+            changed_task_count INTEGER NOT NULL CHECK (changed_task_count >= 0),
+            changed_request_count INTEGER NOT NULL CHECK (changed_request_count >= 0),
+            changed_approval_count INTEGER NOT NULL CHECK (changed_approval_count >= 0),
+            unknown_outcome_count INTEGER NOT NULL CHECK (unknown_outcome_count >= 0),
+            quarantined_count INTEGER NOT NULL CHECK (quarantined_count >= 0),
+            unresolved_count INTEGER NOT NULL CHECK (unresolved_count = 0)
+        ) STRICT""",
+    ),
+    (
+        "recovery_quarantine",
+        """CREATE TABLE recovery_quarantine (
+            request_id TEXT PRIMARY KEY REFERENCES requests(request_id),
+            run_id TEXT NOT NULL REFERENCES store_runs(run_id),
+            task_id TEXT NOT NULL REFERENCES tasks(task_id),
+            original_status TEXT NOT NULL,
+            category TEXT NOT NULL CHECK (category IN
+                ('LEGACY_METADATA_MISSING','TERMINAL_TASK_DISPATCHING')),
+            at_utc TEXT NOT NULL
+        ) STRICT""",
+    ),
+    (
+        "task_run_owners",
+        """CREATE TABLE task_run_owners (
+            task_id TEXT PRIMARY KEY REFERENCES tasks(task_id),
+            run_id TEXT NOT NULL REFERENCES store_runs(run_id)
+        ) STRICT""",
+    ),
+)
+_SCHEMA = (
+    _SCHEMA_V2[:2]
+    + (("requests", _REQUESTS_V3),)
+    + _SCHEMA_V2[3:]
+    + (("task_call_sequences", _TASK_CALL_SEQUENCES_V3),)
+    + _RECOVERY_SCHEMA
+)
+
 
 @dataclass(frozen=True, slots=True)
 class _DecisionContext:
@@ -339,15 +451,19 @@ class _ConsumeConflictError(Exception):
 class SQLiteStore:
     """전용 daemon writer로 Task·판정·승인·응답 저장을 구현한다.
 
-    파일 DB만 지원한다. 새 DB는 v2, 정확한 v1은 Registry 두 테이블이 비었을 때만
-    v2로 원자 이관한다. RegistryStore도 같은 연결과 트랜잭션 경계를 사용한다.
+    파일 DB만 지원한다. 새 DB는 v3로 만들고 기존 v1·v2의 자동 이관은 하지 않는다.
+    기존 자료의 이관은 백업 후 별도 준비 단계가 맡는다. RegistryStore도 같은 연결과
+    트랜잭션 경계를 사용한다.
     같은 앱/버전의 정확한 스키마만 다시 열며 다른/미래 버전은 거부한다.
     busy_timeout_ms=1000은 조정 가능한 잠금 대기 후보이며 전체 I/O 상한이 아니다.
     SQL/검증 오류와 writer 작업의 callback 실패는 원문·경로 없는 StoreError다.
-    신뢰 audit_id_factory는 ID 또는 원문 없는 StoreError를 공급한다.
+    명시 모드 기본 감사 ID는 UUID4다. 주입한 신뢰 audit_id_factory는 ID 또는
+    원문 없는 StoreError를 공급한다. 즉시 모드에서 기본 factory는 없다.
     정상 상태 전이의 보안 버전 유지 등은 검토용 구현 선택이며 B6 합의는 별도다.
     audit_id_factory와 utc_now는 writer 스레드에서 호출된다. 생성자는 연결과
     이관 준비를 동기 대기하며 busy_timeout 및 실제 I/O에 따라 지연될 수 있다.
+    startup="explicit"은 연결 설정만 하고 스키마와 journal_mode를 변경하지 않는다.
+    이 모드의 스키마 준비와 복구가 끝나기 전에는 일반 Store 연산을 거부한다.
     전역 정지 시 create_task·record_decision·reserve_dispatch·create_approval·
     consume_and_reserve·APPROVED 승인 전이·activate_server는 거부한다. 읽기,
     Task 상태·예약 후 결과 기록, 다른 승인 전이·세션 감사와 나머지 Registry
@@ -363,11 +479,16 @@ class SQLiteStore:
         audit_id_factory: Callable[[], str] | None = None,
         utc_now: Callable[[], datetime] | None = None,
         max_pending_jobs: int = 1024,
+        startup: Literal["immediate", "explicit"] = "immediate",
     ) -> None:
         self._connection: sqlite3.Connection | None = None
         self._connection_close_ok = True
         self._state_lock = Lock()
         self._connection_faulted = False
+        self._prepare_started = False
+        self._recovery_started = False
+        self._activation_started = False
+        self._close_requested = False
         self._state = StoreExecutionState(
             run_id=None,
             phase=StorePhase.MIGRATING,
@@ -379,7 +500,11 @@ class SQLiteStore:
             requires_restart=False,
         )
         self._owner_thread = 0
-        self._audit_id_factory = audit_id_factory
+        self._audit_id_factory = (
+            (lambda: f"audit-{uuid4().hex}")
+            if startup == "explicit" and audit_id_factory is None
+            else audit_id_factory
+        )
         self._allowed_decisions: dict[str, _DecisionContext] = {}
         self._request_contexts: dict[str, _DecisionContext] = {}
         self._approval_contexts: dict[str, _ApprovalContext] = {}
@@ -394,21 +519,33 @@ class SQLiteStore:
             or not callable(self._utc_now)
             or type(max_pending_jobs) is not int
             or max_pending_jobs < 1
+            or type(startup) is not str
+            or startup not in ("immediate", "explicit")
         ):
             raise StoreError()
-        self._writer = SQLiteWriter(
+        self._startup: Literal["immediate", "explicit"] = startup
+        self._busy_timeout_ms: int = busy_timeout_ms
+        self._writer: SQLiteWriter = SQLiteWriter(
             lambda: self._open_connection(path, busy_timeout_ms),
             self._discard_connection,
             max_pending_jobs,
         )
-        with self._state_lock:
-            self._state = self._state.model_copy(
-                update={"phase": StorePhase.READY, "execution_enabled": True}
-            )
+        if self._startup == "immediate":
+            with self._state_lock:
+                self._state = self._state.model_copy(
+                    update={"phase": StorePhase.READY, "execution_enabled": True}
+                )
 
     def _open_connection(self, path: str | Path, busy_timeout_ms: int) -> None:
         self._owner_thread = get_ident()
         failed = False
+        no_close_checkpoint = getattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE", None)
+        if self._startup == "explicit" and (
+            type(no_close_checkpoint) is not int
+            or not callable(getattr(sqlite3.Connection, "setconfig", None))
+            or not callable(getattr(sqlite3.Connection, "getconfig", None))
+        ):
+            raise StoreError()
         try:
             self._connection = sqlite3.connect(
                 path,
@@ -416,17 +553,23 @@ class SQLiteStore:
                 isolation_level=None,
                 check_same_thread=True,
             )
+            if self._startup == "explicit":
+                option = cast(int, no_close_checkpoint)
+                self._connection.setconfig(option, True)
+                if not self._connection.getconfig(option):
+                    raise StoreError()
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys=ON")
             self._connection.execute("PRAGMA synchronous=FULL")
-        except (sqlite3.Error, OSError, ValueError, OverflowError, UnicodeError):
+        except (sqlite3.Error, OSError, ValueError, OverflowError, UnicodeError, StoreError):
             failed = True
         if failed:
             self._discard_connection()
             raise StoreError()
         try:
-            self._migrate()
-            self._configure(busy_timeout_ms)
+            if self._startup == "immediate":
+                self._migrate()
+            self._configure(busy_timeout_ms, set_wal=self._startup == "immediate")
         except StoreError:
             failed = True
         if failed:
@@ -450,16 +593,23 @@ class SQLiteStore:
         """접수를 즉시 닫고 writer가 진행 중 작업을 끝낸 후 연결을 닫는다."""
         with self._state_lock:
             reason = self._state.reason or Reason.INTERNAL_ERROR
+            self._close_requested = True
         # writer 큐의 시작 판정과 접수 종료를 같은 Condition으로 직렬화한다.
         # 이미 dequeue된 작업은 완료하고, 대기 중 작업은 시작하지 않는다.
         self._writer.close(reason)
         with self._state_lock:
-            if self._state.phase is StorePhase.READY:
+            if self._state.phase in (
+                StorePhase.READY,
+                StorePhase.MIGRATING,
+                StorePhase.RECOVERING,
+                StorePhase.RECOVERED,
+            ):
                 self._state = self._state.model_copy(
                     update={
                         "phase": StorePhase.CLOSED,
                         "execution_enabled": False,
-                        "state_revision": self._state.state_revision + 1,
+                        "state_revision": self._state.state_revision
+                        + int(self._state.execution_enabled),
                     }
                 )
 
@@ -503,15 +653,37 @@ class SQLiteStore:
                 }
             )
 
-    def _check_execution_gate(self, *, grants_execution: bool, started: bool = False) -> None:
+    def _check_execution_gate(
+        self, *, grants_execution: bool, started: bool = False, method: str | None = None
+    ) -> None:
         with self._state_lock:
             state = self._state
+            recovered = self._startup == "explicit" and state.phase is StorePhase.RECOVERED
+            allowed_bootstrap = recovered and (
+                method is None
+                or method in _RECOVERED_WRITES
+                or (method in _METHOD_WRITES and not _METHOD_WRITES[method])
+            )
+            allowed_cleanup = (
+                self._startup == "explicit"
+                and state.phase is StorePhase.FAULTED
+                and state.run_id is not None
+                and not grants_execution
+            )
             if (
                 (state.phase is StorePhase.CLOSED and not started)
                 or self._connection_faulted
+                or (self._startup == "explicit" and self._close_requested)
+                or (
+                    self._startup == "explicit"
+                    and state.phase is not StorePhase.READY
+                    and not allowed_bootstrap
+                    and not allowed_cleanup
+                )
                 or (
                     grants_execution
                     and not state.execution_enabled
+                    and not allowed_bootstrap
                     and not (started and state.phase is StorePhase.CLOSED)
                 )
             ):
@@ -521,16 +693,911 @@ class SQLiteStore:
         """writer의 연결 종료를 이벤트 루프를 막지 않고 기다린다."""
         return await self._writer.wait_closed(timeout)
 
+    async def prepare_schema(
+        self,
+        *,
+        deadline: float,
+        begin_backup: Callable[[str], BackupDestination],
+        on_step: Callable[[StorePrepareStep], None] | None = None,
+    ) -> MigrationReport:
+        """time.monotonic 기준 바깥 deadline 안에 스키마를 준비한다.
+
+        on_step은 이벤트 루프에서 호출하는 예외 없는 동기 함수다. 성공은 이관 ACK이며,
+        이후 복구 ACK 및 실행 회차 활성화는 별도다. 이 객체에서는 재시도하지 않는다.
+        """
+        with self._state_lock:
+            if (
+                self._startup != "explicit"
+                or self._state.phase is not StorePhase.MIGRATING
+                or self._prepare_started
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+            self._prepare_started = True
+
+        completed = False
+        close_unsupported = False
+        try:
+            if (
+                type(deadline) not in (int, float)
+                or not math.isfinite(deadline)
+                or not callable(begin_backup)
+                or inspect.iscoroutinefunction(begin_backup)
+                or (on_step is not None and not callable(on_step))
+                or (on_step is not None and inspect.iscoroutinefunction(on_step))
+            ):
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+
+            async def step[T](
+                kind: StorePrepareStep,
+                operation: Callable[[], T],
+                *,
+                write: bool,
+                failure: StoreStartFailure,
+            ) -> T:
+                if on_step is not None:
+                    callback = SQLiteWriter._execute(lambda: on_step(kind))
+                    if callback.error is not None or _close_async_result(callback.value):
+                        raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+                self._prepare_deadline(deadline)
+                self._check_preparing()
+
+                def execute() -> tuple[T | None, StoreStartFailure | None]:
+                    self._check_preparing()
+
+                    def checked() -> T:
+                        self._prepare_deadline(deadline)
+                        return operation()
+
+                    return _prepare_operation(checked, failure)
+
+                try:
+                    value, code = await self._writer.submit(execute, write=write)
+                except StoreError:
+                    raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED) from None
+                if code is not None:
+                    raise StorePrepareError(code)
+                self._prepare_deadline(deadline)
+                self._check_preparing()
+                return cast(T, value)
+
+            try:
+                version = await step(
+                    StorePrepareStep.STORE_CHECK,
+                    self._check_schema_plan,
+                    write=False,
+                    failure=StoreStartFailure.STORE_INTEGRITY_FAILED,
+                )
+            except StorePrepareError as error:
+                close_unsupported = error.code in (
+                    StoreStartFailure.STORE_SCHEMA_UNSUPPORTED,
+                    StoreStartFailure.STORE_INTEGRITY_FAILED,
+                )
+                raise
+
+            backup_published = False
+            if version in (1, 2):
+                await step(
+                    StorePrepareStep.STORE_BACKUP,
+                    lambda: self._backup_schema(version, deadline, begin_backup),
+                    write=True,
+                    failure=StoreStartFailure.STORE_BACKUP_FAILED,
+                )
+                backup_published = True
+
+            # 원본을 검사하고 기존 DB를 백업하기 전에는 journal_mode를 바꾸지 않는다.
+            self._prepare_deadline(deadline)
+
+            def enable_wal() -> tuple[None, StoreStartFailure | None]:
+                self._check_preparing()
+
+                def checked() -> None:
+                    self._prepare_deadline(deadline)
+                    self._enable_prepare_wal()
+
+                return _prepare_operation(checked, StoreStartFailure.STORE_IO_FAILED)
+
+            try:
+                _, code = await self._writer.submit(enable_wal, write=True)
+            except StoreError:
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED) from None
+            if code is not None:
+                raise StorePrepareError(code)
+            self._prepare_deadline(deadline)
+            self._check_preparing()
+
+            migrated = version != SCHEMA_VERSION
+            if migrated:
+                await step(
+                    StorePrepareStep.STORE_MIGRATE,
+                    lambda: self._prepare_migration(version),
+                    write=True,
+                    failure=StoreStartFailure.STORE_MIGRATION_FAILED,
+                )
+            await step(
+                StorePrepareStep.STORE_VERIFY,
+                self._verify_prepared_schema,
+                write=False,
+                failure=StoreStartFailure.STORE_INTEGRITY_FAILED,
+            )
+            with self._state_lock:
+                if self._state.phase is not StorePhase.MIGRATING:
+                    raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+                self._state = self._state.model_copy(update={"phase": StorePhase.RECOVERING})
+            completed = True
+            return MigrationReport(
+                from_version=version,
+                to_version=SCHEMA_VERSION,
+                backup_published=backup_published,
+                migrated=migrated,
+            )
+        finally:
+            if not completed:
+                self._prepare_fault()
+                if close_unsupported:
+                    self.close()
+
+    @staticmethod
+    def _prepare_deadline(deadline: float) -> None:
+        if time.monotonic() >= deadline:
+            raise StorePrepareError(StoreStartFailure.STORE_DEADLINE_EXCEEDED)
+
+    async def recover(
+        self,
+        *,
+        deadline: float,
+        run_id: str,
+        on_step: Callable[[StorePrepareStep], None] | None = None,
+    ) -> RecoveryReport:
+        """단일 쓰기 TX로 옛 실행을 종결하고 새 회차의 복구 보고를 남긴다."""
+        with self._state_lock:
+            if (
+                self._startup != "explicit"
+                or self._state.phase is not StorePhase.RECOVERING
+                or self._recovery_started
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+            self._recovery_started = True
+        completed = False
+        try:
+            if (
+                type(deadline) not in (int, float)
+                or not math.isfinite(deadline)
+                or (on_step is not None and not callable(on_step))
+                or (on_step is not None and inspect.iscoroutinefunction(on_step))
+            ):
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+            deadline = min(deadline, time.monotonic() + 30.0)
+            try:
+                _identifier(run_id)
+            except (TypeError, ValueError, OverflowError):
+                raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED) from None
+            if on_step is not None:
+                callback = SQLiteWriter._execute(lambda: on_step(StorePrepareStep.STORE_RECOVER))
+                if callback.error is not None or _close_async_result(callback.value):
+                    raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+            self._prepare_deadline(deadline)
+            self._check_recovering()
+
+            def execute() -> tuple[RecoveryReport | None, StoreStartFailure | None]:
+                def checked() -> RecoveryReport:
+                    self._check_recovering()
+                    self._prepare_deadline(deadline)
+                    return self._recover_locked(run_id, deadline)
+
+                return _prepare_operation(checked, StoreStartFailure.STORE_INTEGRITY_FAILED)
+
+            try:
+                report, code = await self._writer.submit(execute, write=True)
+            except StoreError:
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED) from None
+            if code is not None:
+                raise StorePrepareError(code)
+            self._prepare_deadline(deadline)
+            self._check_recovering()
+            if report is None:
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+            with self._state_lock:
+                if self._close_requested or self._state.phase is not StorePhase.RECOVERING:
+                    raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+                self._state = self._state.model_copy(
+                    update={
+                        "phase": StorePhase.RECOVERED,
+                        "run_id": run_id,
+                        "last_committed_run_state": "RECOVERY_COMMITTED",
+                    }
+                )
+            completed = True
+            return report
+        finally:
+            if not completed:
+                self._prepare_fault()
+
+    async def activate_run(self) -> StoreExecutionState:
+        """복구한 회차의 ACTIVE 커밋을 확인한 뒤에만 실행을 연다."""
+        with self._state_lock:
+            if (
+                self._startup != "explicit"
+                or self._state.phase is not StorePhase.RECOVERED
+                or self._state.run_id is None
+                or self._close_requested
+                or self._activation_started
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+            run_id = self._state.run_id
+            self._activation_started = True
+
+        completed = False
+        try:
+
+            def activate() -> None:
+                self._check_activation(run_id)
+                with self._transaction(write=True) as connection:
+                    row = connection.execute(
+                        "SELECT recovery_committed_at_utc FROM store_runs "
+                        "WHERE run_id=? AND state='RECOVERY_COMMITTED'",
+                        (run_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise StoreError()
+                    timestamp = _utc_text(max(self._fresh_utc(), _utc_value(row[0])))
+                    changed = connection.execute(
+                        "UPDATE store_runs SET state='ACTIVE',activated_at_utc=? "
+                        "WHERE run_id=? AND state='RECOVERY_COMMITTED'",
+                        (timestamp, run_id),
+                    ).rowcount
+                    if changed != 1:
+                        raise StoreError()
+                    self._check_activation(run_id)
+
+            await self._writer.submit(lambda: _store_result(activate), write=True)
+            with self._state_lock:
+                if (
+                    self._close_requested
+                    or self._connection_faulted
+                    or self._state.phase is not StorePhase.RECOVERED
+                    or self._state.run_id != run_id
+                ):
+                    raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+                self._state = self._state.model_copy(
+                    update={
+                        "phase": StorePhase.READY,
+                        "execution_enabled": True,
+                        "state_revision": self._state.state_revision + 1,
+                        "last_committed_run_state": "ACTIVE",
+                    }
+                )
+                state = self._state
+            completed = True
+            return state
+        finally:
+            if not completed:
+                # 시작된 쓰기의 취소와 ACK 유실도 같은 객체에서 다시 열지 않는다.
+                self.halt_execution(Reason.INTERNAL_ERROR)
+
+    def _check_activation(self, run_id: str) -> None:
+        with self._state_lock:
+            if (
+                self._close_requested
+                or self._connection_faulted
+                or self._state.phase is not StorePhase.RECOVERED
+                or self._state.run_id != run_id
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+
+    def _check_recovering(self) -> None:
+        with self._state_lock:
+            if (
+                self._close_requested
+                or self._state.phase is not StorePhase.RECOVERING
+                or self._connection_faulted
+            ):
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+
+    def _recover_locked(self, run_id: str, deadline: float) -> RecoveryReport:
+        """writer 소유 연결과 하나의 TX에서만 복구 상태를 계산하고 저장한다."""
+        with self._transaction(write=True, prepare=True) as connection:
+            self._prepare_deadline(deadline)
+            if connection.execute("SELECT 1 FROM store_runs WHERE run_id=?", (run_id,)).fetchone():
+                raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
+            inventory = self._inspect_startup_rows_locked(
+                connection, inspect_reasons=False, deadline=deadline
+            )
+            tasks = {item.state.task_id: item.state for item in inventory.tasks}
+            requests = {item.request_id: item for item in inventory.requests}
+            approvals = {item.record.request_id: item.record for item in inventory.approvals}
+            raw_requests = {
+                row["request_id"]: row
+                for row in connection.execute("SELECT * FROM requests ORDER BY request_id")
+            }
+            now = self._fresh_utc()
+            for row in connection.execute("SELECT created_at_utc FROM tasks"):
+                self._prepare_deadline(deadline)
+                now = max(now, _utc_value(row[0]))
+            for item in inventory.approvals:
+                self._prepare_deadline(deadline)
+                now = max(now, item.record.created_at_utc)
+                if item.record.decided_at_utc is not None:
+                    now = max(now, item.record.decided_at_utc)
+                if item.record.consumed_at_utc is not None:
+                    now = max(now, item.record.consumed_at_utc)
+            for request_item in inventory.requests:
+                self._prepare_deadline(deadline)
+                if request_item.dispatch_reserved_at_utc is not None:
+                    now = max(now, request_item.dispatch_reserved_at_utc)
+            for row in connection.execute(
+                "SELECT started_at_utc,recovery_committed_at_utc,activated_at_utc,closed_at_utc "
+                "FROM store_runs"
+            ):
+                self._prepare_deadline(deadline)
+                for value in row:
+                    if value is not None:
+                        now = max(now, _utc_value(value))
+            timestamp = _utc_text(now)
+            self._validate_recovery_audits(connection, tasks, requests, deadline)
+
+            task_targets: dict[str, TaskStatus] = {
+                task_id: TaskStatus.HALTED
+                for task_id, task in tasks.items()
+                if task.status
+                in (TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+            }
+            request_targets: dict[str, RequestStatus] = {}
+            quarantine: list[tuple[str, str, RequestStatus, RecoveryCategory]] = []
+            existing_quarantine = {
+                row["request_id"]: row
+                for row in connection.execute("SELECT * FROM recovery_quarantine")
+            }
+            for request_id, request_item in requests.items():
+                self._prepare_deadline(deadline)
+                row = raw_requests[request_id]
+                legacy = row["legacy_source"]
+                if (
+                    legacy is None
+                    and (request_item.stored_kind is None or request_item.stored_epoch is None)
+                ) or (
+                    legacy is not None
+                    and (
+                        legacy not in ("v1", "v2")
+                        or request_item.stored_kind is not None
+                        or request_item.stored_epoch is not None
+                    )
+                ):
+                    raise StoreError()
+                if (
+                    request_item.stored_epoch is not None
+                    and request_item.stored_epoch > MAX_SAFE_SEQUENCE
+                ):
+                    raise StoreError()
+                if request_id in existing_quarantine:
+                    saved = existing_quarantine[request_id]
+                    if saved["task_id"] != request_item.task_id:
+                        raise StoreError()
+                    original = RequestStatus(_text(saved["original_status"]))
+                    category = RecoveryCategory(_text(saved["category"]))
+                    _utc_value(saved["at_utc"])
+                    if (
+                        request_item.status is not RequestStatus.UNKNOWN_OUTCOME
+                        or (
+                            category is RecoveryCategory.LEGACY_METADATA_MISSING
+                            and (
+                                legacy is None
+                                or original
+                                not in (RequestStatus.DISPATCHING, RequestStatus.UNKNOWN_OUTCOME)
+                            )
+                        )
+                        or (
+                            category is RecoveryCategory.TERMINAL_TASK_DISPATCHING
+                            and (
+                                original is not RequestStatus.DISPATCHING
+                                or request_item.stored_kind not in (None, ToolKind.SEND)
+                            )
+                        )
+                    ):
+                        raise StoreError()
+                task = tasks[request_item.task_id]
+                if request_item.status in (RequestStatus.DECIDED, RequestStatus.WAITING_APPROVAL):
+                    if request_item.dispatch_reserved_at_utc is not None:
+                        raise StoreError()
+                    request_targets[request_id] = RequestStatus.DENIED
+                elif request_item.status is RequestStatus.DISPATCHING:
+                    if request_item.dispatch_reserved_at_utc is None:
+                        raise StoreError()
+                    approval = approvals.get(request_id)
+                    if task.status in (TaskStatus.READY, TaskStatus.WAITING_APPROVAL) or (
+                        approval is not None
+                        and approval.status in (ApprovalStatus.PENDING, ApprovalStatus.APPROVED)
+                    ):
+                        raise StorePrepareError(StoreStartFailure.STORE_RECOVERY_UNRESOLVED)
+                    if request_item.stored_kind not in (None, ToolKind.READ, ToolKind.SEND):
+                        raise StoreError()
+                    unknown = request_item.stored_kind is not ToolKind.READ
+                    request_targets[request_id] = (
+                        RequestStatus.UNKNOWN_OUTCOME if unknown else RequestStatus.WITHHELD
+                    )
+                    if unknown:
+                        if task.task_id in task_targets:
+                            task_targets[task.task_id] = TaskStatus.UNKNOWN_OUTCOME
+                        category = (
+                            RecoveryCategory.TERMINAL_TASK_DISPATCHING
+                            if task.task_id not in task_targets
+                            else RecoveryCategory.LEGACY_METADATA_MISSING
+                        )
+                        if request_item.stored_kind is None or task.task_id not in task_targets:
+                            quarantine.append(
+                                (request_id, request_item.task_id, request_item.status, category)
+                            )
+                elif request_item.status is RequestStatus.UNKNOWN_OUTCOME:
+                    if request_item.dispatch_reserved_at_utc is None:
+                        raise StoreError()
+                    if request_item.task_id in task_targets:
+                        task_targets[request_item.task_id] = TaskStatus.UNKNOWN_OUTCOME
+                    if legacy is not None and request_id not in existing_quarantine:
+                        quarantine.append(
+                            (
+                                request_id,
+                                request_item.task_id,
+                                request_item.status,
+                                RecoveryCategory.LEGACY_METADATA_MISSING,
+                            )
+                        )
+
+            for item in inventory.approvals:
+                if (
+                    item.record.status in (ApprovalStatus.PENDING, ApprovalStatus.APPROVED)
+                    and requests[item.record.request_id].status is RequestStatus.DISPATCHING
+                ):
+                    raise StorePrepareError(StoreStartFailure.STORE_RECOVERY_UNRESOLVED)
+
+            connection.execute(
+                "UPDATE store_runs SET state='CLOSED',closed_at_utc=? "
+                "WHERE state IN ('RECOVERY_COMMITTED','ACTIVE')",
+                (timestamp,),
+            )
+            connection.execute(
+                "INSERT INTO store_runs VALUES (?,'RECOVERY_COMMITTED',?,?,NULL,NULL)",
+                (run_id, timestamp, timestamp),
+            )
+            for task_id, target in task_targets.items():
+                self._prepare_deadline(deadline)
+                task = tasks[task_id]
+                changed = connection.execute(
+                    "UPDATE tasks SET status=?,row_revision=?,security_version=? "
+                    "WHERE task_id=? AND row_revision=? AND status=?",
+                    (
+                        target.value,
+                        _integer(task.row_revision + 1),
+                        _integer(task.security_version + 1),
+                        task_id,
+                        task.row_revision,
+                        task.status.value,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise StoreError()
+                self._insert_audit(
+                    connection,
+                    _TASK_AUDIT_EVENTS[target],
+                    task_id=task_id,
+                    request_id=None,
+                    reason=Reason.TASK_NOT_RUNNING,
+                    timestamp=timestamp,
+                )
+            for request_id, request_target in request_targets.items():
+                self._prepare_deadline(deadline)
+                request_item = requests[request_id]
+                changed = connection.execute(
+                    "UPDATE requests SET status=?,row_revision=? "
+                    "WHERE request_id=? AND row_revision=? AND status=?",
+                    (
+                        request_target.value,
+                        _integer(request_item.stored_row_revision + 1),
+                        request_id,
+                        request_item.stored_row_revision,
+                        request_item.status.value,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise StoreError()
+                self._insert_audit(
+                    connection,
+                    "REQUEST_" + request_target.name,
+                    task_id=request_item.task_id,
+                    request_id=request_id,
+                    reason=Reason.TASK_NOT_RUNNING,
+                    timestamp=timestamp,
+                )
+            changed_approvals = 0
+            for item in inventory.approvals:
+                self._prepare_deadline(deadline)
+                record = item.record
+                if record.status not in (ApprovalStatus.PENDING, ApprovalStatus.APPROVED):
+                    continue
+                changed = connection.execute(
+                    "UPDATE approvals SET status='EXPIRED',decided_at_utc=?,row_revision=? "
+                    "WHERE approval_id=? AND row_revision=? AND status=?",
+                    (
+                        timestamp,
+                        _integer(record.row_revision + 1),
+                        record.approval_id,
+                        record.row_revision,
+                        record.status.value,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise StoreError()
+                self._insert_audit(
+                    connection,
+                    "APPROVAL_EXPIRED",
+                    task_id=item.task_id,
+                    request_id=record.request_id,
+                    reason=Reason.APPROVAL_STALE,
+                    timestamp=timestamp,
+                    system_expiry=True,
+                )
+                changed_approvals += 1
+            for request_id, task_id, original, category in quarantine:
+                self._prepare_deadline(deadline)
+                if request_id not in existing_quarantine:
+                    connection.execute(
+                        "INSERT INTO recovery_quarantine VALUES (?,?,?,?,?,?)",
+                        (request_id, run_id, task_id, original.value, category.value, timestamp),
+                    )
+            unknown_count = connection.execute(
+                "SELECT count(*) FROM requests WHERE status='UNKNOWN_OUTCOME'"
+            ).fetchone()[0]
+            quarantine_count = connection.execute(
+                "SELECT count(*) FROM recovery_quarantine"
+            ).fetchone()[0]
+            report = RecoveryReport(
+                schema_version=3,
+                recovery_version=1,
+                run_id=run_id,
+                committed_at_utc=now,
+                changed_task_count=len(task_targets),
+                changed_request_count=len(request_targets),
+                changed_approval_count=changed_approvals,
+                unknown_outcome_count=_integer(unknown_count),
+                quarantined_count=_integer(quarantine_count),
+                unresolved_count=0,
+            )
+            connection.execute(
+                "INSERT INTO recovery_reports VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    3,
+                    1,
+                    timestamp,
+                    len(task_targets),
+                    len(request_targets),
+                    changed_approvals,
+                    unknown_count,
+                    quarantine_count,
+                    0,
+                ),
+            )
+            if self._audit_id_factory is None:
+                raise StoreError()
+            event_id = _identifier(self._audit_id_factory())
+            detail = json.dumps(
+                {
+                    "changed_task_count": len(task_targets),
+                    "changed_request_count": len(request_targets),
+                    "changed_approval_count": changed_approvals,
+                    "unknown_outcome_count": unknown_count,
+                    "quarantined_count": quarantine_count,
+                    "unresolved_count": 0,
+                },
+                separators=(",", ":"),
+            )
+            connection.execute(
+                "INSERT INTO audit_events VALUES (?,NULL,NULL,'RECOVERY_COMMITTED',NULL,NULL,?,?)",
+                (event_id, detail, timestamp),
+            )
+            self._prepare_deadline(deadline)
+            self._check_recovering()
+        return report
+
+    def _validate_recovery_audits(
+        self,
+        connection: sqlite3.Connection,
+        tasks: dict[str, TaskState],
+        requests: dict[str, _StoredRequest],
+        deadline: float,
+    ) -> None:
+        """기록된 관찰이 현재 보안 상태와 모순되는 경우 복구하지 않는다."""
+        for row in connection.execute(
+            "SELECT task_id,request_id,event_type,reason_code,label,at_utc FROM audit_events "
+            "WHERE event_type IN ('OBSERVED','DISPATCH_RESERVED','CONSUMED')"
+        ):
+            self._prepare_deadline(deadline)
+            task_id = _identifier(row["task_id"])
+            request_id = _identifier(row["request_id"])
+            task = tasks.get(task_id)
+            request = requests.get(request_id)
+            if task is None or request is None or request.task_id != task_id:
+                raise StoreError()
+            _utc_value(row["at_utc"])
+            if row["event_type"] != "OBSERVED":
+                continue
+            label = row["label"]
+            if label is None:
+                if row["reason_code"] != Reason.RESULT_UNCLASSIFIED.value or not task.unclassified:
+                    raise StoreError()
+            elif (
+                row["reason_code"] != Reason.OK.value
+                or Label(_integer(label)) > task.high_watermark
+            ):
+                raise StoreError()
+
+    def _check_recovery_query(self) -> None:
+        with self._state_lock:
+            if (
+                self._close_requested
+                or self._connection_faulted
+                or self._state.phase
+                not in (
+                    StorePhase.RECOVERED,
+                    StorePhase.READY,
+                )
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+
+    async def _submit_recovery_query[T](self, operation: Callable[[], T]) -> T:
+        self._check_recovery_query()
+
+        def execute() -> T:
+            self._check_recovery_query()
+            return _store_result(operation)
+
+        return await self._writer.submit(execute, write=False)
+
+    async def load_recovery_report(self, run_id: str) -> RecoveryReport | None:
+        """커밋된 보고를 조회하며 복구를 다시 적용하지 않는다."""
+
+        def read() -> RecoveryReport | None:
+            _identifier(run_id)
+            with self._transaction(write=False) as connection:
+                row = connection.execute(
+                    "SELECT * FROM recovery_reports WHERE run_id=?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    return None
+                return RecoveryReport(
+                    schema_version=_integer(row["schema_version"]),
+                    recovery_version=_integer(row["recovery_version"]),
+                    run_id=_identifier(row["run_id"]),
+                    committed_at_utc=_utc_value(row["committed_at_utc"]),
+                    changed_task_count=_integer(row["changed_task_count"]),
+                    changed_request_count=_integer(row["changed_request_count"]),
+                    changed_approval_count=_integer(row["changed_approval_count"]),
+                    unknown_outcome_count=_integer(row["unknown_outcome_count"]),
+                    quarantined_count=_integer(row["quarantined_count"]),
+                    unresolved_count=_integer(row["unresolved_count"]),
+                )
+
+        return await self._submit_recovery_query(read)
+
+    async def list_recovery_items(
+        self, *, run_id: str | None = None, after: str | None = None, limit: int = 100
+    ) -> RecoveryItemPage:
+        """격리된 요청의 저장 메타데이터를 request_id 순서로 조회한다."""
+
+        def read() -> RecoveryItemPage:
+            if run_id is not None:
+                _identifier(run_id)
+            if after is not None:
+                _identifier(after)
+            if type(limit) is not int or not 1 <= limit <= 500:
+                raise StoreError(Reason.INVALID_ARGUMENTS)
+            with self._transaction(write=False) as connection:
+                rows = connection.execute(
+                    """SELECT q.run_id,q.task_id,q.request_id,q.original_status,q.category,q.at_utc,
+                        r.task_id AS request_task_id,r.server_id,r.tool_name,r.destination_id,
+                        r.kind,r.epoch
+                    FROM recovery_quarantine q JOIN requests r ON r.request_id=q.request_id
+                    WHERE (? IS NULL OR q.run_id=?) AND (? IS NULL OR q.request_id>?)
+                    ORDER BY q.request_id LIMIT ?""",
+                    (run_id, run_id, after, after, limit + 1),
+                ).fetchall()
+                items: list[RecoveryItem] = []
+                for row in rows[:limit]:
+                    if row["task_id"] != row["request_task_id"]:
+                        raise StoreError()
+                    items.append(
+                        RecoveryItem(
+                            run_id=_identifier(row["run_id"]),
+                            task_id=_identifier(row["task_id"]),
+                            request_id=_identifier(row["request_id"]),
+                            original_status=RequestStatus(_text(row["original_status"])),
+                            category=RecoveryCategory(_text(row["category"])),
+                            at_utc=_utc_value(row["at_utc"]),
+                            server_id=_identifier(row["server_id"]),
+                            tool_name=_identifier(row["tool_name"]),
+                            destination_id=None
+                            if row["destination_id"] is None
+                            else _identifier(row["destination_id"]),
+                            kind=None if row["kind"] is None else ToolKind(_text(row["kind"])),
+                            epoch=None if row["epoch"] is None else _integer(row["epoch"]),
+                        )
+                    )
+                return RecoveryItemPage(
+                    items=tuple(items),
+                    next_after=items[-1].request_id if len(rows) > limit else None,
+                )
+
+        return await self._submit_recovery_query(read)
+
+    def _check_preparing(self) -> None:
+        with self._state_lock:
+            if self._state.phase is not StorePhase.MIGRATING:
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+
+    def _prepare_fault(self) -> None:
+        with self._state_lock:
+            if self._state.phase is not StorePhase.FAULTED:
+                self._state = self._state.model_copy(
+                    update={
+                        "phase": StorePhase.FAULTED,
+                        "execution_enabled": False,
+                        "state_revision": self._state.state_revision
+                        + int(self._state.execution_enabled),
+                        "reason": self._state.reason or Reason.INTERNAL_ERROR,
+                        "requires_restart": True,
+                    }
+                )
+
+    def _check_schema_plan(self) -> int:
+        """query_only로 스키마를 검사하고 원본 journal_mode를 바꾸지 않는다."""
+        connection = self._owned_connection()
+        connection.execute("PRAGMA query_only=ON")
+        try:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            application = connection.execute("PRAGMA application_id").fetchone()[0]
+            entries = connection.execute(
+                "SELECT name,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
+            ).fetchall()
+            if version == 0 and application == 0 and not entries:
+                return 0
+            if version not in (1, 2, SCHEMA_VERSION) or application != APPLICATION_ID:
+                raise StorePrepareError(StoreStartFailure.STORE_SCHEMA_UNSUPPORTED)
+            expected = {1: _SCHEMA_V1, 2: _SCHEMA_V2, SCHEMA_VERSION: _SCHEMA}[version]
+            if {row[0]: row[1] for row in entries} != dict(expected):
+                raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
+            if version == 1 and (
+                connection.execute("SELECT 1 FROM registrations LIMIT 1").fetchone() is not None
+                or connection.execute("SELECT 1 FROM scan_reports LIMIT 1").fetchone() is not None
+            ):
+                raise StorePrepareError(StoreStartFailure.STORE_SCHEMA_UNSUPPORTED)
+            if [row[0] for row in connection.execute("PRAGMA quick_check").fetchall()] != [
+                "ok"
+            ] or connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
+            return cast(int, version)
+        finally:
+            connection.execute("PRAGMA query_only=OFF")
+
+    def _backup_schema(
+        self,
+        version: int,
+        deadline: float,
+        begin_backup: Callable[[str], BackupDestination],
+    ) -> None:
+        """원본 연결을 SQLite 백업으로 복사하고 독립 연결로 검사한 뒤 발행한다."""
+        outcome = SQLiteWriter._execute(lambda: begin_backup(f"v{version}-to-v3"))
+        if outcome.error is not None or _close_async_result(outcome.value):
+            raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED)
+        target = cast(BackupDestination, outcome.value)
+        published = False
+        try:
+            path_result = SQLiteWriter._execute(lambda: target.path)
+            if path_result.error is not None or not isinstance(path_result.value, Path):
+                raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED)
+            destination_path = path_result.value
+
+            def progress(_status: int, _remaining: int, _total: int) -> None:
+                self._prepare_deadline(deadline)
+
+            try:
+                destination = sqlite3.connect(destination_path, isolation_level=None)
+                try:
+                    self._owned_connection().backup(destination, pages=128, progress=progress)
+                finally:
+                    destination.close()
+                self._prepare_deadline(deadline)
+                verification = sqlite3.connect(destination_path, isolation_level=None)
+                try:
+                    quick = verification.execute("PRAGMA quick_check").fetchall()
+                    application = verification.execute("PRAGMA application_id").fetchone()[0]
+                    copied_version = verification.execute("PRAGMA user_version").fetchone()[0]
+                    if (
+                        quick != [("ok",)]
+                        or application != APPLICATION_ID
+                        or copied_version != version
+                    ):
+                        raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED)
+                finally:
+                    verification.close()
+            except sqlite3.Error:
+                raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED) from None
+            self._prepare_deadline(deadline)
+            result = SQLiteWriter._execute(lambda: target.publish())
+            if (
+                result.error is not None
+                or _close_async_result(result.value)
+                or not isinstance(result.value, Path)
+            ):
+                raise StorePrepareError(StoreStartFailure.STORE_BACKUP_FAILED)
+            published = True
+        finally:
+            if not published:
+                # 실패한 discard도 기존 writer 오류 정제 경계를 거쳐 고정 오류만 남긴다.
+                result = SQLiteWriter._execute(lambda: target.discard())
+                _close_async_result(result.value)
+
+    def _enable_prepare_wal(self) -> None:
+        connection = self._owned_connection()
+        journal = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+        synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
+        timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
+        if (journal, foreign_keys, synchronous, timeout) != ("wal", 1, 2, self._busy_timeout_ms):
+            raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+        option = sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE
+        connection.setconfig(option, False)
+        if connection.getconfig(option):
+            raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+
+    def _prepare_migration(self, version: int) -> None:
+        if version != 0:
+            try:
+                _migrate_to_v3(self._owned_connection(), version)
+            except _MigrationFailureError as error:
+                if error.discard_connection:
+                    self._connection_fault(error.outcome)
+                    self._discard_connection()
+                raise
+            return
+        try:
+            self._migrate(prepare=True)
+        except _MigrationFailureError:
+            raise
+        except StoreError:
+            if self.execution_state().commit_outcome is CommitOutcome.UNKNOWN:
+                raise StorePrepareError(StoreStartFailure.STORE_COMMIT_UNKNOWN) from None
+            raise
+
+    def _verify_prepared_schema(self) -> None:
+        connection = self._owned_connection()
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        application = connection.execute("PRAGMA application_id").fetchone()[0]
+        journal = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        entries = connection.execute(
+            "SELECT name,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
+        ).fetchall()
+        foreign_key = connection.execute("PRAGMA foreign_key_check").fetchall()
+        quick = connection.execute("PRAGMA quick_check").fetchall()
+        if (
+            version != SCHEMA_VERSION
+            or application != APPLICATION_ID
+            or journal != "wal"
+            or {row[0]: row[1] for row in entries} != dict(_SCHEMA)
+            or foreign_key
+            or [row[0] for row in quick] != ["ok"]
+        ):
+            raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
+
     async def _submit[T](
         self, operation: Callable[[], T], *, method: str, grants_execution: bool | None = None
     ) -> T:
         if grants_execution is None:
             grants_execution = method in _EXECUTION_GATED_METHODS
-        self._check_execution_gate(grants_execution=grants_execution)
+        self._check_execution_gate(grants_execution=grants_execution, method=method)
 
         def execute() -> T:
             # 큐에 든 뒤 전역 정지 또는 연결 폐기가 된 작업도 시작하지 않는다.
-            self._check_execution_gate(grants_execution=grants_execution, started=True)
+            self._check_execution_gate(
+                grants_execution=grants_execution, started=True, method=method
+            )
             return _store_result(operation)
 
         return await self._writer.submit(execute, write=_METHOD_WRITES[method])
@@ -1049,6 +2116,30 @@ class SQLiteStore:
         """Task와 제공된 승격 근거를 함께 저장. 중복 ID는 기존 행을 변경하지 않는다."""
         await self._submit(lambda: self._create_task(state, created_at_utc), method="create_task")
 
+    def _current_run_id(self) -> str | None:
+        if self._startup == "immediate":
+            return None
+        with self._state_lock:
+            if (
+                self._close_requested
+                or self._connection_faulted
+                or self._state.phase
+                not in (StorePhase.RECOVERED, StorePhase.READY, StorePhase.FAULTED)
+                or self._state.run_id is None
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+            return self._state.run_id
+
+    def _require_current_task_owner(self, connection: sqlite3.Connection, task_id: str) -> None:
+        run_id = self._current_run_id()
+        if run_id is None:
+            return
+        row = connection.execute(
+            "SELECT run_id FROM task_run_owners WHERE task_id=?", (task_id,)
+        ).fetchone()
+        if row is None or row[0] != run_id:
+            raise StoreError(Reason.TASK_NOT_RUNNING)
+
     def _create_task(self, state: TaskState, created_at_utc: datetime) -> None:
         self._owned_connection()
         valid: TaskState | None = None
@@ -1061,7 +2152,10 @@ class SQLiteStore:
             valid = None
         if valid is None or timestamp is None:
             raise StoreError()
+        if self._startup == "explicit" and valid.epoch != 1:
+            raise StoreError(Reason.INVALID_ARGUMENTS)
         with self._transaction(write=True) as connection:
+            run_id = self._current_run_id()
             connection.execute(
                 """INSERT INTO tasks (task_id, epoch, profile_id, policy_version,
                     high_watermark, last_read_label, unclassified, status,
@@ -1081,6 +2175,15 @@ class SQLiteStore:
                     timestamp,
                 ),
             )
+            connection.execute(
+                "INSERT INTO task_call_sequences (task_id,last_issued) VALUES (?,0)",
+                (valid.task_id,),
+            )
+            if run_id is not None:
+                connection.execute(
+                    "INSERT INTO task_run_owners (task_id,run_id) VALUES (?,?)",
+                    (valid.task_id, run_id),
+                )
             connection.executemany(
                 """INSERT INTO escalations (task_id, at_seq, source_id, from_label, to_label)
                     VALUES (?, ?, ?, ?, ?)""",
@@ -1095,6 +2198,80 @@ class SQLiteStore:
                     for item in valid.escalations
                 ),
             )
+
+    async def allocate_call_seq(self, task_id: str) -> int:
+        """Task별 순번과 감사를 원자 커밋하고 ACK된 값만 반환한다(SEQ-01/02).
+
+        배정 후 실패·취소·ACK 유실에서도 값은 회수하지 않는다. 정상 실행 여부와
+        계수 무결성은 동일 writer 트랜잭션에서 확인한다.
+        """
+        return await self._submit(
+            lambda: self._allocate_call_seq(task_id), method="allocate_call_seq"
+        )
+
+    def _allocate_call_seq(self, task_id: str) -> int:
+        try:
+            _identifier(task_id)
+        except (TypeError, ValueError, OverflowError):
+            raise StoreError(Reason.INVALID_ARGUMENTS) from None
+
+        with self._transaction(write=True, failure_reason=Reason.STATE_COMMIT_FAILED) as connection:
+            state = self._load_task_locked(connection, task_id)
+            self._require_current_task_owner(connection, task_id)
+            if state.status is not TaskStatus.RUNNING:
+                raise StoreError(Reason.TASK_NOT_RUNNING)
+            if state.unclassified:
+                raise StoreError(Reason.TASK_UNCLASSIFIED)
+            row = connection.execute(
+                """SELECT last_issued,
+                    coalesce((SELECT max(call_seq) FROM requests WHERE task_id=?),0),
+                    coalesce((SELECT max(at_seq) FROM escalations WHERE task_id=?),0)
+                FROM task_call_sequences WHERE task_id=?""",
+                (task_id, task_id, task_id),
+            ).fetchone()
+            if row is None or any(type(value) is not int for value in row):
+                self.halt_execution(Reason.INTERNAL_ERROR)
+                raise StoreError(Reason.INTERNAL_ERROR)
+            last, request_max, escalation_max = (int(value) for value in row)
+            if (
+                not 0 <= last <= MAX_SAFE_SEQUENCE
+                or not 0 <= request_max <= MAX_SAFE_SEQUENCE
+                or not 0 <= escalation_max <= MAX_SAFE_SEQUENCE
+                or last < max(request_max, escalation_max)
+            ):
+                self.halt_execution(Reason.INTERNAL_ERROR)
+                raise StoreError(Reason.INTERNAL_ERROR)
+            if last == MAX_SAFE_SEQUENCE:
+                raise StoreError(Reason.INVALID_ARGUMENTS)
+            value = last + 1
+            if (
+                connection.execute(
+                    """UPDATE task_call_sequences SET last_issued=?
+                    WHERE task_id=? AND last_issued=?""",
+                    (value, task_id, last),
+                ).rowcount
+                != 1
+            ):
+                self.halt_execution(Reason.INTERNAL_ERROR)
+                raise StoreError(Reason.INTERNAL_ERROR)
+            if self._audit_id_factory is None:
+                raise StoreError(Reason.STATE_COMMIT_FAILED)
+            try:
+                event_id = _identifier(self._audit_id_factory())
+                timestamp = _utc_text(self._fresh_utc())
+            except (StoreError, TypeError, ValueError, OverflowError):
+                raise StoreError(Reason.STATE_COMMIT_FAILED) from None
+            connection.execute(
+                """INSERT INTO audit_events (event_id,request_id,task_id,event_type,reason_code,
+                    label,detail,at_utc) VALUES (?,NULL,?,'CALL_SEQ_ALLOCATED',NULL,NULL,?,?)""",
+                (
+                    event_id,
+                    task_id,
+                    json.dumps({"call_seq": value, "run_id": self._current_run_id()}),
+                    timestamp,
+                ),
+            )
+        return value
 
     async def load_task(self, task_id: str) -> TaskState:
         """같은 읽기 트랜잭션에서 Task와 승격 근거를 조회. 없는 Task는 STATE_MISSING."""
@@ -1145,85 +2322,100 @@ class SQLiteStore:
             # 기존 쓰기 TX를 BEGIN 실패 처리로 rollback하지 않는다.
             raise StoreError()
         with self._transaction(write=False):
-            version = _integer(connection.execute("PRAGMA user_version").fetchone()[0])
-            application = connection.execute("PRAGMA application_id").fetchone()[0]
-            entries = connection.execute(
-                "SELECT name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
-            ).fetchall()
+            return self._inspect_startup_rows_locked(connection, inspect_reasons=True)
+
+    def _inspect_startup_rows_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        inspect_reasons: bool,
+        deadline: float | None = None,
+    ) -> _StartupInventory:
+        """호출자가 보유한 TX 안에서 저장 사실을 검증한다."""
+        version = _integer(connection.execute("PRAGMA user_version").fetchone()[0])
+        application = connection.execute("PRAGMA application_id").fetchone()[0]
+        entries = connection.execute(
+            "SELECT name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
+        ).fetchall()
+        if (
+            version != SCHEMA_VERSION
+            or application != APPLICATION_ID
+            or {row[0]: row[1] for row in entries} != dict(_SCHEMA)
+        ):
+            raise StoreError()
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise StoreError(Reason.STATE_MISSING)
+
+        history_rows = connection.execute(
+            """SELECT task_id, at_seq, source_id, from_label, to_label
+            FROM escalations ORDER BY task_id, at_seq"""
+        )
+        histories: dict[str, list[sqlite3.Row]] = {}
+        for row in history_rows:
+            if deadline is not None:
+                self._prepare_deadline(deadline)
+            histories.setdefault(_identifier(row["task_id"]), []).append(row)
+        states: dict[str, TaskState] = {}
+        for row in connection.execute("SELECT * FROM tasks ORDER BY task_id"):
+            if deadline is not None:
+                self._prepare_deadline(deadline)
+            task_id = _identifier(row["task_id"])
+            if task_id in states:
+                raise StoreError(Reason.STATE_MISSING)
+            states[task_id] = _decode_task(row, histories.get(task_id, []))
+        if histories.keys() - states.keys():
+            raise StoreError(Reason.STATE_MISSING)
+
+        requests: dict[str, _StoredRequest] = {}
+        request_sequences: set[tuple[str, int]] = set()
+        request_maxima: dict[str, int] = {}
+        for row in connection.execute("SELECT * FROM requests ORDER BY request_id"):
+            if deadline is not None:
+                self._prepare_deadline(deadline)
+            stored = _decode_stored_request(row, inspect_reasons=inspect_reasons)
+            sequence_key = (stored.task_id, stored.call_seq)
             if (
-                version != SCHEMA_VERSION
-                or application != APPLICATION_ID
-                or {row[0]: row[1] for row in entries} != dict(_SCHEMA)
+                stored.task_id not in states
+                or stored.request_id in requests
+                or sequence_key in request_sequences
             ):
-                raise StoreError()
-            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
                 raise StoreError(Reason.STATE_MISSING)
-
-            task_rows = connection.execute("SELECT * FROM tasks ORDER BY task_id").fetchall()
-            history_rows = connection.execute(
-                """SELECT task_id, at_seq, source_id, from_label, to_label
-                FROM escalations ORDER BY task_id, at_seq"""
-            ).fetchall()
-            histories: dict[str, list[sqlite3.Row]] = {}
-            for row in history_rows:
-                histories.setdefault(_identifier(row["task_id"]), []).append(row)
-            states: dict[str, TaskState] = {}
-            for row in task_rows:
-                task_id = _identifier(row["task_id"])
-                if task_id in states:
-                    raise StoreError(Reason.STATE_MISSING)
-                states[task_id] = _decode_task(row, histories.get(task_id, []))
-            if histories.keys() - states.keys():
-                raise StoreError(Reason.STATE_MISSING)
-
-            requests: dict[str, _StoredRequest] = {}
-            request_sequences: set[tuple[str, int]] = set()
-            request_maxima: dict[str, int] = {}
-            for row in connection.execute("SELECT * FROM requests ORDER BY request_id").fetchall():
-                stored = _decode_stored_request(row)
-                sequence_key = (stored.task_id, stored.call_seq)
-                if (
-                    stored.task_id not in states
-                    or stored.request_id in requests
-                    or sequence_key in request_sequences
-                ):
-                    raise StoreError(Reason.STATE_MISSING)
-                requests[stored.request_id] = stored
-                request_sequences.add(sequence_key)
-                request_maxima[stored.task_id] = max(
-                    request_maxima.get(stored.task_id, stored.call_seq), stored.call_seq
-                )
-
-            approvals: list[_StoredApproval] = []
-            approved_requests: set[str] = set()
-            for row in connection.execute(
-                "SELECT approval_id FROM approvals ORDER BY approval_id"
-            ).fetchall():
-                record = self._approval_locked(connection, _identifier(row["approval_id"]))
-                if (
-                    record is None
-                    or record.request_id not in requests
-                    or record.request_id in approved_requests
-                ):
-                    raise StoreError(Reason.STATE_MISSING)
-                approved_requests.add(record.request_id)
-                approvals.append(_StoredApproval(record, requests[record.request_id].task_id))
-
-            return _StartupInventory(
-                schema_version=version,
-                tasks=tuple(
-                    _StoredTask(
-                        state=state,
-                        request_sequence_max=request_maxima.get(task_id),
-                        escalation_sequence_max=max(
-                            (item.at_seq for item in state.escalations), default=None
-                        ),
-                    )
-                    for task_id, state in states.items()
-                ),
-                requests=tuple(requests.values()),
-                approvals=tuple(approvals),
+            requests[stored.request_id] = stored
+            request_sequences.add(sequence_key)
+            request_maxima[stored.task_id] = max(
+                request_maxima.get(stored.task_id, stored.call_seq), stored.call_seq
             )
+
+        approvals: list[_StoredApproval] = []
+        approved_requests: set[str] = set()
+        for row in connection.execute("SELECT approval_id FROM approvals ORDER BY approval_id"):
+            if deadline is not None:
+                self._prepare_deadline(deadline)
+            record = self._approval_locked(connection, _identifier(row["approval_id"]))
+            if (
+                record is None
+                or record.request_id not in requests
+                or record.request_id in approved_requests
+            ):
+                raise StoreError(Reason.STATE_MISSING)
+            approved_requests.add(record.request_id)
+            approvals.append(_StoredApproval(record, requests[record.request_id].task_id))
+
+        return _StartupInventory(
+            schema_version=version,
+            tasks=tuple(
+                _StoredTask(
+                    state=state,
+                    request_sequence_max=request_maxima.get(task_id),
+                    escalation_sequence_max=max(
+                        (item.at_seq for item in state.escalations), default=None
+                    ),
+                )
+                for task_id, state in states.items()
+            ),
+            requests=tuple(requests.values()),
+            approvals=tuple(approvals),
+        )
 
     async def set_task_status(
         self,
@@ -1254,6 +2446,7 @@ class SQLiteStore:
         if not isinstance(status, TaskStatus) or not isinstance(reason, Reason):
             raise StoreError()
         with self._transaction(write=True) as connection:
+            self._require_current_task_owner(connection, task_id)
             current = self._load_task_locked(connection, task_id)
             if current.row_revision != expected_revision:
                 raise StoreError(Reason.STATE_COMMIT_FAILED)
@@ -1323,6 +2516,44 @@ class SQLiteStore:
             method="record_session_event",
         )
 
+    async def record_failure_audit(self, record: FailureAuditRecord) -> None:
+        """예약 전후 실패 사실과 고정 사유만 writer 트랜잭션에서 감사한다."""
+        await self._submit(
+            lambda: self._record_failure_audit(record), method="record_failure_audit"
+        )
+
+    def _record_failure_audit(self, record: FailureAuditRecord) -> None:
+        try:
+            valid = FailureAuditRecord.model_validate(record)
+            task_id = _identifier(valid.task_id)
+            request_id = None if valid.request_id is None else _identifier(valid.request_id)
+            timestamp = _utc_text(valid.at_utc)
+        except (TypeError, ValueError, OverflowError):
+            raise StoreError(Reason.INVALID_ARGUMENTS) from None
+        run_id = self._current_run_id()
+        # 공급된 회차는 현재 Store가 확인한 값과 일치해야 한다. epoch는 아직 결속하지 않는다.
+        if (valid.run_id is not None and valid.run_id != run_id) or valid.epoch is not None:
+            raise StoreError(Reason.INVALID_ARGUMENTS)
+        event_type = (
+            "FAILURE_BEFORE_DISPATCH"
+            if valid.phase == "before_dispatch"
+            else "FAILURE_AFTER_DISPATCH"
+        )
+        detail = json.dumps(
+            {"exception_type": valid.exception_type, "run_id": run_id, "epoch": valid.epoch},
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        with self._transaction(write=True) as connection:
+            if self._audit_id_factory is None:
+                raise StoreError()
+            event_id = _identifier(self._audit_id_factory())
+            connection.execute(
+                """INSERT INTO audit_events (event_id,request_id,task_id,event_type,reason_code,
+                    label,detail,at_utc) VALUES (?,?,?,?,?,NULL,?,?)""",
+                (event_id, request_id, task_id, event_type, valid.reason.value, detail, timestamp),
+            )
+
     def _record_session_event(
         self,
         identity: TaskIdentity,
@@ -1389,6 +2620,8 @@ class SQLiteStore:
         timestamp = _utc_text(at_utc)
         _integer(req.call_seq)
         _integer(req.epoch)
+        if req.call_seq > MAX_SAFE_SEQUENCE or req.epoch > MAX_SAFE_SEQUENCE:
+            raise StoreError(Reason.INVALID_ARGUMENTS)
         if type(arguments_digest) is not str or arguments_digest != json_digest(
             req.arguments.to_dict()
         ):
@@ -1415,8 +2648,8 @@ class SQLiteStore:
             )
             connection.execute(
                 """INSERT INTO requests (request_id,task_id,call_seq,server_id,tool_name,
-                    destination_id,arguments_digest,decision,reasons,status)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    destination_id,arguments_digest,decision,reasons,status,epoch,kind)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     req.request_id,
                     req.task_id,
@@ -1428,6 +2661,8 @@ class SQLiteStore:
                     int(decision.decision),
                     reasons_json,
                     request_status.value,
+                    req.epoch,
+                    req.tool.kind.value,
                 ),
             )
             self._insert_audit(
@@ -1476,6 +2711,7 @@ class SQLiteStore:
             ).fetchone()
             if row is None:
                 raise StoreError(Reason.STATE_MISSING)
+            self._require_current_task_owner(connection, _identifier(row["task_id"]))
             allowed = self._allowed_decisions.get(request_id)
             if (
                 allowed is None
@@ -1821,6 +3057,7 @@ class SQLiteStore:
         _utc_text(now_utc)
         try:
             with self._transaction(write=True) as connection:
+                self._require_current_task_owner(connection, task_id)
                 record = self._approval_locked(connection, approval_id)
                 context = self._approval_contexts.get(approval_id)
                 if (
@@ -2315,7 +3552,9 @@ class SQLiteStore:
             return False
         return True
 
-    def _rollback(self, connection: sqlite3.Connection) -> None:
+    def _rollback(
+        self, connection: sqlite3.Connection, *, failure_reason: Reason = Reason.INTERNAL_ERROR
+    ) -> None:
         failed = False
         try:
             if connection.in_transaction:
@@ -2326,19 +3565,42 @@ class SQLiteStore:
             # COMMIT을 아직 보내지 않았으므로 rollback 실패여도 해당 작업은 미커밋이다.
             self._connection_fault(CommitOutcome.ROLLED_BACK)
             self._discard_connection()
-            raise StoreError()
+            raise StoreError(failure_reason)
 
     @contextmanager
-    def _transaction(self, *, write: bool) -> Iterator[sqlite3.Connection]:
+    def _transaction(
+        self,
+        *,
+        write: bool,
+        failure_reason: Reason = Reason.INTERNAL_ERROR,
+        prepare: bool = False,
+    ) -> Iterator[sqlite3.Connection]:
         connection = self._owned_connection()
         failed = False
+        io_failure = False
         try:
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             failed = True
+            io_failure = _sqlite_io_failure(error)
         if failed:
-            self._rollback(connection)
-            raise StoreError()
+            try:
+                self._rollback(connection, failure_reason=failure_reason)
+            except StoreError:
+                if prepare:
+                    raise _MigrationFailureError(
+                        outcome=CommitOutcome.ROLLED_BACK,
+                        io_failure=True,
+                        discard_connection=True,
+                    ) from None
+                raise
+            if prepare:
+                raise _MigrationFailureError(
+                    outcome=CommitOutcome.ROLLED_BACK,
+                    io_failure=io_failure,
+                    discard_connection=False,
+                ) from None
+            raise StoreError(failure_reason)
         completed = False
         reason: Reason | None = None
         try:
@@ -2346,19 +3608,36 @@ class SQLiteStore:
                 yield connection
             except StoreError as error:
                 reason = error.reason
-            except sqlite3.Error:
-                reason = Reason.INTERNAL_ERROR
+            except sqlite3.Error as error:
+                reason = failure_reason
+                io_failure = _sqlite_io_failure(error)
             else:
                 completed = True
         finally:
             if not completed:
-                self._rollback(connection)
+                try:
+                    self._rollback(connection, failure_reason=failure_reason)
+                except StoreError:
+                    if prepare:
+                        raise _MigrationFailureError(
+                            outcome=CommitOutcome.ROLLED_BACK,
+                            io_failure=True,
+                            discard_connection=True,
+                        ) from None
+                    raise
         if reason is not None:
+            if prepare:
+                raise _MigrationFailureError(
+                    outcome=CommitOutcome.ROLLED_BACK,
+                    io_failure=io_failure,
+                    discard_connection=False,
+                ) from None
             raise StoreError(reason)
         try:
             connection.execute("COMMIT")
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             failed = True
+            io_failure = _sqlite_io_failure(error)
         if failed:
             # COMMIT 뒤 이미 TX가 없으면 실제 커밋인지 ACK 유실인지 구분할 수 없다.
             outcome = CommitOutcome.UNKNOWN
@@ -2372,10 +3651,16 @@ class SQLiteStore:
                 pass
             self._connection_fault(outcome)
             self._discard_connection()
-            raise StoreError()
+            if prepare:
+                raise _MigrationFailureError(
+                    outcome=outcome,
+                    io_failure=io_failure,
+                    discard_connection=True,
+                ) from None
+            raise StoreError(failure_reason)
 
-    def _migrate(self) -> None:
-        with self._transaction(write=True) as connection:
+    def _migrate(self, *, prepare: bool = False) -> None:
+        with self._transaction(write=True, prepare=prepare) as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             application = connection.execute("PRAGMA application_id").fetchone()[0]
             entries = connection.execute(
@@ -2387,23 +3672,7 @@ class SQLiteStore:
                 for _, statement in _SCHEMA:
                     connection.execute(statement)
                 connection.execute("PRAGMA application_id=0x4D435047")
-                connection.execute("PRAGMA user_version=2")
-            elif version == 1:
-                if (
-                    application != APPLICATION_ID
-                    or {row[0]: row[1] for row in entries} != dict(_SCHEMA_V1)
-                    or connection.execute("SELECT 1 FROM registrations LIMIT 1").fetchone()
-                    is not None
-                    or connection.execute("SELECT 1 FROM scan_reports LIMIT 1").fetchone()
-                    is not None
-                ):
-                    raise StoreError()
-                # BEGIN IMMEDIATE 안에서 검사·교체·버전 갱신. 다른 다섯 테이블은 보존.
-                connection.execute("DROP TABLE scan_reports")
-                connection.execute("DROP TABLE registrations")
-                for _, statement in _SCHEMA[5:]:
-                    connection.execute(statement)
-                connection.execute("PRAGMA user_version=2")
+                connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             elif (
                 version != SCHEMA_VERSION
                 or application != APPLICATION_ID
@@ -2411,20 +3680,17 @@ class SQLiteStore:
             ):
                 raise StoreError()
 
-    def _configure(self, busy_timeout_ms: int) -> None:
+    def _configure(self, busy_timeout_ms: int, *, set_wal: bool = True) -> None:
         connection = self._owned_connection()
         failed = False
         try:
-            journal = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            if set_wal:
+                journal = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                failed = journal != "wal"
             foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
             synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
             timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
-            failed = (journal, foreign_keys, synchronous, timeout) != (
-                "wal",
-                1,
-                2,
-                busy_timeout_ms,
-            )
+            failed = failed or (foreign_keys, synchronous, timeout) != (1, 2, busy_timeout_ms)
             failed = (
                 failed
                 or connection.isolation_level is not None
@@ -2434,6 +3700,195 @@ class SQLiteStore:
             failed = True
         if failed:
             raise StoreError()
+
+
+class _MigrationFailureError(StoreError):
+    """원문 없이 이관 커밋의 불명 여부와 I/O 분류만 보존한다."""
+
+    def __init__(
+        self, *, outcome: CommitOutcome, io_failure: bool, discard_connection: bool
+    ) -> None:
+        super().__init__()
+        self.outcome = outcome
+        self.io_failure = io_failure
+        self.discard_connection = discard_connection
+
+
+def _close_async_result(value: object) -> bool:
+    """동기 콜백의 잘못된 awaitable 결과를 거부하고 코루틴 누출을 막는다."""
+    if not inspect.isawaitable(value):
+        return False
+    if inspect.iscoroutine(value):
+        SQLiteWriter._execute(value.close)
+    return True
+
+
+def _sqlite_io_failure(error: sqlite3.Error) -> bool:
+    """SQLite 오류 코드로만 디스크·I/O 계열을 분류한다."""
+    code = getattr(error, "sqlite_errorcode", None)
+    return type(code) is int and (code & 0xFF) in {
+        sqlite3.SQLITE_IOERR,
+        sqlite3.SQLITE_FULL,
+        sqlite3.SQLITE_CANTOPEN,
+        sqlite3.SQLITE_READONLY,
+        sqlite3.SQLITE_NOMEM,
+    }
+
+
+def _prepare_operation[T](
+    operation: Callable[[], T], failure: StoreStartFailure
+) -> tuple[T | None, StoreStartFailure | None]:
+    """writer 경계에 예외 원문 대신 시작 실패 코드만 전달한다."""
+    try:
+        return operation(), None
+    except StorePrepareError as error:
+        return None, error.code
+    except _MigrationFailureError as error:
+        if error.outcome is CommitOutcome.UNKNOWN:
+            return None, StoreStartFailure.STORE_COMMIT_UNKNOWN
+        if error.io_failure or error.outcome is CommitOutcome.COMMITTED:
+            return None, StoreStartFailure.STORE_IO_FAILED
+        return None, failure
+    except sqlite3.Error as error:
+        if _sqlite_io_failure(error):
+            return None, StoreStartFailure.STORE_IO_FAILED
+        return None, failure
+    except StoreError:
+        return None, failure
+    except (TypeError, ValueError, OverflowError):
+        return None, failure
+
+
+def _migrate_to_v3(connection: sqlite3.Connection, from_version: int) -> None:
+    """정확한 v1/v2를 한 트랜잭션으로 v3로 이관한다.
+
+    호출자는 이관 전 백업과 연결 소유권을 확보해야 한다. 이 함수는 생성자에서
+    호출하지 않는다. 외래 키 전환은 트랜잭션 밖에서 하고 기존 설정을 복원한다.
+    """
+    if not isinstance(connection, sqlite3.Connection) or type(from_version) is not int:
+        raise StoreError()
+    if from_version not in (1, 2):
+        raise StoreError()
+    original_foreign_keys: int | None = None
+    failed = False
+    began = False
+    commit_attempted = False
+    commit_succeeded = False
+    commit_unknown = False
+    io_failure = False
+    rollback_failed = False
+    restore_failed = False
+    try:
+        if connection.in_transaction:
+            raise StoreError()
+        original_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+        if original_foreign_keys not in (0, 1):
+            raise StoreError()
+        connection.execute("PRAGMA foreign_keys=OFF")
+        if connection.execute("PRAGMA foreign_keys").fetchone()[0] != 0:
+            raise StoreError()
+        connection.execute("BEGIN IMMEDIATE")
+        began = True
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        application = connection.execute("PRAGMA application_id").fetchone()[0]
+        entries = connection.execute(
+            "SELECT name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
+        ).fetchall()
+        expected = _SCHEMA_V1 if from_version == 1 else _SCHEMA_V2
+        if (
+            version != from_version
+            or application != APPLICATION_ID
+            or {row[0]: row[1] for row in entries} != dict(expected)
+            or connection.execute("PRAGMA foreign_key_check").fetchone() is not None
+        ):
+            raise StoreError()
+        if from_version == 1:
+            if (
+                connection.execute("SELECT 1 FROM registrations LIMIT 1").fetchone() is not None
+                or connection.execute("SELECT 1 FROM scan_reports LIMIT 1").fetchone() is not None
+            ):
+                raise StoreError()
+            connection.execute("DROP TABLE scan_reports")
+            connection.execute("DROP TABLE registrations")
+            for _, statement in _SCHEMA_V2[5:]:
+                connection.execute(statement)
+
+        connection.execute(
+            _REQUESTS_V3.replace('CREATE TABLE "requests"', 'CREATE TABLE "requests_new"', 1)
+        )
+        connection.execute(
+            """INSERT INTO requests_new (
+                request_id,task_id,call_seq,server_id,tool_name,destination_id,
+                arguments_digest,decision,reasons,status,dispatch_reserved_at_utc,
+                epoch,kind,row_revision,legacy_source
+            ) SELECT request_id,task_id,call_seq,server_id,tool_name,destination_id,
+                arguments_digest,decision,reasons,status,dispatch_reserved_at_utc,
+                NULL,NULL,0,? FROM requests""",
+            (f"v{from_version}",),
+        )
+        connection.execute("DROP TABLE requests")
+        connection.execute('ALTER TABLE "requests_new" RENAME TO "requests"')
+        connection.execute(_TASK_CALL_SEQUENCES_V3)
+        connection.execute(
+            """INSERT INTO task_call_sequences (task_id,last_issued)
+            SELECT t.task_id, max(
+                coalesce((SELECT max(r.call_seq) FROM requests AS r WHERE r.task_id=t.task_id),0),
+                coalesce((SELECT max(e.at_seq) FROM escalations AS e WHERE e.task_id=t.task_id),0)
+            ) FROM tasks AS t"""
+        )
+        for _, statement in _RECOVERY_SCHEMA:
+            connection.execute(statement)
+        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise StoreError()
+        commit_attempted = True
+        connection.execute("COMMIT")
+        commit_succeeded = True
+    except (sqlite3.Error, StoreError, TypeError, ValueError, OverflowError) as error:
+        failed = True
+        if isinstance(error, sqlite3.Error):
+            io_failure = _sqlite_io_failure(error)
+        if commit_attempted:
+            try:
+                commit_unknown = not connection.in_transaction
+            except sqlite3.Error:
+                commit_unknown = True
+    finally:
+        try:
+            if began and connection.in_transaction:
+                connection.execute("ROLLBACK")
+                if connection.in_transaction:
+                    rollback_failed = True
+                    failed = True
+                    if commit_attempted:
+                        commit_unknown = True
+        except sqlite3.Error:
+            failed = True
+            rollback_failed = True
+            if commit_attempted:
+                commit_unknown = True
+        if original_foreign_keys is not None:
+            try:
+                connection.execute(f"PRAGMA foreign_keys={original_foreign_keys}")
+                if connection.execute("PRAGMA foreign_keys").fetchone()[0] != original_foreign_keys:
+                    failed = True
+                    restore_failed = True
+            except sqlite3.Error:
+                failed = True
+                restore_failed = True
+    if failed:
+        outcome = (
+            CommitOutcome.UNKNOWN
+            if commit_unknown
+            else CommitOutcome.COMMITTED
+            if commit_succeeded
+            else CommitOutcome.ROLLED_BACK
+        )
+        raise _MigrationFailureError(
+            outcome=outcome,
+            io_failure=io_failure or rollback_failed or restore_failed,
+            discard_connection=commit_attempted or rollback_failed or restore_failed,
+        ) from None
 
 
 def _registry_input[T](operation: Callable[[], T]) -> T:
@@ -2635,11 +4090,14 @@ def _text(value: object) -> str:
 def _check_task(state: TaskState) -> None:
     for number in (state.epoch, state.security_version, state.row_revision):
         _integer(number)
+    if state.epoch > MAX_SAFE_SEQUENCE:
+        raise ValueError("invalid epoch")
     previous: Escalation | None = None
     for item in state.escalations:
         _integer(item.at_seq)
         if (
-            item.to_label <= item.from_label
+            item.at_seq > MAX_SAFE_SEQUENCE
+            or item.to_label <= item.from_label
             or item.to_label > state.high_watermark
             or (
                 previous is not None
@@ -2650,15 +4108,15 @@ def _check_task(state: TaskState) -> None:
         previous = item
 
 
-def _decode_stored_request(row: sqlite3.Row) -> _StoredRequest:
-    """v1 문자열/정수/시각을 기존 타입으로 검사하고 상태 조합은 추정하지 않는다."""
+def _decode_stored_request(row: sqlite3.Row, *, inspect_reasons: bool = True) -> _StoredRequest:
+    """저장된 요청을 검사하며 legacy의 누락된 필드는 추정하지 않는다."""
     _identifier(row["server_id"])
     _identifier(row["tool_name"])
     if row["destination_id"] is not None:
         _identifier(row["destination_id"])
     _sha256(row["arguments_digest"])
     decision = None if row["decision"] is None else Decision(_integer(row["decision"]))
-    if row["reasons"] is not None:
+    if inspect_reasons and row["reasons"] is not None:
         try:
             reasons = json.loads(_text(row["reasons"]))
         except RecursionError:
@@ -2676,6 +4134,9 @@ def _decode_stored_request(row: sqlite3.Row) -> _StoredRequest:
         dispatch_reserved_at_utc=None
         if row["dispatch_reserved_at_utc"] is None
         else _utc_value(row["dispatch_reserved_at_utc"]),
+        stored_epoch=None if row["epoch"] is None else _integer(row["epoch"]),
+        stored_kind=None if row["kind"] is None else ToolKind(_text(row["kind"])),
+        stored_row_revision=_integer(row["row_revision"]),
     )
 
 
