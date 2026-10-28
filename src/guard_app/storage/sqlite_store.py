@@ -387,6 +387,8 @@ class SQLiteStore:
     정상 상태 전이의 보안 버전 유지 등은 검토용 구현 선택이며 B6 합의는 별도다.
     audit_id_factory와 utc_now는 writer 스레드에서 호출된다. 생성자는 연결과
     이관 준비를 동기 대기하며 busy_timeout 및 실제 I/O에 따라 지연될 수 있다.
+    startup="explicit"은 연결 설정만 하고 스키마와 journal_mode를 변경하지 않는다.
+    이 모드의 스키마 준비와 복구가 끝나기 전에는 일반 Store 연산을 거부한다.
     전역 정지 시 create_task·record_decision·reserve_dispatch·create_approval·
     consume_and_reserve·APPROVED 승인 전이·activate_server는 거부한다. 읽기,
     Task 상태·예약 후 결과 기록, 다른 승인 전이·세션 감사와 나머지 Registry
@@ -402,6 +404,7 @@ class SQLiteStore:
         audit_id_factory: Callable[[], str] | None = None,
         utc_now: Callable[[], datetime] | None = None,
         max_pending_jobs: int = 1024,
+        startup: Literal["immediate", "explicit"] = "immediate",
     ) -> None:
         self._connection: sqlite3.Connection | None = None
         self._connection_close_ok = True
@@ -433,17 +436,22 @@ class SQLiteStore:
             or not callable(self._utc_now)
             or type(max_pending_jobs) is not int
             or max_pending_jobs < 1
+            or type(startup) is not str
+            or startup not in ("immediate", "explicit")
         ):
             raise StoreError()
-        self._writer = SQLiteWriter(
+        self._startup: Literal["immediate", "explicit"] = startup
+        self._busy_timeout_ms = busy_timeout_ms
+        self._writer: SQLiteWriter = SQLiteWriter(
             lambda: self._open_connection(path, busy_timeout_ms),
             self._discard_connection,
             max_pending_jobs,
         )
-        with self._state_lock:
-            self._state = self._state.model_copy(
-                update={"phase": StorePhase.READY, "execution_enabled": True}
-            )
+        if self._startup == "immediate":
+            with self._state_lock:
+                self._state = self._state.model_copy(
+                    update={"phase": StorePhase.READY, "execution_enabled": True}
+                )
 
     def _open_connection(self, path: str | Path, busy_timeout_ms: int) -> None:
         self._owner_thread = get_ident()
@@ -464,8 +472,9 @@ class SQLiteStore:
             self._discard_connection()
             raise StoreError()
         try:
-            self._migrate()
-            self._configure(busy_timeout_ms)
+            if self._startup == "immediate":
+                self._migrate()
+            self._configure(busy_timeout_ms, set_wal=self._startup == "immediate")
         except StoreError:
             failed = True
         if failed:
@@ -493,12 +502,13 @@ class SQLiteStore:
         # 이미 dequeue된 작업은 완료하고, 대기 중 작업은 시작하지 않는다.
         self._writer.close(reason)
         with self._state_lock:
-            if self._state.phase is StorePhase.READY:
+            if self._state.phase in (StorePhase.READY, StorePhase.MIGRATING, StorePhase.RECOVERING):
                 self._state = self._state.model_copy(
                     update={
                         "phase": StorePhase.CLOSED,
                         "execution_enabled": False,
-                        "state_revision": self._state.state_revision + 1,
+                        "state_revision": self._state.state_revision
+                        + int(self._state.execution_enabled),
                     }
                 )
 
@@ -548,6 +558,7 @@ class SQLiteStore:
             if (
                 (state.phase is StorePhase.CLOSED and not started)
                 or self._connection_faulted
+                or (self._startup == "explicit" and state.phase is not StorePhase.READY)
                 or (
                     grants_execution
                     and not state.execution_enabled
@@ -2550,20 +2561,17 @@ class SQLiteStore:
             ):
                 raise StoreError()
 
-    def _configure(self, busy_timeout_ms: int) -> None:
+    def _configure(self, busy_timeout_ms: int, *, set_wal: bool = True) -> None:
         connection = self._owned_connection()
         failed = False
         try:
-            journal = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            if set_wal:
+                journal = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                failed = journal != "wal"
             foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
             synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
             timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
-            failed = (journal, foreign_keys, synchronous, timeout) != (
-                "wal",
-                1,
-                2,
-                busy_timeout_ms,
-            )
+            failed = failed or (foreign_keys, synchronous, timeout) != (1, 2, busy_timeout_ms)
             failed = (
                 failed
                 or connection.isolation_level is not None
