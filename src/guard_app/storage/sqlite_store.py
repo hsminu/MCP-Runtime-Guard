@@ -21,6 +21,7 @@ from pathlib import Path
 from threading import Lock, get_ident
 from types import TracebackType
 from typing import Literal, cast
+from uuid import uuid4
 
 from guard_app.core.approval_time import approval_event_time
 from guard_app.core.taint import merge
@@ -38,6 +39,7 @@ from guard_app.domain.enums import (
     CommitOutcome,
     Decision,
     Label,
+    RecoveryCategory,
     RegStatus,
     RequestStatus,
     SessionEvent,
@@ -58,6 +60,9 @@ from guard_app.domain.models import (
     FailureAuditRecord,
     MigrationReport,
     PolicyDecision,
+    RecoveryItem,
+    RecoveryItemPage,
+    RecoveryReport,
     ResolvedRequest,
     StoreExecutionState,
     TaskState,
@@ -438,7 +443,8 @@ class SQLiteStore:
     같은 앱/버전의 정확한 스키마만 다시 열며 다른/미래 버전은 거부한다.
     busy_timeout_ms=1000은 조정 가능한 잠금 대기 후보이며 전체 I/O 상한이 아니다.
     SQL/검증 오류와 writer 작업의 callback 실패는 원문·경로 없는 StoreError다.
-    신뢰 audit_id_factory는 ID 또는 원문 없는 StoreError를 공급한다.
+    명시 모드 기본 감사 ID는 UUID4다. 주입한 신뢰 audit_id_factory는 ID 또는
+    원문 없는 StoreError를 공급한다. 즉시 모드에서 기본 factory는 없다.
     정상 상태 전이의 보안 버전 유지 등은 검토용 구현 선택이며 B6 합의는 별도다.
     audit_id_factory와 utc_now는 writer 스레드에서 호출된다. 생성자는 연결과
     이관 준비를 동기 대기하며 busy_timeout 및 실제 I/O에 따라 지연될 수 있다.
@@ -466,6 +472,7 @@ class SQLiteStore:
         self._state_lock = Lock()
         self._connection_faulted = False
         self._prepare_started = False
+        self._recovery_started = False
         self._state = StoreExecutionState(
             run_id=None,
             phase=StorePhase.MIGRATING,
@@ -477,7 +484,11 @@ class SQLiteStore:
             requires_restart=False,
         )
         self._owner_thread = 0
-        self._audit_id_factory = audit_id_factory
+        self._audit_id_factory = (
+            (lambda: f"audit-{uuid4().hex}")
+            if startup == "explicit" and audit_id_factory is None
+            else audit_id_factory
+        )
         self._allowed_decisions: dict[str, _DecisionContext] = {}
         self._request_contexts: dict[str, _DecisionContext] = {}
         self._approval_contexts: dict[str, _ApprovalContext] = {}
@@ -786,6 +797,511 @@ class SQLiteStore:
     def _prepare_deadline(deadline: float) -> None:
         if time.monotonic() >= deadline:
             raise StorePrepareError(StoreStartFailure.STORE_DEADLINE_EXCEEDED)
+
+    async def recover(
+        self,
+        *,
+        deadline: float,
+        run_id: str,
+        on_step: Callable[[StorePrepareStep], None] | None = None,
+    ) -> RecoveryReport:
+        """단일 쓰기 TX로 옛 실행을 종결하고 새 회차의 복구 보고를 남긴다."""
+        with self._state_lock:
+            if (
+                self._startup != "explicit"
+                or self._state.phase is not StorePhase.RECOVERING
+                or self._recovery_started
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+            self._recovery_started = True
+        completed = False
+        try:
+            if (
+                type(deadline) not in (int, float)
+                or not math.isfinite(deadline)
+                or (on_step is not None and not callable(on_step))
+                or (on_step is not None and inspect.iscoroutinefunction(on_step))
+            ):
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+            deadline = min(deadline, time.monotonic() + 30.0)
+            try:
+                _identifier(run_id)
+            except (TypeError, ValueError, OverflowError):
+                raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED) from None
+            if on_step is not None:
+                callback = SQLiteWriter._execute(lambda: on_step(StorePrepareStep.STORE_RECOVER))
+                if callback.error is not None or _close_async_result(callback.value):
+                    raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+            self._prepare_deadline(deadline)
+            self._check_recovering()
+
+            def execute() -> tuple[RecoveryReport | None, StoreStartFailure | None]:
+                def checked() -> RecoveryReport:
+                    self._check_recovering()
+                    self._prepare_deadline(deadline)
+                    return self._recover_locked(run_id, deadline)
+
+                return _prepare_operation(checked, StoreStartFailure.STORE_INTEGRITY_FAILED)
+
+            try:
+                report, code = await self._writer.submit(execute, write=True)
+            except StoreError:
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED) from None
+            if code is not None:
+                raise StorePrepareError(code)
+            self._prepare_deadline(deadline)
+            self._check_recovering()
+            if report is None:
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+            with self._state_lock:
+                if self._state.phase is not StorePhase.RECOVERING:
+                    raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+                self._state = self._state.model_copy(
+                    update={
+                        "phase": StorePhase.RECOVERED,
+                        "run_id": run_id,
+                        "last_committed_run_state": "RECOVERY_COMMITTED",
+                    }
+                )
+            completed = True
+            return report
+        finally:
+            if not completed:
+                self._prepare_fault()
+
+    def _check_recovering(self) -> None:
+        with self._state_lock:
+            if self._state.phase is not StorePhase.RECOVERING or self._connection_faulted:
+                raise StorePrepareError(StoreStartFailure.STORE_IO_FAILED)
+
+    def _recover_locked(self, run_id: str, deadline: float) -> RecoveryReport:
+        """writer 소유 연결과 하나의 TX에서만 복구 상태를 계산하고 저장한다."""
+        with self._transaction(write=True, prepare=True) as connection:
+            self._prepare_deadline(deadline)
+            if connection.execute("SELECT 1 FROM store_runs WHERE run_id=?", (run_id,)).fetchone():
+                raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
+            inventory = self._inspect_startup_rows_locked(
+                connection, inspect_reasons=False, deadline=deadline
+            )
+            tasks = {item.state.task_id: item.state for item in inventory.tasks}
+            requests = {item.request_id: item for item in inventory.requests}
+            approvals = {item.record.request_id: item.record for item in inventory.approvals}
+            raw_requests = {
+                row["request_id"]: row
+                for row in connection.execute("SELECT * FROM requests ORDER BY request_id")
+            }
+            now = self._fresh_utc()
+            for row in connection.execute("SELECT created_at_utc FROM tasks"):
+                self._prepare_deadline(deadline)
+                now = max(now, _utc_value(row[0]))
+            for item in inventory.approvals:
+                self._prepare_deadline(deadline)
+                now = max(now, item.record.created_at_utc)
+                if item.record.decided_at_utc is not None:
+                    now = max(now, item.record.decided_at_utc)
+                if item.record.consumed_at_utc is not None:
+                    now = max(now, item.record.consumed_at_utc)
+            for request_item in inventory.requests:
+                self._prepare_deadline(deadline)
+                if request_item.dispatch_reserved_at_utc is not None:
+                    now = max(now, request_item.dispatch_reserved_at_utc)
+            for row in connection.execute(
+                "SELECT started_at_utc,recovery_committed_at_utc,activated_at_utc,closed_at_utc "
+                "FROM store_runs"
+            ):
+                self._prepare_deadline(deadline)
+                for value in row:
+                    if value is not None:
+                        now = max(now, _utc_value(value))
+            timestamp = _utc_text(now)
+            self._validate_recovery_audits(connection, tasks, requests, deadline)
+
+            task_targets: dict[str, TaskStatus] = {
+                task_id: TaskStatus.HALTED
+                for task_id, task in tasks.items()
+                if task.status
+                in (TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+            }
+            request_targets: dict[str, RequestStatus] = {}
+            quarantine: list[tuple[str, str, RequestStatus, RecoveryCategory]] = []
+            existing_quarantine = {
+                row["request_id"]: row
+                for row in connection.execute("SELECT * FROM recovery_quarantine")
+            }
+            for request_id, request_item in requests.items():
+                self._prepare_deadline(deadline)
+                row = raw_requests[request_id]
+                legacy = row["legacy_source"]
+                if (
+                    legacy is None
+                    and (request_item.stored_kind is None or request_item.stored_epoch is None)
+                ) or (
+                    legacy is not None
+                    and (
+                        legacy not in ("v1", "v2")
+                        or request_item.stored_kind is not None
+                        or request_item.stored_epoch is not None
+                    )
+                ):
+                    raise StoreError()
+                if (
+                    request_item.stored_epoch is not None
+                    and request_item.stored_epoch > MAX_SAFE_SEQUENCE
+                ):
+                    raise StoreError()
+                if request_id in existing_quarantine:
+                    saved = existing_quarantine[request_id]
+                    if saved["task_id"] != request_item.task_id:
+                        raise StoreError()
+                    original = RequestStatus(_text(saved["original_status"]))
+                    category = RecoveryCategory(_text(saved["category"]))
+                    _utc_value(saved["at_utc"])
+                    if (
+                        request_item.status is not RequestStatus.UNKNOWN_OUTCOME
+                        or (
+                            category is RecoveryCategory.LEGACY_METADATA_MISSING
+                            and (
+                                legacy is None
+                                or original
+                                not in (RequestStatus.DISPATCHING, RequestStatus.UNKNOWN_OUTCOME)
+                            )
+                        )
+                        or (
+                            category is RecoveryCategory.TERMINAL_TASK_DISPATCHING
+                            and (
+                                original is not RequestStatus.DISPATCHING
+                                or request_item.stored_kind not in (None, ToolKind.SEND)
+                            )
+                        )
+                    ):
+                        raise StoreError()
+                task = tasks[request_item.task_id]
+                if request_item.status in (RequestStatus.DECIDED, RequestStatus.WAITING_APPROVAL):
+                    if request_item.dispatch_reserved_at_utc is not None:
+                        raise StoreError()
+                    request_targets[request_id] = RequestStatus.DENIED
+                elif request_item.status is RequestStatus.DISPATCHING:
+                    if request_item.dispatch_reserved_at_utc is None:
+                        raise StoreError()
+                    approval = approvals.get(request_id)
+                    if task.status in (TaskStatus.READY, TaskStatus.WAITING_APPROVAL) or (
+                        approval is not None
+                        and approval.status in (ApprovalStatus.PENDING, ApprovalStatus.APPROVED)
+                    ):
+                        raise StorePrepareError(StoreStartFailure.STORE_RECOVERY_UNRESOLVED)
+                    if request_item.stored_kind not in (None, ToolKind.READ, ToolKind.SEND):
+                        raise StoreError()
+                    unknown = request_item.stored_kind is not ToolKind.READ
+                    request_targets[request_id] = (
+                        RequestStatus.UNKNOWN_OUTCOME if unknown else RequestStatus.WITHHELD
+                    )
+                    if unknown:
+                        if task.task_id in task_targets:
+                            task_targets[task.task_id] = TaskStatus.UNKNOWN_OUTCOME
+                        category = (
+                            RecoveryCategory.TERMINAL_TASK_DISPATCHING
+                            if task.task_id not in task_targets
+                            else RecoveryCategory.LEGACY_METADATA_MISSING
+                        )
+                        if request_item.stored_kind is None or task.task_id not in task_targets:
+                            quarantine.append(
+                                (request_id, request_item.task_id, request_item.status, category)
+                            )
+                elif request_item.status is RequestStatus.UNKNOWN_OUTCOME:
+                    if request_item.dispatch_reserved_at_utc is None:
+                        raise StoreError()
+                    if request_item.task_id in task_targets:
+                        task_targets[request_item.task_id] = TaskStatus.UNKNOWN_OUTCOME
+                    if legacy is not None and request_id not in existing_quarantine:
+                        quarantine.append(
+                            (
+                                request_id,
+                                request_item.task_id,
+                                request_item.status,
+                                RecoveryCategory.LEGACY_METADATA_MISSING,
+                            )
+                        )
+
+            for item in inventory.approvals:
+                if (
+                    item.record.status in (ApprovalStatus.PENDING, ApprovalStatus.APPROVED)
+                    and requests[item.record.request_id].status is RequestStatus.DISPATCHING
+                ):
+                    raise StorePrepareError(StoreStartFailure.STORE_RECOVERY_UNRESOLVED)
+
+            connection.execute(
+                "UPDATE store_runs SET state='CLOSED',closed_at_utc=? "
+                "WHERE state IN ('RECOVERY_COMMITTED','ACTIVE')",
+                (timestamp,),
+            )
+            connection.execute(
+                "INSERT INTO store_runs VALUES (?,'RECOVERY_COMMITTED',?,?,NULL,NULL)",
+                (run_id, timestamp, timestamp),
+            )
+            for task_id, target in task_targets.items():
+                self._prepare_deadline(deadline)
+                task = tasks[task_id]
+                changed = connection.execute(
+                    "UPDATE tasks SET status=?,row_revision=?,security_version=? "
+                    "WHERE task_id=? AND row_revision=? AND status=?",
+                    (
+                        target.value,
+                        _integer(task.row_revision + 1),
+                        _integer(task.security_version + 1),
+                        task_id,
+                        task.row_revision,
+                        task.status.value,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise StoreError()
+                self._insert_audit(
+                    connection,
+                    _TASK_AUDIT_EVENTS[target],
+                    task_id=task_id,
+                    request_id=None,
+                    reason=Reason.TASK_NOT_RUNNING,
+                    timestamp=timestamp,
+                )
+            for request_id, request_target in request_targets.items():
+                self._prepare_deadline(deadline)
+                request_item = requests[request_id]
+                changed = connection.execute(
+                    "UPDATE requests SET status=?,row_revision=? "
+                    "WHERE request_id=? AND row_revision=? AND status=?",
+                    (
+                        request_target.value,
+                        _integer(request_item.stored_row_revision + 1),
+                        request_id,
+                        request_item.stored_row_revision,
+                        request_item.status.value,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise StoreError()
+                self._insert_audit(
+                    connection,
+                    "REQUEST_" + request_target.name,
+                    task_id=request_item.task_id,
+                    request_id=request_id,
+                    reason=Reason.TASK_NOT_RUNNING,
+                    timestamp=timestamp,
+                )
+            changed_approvals = 0
+            for item in inventory.approvals:
+                self._prepare_deadline(deadline)
+                record = item.record
+                if record.status not in (ApprovalStatus.PENDING, ApprovalStatus.APPROVED):
+                    continue
+                changed = connection.execute(
+                    "UPDATE approvals SET status='EXPIRED',decided_at_utc=?,row_revision=? "
+                    "WHERE approval_id=? AND row_revision=? AND status=?",
+                    (
+                        timestamp,
+                        _integer(record.row_revision + 1),
+                        record.approval_id,
+                        record.row_revision,
+                        record.status.value,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise StoreError()
+                self._insert_audit(
+                    connection,
+                    "APPROVAL_EXPIRED",
+                    task_id=item.task_id,
+                    request_id=record.request_id,
+                    reason=Reason.APPROVAL_STALE,
+                    timestamp=timestamp,
+                    system_expiry=True,
+                )
+                changed_approvals += 1
+            for request_id, task_id, original, category in quarantine:
+                self._prepare_deadline(deadline)
+                if request_id not in existing_quarantine:
+                    connection.execute(
+                        "INSERT INTO recovery_quarantine VALUES (?,?,?,?,?,?)",
+                        (request_id, run_id, task_id, original.value, category.value, timestamp),
+                    )
+            unknown_count = connection.execute(
+                "SELECT count(*) FROM requests WHERE status='UNKNOWN_OUTCOME'"
+            ).fetchone()[0]
+            quarantine_count = connection.execute(
+                "SELECT count(*) FROM recovery_quarantine"
+            ).fetchone()[0]
+            report = RecoveryReport(
+                schema_version=3,
+                recovery_version=1,
+                run_id=run_id,
+                committed_at_utc=now,
+                changed_task_count=len(task_targets),
+                changed_request_count=len(request_targets),
+                changed_approval_count=changed_approvals,
+                unknown_outcome_count=_integer(unknown_count),
+                quarantined_count=_integer(quarantine_count),
+                unresolved_count=0,
+            )
+            connection.execute(
+                "INSERT INTO recovery_reports VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    3,
+                    1,
+                    timestamp,
+                    len(task_targets),
+                    len(request_targets),
+                    changed_approvals,
+                    unknown_count,
+                    quarantine_count,
+                    0,
+                ),
+            )
+            if self._audit_id_factory is None:
+                raise StoreError()
+            event_id = _identifier(self._audit_id_factory())
+            detail = json.dumps(
+                {
+                    "changed_task_count": len(task_targets),
+                    "changed_request_count": len(request_targets),
+                    "changed_approval_count": changed_approvals,
+                    "unknown_outcome_count": unknown_count,
+                    "quarantined_count": quarantine_count,
+                    "unresolved_count": 0,
+                },
+                separators=(",", ":"),
+            )
+            connection.execute(
+                "INSERT INTO audit_events VALUES (?,NULL,NULL,'RECOVERY_COMMITTED',NULL,NULL,?,?)",
+                (event_id, detail, timestamp),
+            )
+            self._prepare_deadline(deadline)
+            self._check_recovering()
+        return report
+
+    def _validate_recovery_audits(
+        self,
+        connection: sqlite3.Connection,
+        tasks: dict[str, TaskState],
+        requests: dict[str, _StoredRequest],
+        deadline: float,
+    ) -> None:
+        """기록된 관찰이 현재 보안 상태와 모순되는 경우 복구하지 않는다."""
+        for row in connection.execute(
+            "SELECT task_id,request_id,event_type,reason_code,label,at_utc FROM audit_events "
+            "WHERE event_type IN ('OBSERVED','DISPATCH_RESERVED','CONSUMED')"
+        ):
+            self._prepare_deadline(deadline)
+            task_id = _identifier(row["task_id"])
+            request_id = _identifier(row["request_id"])
+            task = tasks.get(task_id)
+            request = requests.get(request_id)
+            if task is None or request is None or request.task_id != task_id:
+                raise StoreError()
+            _utc_value(row["at_utc"])
+            if row["event_type"] != "OBSERVED":
+                continue
+            label = row["label"]
+            if label is None:
+                if row["reason_code"] != Reason.RESULT_UNCLASSIFIED.value or not task.unclassified:
+                    raise StoreError()
+            elif (
+                row["reason_code"] != Reason.OK.value
+                or Label(_integer(label)) > task.high_watermark
+            ):
+                raise StoreError()
+
+    def _check_recovery_query(self) -> None:
+        with self._state_lock:
+            if self._connection_faulted or self._state.phase not in (
+                StorePhase.RECOVERED,
+                StorePhase.READY,
+            ):
+                raise StoreError(self._state.reason or Reason.INTERNAL_ERROR)
+
+    async def _submit_recovery_query[T](self, operation: Callable[[], T]) -> T:
+        self._check_recovery_query()
+
+        def execute() -> T:
+            self._check_recovery_query()
+            return _store_result(operation)
+
+        return await self._writer.submit(execute, write=False)
+
+    async def load_recovery_report(self, run_id: str) -> RecoveryReport | None:
+        """커밋된 보고를 조회하며 복구를 다시 적용하지 않는다."""
+
+        def read() -> RecoveryReport | None:
+            _identifier(run_id)
+            with self._transaction(write=False) as connection:
+                row = connection.execute(
+                    "SELECT * FROM recovery_reports WHERE run_id=?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    return None
+                return RecoveryReport(
+                    schema_version=_integer(row["schema_version"]),
+                    recovery_version=_integer(row["recovery_version"]),
+                    run_id=_identifier(row["run_id"]),
+                    committed_at_utc=_utc_value(row["committed_at_utc"]),
+                    changed_task_count=_integer(row["changed_task_count"]),
+                    changed_request_count=_integer(row["changed_request_count"]),
+                    changed_approval_count=_integer(row["changed_approval_count"]),
+                    unknown_outcome_count=_integer(row["unknown_outcome_count"]),
+                    quarantined_count=_integer(row["quarantined_count"]),
+                    unresolved_count=_integer(row["unresolved_count"]),
+                )
+
+        return await self._submit_recovery_query(read)
+
+    async def list_recovery_items(
+        self, *, run_id: str | None = None, after: str | None = None, limit: int = 100
+    ) -> RecoveryItemPage:
+        """격리된 요청의 저장 메타데이터를 request_id 순서로 조회한다."""
+
+        def read() -> RecoveryItemPage:
+            if run_id is not None:
+                _identifier(run_id)
+            if after is not None:
+                _identifier(after)
+            if type(limit) is not int or not 1 <= limit <= 500:
+                raise StoreError(Reason.INVALID_ARGUMENTS)
+            with self._transaction(write=False) as connection:
+                rows = connection.execute(
+                    """SELECT q.run_id,q.task_id,q.request_id,q.original_status,q.category,q.at_utc,
+                        r.task_id AS request_task_id,r.server_id,r.tool_name,r.destination_id,
+                        r.kind,r.epoch
+                    FROM recovery_quarantine q JOIN requests r ON r.request_id=q.request_id
+                    WHERE (? IS NULL OR q.run_id=?) AND (? IS NULL OR q.request_id>?)
+                    ORDER BY q.request_id LIMIT ?""",
+                    (run_id, run_id, after, after, limit + 1),
+                ).fetchall()
+                items: list[RecoveryItem] = []
+                for row in rows[:limit]:
+                    if row["task_id"] != row["request_task_id"]:
+                        raise StoreError()
+                    items.append(
+                        RecoveryItem(
+                            run_id=_identifier(row["run_id"]),
+                            task_id=_identifier(row["task_id"]),
+                            request_id=_identifier(row["request_id"]),
+                            original_status=RequestStatus(_text(row["original_status"])),
+                            category=RecoveryCategory(_text(row["category"])),
+                            at_utc=_utc_value(row["at_utc"]),
+                            server_id=_identifier(row["server_id"]),
+                            tool_name=_identifier(row["tool_name"]),
+                            destination_id=None
+                            if row["destination_id"] is None
+                            else _identifier(row["destination_id"]),
+                            kind=None if row["kind"] is None else ToolKind(_text(row["kind"])),
+                            epoch=None if row["epoch"] is None else _integer(row["epoch"]),
+                        )
+                    )
+                return RecoveryItemPage(
+                    items=tuple(items),
+                    next_after=items[-1].request_id if len(rows) > limit else None,
+                )
+
+        return await self._submit_recovery_query(read)
 
     def _check_preparing(self) -> None:
         with self._state_lock:
@@ -1642,85 +2158,100 @@ class SQLiteStore:
             # 기존 쓰기 TX를 BEGIN 실패 처리로 rollback하지 않는다.
             raise StoreError()
         with self._transaction(write=False):
-            version = _integer(connection.execute("PRAGMA user_version").fetchone()[0])
-            application = connection.execute("PRAGMA application_id").fetchone()[0]
-            entries = connection.execute(
-                "SELECT name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
-            ).fetchall()
+            return self._inspect_startup_rows_locked(connection, inspect_reasons=True)
+
+    def _inspect_startup_rows_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        inspect_reasons: bool,
+        deadline: float | None = None,
+    ) -> _StartupInventory:
+        """호출자가 보유한 TX 안에서 저장 사실을 검증한다."""
+        version = _integer(connection.execute("PRAGMA user_version").fetchone()[0])
+        application = connection.execute("PRAGMA application_id").fetchone()[0]
+        entries = connection.execute(
+            "SELECT name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name"
+        ).fetchall()
+        if (
+            version != SCHEMA_VERSION
+            or application != APPLICATION_ID
+            or {row[0]: row[1] for row in entries} != dict(_SCHEMA)
+        ):
+            raise StoreError()
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise StoreError(Reason.STATE_MISSING)
+
+        history_rows = connection.execute(
+            """SELECT task_id, at_seq, source_id, from_label, to_label
+            FROM escalations ORDER BY task_id, at_seq"""
+        )
+        histories: dict[str, list[sqlite3.Row]] = {}
+        for row in history_rows:
+            if deadline is not None:
+                self._prepare_deadline(deadline)
+            histories.setdefault(_identifier(row["task_id"]), []).append(row)
+        states: dict[str, TaskState] = {}
+        for row in connection.execute("SELECT * FROM tasks ORDER BY task_id"):
+            if deadline is not None:
+                self._prepare_deadline(deadline)
+            task_id = _identifier(row["task_id"])
+            if task_id in states:
+                raise StoreError(Reason.STATE_MISSING)
+            states[task_id] = _decode_task(row, histories.get(task_id, []))
+        if histories.keys() - states.keys():
+            raise StoreError(Reason.STATE_MISSING)
+
+        requests: dict[str, _StoredRequest] = {}
+        request_sequences: set[tuple[str, int]] = set()
+        request_maxima: dict[str, int] = {}
+        for row in connection.execute("SELECT * FROM requests ORDER BY request_id"):
+            if deadline is not None:
+                self._prepare_deadline(deadline)
+            stored = _decode_stored_request(row, inspect_reasons=inspect_reasons)
+            sequence_key = (stored.task_id, stored.call_seq)
             if (
-                version != SCHEMA_VERSION
-                or application != APPLICATION_ID
-                or {row[0]: row[1] for row in entries} != dict(_SCHEMA)
+                stored.task_id not in states
+                or stored.request_id in requests
+                or sequence_key in request_sequences
             ):
-                raise StoreError()
-            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
                 raise StoreError(Reason.STATE_MISSING)
-
-            task_rows = connection.execute("SELECT * FROM tasks ORDER BY task_id").fetchall()
-            history_rows = connection.execute(
-                """SELECT task_id, at_seq, source_id, from_label, to_label
-                FROM escalations ORDER BY task_id, at_seq"""
-            ).fetchall()
-            histories: dict[str, list[sqlite3.Row]] = {}
-            for row in history_rows:
-                histories.setdefault(_identifier(row["task_id"]), []).append(row)
-            states: dict[str, TaskState] = {}
-            for row in task_rows:
-                task_id = _identifier(row["task_id"])
-                if task_id in states:
-                    raise StoreError(Reason.STATE_MISSING)
-                states[task_id] = _decode_task(row, histories.get(task_id, []))
-            if histories.keys() - states.keys():
-                raise StoreError(Reason.STATE_MISSING)
-
-            requests: dict[str, _StoredRequest] = {}
-            request_sequences: set[tuple[str, int]] = set()
-            request_maxima: dict[str, int] = {}
-            for row in connection.execute("SELECT * FROM requests ORDER BY request_id").fetchall():
-                stored = _decode_stored_request(row)
-                sequence_key = (stored.task_id, stored.call_seq)
-                if (
-                    stored.task_id not in states
-                    or stored.request_id in requests
-                    or sequence_key in request_sequences
-                ):
-                    raise StoreError(Reason.STATE_MISSING)
-                requests[stored.request_id] = stored
-                request_sequences.add(sequence_key)
-                request_maxima[stored.task_id] = max(
-                    request_maxima.get(stored.task_id, stored.call_seq), stored.call_seq
-                )
-
-            approvals: list[_StoredApproval] = []
-            approved_requests: set[str] = set()
-            for row in connection.execute(
-                "SELECT approval_id FROM approvals ORDER BY approval_id"
-            ).fetchall():
-                record = self._approval_locked(connection, _identifier(row["approval_id"]))
-                if (
-                    record is None
-                    or record.request_id not in requests
-                    or record.request_id in approved_requests
-                ):
-                    raise StoreError(Reason.STATE_MISSING)
-                approved_requests.add(record.request_id)
-                approvals.append(_StoredApproval(record, requests[record.request_id].task_id))
-
-            return _StartupInventory(
-                schema_version=version,
-                tasks=tuple(
-                    _StoredTask(
-                        state=state,
-                        request_sequence_max=request_maxima.get(task_id),
-                        escalation_sequence_max=max(
-                            (item.at_seq for item in state.escalations), default=None
-                        ),
-                    )
-                    for task_id, state in states.items()
-                ),
-                requests=tuple(requests.values()),
-                approvals=tuple(approvals),
+            requests[stored.request_id] = stored
+            request_sequences.add(sequence_key)
+            request_maxima[stored.task_id] = max(
+                request_maxima.get(stored.task_id, stored.call_seq), stored.call_seq
             )
+
+        approvals: list[_StoredApproval] = []
+        approved_requests: set[str] = set()
+        for row in connection.execute("SELECT approval_id FROM approvals ORDER BY approval_id"):
+            if deadline is not None:
+                self._prepare_deadline(deadline)
+            record = self._approval_locked(connection, _identifier(row["approval_id"]))
+            if (
+                record is None
+                or record.request_id not in requests
+                or record.request_id in approved_requests
+            ):
+                raise StoreError(Reason.STATE_MISSING)
+            approved_requests.add(record.request_id)
+            approvals.append(_StoredApproval(record, requests[record.request_id].task_id))
+
+        return _StartupInventory(
+            schema_version=version,
+            tasks=tuple(
+                _StoredTask(
+                    state=state,
+                    request_sequence_max=request_maxima.get(task_id),
+                    escalation_sequence_max=max(
+                        (item.at_seq for item in state.escalations), default=None
+                    ),
+                )
+                for task_id, state in states.items()
+            ),
+            requests=tuple(requests.values()),
+            approvals=tuple(approvals),
+        )
 
     async def set_task_status(
         self,
@@ -3055,6 +3586,8 @@ def _prepare_operation[T](
         return None, failure
     except StoreError:
         return None, failure
+    except (TypeError, ValueError, OverflowError):
+        return None, failure
 
 
 def _migrate_to_v3(connection: sqlite3.Connection, from_version: int) -> None:
@@ -3406,7 +3939,7 @@ def _check_task(state: TaskState) -> None:
         previous = item
 
 
-def _decode_stored_request(row: sqlite3.Row) -> _StoredRequest:
+def _decode_stored_request(row: sqlite3.Row, *, inspect_reasons: bool = True) -> _StoredRequest:
     """저장된 요청을 검사하며 legacy의 누락된 필드는 추정하지 않는다."""
     _identifier(row["server_id"])
     _identifier(row["tool_name"])
@@ -3414,7 +3947,7 @@ def _decode_stored_request(row: sqlite3.Row) -> _StoredRequest:
         _identifier(row["destination_id"])
     _sha256(row["arguments_digest"])
     decision = None if row["decision"] is None else Decision(_integer(row["decision"]))
-    if row["reasons"] is not None:
+    if inspect_reasons and row["reasons"] is not None:
         try:
             reasons = json.loads(_text(row["reasons"]))
         except RecursionError:
