@@ -1305,7 +1305,7 @@ class SQLiteStore:
         self,
         connection: sqlite3.Connection,
         tasks: dict[str, TaskState],
-        requests: dict[str, _StoredRequest],
+        stored_requests: dict[str, _StoredRequest],
         deadline: float,
     ) -> None:
         """기록된 관찰이 현재 보안 상태와 모순되는 경우 복구하지 않는다."""
@@ -1317,7 +1317,7 @@ class SQLiteStore:
             task_id = _identifier(row["task_id"])
             request_id = _identifier(row["request_id"])
             task = tasks.get(task_id)
-            request = requests.get(request_id)
+            request = stored_requests.get(request_id)
             if task is None or request is None or request.task_id != task_id:
                 raise StoreError()
             _utc_value(row["at_utc"])
