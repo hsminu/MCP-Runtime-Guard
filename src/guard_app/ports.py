@@ -4,8 +4,9 @@
 Store의 날짜와 ID는 호출자가 공급하며 포트에서 생성하지 않는다.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
+from pathlib import Path
 from typing import Literal, Protocol
 
 from guard_app.domain.contracts import (
@@ -28,6 +29,7 @@ from guard_app.domain.enums import (
     RegStatus,
     RequestStatus,
     SessionEvent,
+    StorePrepareStep,
     SystemStopReason,
     TaskStatus,
 )
@@ -35,6 +37,7 @@ from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
     AccessResult,
     FailureAuditRecord,
+    MigrationReport,
     PolicyDecision,
     ResolvedRequest,
     StoreExecutionState,
@@ -73,6 +76,17 @@ class PendingFinals(Protocol):
     async def aclose(self) -> None: ...
 
 
+class BackupDestination(Protocol):
+    """신뢰된 백업 생성자가 제공한 임시 대상과 발행·폐기 경계."""
+
+    @property
+    def path(self) -> Path: ...
+
+    def publish(self) -> Path: ...
+
+    def discard(self) -> None: ...
+
+
 class StoreLifecycle(Protocol):
     """Store 실행 권한과 종료 상태를 SQL 큐를 기다리지 않고 조회한다(SEQ-02).
 
@@ -93,6 +107,19 @@ class StoreLifecycle(Protocol):
         ...
 
     async def wait_closed(self, timeout: float) -> bool: ...  # noqa: ASYNC109
+
+    async def prepare_schema(
+        self,
+        *,
+        deadline: float,
+        begin_backup: Callable[[str], BackupDestination],
+        on_step: Callable[[StorePrepareStep], None] | None = None,
+    ) -> MigrationReport:
+        """A가 넘긴 time.monotonic 기준 바깥 deadline 안에서 스키마를 준비한다.
+
+        이관 ACK는 27b 복구 ACK와 별개다. on_step은 예외를 내지 않는 동기 함수다.
+        """
+        ...
 
 
 class SequenceAllocator(Protocol):

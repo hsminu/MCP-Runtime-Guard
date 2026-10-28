@@ -40,6 +40,7 @@ __all__ = [
     "Frozen",
     "FrozenJsonObject",
     "MAX_SAFE_SEQUENCE",
+    "MigrationReport",
     "PolicyDecision",
     "PolicyInput",
     "ProposedCall",
@@ -106,6 +107,15 @@ class StoreExecutionState(Frozen):
     commit_outcome: CommitOutcome | None
     last_committed_run_state: str | None = Field(repr=False)
     requires_restart: bool
+
+
+class MigrationReport(Frozen):
+    """경로·원문 없이 스키마 준비의 완료 사실만 전달한다."""
+
+    from_version: NonNegativeInt
+    to_version: Annotated[int, Field(ge=3, le=3)]
+    backup_published: bool
+    migrated: bool
 
 
 class FailureAuditRecord(Frozen):
