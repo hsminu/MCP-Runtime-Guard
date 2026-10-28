@@ -40,7 +40,6 @@ A 등록 화면은 그 보고서로 경고를 보여 주고, 사용자가 확인
 from __future__ import annotations
 
 import asyncio
-import secrets
 from collections.abc import Callable, Mapping
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import AbstractAsyncContextManager
@@ -57,6 +56,7 @@ from guard_app.adapters.cisco_aggregation import (
 from guard_app.domain.contracts import RegistryEntry, ScanReport
 from guard_app.domain.errors import StoreError
 from guard_app.domain.reasons import Reason
+from guard_app.security.ids import new_id
 from guard_app.security.secrets import scanner_key_environ
 from guard_app.services.registry import (
     RegistryError,
@@ -238,7 +238,7 @@ class ScanService:
             report = scan_report(result, list(tools.items()), scanned_at_utc=self._clock())
         except ScanReportError as error:
             raise ScanError(str(error)) from None
-        scan_id = f"scan-{secrets.token_hex(16)}"
+        scan_id = new_id("scan")
         try:
             entry = await self._registry.record_scan(scan_id, report)
         except RegistryError as error:

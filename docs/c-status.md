@@ -31,7 +31,7 @@
 - [x] C2.4 검사-열기 TOCTOU: 파일 서버가 `safe_path` 뒤 링크 미추적(`OPEN_REPARSE_POINT`) 핸들로 열고 핸들의 실제 경로·reparse·하드링크를 다시 대조(`FILE_CHANGED`). 상위 폴더 junction 바꿔치기 실측 · [기록](archive/c/C2.11-file-server.md)
 - [x] C2.5 URL 검증(URL-01, `security/endpoints.py`): 등록 화면은 `normalize_endpoint`로 정규형을 만들고, 설정 로더(`ServerSettings.url`)와 transport는 `canonical_endpoint`로 정규형만 받는다. https 원칙, http는 루프백 IP 리터럴만, 사용자 정보·쿼리·fragment·끝 점·`%`·숫자 IP 변형·특수 주소 거부, IDNA 2008 · [기록](archive/c/C2.5-endpoint-validation.md)
 - [x] C2.6 stdio MCP 서버 실행 입구(EXE-01, `security/launcher.py`): `check_stdio_values`(command·args·env_allow 검사), `pin_executable`(등록 지문), `launch_mcp_server`(연결마다 재검사·지문 대조, 지문 없으면 `LAUNCH_EXECUTABLE_UNPINNED`, 서버별 폴더 `AppFolders.server_folder`·연결별 stderr·기본 환경 5개와 서버 폴더 TEMP·`env_allow`만). A 화면·연결과 B 지문 필드(#48)는 각 담당 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.6-mcp-server-launch.md)
-- [ ] C2.7 ids: 암호학적 난수, 비밀값 누락은 전용 예외
+- [x] C2.7 ids(`security/ids.py`): `new_id`·`new_suffix`·`new_token`·`token_matches`, `secrets`만 사용. C 파일 6개의 직접 생성을 옮기고 L2 가짜 모델 인증 비교를 `compare_digest`로. `src`의 `random` import와 C 모듈의 직접 생성을 `test_ids.py`가 막음(Semgrep은 C2.9). 비밀값 누락은 기존 고정 코드(`SCAN_LLM_KEY_MISSING_OR_INVALID`, 대체값 없음). A 모듈 전환은 A 요청 · [기록](archive/c/C2.7-ids.md)
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
 - [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
 - [x] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용(`secrets.store_scanner_key`·`save_scanner_key`(A `KeySaver`)·`load_scanner_key`·`scanner_key_tail`·`delete_scanner_key`·`scanner_key_environ`). A 화면 연결과 #59 뒤 검사기 연결은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.10-scanner-key-store.md)
@@ -79,7 +79,8 @@
 - [ ] C4.16 LLM 경고의 반복 실행 변동 측정(144개 × 여러 회)
 - [x] C4.17 모델 설명(`threat_summary`) 보존: SDK 원문 비복사 원칙의 예외로 이 문장만, 300자·일반 텍스트·로그 미기록(`defang_scanner_text`) · [기록](archive/c/C4.9-scan-report-translation.md)
 - [x] C4.18 등록 때 서버 ID의 `__`·끝 `_` 거부: B `valid_server_id`를 그대로 쓰고 등록 화면은 bridge가 넘기는 같은 검사 결과를 씀. Registry `register`·`observe`가 설정 검증과 별도로 다시 검사 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
-- [x] C4.19 Registry 쓰기 결과를 모를 때 닫기(#46 B 리뷰): 제어 쓰기가 실패하거나 커밋 뒤 취소되면 그 서버의 ACTIVE를 PENDING으로 보고, 다음 제어 연산·`refresh`가 DB 행을 다시 읽어 맞춤. `observe` 취소는 기록 실패와 같이 이번 실행 PENDING. 실제 저장소 재현은 B6.13 뒤 · [기록](archive/c/C4.19-registry-unknown-write.md)
+- [x] C4.19 Registry 쓰기 결과를 모를 때 닫기(#46 B 리뷰): 제어 쓰기가 실패하거나 커밋 뒤 취소되면 그 서버의 ACTIVE를 PENDING으로 보고, 다음 제어 연산·`refresh`가 DB 행을 다시 읽어 맞춤. `observe` 취소는 기록 실패와 같이 이번 실행 PENDING. 실제 writer 재현은 C4.20 · [기록](archive/c/C4.19-registry-unknown-write.md)
+- [x] C4.20 C4.19 실제 writer 재현: B6.13 writer가 COMMIT을 실행한 직후 취소해도 `register`·`activate`·`record_scan`·`request_review`·`save_reviewed_descriptions`는 다시 읽기 전까지 ACTIVE로 보이지 않고 `refresh`가 DB와 맞춤, `observe`는 이번 실행 PENDING·활성화 거부. `block`·시작 전 취소·COMMIT 실패는 #58 B 시험 · [기록](archive/c/C4.20-registry-real-writer.md)
 
 ## C5 · fixture와 계수
 

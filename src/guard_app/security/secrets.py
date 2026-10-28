@@ -17,7 +17,6 @@ import os
 import re
 import sys
 import threading
-import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from importlib.metadata import distribution
@@ -25,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
+
+from guard_app.security.ids import new_suffix
 
 _SDK_IMPORT_LOCK = threading.Lock()
 
@@ -155,7 +156,7 @@ def prepare_tokenizer_cache(
             data = data.replace(b"\r\n", b"\n")
             if hashlib.sha256(data).hexdigest() != expected:
                 raise TokenizerCacheError("SCAN_SDK_TOKENIZER_INVALID")
-        temporary = cache_dir / f"{cache_key}.{uuid.uuid4().hex}.tmp"
+        temporary = cache_dir / f"{cache_key}.{new_suffix()}.tmp"
         try:
             temporary.write_bytes(data)
             os.replace(temporary, target)

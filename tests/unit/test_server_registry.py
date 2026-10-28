@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import sqlite3
+import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from guard_app.adapters.mcp_transport import ToolListing
+from guard_app.domain.contracts import ScanReport
 from guard_app.domain.enums import Label, RegStatus, ToolKind, TrustTier
 from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
@@ -584,6 +587,147 @@ def test_cancel_while_waiting_for_the_lock_marks_nothing(registry, store, monkey
     run(scenario())
     assert run(store.load_registration("docs")).registration.status is RegStatus.ACTIVE
     assert registry.status("docs") is RegStatus.ACTIVE
+
+
+# C4.19 실제 B6.13 writer: COMMIT을 실행한 그 순간 취소한다. 위 시험은 저장 호출을 감싸 커밋 뒤
+# 취소를 흉내 냈고, #58 B 시험(`test_b_registry_writer_integration`)은 실제 writer로 `block`만 봤다.
+
+
+@pytest.fixture
+def commit_barrier(tmp_path: Path, monkeypatch):
+    """무장한 뒤 writer 연결의 첫 COMMIT을 실행한 직후 멈추는 실제 SQLiteStore와 Registry."""
+    armed, committed, release = threading.Event(), threading.Event(), threading.Event()
+    connect = sqlite3.connect
+
+    class CommitBarrier(sqlite3.Connection):
+        def execute(self, statement, parameters=(), /):
+            cursor = super().execute(statement, parameters)
+            if statement == "COMMIT" and armed.is_set():
+                armed.clear()
+                committed.set()
+                release.wait(5)
+            return cursor
+
+    monkeypatch.setattr(
+        sqlite3, "connect", lambda *args, **kwargs: connect(*args, **kwargs, factory=CommitBarrier)
+    )
+    sequence = iter(range(10_000))
+    with SQLiteStore(
+        tmp_path / "barrier.db", audit_id_factory=lambda: f"audit-{next(sequence)}"
+    ) as store:
+        registry = ServerRegistry(store, clock=lambda: NOW)
+        run(registry.load())
+
+        async def cancel_at_commit(operation):
+            armed.set()
+            task = asyncio.create_task(operation)
+            assert await asyncio.to_thread(committed.wait, 5)
+            task.cancel()  # writer는 이미 COMMIT을 실행했고 결과를 돌려주기 전이다
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        try:
+            yield registry, store, cancel_at_commit
+        finally:
+            release.set()
+
+
+def _scan_report(registry: ServerRegistry) -> ScanReport:
+    return ScanReport(
+        server_id="docs",
+        fingerprint_set=tuple(tool.fingerprint for tool in registry.registration("docs").tools),
+        analyzers_required=("llm", "yara"),
+        analyzers_completed=("llm", "yara"),
+        analyzers_skipped=(),
+        analyzers_failed=(),
+        max_severity=None,
+        findings=(),
+        scanned_at_utc=NOW,
+        scanner_version="4.8.6",
+    )
+
+
+@pytest.mark.parametrize(
+    ("setup", "operation", "stored"),
+    [
+        (
+            lambda registry: None,
+            lambda registry: registry.register(settings(), listing()),
+            RegStatus.PENDING,
+        ),
+        (
+            _registered,
+            lambda registry: registry.activate(
+                "docs", expected_row_revision=_revision(registry), reviewed_by="operator"
+            ),
+            RegStatus.ACTIVE,
+        ),
+        (
+            _active,
+            lambda registry: registry.record_scan("scan-1", _scan_report(registry)),
+            RegStatus.ACTIVE,
+        ),
+        (
+            _active,
+            lambda registry: registry.request_review(
+                "docs", expected_row_revision=_revision(registry)
+            ),
+            RegStatus.PENDING,
+        ),
+        (
+            _registered,
+            lambda registry: registry.save_reviewed_descriptions(
+                "docs", {"read": "검토한 설명"}, expected_row_revision=_revision(registry)
+            ),
+            RegStatus.PENDING,
+        ),
+    ],
+    ids=["register", "activate", "record_scan", "request_review", "save_reviewed_descriptions"],
+)
+def test_real_writer_cancel_at_commit_is_closed_until_reread(
+    commit_barrier, setup, operation, stored
+):
+    registry, store, cancel_at_commit = commit_barrier
+    setup(registry)
+    before = registry.entry("docs")
+    run(cancel_at_commit(operation(registry)))
+    saved = run(store.load_registration("docs"))
+    assert saved != before  # 실제로 커밋됐다
+    assert saved.registration.status is stored
+    assert registry.entry("docs") == before  # 결과를 받지 못해 캐시는 그대로
+    assert registry.status("docs") is not RegStatus.ACTIVE
+    assert run(registry.refresh("docs")) == saved
+    assert registry.status("docs") is stored
+
+
+def test_real_writer_cancel_at_observe_commit_keeps_the_server_pending_this_run(commit_barrier):
+    registry, store, cancel_at_commit = commit_barrier
+    _active(registry)
+    registered = registry.registration("docs").tools
+    invalidated = []
+
+    async def invalidate(server_id, tool_name):
+        invalidated.append(tool_name)
+        return 1
+
+    changed = listing(edit={"read": {"description": "x"}})
+    run(cancel_at_commit(registry.observe(settings(), changed, invalidate_tool=invalidate)))
+    assert run(store.load_registration("docs")).registration.status is RegStatus.PENDING
+    # 바뀐 도구를 알려 주는 결과를 못 받아 무효화는 없다. 대신 이번 실행 동안 ACTIVE가 아니다.
+    assert invalidated == []
+    assert registry.status("docs") is RegStatus.PENDING
+    run(registry.refresh("docs"))
+    with pytest.raises(RegistryError) as raised:
+        run(
+            registry.activate(
+                "docs", expected_row_revision=_revision(registry), reviewed_by="operator"
+            )
+        )
+    assert str(raised.value) == "REG_SERVER_UNRECORDED"
+    run(registry.load())  # 다음 시작: DB에 기록된 새 지문과 PENDING에서 다시 확인한다
+    assert registry.registration("docs").tools != registered
+    assert registry.status("docs") is RegStatus.PENDING
 
 
 DOCUMENT = {
