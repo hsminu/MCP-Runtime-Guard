@@ -22,12 +22,13 @@ from guard_app.ui.approvals import (
     ApprovalSort,
     ApprovalSummary,
 )
+from guard_app.ui.call_logs import CallLogPage
 from guard_app.ui.models import LoadState
 from guard_app.ui.runtime import RuntimePanel
 from guard_app.ui.window import GuardWindow
 
 from .test_ui_icons_style import app as app
-from .test_ui_icons_style import closing_widgets, resize_widget
+from .test_ui_icons_style import closing_widgets, resize_widget, show_widget
 
 NOW = datetime(2026, 10, 12, 5, 0, tzinfo=UTC)
 
@@ -38,7 +39,9 @@ def summary(
     status: ApprovalStatus = ApprovalStatus.PENDING,
     created_at: datetime | None = None,
     destination: str = "내부 저장소",
+    ttl: timedelta | None = timedelta(minutes=5),
 ) -> ApprovalSummary:
+    created = created_at or NOW - timedelta(minutes=number)
     return ApprovalSummary(
         approval_id=f"approval-{number:03}",
         task_id=f"task-{number:03}",
@@ -46,8 +49,9 @@ def summary(
         server_id="server-a",
         destination_summary=destination,
         status=status,
-        created_at=created_at or NOW - timedelta(minutes=number),
+        created_at=created,
         resolved_at=NOW if status is not ApprovalStatus.PENDING else None,
+        expires_at=None if ttl is None else created + ttl,
     )
 
 
@@ -449,8 +453,8 @@ def _policy(ttl: int) -> PolicyView:
     )
 
 
-def test_window_uses_the_profile_approval_ttl_for_the_waiting_hint(app: QApplication) -> None:
-    """T18: the reference hint follows the loaded Profile, not the 300 s default."""
+def test_waiting_hint_follows_the_stored_expiry_not_the_profile(app: QApplication) -> None:
+    """T18: the hint reads the row's ``expires_at_utc``; the current Profile is not a guess."""
 
     async def unused() -> BackendBindings:
         raise AssertionError("must not bootstrap")
@@ -461,21 +465,33 @@ def test_window_uses_the_profile_approval_ttl_for_the_waiting_hint(app: QApplica
     shell.set_approval_query_connected(True)
     view = shell.approval_page
     with closing_widgets(bridge, shell):
-        row = summary(1, created_at=NOW - timedelta(minutes=3))
-        view.refresh()
-        assert view.set_page(result(view, (row,), 1), display_now=NOW)
-        assert "승인 유효 시간 지남" not in view.table.item(0, 4).text()  # 180 s < 300 s
-        bridge.policy_changed.emit(_policy(120))
-        view.refresh()
-        assert view.set_page(result(view, (row,), 1), display_now=NOW)
-        assert "승인 유효 시간 지남" in view.table.item(0, 4).text()  # 180 s >= 120 s
-        # No Profile, or an invalid TTL, leaves the last valid value in place.
-        bridge.policy_changed.emit(None)
-        bridge.policy_changed.emit(_policy(0))
-        view.refresh()
-        assert view.set_page(result(view, (row,), 1), display_now=NOW)
-        assert "승인 유효 시간 지남" in view.table.item(0, 4).text()
-        bridge.policy_changed.emit(_policy(600))
-        view.refresh()
-        assert view.set_page(result(view, (row,), 1), display_now=NOW)
-        assert "승인 유효 시간 지남" not in view.table.item(0, 4).text()
+
+        def hint(row: ApprovalSummary) -> bool:
+            view.refresh()
+            assert view.set_page(result(view, (row,), 1), display_now=NOW)
+            return "승인 유효 시간 지남" in view.table.item(0, 4).text()
+
+        created = NOW - timedelta(minutes=3)
+        assert not hint(summary(1, created_at=created))  # expires 2 minutes from now
+        bridge.policy_changed.emit(_policy(120))  # a shorter Profile TTL is ignored
+        assert not hint(summary(1, created_at=created))
+        assert hint(summary(1, created_at=created, ttl=timedelta(seconds=180)))  # now == expiry
+        assert not hint(summary(1, created_at=NOW - timedelta(days=2), ttl=None))
+        naive = replace(summary(1, created_at=created), expires_at=datetime(2026, 1, 1))
+        assert not hint(naive)
+
+
+def test_page_counts_stay_on_one_line_beside_the_pager_buttons(app):
+    """#92 window check: in a wide window the count broke mid-phrase."""
+    calls = CallLogPage()
+    calls.set_source_connected(True)
+    approvals = ApprovalListPage()
+    with closing_widgets(calls, approvals):
+        for page in (calls, approvals):
+            show_widget(app, page, 1056, 760)
+            page.count_label.setText("전체 122건 · 현재 페이지 50건")
+            app.processEvents()
+            label = page.count_label
+            # It takes the free width, not its wrapped hint (85px with real fonts).
+            assert label.width() > label.sizeHint().width()
+            assert label.width() >= label.fontMetrics().horizontalAdvance(label.text())

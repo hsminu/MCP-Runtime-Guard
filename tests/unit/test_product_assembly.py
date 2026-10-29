@@ -698,6 +698,39 @@ async def test_a_blocked_server_whose_settings_are_ahead_of_its_registration_is_
 
 
 @pytest.mark.asyncio
+async def test_a_server_whose_url_is_refused_needs_no_stream_and_offers_nothing(tmp_path) -> None:
+    """#86: startable_servers leaves a URL_* server out of the start; the rest run."""
+    peer = Peer([READ_DEFINITION])
+    registry = Registry(tool_fingerprint(READ_DEFINITION))
+    doc = document()
+    doc["servers"].append(
+        {
+            "id": "remote",
+            "transport": "streamable_http",
+            "url": "http://example.com/mcp",
+            "tier": "general_external",
+            "max_label": "PUBLIC",
+            "tools": [],
+        }
+    )
+    doc["profile"]["servers"].append("remote")
+
+    store = SQLiteStore(tmp_path / "url.db", audit_id_factory=lambda: "unit-audit")
+    try:
+        # inputs() injects a stream for "docs" only.
+        assembled = await assemble_guard(store, inputs(peer, registry, doc))
+        try:
+            assert (assembled.loaded.server_issue("remote") or "").startswith("URL_")
+            assert "remote" not in assembled.transport._workers
+            assert [view.tool_ref for view in assembled.tool_views] == ["docs__read"]
+        finally:
+            await assembled.aclose()
+    finally:
+        store.close()
+    assert peer.calls == []
+
+
+@pytest.mark.asyncio
 async def test_invalid_profile_and_missing_server_stream_fail_closed(tmp_path) -> None:
     peer = Peer([READ_DEFINITION])
     registry = Registry(tool_fingerprint(READ_DEFINITION))

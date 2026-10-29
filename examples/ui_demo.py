@@ -62,6 +62,7 @@ from guard_app.ui.window import GuardWindow
 CONTEXT = "화면 시연 / 가짜 조회 데이터"
 # Queries answer after a short pause so loading states are visible too.
 REPLY_DELAY_MS = 250
+APPROVAL_TTL_SECONDS = 900
 DEVICE_LOGIN_MS = 4000
 
 SERVERS = (
@@ -233,7 +234,8 @@ _POLICY_SERVERS = (
 
 def calls(now: datetime) -> tuple[PublicCallSummary, ...]:
     rows = []
-    for index, (server, tool, kind, tier, decision, reason, approval, status, ago) in enumerate(
+    # The tier column stays in _CALLS for the overview; the log shows none (#86).
+    for index, (server, tool, kind, _tier, decision, reason, approval, status, ago) in enumerate(
         _CALLS, 1
     ):
         rows.append(
@@ -244,7 +246,6 @@ def calls(now: datetime) -> tuple[PublicCallSummary, ...]:
                 server_id=server,
                 tool_name=tool,
                 kind=kind,
-                boundary_tier=tier,
                 initial_decision=decision,
                 reason_code=reason,
                 approval_status=approval,
@@ -258,17 +259,19 @@ def calls(now: datetime) -> tuple[PublicCallSummary, ...]:
 def call_stages(call: PublicCallSummary) -> tuple[PublicCallStage, ...]:
     """Stages a call of this status would have passed; later ones never ran."""
     start = call.occurred_at
+    # B6-05 stages; success or release shows in the status, not in a stage.
     reached = {
         "DENIED": 1,
         "WAITING_APPROVAL": 2,
         "DISPATCHING": 3,
-        "UNKNOWN_OUTCOME": 4,
+        "UNKNOWN_OUTCOME": 3,
         "FAILED": 4,
         "WITHHELD": 6,
-        "SUCCEEDED": 7,
+        "SUCCEEDED": 5,
     }.get(call.current_status or "", 1)
-    codes = ["DECIDED", "WAITING_APPROVAL", "DISPATCHING", "DISPATCHED", "OBSERVED", "COMMITTED"]
-    codes.append("WITHHELD" if call.current_status == "WITHHELD" else "RELEASED")
+    codes = ["DECIDED", "WAITING_APPROVAL", "DISPATCHING", "OBSERVED", "COMMITTED"]
+    if call.current_status == "WITHHELD":
+        codes.append("WITHHELD")
     if call.initial_decision != "ASK":
         codes.remove("WAITING_APPROVAL")
         reached -= 1 if reached > 1 else 0
@@ -297,6 +300,7 @@ def approvals(now: datetime) -> tuple[ApprovalSummary, ...]:
                 resolved_at=None if resolve is None else created + timedelta(minutes=resolve),
                 reason_code=reason,
                 row_revision=1,
+                expires_at=created + timedelta(seconds=APPROVAL_TTL_SECONDS),
             )
         )
     return tuple(rows)
@@ -509,7 +513,7 @@ class DemoData:
         self.policy = PolicyView(
             profile_id="demo-profile",
             policy_version="demo-v1",
-            approval_ttl_seconds=900,
+            approval_ttl_seconds=APPROVAL_TTL_SECONDS,
             taint_mode="sticky",
             allow=(("docs", "read"), ("docs", "send"), ("mail", "list_folders"), ("wiki", "read")),
             deny=(("mail", "send"),),
@@ -551,7 +555,6 @@ class DemoData:
         window.set_server_snapshot(Surface(LoadState.READY, SERVERS, now))
         window.set_call_log_snapshot(Surface(LoadState.READY, self.calls, now))
         window.policy_page.set_view(self.policy)
-        window.approval_page.set_approval_ttl_seconds(self.policy.approval_ttl_seconds)
         window.codex_login_info.set_view(self.account)
         window.set_approval_query_connected(True)
         window.approval_page.refresh()

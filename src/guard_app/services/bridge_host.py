@@ -21,6 +21,7 @@ from guard_app.services.bridge_commands import (
 )
 from guard_app.services.bridge_context import CommandContext
 from guard_app.services.bridge_ingress import BridgeCommand
+from guard_app.services.bridge_queries import QueryLane
 from guard_app.services.bridge_streams import AnswerStreams
 from guard_app.services.bridge_types import (
     BackendBindings,
@@ -29,6 +30,8 @@ from guard_app.services.bridge_types import (
     CommandStage,
     ConversationEvent,
     LifecycleEvent,
+    QueryReply,
+    QueryRequest,
 )
 from guard_app.services.codex_account import AccountView
 from guard_app.services.policy_view import PolicyView
@@ -82,6 +85,9 @@ class LifecycleOutlet:
     recovery: Callable[[RecoveryReport | None], None]
     recovery_page: Callable[[RecoveryItemPage | None], None]
     policy: Callable[[PolicyView | None], None]
+    # B6-05: whether this run answers screen queries (at READY), and each answer.
+    query_source: Callable[[bool], None]
+    query: Callable[[QueryReply], None]
 
 
 class BackendHost:
@@ -138,6 +144,7 @@ class BackendHost:
         )
         self._out = outlet
         self._events = lifecycle
+        self._queries = QueryLane(lifecycle.query, self._consume_task)
 
     @property
     def state(self) -> BridgeState:
@@ -358,7 +365,9 @@ class BackendHost:
             bindings.task_events(self._views.task_event)
         if bindings.answer_partials is not None:
             bindings.answer_partials(self._streams.add)
+        self._queries.open(bindings.queries)
         self._set_state(BridgeState.READY, "READY")
+        self._events.query_source(bindings.queries is not None)
 
     def codex_progress(self, code: str) -> None:
         """Only the fixed startup phase crosses to Qt."""
@@ -369,6 +378,15 @@ class BackendHost:
         """Backend-loop callback; fixed progress values only, no state transition."""
         if isinstance(step, StorePrepareStep) and self.state is BridgeState.STARTING:
             self._events.lifecycle(LifecycleEvent(BridgeState.STARTING, step.value))
+
+    def query(self, kind: str, token: int, request: QueryRequest) -> None:
+        """Qt thread: queue one validated read on the backend loop while READY."""
+        loop = self._loop
+        if loop is not None and self.state is BridgeState.READY:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._queries.submit, kind, token, request)
+                return
+        self._events.query(QueryReply(kind, token, None, failed=True))
 
     def load_recovery_page(self) -> None:
         loop = self._loop
@@ -403,11 +421,12 @@ class BackendHost:
         self.commands.lanes.cancel_operations()
         self._accounts.cancel_waits()
         self.commands.lanes.cancel_workers()
+        # Reads end before the bindings close the Store under them.
+        unfinished = not await self._queries.close(self._shutdown_timeout)
         active = self.commands.lanes.active()
-        unfinished = False
         if active:
             _, pending = await asyncio.wait(active, timeout=self._shutdown_timeout)
-            unfinished = bool(pending)
+            unfinished = unfinished or bool(pending)
         for event in self.commands.ledger.unsettled():
             self.commands.emit_command(
                 BridgeCommand(event.command_id, event.lane, event.action, event.target_id),

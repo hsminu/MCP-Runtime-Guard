@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -43,10 +44,12 @@ async def file_collect(server):
 
 
 def test_picker_preserves_case_and_invalidates_confirmation(tmp_path, monkeypatch):
-    bridge = BackendBridge(lambda: None)
     sent = []
-    monkeypatch.setattr(bridge, "request_registration", lambda req, **kw: sent.append((req, kw)))
-    with registration_form() as form:
+    with registration_form() as form:  # the bridge needs the Qt application first
+        bridge = BackendBridge(lambda: None)
+        monkeypatch.setattr(
+            bridge, "request_registration", lambda req, **kw: sent.append((req, kw))
+        )
         form.attach_registration(bridge)
         form.server_id.setText("docs")
         form.transport.setCurrentIndex(form.transport.findData("local_file"))
@@ -180,6 +183,105 @@ async def test_registration_activation_and_guard_use_registered_root(tmp_path):
             assert assembled.resource_resolver is not None
         finally:
             await assembled.aclose()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="C launcher is Windows only")
+@pytest.mark.asyncio
+async def test_a_real_file_server_process_lists_activates_and_reads_through_guard(
+    tmp_path, monkeypatch
+):
+    """A49 with C's launcher and the real file server process, without Codex: the
+    registered record is listed, activated and read, and the folder rules label it."""
+    from guard_app.adapters.mcp_transport import launcher_streams
+    from guard_app.services.product_assembly import collect_registration_listing
+
+    processes = []
+    launch = launcher_streams.launch_mcp_server
+
+    async def tracked(*args):
+        process = await launch(*args)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(launcher_streams, "launch_mcp_server", tracked)
+    root = tmp_path / "MixedRoot"
+    sub = root / "SecretCase"
+    sub.mkdir(parents=True)
+    (root / "Open.txt").write_text("open words", encoding="utf-8")
+    (sub / "Doc.txt").write_text("secret words", encoding="utf-8")
+
+    async with harness(tmp_path) as h:
+        h.commands.collect = lambda server: collect_registration_listing(server, h.folders)
+        req = request(root, folder_labels=((str(sub), "CONFIDENTIAL"),))
+        preview = await h.commands(req)
+        assert preview.code == "REG_CONFIRM_REQUIRED"
+        assert processes == []  # nothing runs before the human confirms
+        assert (await confirm(h, preview)).code == "REG_REGISTERED"
+        assert len(processes) == 1  # the real server listed its own tools
+        entry = h.registry.entry("docs")
+        assert entry is not None
+        assert {t.tool_name for t in entry.registration.tools} == {t["name"] for t in TOOLS}
+        activation = await h.commands(RegistrationRequest("activation_preview", "docs"))
+        result = await h.commands(
+            RegistrationRequest(
+                "activate",
+                "docs",
+                expected_row_revision=activation.row_revision,
+                allowed=("list_root", "read_file"),
+                denied=("list_folder",),
+            )
+        )
+        assert result.code == "REG_ACTIVATION_RESTART_REQUIRED"
+        doc = read_settings(h.folders).document
+        registry = ServerRegistry(h.store)
+        await registry.load()
+        # Product composition: folders and C's launcher, no injected stream.
+        product = replace(inputs(Peer([]), registry, doc), folders=h.folders, server_streams=None)
+        assembled = await assemble_guard(h.store, product)
+        try:
+            assert len(processes) == 2
+            assert assembled.registry.status("docs") is RegStatus.ACTIVE
+            settings = assembled.settings
+            await h.store.create_task(
+                TaskState(
+                    task_id="task-a49",
+                    epoch=1,
+                    profile_id=settings.profile_id,
+                    policy_version=settings.policy_version,
+                    status=TaskStatus.RUNNING,
+                ),
+                created_at_utc=datetime.now(UTC),
+            )
+            for call_id, tool, arguments, expected, label, text in (
+                ("open", "read_file", {"path": "Open.txt"}, Released, Label.PUBLIC, "open words"),
+                ("list", "list_root", {}, Released, Label.INTERNAL, "SecretCase"),
+                (
+                    "secret",
+                    "read_file",
+                    {"path": "SecretCase/Doc.txt"},
+                    Released,
+                    Label.CONFIDENTIAL,
+                    "secret words",
+                ),
+                ("missing", "read_file", {"path": "SecretCase/Missing.txt"}, Denied, None, None),
+                ("denied", "list_folder", {"path": "SecretCase"}, Denied, None, None),
+            ):
+                outcome = await assembled.guard.submit(
+                    "task-a49",
+                    ProposedCall(
+                        tool_ref=f"docs__{tool}", arguments=arguments, model_call_id=call_id
+                    ),
+                    expected_epoch=1,
+                )
+                assert isinstance(outcome, expected), call_id
+                if isinstance(outcome, Released):
+                    assert text in outcome.result.text, call_id
+                    assert (await h.store.load_task("task-a49")).high_watermark is label
+        finally:
+            await assembled.aclose()
+    for process in processes:
+        assert process.returncode is not None
+        assert await process.close() is True
 
 
 @pytest.mark.parametrize("kind", ["overlap", "duplicate", "missing", "outside", "file", "label"])

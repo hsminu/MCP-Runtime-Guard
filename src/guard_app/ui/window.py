@@ -43,6 +43,7 @@ from .models import (
 from .overview import OverviewPage
 from .policy import PolicyPage
 from .presentation import (
+    LIFECYCLE_MESSAGES,
     PAGES,
     SETTINGS_FILE_LOCATION,
     SETTINGS_FILE_NOT_READ,
@@ -55,6 +56,7 @@ from .scanner_key import KeySaver, KeyTail, ScannerKeyForm
 from .server_add import ServerAddForm
 from .servers import ServerListPage
 from .sessions import SessionWorkspace
+from .store_views import StoreQueryLink
 from .style import apply_style, current_theme, set_theme, system_theme
 from .task_status import TaskStatusCard
 from .widgets import IconMark, KeyboardActionButton, plain_label
@@ -125,6 +127,7 @@ class GuardWindow(QMainWindow):
         self._compact_navigation = False
         self._activity_docked = False
         self._runtime_panel: RuntimePanel | None = None
+        self.store_queries: StoreQueryLink | None = None
         self._runtime_context = ""
         # Follow the platform's light or dark scheme until the user picks one.
         self._theme_pinned = False
@@ -251,14 +254,15 @@ class GuardWindow(QMainWindow):
         self._page_indices["overview"] = self.stack.addWidget(_scroll_page(self.overview))
         self.server_page = ServerListPage()
         self.server_page.scan_snapshot_requested.connect(self.scan_snapshot_requested.emit)
+        self.server_page.restore_requested.connect(self._start_settings_restore)
         self._page_indices["servers"] = self.stack.addWidget(_scroll_page(self.server_page))
         self.log_page = CallLogPage()
         self.log_page.detail_requested.connect(self.call_log_detail_requested.emit)
         self._page_indices["logs"] = self.stack.addWidget(_scroll_page(self.log_page))
         self.approval_page = ApprovalListPage()
         self.approval_page.query_requested.connect(self.approval_query_requested.emit)
-        # No product bridge serves approval listings yet (B6-02); a composition
-        # root that does calls set_approval_query_connected(True).
+        # Unconnected until something answers: an attached bridge whose run has
+        # Store queries (StoreQueryLink, B6-05), or set_approval_query_connected.
         self.approval_page.set_source_connected(False)
         self._page_indices["approvals"] = self.stack.addWidget(_scroll_page(self.approval_page))
         # The add form scrolls itself; the folder rules ride in the same scroll,
@@ -519,13 +523,13 @@ class GuardWindow(QMainWindow):
         bridge = panel.bridge
         self.server_add_form.attach_registration(bridge)
         self.server_page.attach_activation(bridge)
+        self.store_queries = StoreQueryLink(bridge, self.approval_page, self.log_page, self)
         bridge.registration_changed.connect(self._registration_rows)
         bridge.task_changed.connect(self.sessions.set_snapshot)
         bridge.session_created.connect(self.sessions.session_created)
         bridge.session_capability_changed.connect(self.sessions.set_session_blocker)
         bridge.account_changed.connect(self.codex_login_info.set_view)
         bridge.policy_changed.connect(self.policy_page.set_view)
-        bridge.policy_changed.connect(self._policy_changed)
         bridge.settings_changed.connect(self.set_settings_status)
         self.policy_page.allow_change_requested.connect(
             lambda server_id, allowed, denied: self.policy_page.set_change_pending(
@@ -584,6 +588,13 @@ class GuardWindow(QMainWindow):
 
         def lifecycle(event: LifecycleEvent) -> None:
             self.sessions.set_ready(event.state is BridgeState.READY)
+            # Startup progress (Store, L2) also shows on the default screen,
+            # not only in the activity panel.
+            self.sessions.set_startup_notice(
+                LIFECYCLE_MESSAGES.get(event.code, "")
+                if event.state is BridgeState.STARTING
+                else ""
+            )
             if event.state in (BridgeState.FAILED, BridgeState.CLOSING, BridgeState.CLOSED):
                 self.sessions.clear_content()
 
@@ -684,7 +695,7 @@ class GuardWindow(QMainWindow):
         self.overview.set_snapshot(snapshot)
 
     def _registration_rows(self, view: RegistrationView) -> None:
-        if view.code in ("REG_REGISTERED", "REG_PIN_SAVED"):
+        if view.code in ("REG_REGISTERED", "REG_PIN_SAVED", "REG_SETTINGS_RESTORED"):
             self.set_settings_status("SETTINGS_REGISTRATION_SAVED")
         if view.rows is None:
             return
@@ -700,12 +711,18 @@ class GuardWindow(QMainWindow):
                         registry_status=row.status,
                         transport=row.transport,
                         executable_pinned=row.pinned if row.transport == "stdio" else None,
+                        settings_issue=row.settings_issue,
+                        in_settings=row.in_settings,
                     )
                     for row in view.rows
                 ),
             )
         )
         self.server_add_form.set_known_ids({row.server_id for row in view.rows})
+
+    def _start_settings_restore(self, server: ServerSummary) -> None:
+        self.server_add_form.start_restore(server.server_id, server.tier, server.max_label)
+        self.navigate("server_add")
 
     def set_server_snapshot(self, snapshot: Surface[tuple[ServerSummary, ...]]) -> None:
         """Update Registry rows from their own query, never overview rows."""
@@ -732,11 +749,6 @@ class GuardWindow(QMainWindow):
         # Only from the start page, so a page the user already chose stays.
         if code == "SETTINGS_FILE_MISSING" and self._page == "runs":
             self.navigate("settings")
-
-    def _policy_changed(self, view: object) -> None:
-        ttl = getattr(view, "approval_ttl_seconds", None)
-        if type(ttl) is int and ttl > 0:
-            self.approval_page.set_approval_ttl_seconds(ttl)
 
     def set_approval_query_connected(self, connected: bool) -> None:
         """Enable approval listing only when something answers its queries."""

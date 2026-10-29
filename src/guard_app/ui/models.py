@@ -64,6 +64,9 @@ class ServerSummary:
     session_status: str | None = None
     transport: str | None = None
     executable_pinned: bool | None = None
+    settings_issue: str | None = None
+    # False: registered, but the settings file has no record of it (A128·A105).
+    in_settings: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

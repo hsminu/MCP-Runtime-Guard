@@ -1,0 +1,958 @@
+{
+  "captured_at": "2026-10-29T21:55:00.058563+09:00",
+  "scope": "Actual Windows product UI verification. Browser login is pending at this snapshot. T43 marker-result test not run.",
+  "versions": {
+    "codex": "0.162.1",
+    "PySide6": "6.12.0",
+    "mcp": "1.29.0",
+    "pydantic": "2.14.0"
+  },
+  "runs": {
+    "api-key-startup-1.json": {
+      "events": [
+        {
+          "s": 0.805071,
+          "kind": "main_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 2.143576,
+          "kind": "bridge_state",
+          "state": "starting",
+          "code": "STARTING"
+        },
+        {
+          "s": 2.223001,
+          "kind": "l2_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 2.831785,
+          "kind": "process_started",
+          "pid": 32216,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 6.948036,
+          "kind": "process_closed",
+          "pid": 32216,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.036213
+        },
+        {
+          "s": 6.970175,
+          "kind": "l2_end",
+          "seconds": 4.751429,
+          "passed": false,
+          "failures": [
+            "L2_CONFIG_LAYERS_UNEXPECTED",
+            "L2_CONFIG_MISMATCH"
+          ]
+        },
+        {
+          "s": 6.977943,
+          "kind": "bridge_state",
+          "state": "ready",
+          "code": "READY"
+        },
+        {
+          "s": 129.861678,
+          "kind": "process_started",
+          "pid": 11144,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 137.824276,
+          "kind": "account_read",
+          "state": "API_KEY"
+        },
+        {
+          "s": 137.834605,
+          "kind": "account_read",
+          "state": "API_KEY"
+        },
+        {
+          "s": 139.225408,
+          "kind": "account_read",
+          "state": "API_KEY"
+        },
+        {
+          "s": 163.610875,
+          "kind": "bridge_state",
+          "state": "closing",
+          "code": "CLOSING"
+        },
+        {
+          "s": 163.649612,
+          "kind": "process_closed",
+          "pid": 11144,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.036535
+        },
+        {
+          "s": 163.669429,
+          "kind": "bridge_state",
+          "state": "closed",
+          "code": "CLOSED"
+        },
+        {
+          "s": 163.689941,
+          "kind": "main_end",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        }
+      ],
+      "main_return": 0
+    },
+    "api-key-startup-2.json": {
+      "events": [
+        {
+          "s": 1.361844,
+          "kind": "main_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 4.112512,
+          "kind": "bridge_state",
+          "state": "starting",
+          "code": "STARTING"
+        },
+        {
+          "s": 4.217953,
+          "kind": "l2_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 4.905457,
+          "kind": "process_started",
+          "pid": 15296,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 9.305177,
+          "kind": "process_closed",
+          "pid": 15296,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.039215
+        },
+        {
+          "s": 9.319446,
+          "kind": "l2_config_diagnostics",
+          "layers": [
+            {
+              "kind": "sessionFlags",
+              "is_dict": true,
+              "keys": [
+                "model_provider",
+                "model_providers",
+                "sqlite_home"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "user",
+              "is_dict": true,
+              "keys": [
+                "analytics",
+                "check_for_update_on_startup",
+                "cli_auth_credentials_store",
+                "features",
+                "feedback",
+                "history",
+                "include_environment_context",
+                "include_permissions_instructions",
+                "model",
+                "model_catalog_json",
+                "project_doc_max_bytes",
+                "project_root_markers",
+                "skills",
+                "web_search"
+              ],
+              "user_file_matches": false,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "system",
+              "is_dict": true,
+              "keys": [],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            }
+          ],
+          "mismatches": [
+            {
+              "key": "model_catalog_json",
+              "path_matches": false,
+              "resolved_matches": true
+            }
+          ],
+          "mcp_empty": true,
+          "profile_none": true,
+          "instruction_nonempty_keys": []
+        },
+        {
+          "s": 9.320709,
+          "kind": "l2_end",
+          "seconds": 5.109168,
+          "passed": false,
+          "failures": [
+            "L2_CONFIG_LAYERS_UNEXPECTED",
+            "L2_CONFIG_MISMATCH"
+          ]
+        },
+        {
+          "s": 9.326649,
+          "kind": "bridge_state",
+          "state": "ready",
+          "code": "READY"
+        },
+        {
+          "s": 16.301717,
+          "kind": "bridge_state",
+          "state": "closing",
+          "code": "CLOSING"
+        },
+        {
+          "s": 16.329824,
+          "kind": "bridge_state",
+          "state": "closed",
+          "code": "CLOSED"
+        },
+        {
+          "s": 16.546584,
+          "kind": "main_end",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        }
+      ],
+      "main_return": 0
+    },
+    "canonical-api-key-1.json": {
+      "events": [
+        {
+          "s": 1.268233,
+          "kind": "main_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 2.874765,
+          "kind": "bridge_state",
+          "state": "starting",
+          "code": "STARTING"
+        },
+        {
+          "s": 2.948663,
+          "kind": "l2_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 3.641592,
+          "kind": "process_started",
+          "pid": 13588,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 8.344805,
+          "kind": "process_closed",
+          "pid": 13588,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.054024
+        },
+        {
+          "s": 8.354573,
+          "kind": "l2_config_diagnostics",
+          "layers": [
+            {
+              "kind": "sessionFlags",
+              "is_dict": true,
+              "keys": [
+                "model_provider",
+                "model_providers",
+                "sqlite_home"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "user",
+              "is_dict": true,
+              "keys": [
+                "analytics",
+                "check_for_update_on_startup",
+                "cli_auth_credentials_store",
+                "features",
+                "feedback",
+                "history",
+                "include_environment_context",
+                "include_permissions_instructions",
+                "model",
+                "model_catalog_json",
+                "project_doc_max_bytes",
+                "project_root_markers",
+                "skills",
+                "web_search"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "system",
+              "is_dict": true,
+              "keys": [],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            }
+          ],
+          "mismatches": [],
+          "mcp_empty": true,
+          "profile_none": true,
+          "instruction_nonempty_keys": []
+        },
+        {
+          "s": 8.356024,
+          "kind": "l2_end",
+          "seconds": 5.409826,
+          "passed": true,
+          "failures": []
+        },
+        {
+          "s": 8.362586,
+          "kind": "bridge_state",
+          "state": "ready",
+          "code": "READY"
+        },
+        {
+          "s": 42.226669,
+          "kind": "process_started",
+          "pid": 27900,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 153.515936,
+          "kind": "process_closed",
+          "pid": 27900,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.06022
+        },
+        {
+          "s": 171.690414,
+          "kind": "process_started",
+          "pid": 30776,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 175.535548,
+          "kind": "account_read",
+          "state": "API_KEY"
+        },
+        {
+          "s": 197.657509,
+          "kind": "logout_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [
+              "account-57f3da55645b7126ef9f8c8f0aa3935d"
+            ],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 204.870749,
+          "kind": "logout_rpc_succeeded"
+        },
+        {
+          "s": 206.62949,
+          "kind": "process_closed",
+          "pid": 30776,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 1.757414
+        },
+        {
+          "s": 206.639138,
+          "kind": "credential_cleanup_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 206.648049,
+          "kind": "credential_cleanup_end",
+          "credentials": {
+            "sealed_names": [],
+            "primary_present": false,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 239.5227,
+          "kind": "process_started",
+          "pid": 30656,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 242.623999,
+          "kind": "account_read",
+          "state": "API_KEY"
+        },
+        {
+          "s": 266.334536,
+          "kind": "process_started",
+          "pid": 1168,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 303.448759,
+          "kind": "process_closed",
+          "pid": 1168,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.058799
+        },
+        {
+          "s": 380.331266,
+          "kind": "bridge_state",
+          "state": "closing",
+          "code": "CLOSING"
+        },
+        {
+          "s": 380.46481,
+          "kind": "process_closed",
+          "pid": 30656,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.130854
+        },
+        {
+          "s": 380.494517,
+          "kind": "bridge_state",
+          "state": "closed",
+          "code": "CLOSED"
+        },
+        {
+          "s": 380.546439,
+          "kind": "main_end",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        }
+      ],
+      "main_return": 0,
+      "canonical_root_injected": true
+    },
+    "canonical-invalid-key-2.json": {
+      "events": [
+        {
+          "s": 1.418299,
+          "kind": "main_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 3.277896,
+          "kind": "bridge_state",
+          "state": "starting",
+          "code": "STARTING"
+        },
+        {
+          "s": 3.342854,
+          "kind": "l2_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 3.938792,
+          "kind": "process_started",
+          "pid": 34344,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 8.650268,
+          "kind": "process_closed",
+          "pid": 34344,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.073559
+        },
+        {
+          "s": 8.661453,
+          "kind": "l2_config_diagnostics",
+          "layers": [
+            {
+              "kind": "sessionFlags",
+              "is_dict": true,
+              "keys": [
+                "model_provider",
+                "model_providers",
+                "sqlite_home"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "user",
+              "is_dict": true,
+              "keys": [
+                "analytics",
+                "check_for_update_on_startup",
+                "cli_auth_credentials_store",
+                "features",
+                "feedback",
+                "history",
+                "include_environment_context",
+                "include_permissions_instructions",
+                "model",
+                "model_catalog_json",
+                "project_doc_max_bytes",
+                "project_root_markers",
+                "skills",
+                "web_search"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "system",
+              "is_dict": true,
+              "keys": [],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            }
+          ],
+          "mismatches": [],
+          "mcp_empty": true,
+          "profile_none": true,
+          "instruction_nonempty_keys": []
+        },
+        {
+          "s": 8.663271,
+          "kind": "l2_end",
+          "seconds": 5.325672,
+          "passed": true,
+          "failures": []
+        },
+        {
+          "s": 8.669714,
+          "kind": "bridge_state",
+          "state": "ready",
+          "code": "READY"
+        },
+        {
+          "s": 106.767755,
+          "kind": "process_started",
+          "pid": 6372,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 144.281376,
+          "kind": "turn_completion",
+          "status": "failed",
+          "info_type": "dict",
+          "info": null,
+          "info_shape": {
+            "httpConnectionFailed": {
+              "httpStatusCode": 401
+            }
+          }
+        },
+        {
+          "s": 144.334327,
+          "kind": "process_closed",
+          "pid": 6372,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.051353
+        },
+        {
+          "s": 256.556483,
+          "kind": "bridge_state",
+          "state": "closing",
+          "code": "CLOSING"
+        },
+        {
+          "s": 256.590233,
+          "kind": "bridge_state",
+          "state": "closed",
+          "code": "CLOSED"
+        },
+        {
+          "s": 256.714374,
+          "kind": "main_end",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        }
+      ],
+      "main_return": 0,
+      "canonical_root_injected": true
+    },
+    "canonical-invalid-key-fixed.json": {
+      "events": [
+        {
+          "s": 1.533516,
+          "kind": "main_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 3.671667,
+          "kind": "bridge_state",
+          "state": "starting",
+          "code": "STARTING"
+        },
+        {
+          "s": 3.780038,
+          "kind": "l2_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 4.494429,
+          "kind": "process_started",
+          "pid": 25232,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 9.452982,
+          "kind": "process_closed",
+          "pid": 25232,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.043157
+        },
+        {
+          "s": 9.463847,
+          "kind": "l2_config_diagnostics",
+          "layers": [
+            {
+              "kind": "sessionFlags",
+              "is_dict": true,
+              "keys": [
+                "model_provider",
+                "model_providers",
+                "sqlite_home"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "user",
+              "is_dict": true,
+              "keys": [
+                "analytics",
+                "check_for_update_on_startup",
+                "cli_auth_credentials_store",
+                "features",
+                "feedback",
+                "history",
+                "include_environment_context",
+                "include_permissions_instructions",
+                "model",
+                "model_catalog_json",
+                "project_doc_max_bytes",
+                "project_root_markers",
+                "skills",
+                "web_search"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "system",
+              "is_dict": true,
+              "keys": [],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            }
+          ],
+          "mismatches": [],
+          "mcp_empty": true,
+          "profile_none": true,
+          "instruction_nonempty_keys": []
+        },
+        {
+          "s": 9.465485,
+          "kind": "l2_end",
+          "seconds": 5.689271,
+          "passed": true,
+          "failures": []
+        },
+        {
+          "s": 9.495973,
+          "kind": "bridge_state",
+          "state": "ready",
+          "code": "READY"
+        },
+        {
+          "s": 45.89652,
+          "kind": "process_started",
+          "pid": 35252,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 82.704749,
+          "kind": "turn_completion",
+          "status": "failed",
+          "info_type": "dict",
+          "info": null,
+          "info_shape": {
+            "httpConnectionFailed": {
+              "httpStatusCode": 401
+            }
+          }
+        },
+        {
+          "s": 82.848942,
+          "kind": "process_closed",
+          "pid": 35252,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.141249
+        },
+        {
+          "s": 528.209191,
+          "kind": "process_started",
+          "pid": 26764,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 530.793731,
+          "kind": "account_read",
+          "state": "API_KEY"
+        },
+        {
+          "s": 543.868785,
+          "kind": "logout_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [
+              "account-b3593008645ed75a56e848d51f920702"
+            ],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 548.890576,
+          "kind": "logout_rpc_succeeded"
+        },
+        {
+          "s": 550.144291,
+          "kind": "process_closed",
+          "pid": 26764,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 1.252997
+        },
+        {
+          "s": 550.151341,
+          "kind": "credential_cleanup_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 550.156039,
+          "kind": "credential_cleanup_end",
+          "credentials": {
+            "sealed_names": [],
+            "primary_present": false,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 581.904707,
+          "kind": "process_started",
+          "pid": 23900,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 582.08306,
+          "kind": "account_read",
+          "state": "SIGNED_OUT"
+        }
+      ],
+      "main_return": null,
+      "canonical_root_injected": true
+    }
+  },
+  "guard_log_audit": {
+    "scope": "product rotated guard.log only",
+    "files_checked": 1,
+    "scanner_key_available": true,
+    "scanner_key_matches": 0,
+    "invalid_test_key_matches": 0
+  },
+  "receiver_counts": {
+    "receiver_calls": 0,
+    "receiver_effect": 0
+  },
+  "ui_observations": {
+    "scanner_tail_after_restart_matches_saved": true,
+    "valid_api_first_request_answer": "OK",
+    "invalid_api_before_fix": "CODEX_SESSION_FAILED generic notice",
+    "invalid_api_after_fix": "A149 authentication failure and relogin notice; HALTED",
+    "registration_status": "PENDING",
+    "exe_pin_size": 262144,
+    "exe_pin_sha256": "00971a1ef67279e9234086dcffa881322478f80d40366bd7d2d16f56a9f08b07",
+    "exe_pin_matches_saved_settings": true
+  },
+  "tests": {
+    "core_session_runner_settings_architecture": {
+      "passed": 56,
+      "subtests": 10,
+      "seconds": 7.92
+    },
+    "ui_sessions": {
+      "passed": 42,
+      "seconds": 36.81
+    },
+    "ruff_check": true,
+    "ruff_format": true,
+    "mypy_sources": 118,
+    "diff_check": true
+  }
+}

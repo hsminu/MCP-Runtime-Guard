@@ -13,8 +13,14 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QBoxLayout, QDialog
 
 from guard_app.domain.enums import ToolKind
+from guard_app.domain.reasons import Reason
+from guard_app.ui.approval_presentation import QUERY_TEXT_INVALID, QUERY_UNKNOWN
 from guard_app.ui.call_logs import (
+    CALL_PAGE_SIZE,
+    SOURCE_NOT_CONNECTED,
     CallLogPage,
+    CallLogQuery,
+    CallLogResult,
     DetailRequest,
     PublicCallDetail,
     PublicCallStage,
@@ -22,6 +28,7 @@ from guard_app.ui.call_logs import (
     public_calls_csv,
 )
 from guard_app.ui.models import LoadState, Surface
+from guard_app.ui.presentation import REASONS
 
 from .test_bridge import app as app
 
@@ -73,7 +80,6 @@ def test_row_click_opens_large_plain_detail_and_ignores_late_response(app) -> No
         server_id="server-1",
         tool_name='<img src="https://example.invalid/leak">',
         kind=ToolKind.SEND.value,
-        boundary_tier="general_external",
         initial_decision="ASK",
         reason_code="POST_DISPATCH_ERROR",
         approval_status="APPROVED",
@@ -105,14 +111,14 @@ def test_row_click_opens_large_plain_detail_and_ignores_late_response(app) -> No
         row,
         PublicCallStage("DECIDED", "OCCURRED", row.occurred_at),
         PublicCallStage("DISPATCHING", "OCCURRED"),
-        PublicCallStage("RELEASED", "NOT_RUN"),
+        PublicCallStage("COMMITTED", "NOT_RUN"),
     )
     shown = dialog.body.toPlainText()
     assert '<img src="https://example.invalid/leak">' in shown
     assert "2026년 10월 12일 01:30:00 KST" in shown
     assert "결과 불명 · 수신측 확인 필요" in shown
     assert "승인됨 · 실행 결과와 별개" in shown
-    assert "결과 공개: 미실행" in shown
+    assert "결과 기록 · 성공 여부는 현재 실행 상태로 확인: 미실행" in shown
     assert "전송 예약: 미제공" in shown
     assert "전체 인자" in shown and "조회 계약 미제공" in shown
     dialog.close()
@@ -260,7 +266,6 @@ def test_csv_uses_only_public_fields_and_neutralizes_formula_prefixes(app) -> No
         server_id="\t+server",
         tool_name="\ufeff  =tool,quoted",
         kind=ToolKind.SEND.value,
-        boundary_tier="general_external",
         initial_decision="ASK",
         reason_code="=raw-reason-must-not-echo",
         approval_status="APPROVED",
@@ -278,9 +283,9 @@ def test_csv_uses_only_public_fields_and_neutralizes_formula_prefixes(app) -> No
     assert parsed[1][3] == "'\r\n@task"
     assert parsed[1][4] == "'\t+server"
     assert parsed[1][5] == "'\ufeff  =tool,quoted"
-    assert parsed[1][8] == "승인 필요"
-    assert parsed[1][10] == "승인됨 · 실행 결과와 별개"
-    assert parsed[1][11] == "결과 불명 · 수신측 확인 필요"
+    assert parsed[1][7] == "승인 필요"
+    assert parsed[1][9] == "승인됨 · 실행 결과와 별개"
+    assert parsed[1][10] == "결과 불명 · 수신측 확인 필요"
     assert "=raw-reason-must-not-echo" not in exported
     assert "do-not-export" not in exported
     naive = PublicCallSummary("naive", occurred_at=datetime(2026, 10, 12))
@@ -387,3 +392,75 @@ def test_narrow_keyboard_selection_detail_and_csv_remain_reachable(app) -> None:
         assert "server-a" in QApplication.clipboard().text()
     finally:
         page.close()
+
+
+def test_store_pages_follow_the_current_query_and_refuse_text_b_would_refuse(app) -> None:
+    """B6-05: with a query source the page asks B for each page and never filters locally."""
+    page = CallLogPage()
+    queries: list[CallLogQuery] = []
+    page.query_requested.connect(queries.append)
+    try:
+        page.refresh()
+        assert queries == []  # no source, no query
+        page.set_source_connected(True)
+        assert page.search.isEnabled() and not page.pager.isHidden()
+        page.refresh()
+        first = queries[-1]
+        assert (first.search, first.page, first.page_size) == ("", 1, CALL_PAGE_SIZE)
+        rows = tuple(PublicCallSummary(f"request-{n}") for n in range(CALL_PAGE_SIZE))
+        assert page.set_page(CallLogResult(first, rows, 120, None))
+        assert page.count_label.text() == "전체 120건 · 현재 페이지 50건"
+        assert page.page_label.text() == "1 / 3"
+        assert page.next_button.isEnabled() and not page.previous_button.isEnabled()
+        page.next_page()
+        second = queries[-1]
+        assert second.page == 2 and second.token != first.token
+        assert not page.set_page(CallLogResult(first, rows, 120, None))  # an older intent
+        # The total shrank under page 2: the last page is asked for instead.
+        assert not page.set_page(CallLogResult(second, (), 30, None))
+        assert queries[-1].page == 1
+
+        page.search.setText("request-1")  # shown as sent; B already searched the page
+        page.search.editingFinished.emit()
+        searched = queries[-1]
+        assert searched.search == "request-1"
+        assert page.set_page(CallLogResult(searched, rows[:2], 2, None))
+        assert page.table.rowCount() == 2
+        assert page.set_error(searched) is True
+        assert page.state_message.message.text() == QUERY_UNKNOWN
+        assert page.count_label.text() == "총건수 미제공 · 현재 페이지 0건"
+
+        sent = len(queries)
+        page.search.setText("요청 1")
+        page.search.editingFinished.emit()
+        assert len(queries) == sent
+        assert page.current_query is None
+        assert page.state_message.message.text() == QUERY_TEXT_INVALID
+        assert page.search.isEnabled()  # so the text can be corrected
+
+        page.set_source_connected(False)
+        assert page.pager.isHidden() and page.current_query is None
+        assert page.state_message.message.text() == SOURCE_NOT_CONNECTED
+    finally:
+        page.close()
+
+
+# Not on request or approval rows: OK is no reason, and the Codex session
+# reasons only choose the model's text (core.model_messages).
+_NOT_ON_ROWS = {
+    Reason.OK,
+    Reason.SESSION_L3_VIOLATION,
+    Reason.SESSION_WATCHDOG_EXCEEDED,
+    Reason.SESSION_AUTH_FAILED,
+    Reason.SESSION_AUTH_REFRESH_CONFLICT,
+    Reason.SESSION_USAGE_LIMIT,
+    Reason.SESSION_PROCESS_FAILED,
+    Reason.SESSION_PROTOCOL_FAILED,
+}
+
+
+def test_every_reason_a_row_can_carry_has_its_own_text() -> None:
+    """#89 added GUARD_CLOSED with no text, so the log showed a normal close as 미확인."""
+    assert set(REASONS) == {reason.value for reason in set(Reason) - _NOT_ON_ROWS}
+    row = PublicCallSummary("call-1", reason_code="GUARD_CLOSED", reason_codes=("GUARD_CLOSED",))
+    assert "Guard 정상 종료로 실행하지 않음" in public_calls_csv((row,))

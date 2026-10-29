@@ -62,6 +62,15 @@ _NOTICES = {
 }
 # Logout stays available after these, so the cleanup can be asked again.
 _RETRY_LOGOUT = frozenset({"LOGOUT_CLEANUP_FAILED"})
+# FAILED notices that carry their own next step replace the generic FAILED line.
+_OWN_NEXT_STEP = frozenset(
+    {
+        "BROWSER_OPEN_FAILED",
+        "LOGIN_REQUEST_UNCONFIRMED",
+        "LOGIN_CANCEL_UNCONFIRMED",
+        "LOGOUT_REQUEST_UNCONFIRMED",
+    }
+)
 # An accepted account command whose result is unknown; login starts use
 # LOGIN_REQUEST_UNCONFIRMED. The state must be read again either way.
 _UNCONFIRMED = {
@@ -173,7 +182,11 @@ class CodexLoginInfo(QWidget):
         elif view.state != "API_KEY":
             self._sent_suffix = ""
         notice = _NOTICES.get(view.notice) if view.notice is not None else None
-        if notice is not None:
+        if notice is not None and view.state == "FAILED" and view.notice in _OWN_NEXT_STEP:
+            # The notice already says what happened and what to do; the generic
+            # "try again later" line would contradict it.
+            text = notice
+        elif notice is not None:
             text = f"{text}\n{notice}"
         self.status.setText(text)
         pending = view.state in ("PENDING_DEVICE", "PENDING_BROWSER")

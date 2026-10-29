@@ -58,7 +58,8 @@ for line in sys.stdin:
 
 
 @pytest.mark.parametrize(
-    "mode", ["normal", "changed", "crash", "oversize", "unpinned", "mismatch", "mixed", "badurl"]
+    "mode",
+    ["normal", "changed", "crash", "oversize", "unpinned", "mismatch", "mixed", "badurl", "exits"],
 )
 def test_real_launcher_guard_listing_call_and_exit(tmp_path, monkeypatch, mode):
     async def run():
@@ -95,7 +96,8 @@ def test_real_launcher_guard_listing_call_and_exit(tmp_path, monkeypatch, mode):
                 doc["servers"].append(bad)
                 doc["profile"]["servers"].append("bad")
             elif mode == "badurl":
-                # A hand-edited URL that C2.5 refuses blocks only that server (#83 C review 3.2).
+                # A hand-edited URL that C2.5 refuses blocks only that server (#83 C review 3.2)
+                # and is not started at all (#86 startable_servers).
                 remote = {
                     "id": "remote",
                     "transport": "streamable_http",
@@ -106,6 +108,12 @@ def test_real_launcher_guard_listing_call_and_exit(tmp_path, monkeypatch, mode):
                 }
                 doc["servers"].append(remote)
                 doc["profile"]["servers"].append("remote")
+            elif mode == "exits":
+                # A158: a stdio server that exits during initialize is left out of
+                # this run on its own once C confirms its exit; the other one starts.
+                gone = {**doc["servers"][0], "id": "gone", "args": ["-u", "-c", "pass"]}
+                doc["servers"].append(gone)
+                doc["profile"]["servers"].append("gone")
             observed = []
             observe = registry.observe
 
@@ -169,11 +177,17 @@ def test_real_launcher_guard_listing_call_and_exit(tmp_path, monkeypatch, mode):
                 if mode == "mixed":
                     assert assembled.registry.status("bad") is not RegStatus.ACTIVE
                 if mode == "badurl":
+                    assert (assembled.loaded.server_issue("remote") or "").startswith("URL_")
+                    assert "remote" not in assembled.transport._workers
                     assert assembled.transport.tool_listing("remote") is None
+                if mode == "exits":
+                    assert assembled.transport.tool_listing("gone") is None
+                    assert assembled.registry.status("gone") is not RegStatus.ACTIVE
         finally:
             if assembled is not None:
                 await assembled.aclose()
-            assert len(processes) == (0 if mode in {"unpinned", "mismatch"} else 1)
+            started = {"unpinned": 0, "mismatch": 0, "exits": 2}
+            assert len(processes) == started.get(mode, 1)
             for process in processes:
                 assert process.returncode is not None
                 assert await process.close() is True
@@ -279,6 +293,108 @@ def test_unconfirmed_startup_cleanup_is_not_a_server_local_refusal(tmp_path, mon
             assert failed.value.exception_type == "SessionCloseFailed"
 
     asyncio.run(asyncio.wait_for(run(), 5))
+
+
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_a_server_ending_in_initialize_is_left_out_only_when_c_confirms_its_exit(
+    tmp_path, monkeypatch, confirmed
+):
+    """A158/I6: the pipe ends during initialize; C's close alone decides the teardown."""
+    from guard_app.adapters.mcp_transport import McpTransport
+    from guard_app.domain.errors import DispatchError
+
+    async def run():
+        class Process:
+            async def read_bytes(self, _size):
+                return b""
+
+            async def write_bytes(self, _frame):
+                pass
+
+            async def drain(self):
+                pass
+
+            async def close(self):
+                return confirmed
+
+        async def launch(*_args):
+            return Process()
+
+        monkeypatch.setattr(launcher_streams, "launch_mcp_server", launch)
+        factory = launcher_streams.launcher_stdio_stream_factory(tmp_path, None, (), (), None)
+        transport = McpTransport(
+            {"gone": factory}, tool_list_limits=ToolListLimits(), isolate_start_failures=True
+        )
+        if confirmed:
+            await transport.start()
+            assert transport.tool_listing("gone") is None
+            await transport.close()
+            return
+        for operation in (transport.start, transport.close):
+            with pytest.raises(DispatchError) as failed:
+                await operation()
+            assert failed.value.exception_type == "SessionCloseFailed"
+
+    asyncio.run(asyncio.wait_for(run(), 5))
+
+
+# A158: one exits before answering initialize; one answers it with an error and waits.
+EXITS = "pass"
+REFUSES = """import json, sys
+request = json.loads(sys.stdin.readline())
+error = {"code": -32603, "message": "unit refusal"}
+print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "error": error}), flush=True)
+sys.stdin.readline()
+"""
+
+
+@pytest.mark.parametrize("script", [EXITS, REFUSES], ids=["exits", "refuses"])
+def test_registration_listing_refuses_a_real_server_that_fails_initialize(
+    tmp_path, monkeypatch, script
+):
+    """A158 with the real launcher: a confirmed start failure, so registration refuses
+    it before any write (REG_SERVER_UNREACHABLE) instead of leaving it unknown."""
+    from guard_app.domain.errors import DispatchError
+    from guard_app.services import bridge_registration
+    from guard_app.services.catalog import ServerSettings
+    from guard_app.services.product_assembly import collect_registration_listing
+
+    async def run():
+        processes = []
+        launch = launcher_streams.launch_mcp_server
+
+        async def tracked(*args):
+            process = await launch(*args)
+            processes.append(process)
+            return process
+
+        monkeypatch.setattr(launcher_streams, "launch_mcp_server", tracked)
+        folders = prepare_app_folders(tmp_path / "app")
+        try:
+            command = str(Path(sys.base_prefix) / "python.exe")
+            pin = await pin_executable(command)
+            data = {
+                "id": "gone",
+                "transport": "stdio",
+                "command": command,
+                "args": ["-u", "-c", script],
+                "command_size": pin.size,
+                "command_sha256": pin.sha256,
+                "tier": "internal",
+                "max_label": "PUBLIC",
+                "tools": [],
+            }
+            server = ServerSettings.model_validate_json(json.dumps(data), strict=True)
+            with pytest.raises(DispatchError) as raised:
+                await collect_registration_listing(server, folders)
+            assert raised.value.exception_type in bridge_registration._SERVER_START_FAILURES
+            assert len(processes) == 1
+            assert processes[0].returncode is not None
+            assert await processes[0].close() is True
+        finally:
+            folders.close()
+
+    asyncio.run(asyncio.wait_for(run(), 25))
 
 
 @pytest.mark.asyncio
