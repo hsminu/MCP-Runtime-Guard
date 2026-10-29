@@ -236,6 +236,7 @@
 - [x] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 · [기록](archive/a/A174-l2-failure-codes-from-c.md)
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
+- [x] A173 #91 도구 설정 저장을 apply_settings로 전환·불일치 재저장 복구 · [기록](archive/a/A173-apply-settings-switch.md)
 
 ## 통합·패키징
 

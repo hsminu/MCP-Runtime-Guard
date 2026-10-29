@@ -25,7 +25,7 @@ from guard_app.services.product_settings import (
     SaveOutcomeUnknownError,
     SettingsFileChangedError,
 )
-from guard_app.services.registry import ServerRegistry
+from guard_app.services.registry import RegistryError, ServerRegistry
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 from guard_app.services.session_destinations import destination_document
 from guard_app.services.session_tool_settings import tool_settings_document
@@ -382,21 +382,25 @@ class TaskPolicy:
                 )
             except CatalogConfigError:
                 raise SessionRuntimeError("REG_TOOLS_INVALID") from None
+            # prepare_policy_change loaded these servers from change.document.
+            server = next((s for s in change.loaded_profile.servers if s.id == server_id), None)
+            if server is None:
+                raise SessionRuntimeError("REG_TOOLS_INVALID")
             completed = False
+            rejected = False
             try:
-                entry = registry.entry(server_id)
-                # The stored row, not status(): an unrecorded ACTIVE server reads
-                # as PENDING this run but keeps ACTIVE authority in the Store.
-                if entry is not None and entry.registration.status is RegStatus.ACTIVE:
-                    reviewed = False
-                    try:
-                        await registry.request_review(
-                            server_id, expected_row_revision=expected_row_revision
-                        )
-                        reviewed = True
-                    finally:
-                        if not reviewed:
-                            review_unknown()
+                try:
+                    await registry.apply_settings(
+                        server,
+                        expected_row_revision=expected_row_revision,
+                        invalidate_tool=self._assembled.guard.invalidate_tool
+                        if self._assembled
+                        else None,
+                    )
+                except RegistryError:
+                    # C validation refuses before writing; do not require restart.
+                    rejected = True
+                    raise SessionRuntimeError("REG_TOOLS_INVALID") from None
                 if self._saver is None:
                     raise SessionRuntimeError("REG_SETTINGS_UNAVAILABLE")
                 try:
@@ -424,12 +428,16 @@ class TaskPolicy:
                         await stop_sessions(running)
                 completed = True
             finally:
-                # Also covers cancellation without swallowing it (A130).
-                self._admission.require_restart(
-                    "REG_TOOLS_RESTART_REQUIRED" if completed else "REG_TOOLS_UNKNOWN"
-                )
-                if self._assembled is not None:
-                    await self._assembled.guard.aclose()
+                # Unknown writes/cancellation also block registration (A173, I6).
+                # Cancellation propagates after closing the Guard.
+                if not rejected:
+                    if not completed:
+                        review_unknown()
+                    self._admission.require_restart(
+                        "REG_TOOLS_RESTART_REQUIRED" if completed else "REG_TOOLS_UNKNOWN"
+                    )
+                    if self._assembled is not None:
+                        await self._assembled.guard.aclose()
 
     def registration_document(self) -> Mapping[str, object]:
         if isinstance(self._document, FrozenJsonObject):
