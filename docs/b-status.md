@@ -15,9 +15,9 @@
 ## B1 · 공통 모델과 계약
 
 - [x] B1.1 `ProposedCall`·`ResolvedRequest` 분리, frozen·strict·extra forbid · [기록](archive/b1-contract-draft.md)
-- [x] B1.2 모델·도구 출력에 ID·등급·경계·승인 결정권을 주지 않음. ID·epoch·call_seq는 Guard 관리
-- [x] B1.3 Label·Decision·TrustTier·ToolKind·상태 enum과 reason_code 초안
-- [x] B1.4 Guard 결과 타입과 Transport·AccessChecker·Scanner·Store·ModelClient 계약 초안
+- [x] B1.2 모델·도구 출력에 ID·등급·경계·승인 결정권을 주지 않음. ID·epoch·call_seq는 Guard 관리 · [근거](archive/b1-contract-draft.md) · [근거](archive/b3-catalog.md) · [근거](archive/b-handoff.md)
+- [x] B1.3 Label·Decision·TrustTier·ToolKind·상태 enum과 reason_code 초안 · [근거](archive/b1-contract-draft.md)
+- [x] B1.4 Guard 결과 타입과 Transport·AccessChecker·Scanner·Store·ModelClient 계약 초안 · [근거](archive/b1-contract-draft.md)
 - [x] B1.5 명령·이벤트 payload·원시 결과 격리: A 로컬 frozen bridge DTO를 v1으로 확정([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · C 계수 지점을 worker `_execute` 진입으로 정렬 완료([#108](https://github.com/hsminu/MCP-Runtime-Guard/pull/108))
 - [x] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 대조 · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B1.7 ModelClient 공통 포트 제거·Protocol의 examples 이동 `9dae11b` · [#106 A·C 동의](https://github.com/hsminu/MCP-Runtime-Guard/issues/106) · [기록](archive/b/B1.7-B1.9-code-s.md)
@@ -27,11 +27,11 @@
 ## B2 · 순수 정책과 등급 누적
 
 - [x] B2.1 모든 경계에서 max_label 우선 검사·기본 행렬, 외부 max_label은 INTERNAL 이하만 · [기록](archive/b2-policy-and-taint.md)
-- [x] B2.2 READ에 서버 경계, SEND에 목적지 경계도 적용
-- [x] B2.3 서버·목적지·접근 규칙 중 가장 엄격한 결과 합성, 접근 규칙 거절·오류는 DENY
-- [x] B2.4 등록·지문·Task 상태·미분류·정책 버전·목적지 전제조건을 먼저 검사
-- [x] B2.5 `accumulate` 기본, last_read·none은 비교 모드
-- [x] B2.6 high-watermark 단조성·Unclassified 해제 금지, 보안 의미 변화에만 security_version 증가
+- [x] B2.2 READ에 서버 경계, SEND에 목적지 경계도 적용 · [근거](archive/b2-policy-and-taint.md)
+- [x] B2.3 서버·목적지·접근 규칙 중 가장 엄격한 결과 합성, 접근 규칙 거절·오류는 DENY · [근거](archive/b2-policy-and-taint.md) · [근거](archive/b/B2.9-B2.11-agt-removal.md)
+- [x] B2.4 등록·지문·Task 상태·미분류·정책 버전·목적지 전제조건을 먼저 검사 · [근거](archive/b2-policy-and-taint.md)
+- [x] B2.5 `accumulate` 기본, last_read·none은 비교 모드 · [근거](archive/b2-policy-and-taint.md)
+- [x] B2.6 high-watermark 단조성·Unclassified 해제 금지, 보안 의미 변화에만 security_version 증가 · [근거](archive/b2-policy-and-taint.md)
 - [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증 · 순수 함수 속성 검사의 시간 제한 해제 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 - [x] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계) · [기록](archive/b/B2.8-access-rules.md)
 - [x] B2.9 AccessChecker 동기 포트·Guard 대기 장치 제거(ACCESS-01 결정 이행) · #47 병합 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
@@ -41,12 +41,12 @@
 ## B3 · Catalog와 요청 해석
 
 - [x] B3.1 `server_id__tool_name` 네임스페이스·고정 JSON Schema 검증, ToolKind는 annotation을 신뢰하지 않음 · [기록](archive/b3-catalog.md)
-- [x] B3.2 미등록 서버·도구·목적지·OTHER는 DENY
+- [x] B3.2 미등록 서버·도구·목적지·OTHER는 DENY · [근거](archive/b3-catalog.md)
 - [x] B3.3 자원형 READ의 expected_resource_id 계산·대조 B 구현 완료. C2.3(#63) `file_resource_resolver`가 Catalog `ResourceResolver`와 연결됨 · A `ProductInputs.resource_resolver` 제품 조립 연결 대기
-- [x] B3.4 출처 접두어 매칭·중복은 최고 등급·미매칭은 Unclassified
+- [x] B3.4 출처 접두어 매칭·중복은 최고 등급·미매칭은 Unclassified · [근거](archive/b3-catalog.md)
 - [x] B3.5 도구 단위 READ는 `prefix: []` 규칙만, 없으면 Unclassified
   - 자원형 출처 규칙(prefix ≠ ())은 Guard가 기대 자원 ID를 계산하고 응답 ID를 신뢰 코드가 만드는 서버(현재 C 파일 서버)에만 적용한다. 그 밖의 서버는 도구 단위 READ만 쓴다. 도구 단위 READ 등급은 운영자가 그 도구의 모든 결과에 붙이는 선언이며 응답 `resource_id`는 거부에만 사용한다([#94 B 답](https://github.com/hsminu/MCP-Runtime-Guard/issues/94#issuecomment-6505157878)). 파일 서버 인정 조건의 실행 파일 확인은 A·C 결정 대기다.
-- [x] B3.6 목적지는 등록 목록 정확 일치, 이름·IP·DNS·stdio를 신뢰 근거로 쓰지 않음
+- [x] B3.6 목적지는 등록 목록 정확 일치, 이름·IP·DNS·stdio를 신뢰 근거로 쓰지 않음 · [근거](archive/b3-catalog.md)
 - [x] B3.7 FP-01 JCS 지문 함수 · [기록](archive/b/B3.7-jcs-fingerprint.md)
 - [x] B3.8 DESC-01 검토된 설명 필드·Catalog 연결·합의 전 제안 · [기록](archive/b/B3.8-reviewed-description.md)
 - [x] B3.9 파싱된 설정·Profile 로딩 1단계와 policy_version 계산(10-18 결정) · [기록](archive/b/B3.9-profile-loading.md)
@@ -61,26 +61,26 @@
 ## B4 · Guard와 응답 게이트
 
 - [x] B4.1 일반 도구 실행은 `GuardService.submit()` 하나, transport 비노출 · [기록](archive/b4-b5-execution.md)
-- [x] B4.2 Task별 판정→실행→응답 커밋 직렬화
-- [x] B4.3 ASK 대기 중 lock 미보유, WAITING_APPROVAL의 일반 submit 거부·제어 큐 처리
-- [x] B4.4 DISPATCHING 예약 전 fail_closed, 예약 후 READ HALTED·미공개, SEND UNKNOWN_OUTCOME
-- [x] B4.5 결과 불명·정지 Task를 RUNNING으로 복구하지 않음, 새 Task로만 재시작
-- [x] B4.6 격리→형식/크기 검사→분류→원자 커밋→공개 순서, 미분류·커밋 실패·미지원 형식은 미공개
-- [x] B4.7 본문이 섞인 오류 READ도 분류, 알려진 전송 실패와 예기치 않은 처리 오류 구분
-- [x] B4.8 SEND 응답은 commit_send_outcome으로 요청·감사만 저장
-- [x] B4.9 정책·Profile 불일치는 Task 정지·승인 무효, 기록 실패가 겹치면 global halt
+- [x] B4.2 Task별 판정→실행→응답 커밋 직렬화 · [근거](archive/b4-b5-execution.md)
+- [x] B4.3 ASK 대기 중 lock 미보유, WAITING_APPROVAL의 일반 submit 거부·제어 큐 처리 · [근거](archive/b4-b5-execution.md)
+- [x] B4.4 DISPATCHING 예약 전 fail_closed, 예약 후 READ HALTED·미공개, SEND UNKNOWN_OUTCOME · [근거](archive/b4-b5-execution.md)
+- [x] B4.5 결과 불명·정지 Task를 RUNNING으로 복구하지 않음, 새 Task로만 재시작 · [근거](archive/b4-b5-execution.md) · [근거](archive/b-handoff.md)
+- [x] B4.6 격리→형식/크기 검사→분류→원자 커밋→공개 순서, 미분류·커밋 실패·미지원 형식은 미공개 · [근거](archive/b4-b5-execution.md)
+- [x] B4.7 본문이 섞인 오류 READ도 분류, 알려진 전송 실패와 예기치 않은 처리 오류 구분 · [근거](archive/b4-b5-execution.md)
+- [x] B4.8 SEND 응답은 commit_send_outcome으로 요청·감사만 저장 · [근거](archive/b4-b5-execution.md)
+- [x] B4.9 정책·Profile 불일치는 Task 정지·승인 무효, 기록 실패가 겹치면 global halt · [근거](archive/b4-b5-execution.md) · [근거](archive/b/B3.10-policy-change.md)
 - [x] B4.10 Guard 정상 종료 사유 GUARD_CLOSED B 구현·합의 전 제안 · A 문구·3인 합의 대기 · [기록](archive/b/B4.10-guard-close-reason.md)
 
 ## B5 · 승인 프로토콜
 
 - [x] B5.1 요청·서버/도구/지문·경계·인자 해시·등급·버전·승인자·만료를 snapshot에 고정 · [기록](archive/b4-b5-execution.md)
-- [x] B5.2 정규화 JSON·SHA-256, NFC 변환 없음, float·NaN·불허 타입 거부
-- [x] B5.3 원문은 메모리에만, Store에는 해시·메타데이터, 재시작 때 승인 원문·권한 미복원
-- [x] B5.4 사람 전용 제어 채널만 승인·거절·취소·긴급 차단, 접근 규칙 허용은 사람 승인을 대체하지 않음
-- [x] B5.5 승인 시 재해석·재평가, ASK와 snapshot 해시가 모두 일치해야 소비
-- [x] B5.6 consume_and_reserve의 정확한 True ACK 후에만 실행, 중복 클릭·재전달 실행 1회
-- [x] B5.7 재평가부터 응답 커밋까지 같은 Task lock 유지
-- [x] B5.8 monotonic deadline·UTC 만료 동시 검사, 소비 후 전송 직전에도 검사
+- [x] B5.2 정규화 JSON·SHA-256, NFC 변환 없음, float·NaN·불허 타입 거부 · [근거](archive/b4-b5-execution.md)
+- [x] B5.3 원문은 메모리에만, Store에는 해시·메타데이터, 재시작 때 승인 원문·권한 미복원 · [근거](archive/b4-b5-execution.md)
+- [x] B5.4 사람 전용 제어 채널만 승인·거절·취소·긴급 차단, 접근 규칙 허용은 사람 승인을 대체하지 않음 · [근거](archive/b4-b5-execution.md) · [근거](archive/b/B2.9-B2.11-agt-removal.md)
+- [x] B5.5 승인 시 재해석·재평가, ASK와 snapshot 해시가 모두 일치해야 소비 · [근거](archive/b4-b5-execution.md)
+- [x] B5.6 consume_and_reserve의 정확한 True ACK 후에만 실행, 중복 클릭·재전달 실행 1회 · [근거](archive/b4-b5-execution.md) · [근거](../tests/unit/test_approvals.py)
+- [x] B5.7 재평가부터 응답 커밋까지 같은 Task lock 유지 · [근거](archive/b4-b5-execution.md)
+- [x] B5.8 monotonic deadline·UTC 만료 동시 검사, 소비 후 전송 직전에도 검사 · [근거](archive/b4-b5-execution.md)
 - [x] B5.9 NOTIFY-01 만료 타이머·최종 결과 알림 B 구현·합의 전 제안 · [기록](archive/b/B5.9-pending-notifications.md)
 - [x] B5.10 STOP-01 시스템 정지·사실 감사 B 구현·합의 전 제안 · [기록](archive/b/B5.10-system-stop.md)
 - [x] B5.11 모델에 돌려줄 고정 문구표 · [기록](archive/b/B5.11-model-messages.md)
@@ -116,7 +116,7 @@
 
 ## B7 · 검증과 인수
 
-- [x] B7.1 A의 B 서비스 병합과 32경로 검증 보고 대조
+- [x] B7.1 A의 B 서비스 병합과 32경로 검증 보고 대조 · [근거](archive/b-handoff.md)
 - [ ] B7.2 A의 [Guard](https://github.com/hsminu/MCP-Runtime-Guard/pull/47#pullrequestreview-5669225500)·[Catalog](https://github.com/hsminu/MCP-Runtime-Guard/pull/36#pullrequestreview-5653883833), C의 [승인·예외](https://github.com/hsminu/MCP-Runtime-Guard/pull/32#pullrequestreview-5649334182)·[해시](https://github.com/hsminu/MCP-Runtime-Guard/pull/89#issuecomment-6497627122) 리뷰 확인 · C `core/policy.py`·`services/response_gate.py` 직접 리뷰 근거 미확인
 - [x] B7.3 10-15 AGT 제거 결정으로 대체 · [기록](archive/b/B7.3-agt-decision-superseded.md)
 - [x] B7.4 AGT-03 폐기 · [기록](archive/b/B7.4-agt-worker-retired.md)
