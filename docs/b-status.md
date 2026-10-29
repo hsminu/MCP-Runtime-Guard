@@ -19,7 +19,7 @@
 - [x] B1.2 모델·도구 출력에 ID·등급·경계·승인 결정권을 주지 않음. ID·epoch·call_seq는 Guard 관리
 - [x] B1.3 Label·Decision·TrustTier·ToolKind·상태 enum과 reason_code 초안
 - [x] B1.4 Guard 결과 타입과 Transport·AccessChecker·Scanner·Store·ModelClient 계약 초안
-- [x] B1.5 명령·이벤트 payload·원시 결과 격리: A 로컬 frozen bridge DTO를 v1으로 확정([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · 후속: C `count_dispatches`를 worker `_execute` 진입으로 정렬 중, 그 전까지 전체 계수 인수 완료 표시 보류
+- [x] B1.5 명령·이벤트 payload·원시 결과 격리: A 로컬 frozen bridge DTO를 v1으로 확정([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · C 계수 지점을 worker `_execute` 진입으로 정렬 완료([#108](https://github.com/hsminu/MCP-Runtime-Guard/pull/108))
 - [x] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 대조 · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B1.7 ModelClient 공통 포트 제거·Protocol의 examples 이동 `9dae11b` · [#106 A·C 동의](https://github.com/hsminu/MCP-Runtime-Guard/issues/106) · [기록](archive/b/B1.7-B1.9-code-s.md)
 - [x] B1.8 SCAN-01 DTO 확장·표시 검사 오탐/명시적 무해화 보완 · [#32 DTO 형식 합의](https://github.com/hsminu/MCP-Runtime-Guard/pull/32#pullrequestreview-5649334182) · [기록](archive/b/B1.8-scan-report.md) · Hypothesis 반복 수 1,000 → 200(#100 `17df1ce`, 나머지 두 시험은 300 → 200), C가 4개 시험을 5,000회로 1회 확인해 반례 없음([#100 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/100#issuecomment-6503859925))
