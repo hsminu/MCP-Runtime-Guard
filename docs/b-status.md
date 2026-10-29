@@ -106,7 +106,7 @@
 - [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
 - [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — 1단계·2a·2b B 단위 구현 완료, #69 `b796ff0` 병합 · A 제품 연결·C 독립 인수 대기 · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
   - #65(C2.7) 후속으로 명시 모드 기본 감사 ID 출처를 `security.ids`로 옮기고 B 모듈의 직접 생성 금지 정적 검사를 추가했다.
-- [ ] B6.9 승인 생성·종결 원자화(현재 두 커밋 간격) — 막힘: B6-01
+- [ ] B6.9 승인 생성·종결 원자화 B 단위 제안 구현 · A·C 확인(#76) 대기 · [기록](archive/b/B6.9-atomic-approvals.md)
 - [ ] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 — 막힘: B6-02
 - [ ] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 — 막힘: B6-03·B6-04
 - [ ] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙과 예산(잠금 대기 1000ms는 미측정 제안값) — 막힘: B6-03
