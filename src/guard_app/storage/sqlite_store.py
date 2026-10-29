@@ -3531,6 +3531,11 @@ class SQLiteStore:
                         and status is ApprovalStatus.INVALIDATED
                         and reason is Reason.POLICY_CHANGED
                     )
+                    and not (
+                        context.record.status is ApprovalStatus.APPROVED
+                        and status is ApprovalStatus.CANCELLED
+                        and reason is Reason.TURN_INTERRUPTED
+                    )
                 )
             ):
                 raise StoreError(Reason.APPROVAL_RACE)

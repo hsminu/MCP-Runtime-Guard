@@ -10,7 +10,7 @@ import asyncio
 import inspect
 import math
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from weakref import WeakValueDictionary, finalize
@@ -26,6 +26,7 @@ from guard_app.domain.contracts import (
     Released,
     TaskIdentity,
     TrustedContext,
+    TurnInterrupt,
     Withheld,
 )
 from guard_app.domain.enums import (
@@ -37,6 +38,7 @@ from guard_app.domain.enums import (
     SystemStopReason,
     TaskStatus,
     ToolKind,
+    TurnInterruptOutcome,
 )
 from guard_app.domain.errors import DispatchError, ResolutionError, StoreError, StoreIntegrityError
 from guard_app.domain.models import (
@@ -60,7 +62,13 @@ from guard_app.ports import (
 )
 from guard_app.security.digest import json_digest
 from guard_app.security.failclosed import after_dispatch, fail_closed
-from guard_app.services.approvals import ApprovalService, HumanControl, _ApprovalTaskMismatchError
+from guard_app.services.approvals import (
+    ApprovalConfigError,
+    ApprovalService,
+    HumanControl,
+    _ApprovalConflictError,
+    _ApprovalTaskMismatchError,
+)
 from guard_app.services.catalog import Catalog, LoadedProfile, PreparedPolicyChange
 from guard_app.services.response_gate import ResponseGate
 from guard_app.services.state_checks import (
@@ -118,6 +126,36 @@ def durable_failure_audit(store: FailureAuditStore) -> Callable[[FailureEvent], 
         await store.record_failure_audit(record)
 
     return persist
+
+
+@dataclass(eq=False, slots=True)
+class _TurnIntent:
+    epoch: int
+    confirmed: bool | None = None
+    cancelled_approvals: int = 0
+
+
+@dataclass(eq=False, slots=True)
+class _TurnSubmission:
+    """같은 Task에 제출된 각 호출을 원문 없이 개별 식별한다."""
+
+    task_id: str
+    expected_epoch: int | None
+    actual_epoch: int | None = None
+    intents: list[_TurnIntent] = field(default_factory=list)
+    intent_changed: asyncio.Event = field(default_factory=asyncio.Event)
+    opening: bool = False
+    done: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnInterruptFailure:
+    """경계 밖으로 내보낼 원문 없는 실패."""
+
+    reason: Reason
+    cancelled: bool = False
+    conflict: bool = False
+    missing: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +285,9 @@ class GuardService:
         self._max_result_bytes = max_result_bytes
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._global_halt = False
+        self._turn_instances: set[_TurnSubmission] = set()
+        self._turn_executing: dict[tuple[str, int | None], int] = {}
+        self._turn_submit_started: WeakValueDictionary[str, asyncio.Event] = WeakValueDictionary()
         self._on_global_halt = on_global_halt
         self._stop_requests: dict[str, _TaskStopSignal] = {}
         self._system_stop_requests: dict[tuple[str, int], _TaskStopSignal] = {}
@@ -377,6 +418,213 @@ class GuardService:
     async def cancel_pending(self, task_id: str, *, expected_epoch: int) -> int:
         """합의 전 제안: A 세션 종료의 대기 취소. 사람 채널을 사용하지 않는다."""
         return await self._approvals.cancel_pending(task_id, expected_epoch=expected_epoch)
+
+    def _turn_submit_event(self, task_id: str) -> asyncio.Event:
+        event = self._turn_submit_started.get(task_id)
+        if event is None:
+            event = asyncio.Event()
+            self._turn_submit_started[task_id] = event
+        return event
+
+    def _turn_lock_holder_is_call(self, task_id: str, epoch: int) -> bool:
+        return (
+            any(
+                key_task == task_id and (key_epoch is None or key_epoch == epoch) and count > 0
+                for (key_task, key_epoch), count in self._turn_executing.items()
+            )
+            or task_id in self._approvals._inflight_tasks.values()
+        )
+
+    async def _turn_task_state(self, task_id: str, epoch: int) -> TaskState | None:
+        async def load() -> TaskState | _TurnInterruptFailure:
+            return await self._store.load_task(task_id)
+
+        async def on_error(error: BaseException) -> TaskState | _TurnInterruptFailure:
+            if isinstance(error, asyncio.CancelledError):
+                return _TurnInterruptFailure(Reason.INTERNAL_ERROR, cancelled=True)
+            reason = error.reason if isinstance(error, StoreError) else Reason.INTERNAL_ERROR
+            missing = type(error) is StoreError and reason is Reason.STATE_MISSING
+            return _TurnInterruptFailure(reason, missing=missing)
+
+        loaded = await fail_closed(load, on_error)
+        if self._global_halt:
+            raise StoreError(Reason.GUARD_CLOSED) from None
+        if isinstance(loaded, _TurnInterruptFailure):
+            if loaded.cancelled:
+                raise asyncio.CancelledError() from None
+            if loaded.missing:
+                return None
+            raise StoreError(loaded.reason) from None
+        try:
+            state = TaskState.model_validate(loaded)
+        except ValidationError:
+            raise StoreIntegrityError() from None
+        if state.task_id != task_id:
+            raise StoreIntegrityError() from None
+        if state.epoch != epoch or state.status not in (
+            TaskStatus.RUNNING,
+            TaskStatus.WAITING_APPROVAL,
+        ):
+            return None
+        return state
+
+    async def _turn_acquire_or_call(self, task_id: str, epoch: int) -> asyncio.Lock | None:
+        """Task lock과 새 호출 시작을 함께 기다려 전송 완료를 기다리지 않는다."""
+        while True:
+            lock = self._task_lock(task_id)
+            if self._turn_lock_holder_is_call(task_id, epoch):
+                return None
+            submit_event = self._turn_submit_event(task_id)
+            approval_event = self._approvals._turn_approval_event(task_id)
+            acquire = asyncio.create_task(lock.acquire())
+            submit_started = asyncio.create_task(submit_event.wait())
+            approval_started = asyncio.create_task(approval_event.wait())
+            tasks = (acquire, submit_started, approval_started)
+            claimed = False
+            try:
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                if acquire in done and acquire.result():
+                    claimed = True
+                    return lock
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                if not claimed and acquire.done() and not acquire.cancelled() and acquire.result():
+                    lock.release()
+                if not claimed:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def interrupt_turn(self, task_id: str, *, expected_epoch: int) -> TurnInterrupt:
+        """진행 호출은 끝까지 두고 이 생애의 대기 승인만 취소한다."""
+        if (
+            type(task_id) is not str
+            or not task_id
+            or any(0xD800 <= ord(char) <= 0xDFFF for char in task_id)
+            or type(expected_epoch) is not int
+            or expected_epoch < 0
+        ):
+            raise ApprovalConfigError("취소할 Task 식별자가 유효하지 않다")
+        if self._global_halt:
+            raise StoreError(Reason.GUARD_CLOSED)
+        nothing = TurnInterrupt(
+            outcome=TurnInterruptOutcome.NOTHING_IN_FLIGHT,
+            cancelled_approvals=0,
+            call_in_progress=False,
+        )
+        # 첫 await 전에 기존 제출과 기존 승인을 고정한다. 그 뒤 시작된 제출은 제외한다.
+        targets = tuple(
+            submission
+            for submission in self._turn_instances
+            if submission.task_id == task_id
+            and (submission.expected_epoch is None or submission.expected_epoch == expected_epoch)
+        )
+        opening = tuple(submission for submission in targets if submission.opening)
+        intents = tuple(_TurnIntent(expected_epoch) for _ in targets)
+        for submission, intent in zip(targets, intents, strict=True):
+            submission.intents.append(intent)
+            if submission.actual_epoch is not None:
+                intent.confirmed = submission.actual_epoch == expected_epoch
+            submission.intent_changed.set()
+        existing_ids = frozenset(
+            owner.approval_id for owner in self._approvals._turn_owners(task_id, expected_epoch)
+        )
+        try:
+            if await self._turn_task_state(task_id, expected_epoch) is None:
+                return nothing
+            for submission, intent in zip(targets, intents, strict=True):
+                if intent.confirmed is None:
+                    intent.confirmed = True
+                    submission.intent_changed.set()
+            # 이미 생성 중인 승인에 한해 해당 제출의 종결 ACK까지 기다린다.
+            for submission in opening:
+                await submission.done.wait()
+            if self._global_halt:
+                raise StoreError(Reason.GUARD_CLOSED)
+            if await self._turn_task_state(task_id, expected_epoch) is None:
+                return nothing
+            cancelled = 0
+            owners = self._approvals._turn_owners(task_id, expected_epoch)
+            approval_ids = existing_ids | frozenset(
+                owner.approval_id for owner in owners if owner.turn_submission in targets
+            )
+            if any(owner.approval_id in approval_ids for owner in owners):
+                lock = await self._turn_acquire_or_call(task_id, expected_epoch)
+                if lock is not None:
+                    try:
+                        if self._global_halt:
+                            raise StoreError(Reason.GUARD_CLOSED)
+                        if await self._turn_task_state(task_id, expected_epoch) is None:
+                            return nothing
+                        cancellation_requested = False
+
+                        async def cancel() -> int | _TurnInterruptFailure:
+                            return await self._approvals._cancel_turn_locked(
+                                task_id, expected_epoch, approval_ids=approval_ids
+                            )
+
+                        async def on_error(error: BaseException) -> int | _TurnInterruptFailure:
+                            nonlocal cancellation_requested
+                            if isinstance(error, _ApprovalConflictError):
+                                return _TurnInterruptFailure(error.reason, conflict=True)
+                            cancellation_requested = isinstance(error, asyncio.CancelledError)
+                            reason = (
+                                error.reason
+                                if isinstance(error, StoreError)
+                                else Reason.INTERNAL_ERROR
+                            )
+                            # ACK 불명과 무결성 실패는 lock 안에서 원문 없는 알림을 보낸다.
+                            self._halt_globally(reason)
+                            self._approvals._fail_locked_task_pending(task_id)
+                            return _TurnInterruptFailure(reason, cancellation_requested)
+
+                        def fallback(error: BaseException) -> int | _TurnInterruptFailure:
+                            self._halt_globally(Reason.INTERNAL_ERROR)
+                            return _TurnInterruptFailure(
+                                Reason.INTERNAL_ERROR, cancellation_requested
+                            )
+
+                        result = await fail_closed(cancel, on_error, on_containment_error=fallback)
+                        if isinstance(result, _TurnInterruptFailure):
+                            if result.cancelled:
+                                raise asyncio.CancelledError() from None
+                            if result.conflict:
+                                raise _ApprovalConflictError(result.reason) from None
+                            raise StoreError(result.reason) from None
+                        cancelled += result
+                    finally:
+                        lock.release()
+            if self._global_halt:
+                raise StoreError(Reason.GUARD_CLOSED)
+            cancelled += sum(intent.cancelled_approvals for intent in intents)
+            running = any(
+                submission in self._turn_instances
+                and (submission.actual_epoch is None or submission.actual_epoch == expected_epoch)
+                for submission in targets
+            ) or any(approval_id in self._approvals._inflight_tasks for approval_id in existing_ids)
+            outcome = (
+                TurnInterruptOutcome.CALL_COMPLETING
+                if running
+                else TurnInterruptOutcome.APPROVAL_CANCELLED
+                if cancelled
+                else TurnInterruptOutcome.NOTHING_IN_FLIGHT
+            )
+            return TurnInterrupt(
+                outcome=outcome, cancelled_approvals=cancelled, call_in_progress=running
+            )
+        except _ApprovalConflictError as error:
+            raise StoreError(error.reason) from None
+        except StoreError as error:
+            if error.reason is not Reason.GUARD_CLOSED:
+                self._halt_globally(error.reason)
+                # 다른 소유자가 lock을 가진 승인이나 진행 호출은 건드리지 않는다.
+                self._approvals._fail_policy_change()
+            raise
+        finally:
+            for submission, intent in zip(targets, intents, strict=True):
+                if intent.confirmed is None:
+                    intent.confirmed = False
+                    submission.intent_changed.set()
 
     async def aclose(self) -> None:
         """앱 종료 시 A가 transport 종결과 함께 await한다. 새 submit은 즉시 거부한다."""
@@ -554,16 +802,36 @@ class GuardService:
         self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
     ) -> Outcome:
         """I1·I4·I5·I7: 신뢰 호출자의 epoch를 lock 안에서 확인한다."""
-        return await fail_closed(
-            lambda: self._submit_locked(task_id, call, expected_epoch=expected_epoch),
-            lambda exc: self._pre_dispatch_unlocked_failure(
-                task_id, exc, expected_epoch=expected_epoch
-            ),
-            on_containment_error=self._pre_failure_fallback,
+        track = (
+            type(task_id) is str
+            and bool(task_id)
+            and (expected_epoch is None or (type(expected_epoch) is int and expected_epoch >= 0))
         )
+        submission = _TurnSubmission(task_id, expected_epoch) if track else None
+        if submission is not None:
+            self._turn_instances.add(submission)
+        try:
+            return await fail_closed(
+                lambda: self._submit_locked(
+                    task_id, call, expected_epoch=expected_epoch, turn_submission=submission
+                ),
+                lambda exc: self._pre_dispatch_unlocked_failure(
+                    task_id, exc, expected_epoch=expected_epoch
+                ),
+                on_containment_error=self._pre_failure_fallback,
+            )
+        finally:
+            if submission is not None:
+                self._turn_instances.discard(submission)
+                submission.done.set()
 
     async def _submit_locked(
-        self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
+        self,
+        task_id: str,
+        call: ProposedCall,
+        *,
+        expected_epoch: int | None = None,
+        turn_submission: _TurnSubmission | None = None,
     ) -> Outcome:
         if type(task_id) is not str or not task_id:
             raise ResolutionError(Reason.STATE_MISSING)
@@ -576,16 +844,25 @@ class GuardService:
             async with self._task_lock(task_id):
                 if not self._policy_ready.is_set():
                     continue
-                decided = await fail_closed(
-                    lambda: self._decide(task_id, call, expected_epoch=expected_epoch),
-                    lambda exc: self._pre_dispatch_failure(
-                        task_id, exc, expected_epoch=expected_epoch
-                    ),
-                    on_containment_error=self._pre_failure_fallback,
-                )
-                if not isinstance(decided, _Allowed):
-                    return decided
-                return await self._dispatch_reserved(decided.request, decided.state)
+                key = (task_id, expected_epoch)
+                try:
+                    decided = await fail_closed(
+                        lambda: self._decide(
+                            task_id,
+                            call,
+                            expected_epoch=expected_epoch,
+                            turn_submission=turn_submission,
+                        ),
+                        lambda exc: self._pre_dispatch_failure(
+                            task_id, exc, expected_epoch=expected_epoch
+                        ),
+                        on_containment_error=self._pre_failure_fallback,
+                    )
+                    if not isinstance(decided, _Allowed):
+                        return decided
+                    return await self._dispatch_reserved(decided.request, decided.state)
+                finally:
+                    self._turn_executing.pop(key, None)
 
     def _task_lock(self, task_id: str) -> asyncio.Lock:
         lock = self._locks.get(task_id)
@@ -656,7 +933,12 @@ class GuardService:
         )
 
     async def _decide(
-        self, task_id: str, call: ProposedCall, *, expected_epoch: int | None = None
+        self,
+        task_id: str,
+        call: ProposedCall,
+        *,
+        expected_epoch: int | None = None,
+        turn_submission: _TurnSubmission | None = None,
     ) -> _Allowed | Denied | Pending:
         if self._global_halt:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
@@ -707,6 +989,12 @@ class GuardService:
             return Denied(request_id=None, reasons=(Reason.TASK_UNCLASSIFIED,))
         if state.status is not TaskStatus.RUNNING:
             return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
+        self._turn_executing[(task_id, expected_epoch)] = 1
+        if turn_submission is not None:
+            turn_submission.actual_epoch = state.epoch
+        started = self._turn_submit_started.pop(task_id, None)
+        if started is not None:
+            started.set()
         call = ProposedCall.model_validate(call)
         request_id = self._request_id_factory()
         try:
@@ -736,7 +1024,39 @@ class GuardService:
             return Denied(request_id=req.request_id, reasons=decision.reasons)
         if decision.decision is Decision.ASK:
             try:
-                appr = await self._approvals.open(req, state, decision)
+                if turn_submission is not None:
+                    turn_submission.opening = True
+                try:
+                    appr = await self._approvals.open(
+                        req, state, decision, turn_submission=turn_submission
+                    )
+                    if turn_submission is not None:
+                        while True:
+                            relevant = tuple(
+                                intent
+                                for intent in turn_submission.intents
+                                if intent.epoch == state.epoch
+                            )
+                            accepted = next(
+                                (intent for intent in relevant if intent.confirmed), None
+                            )
+                            if accepted is not None or all(
+                                intent.confirmed is not None for intent in relevant
+                            ):
+                                break
+                            turn_submission.intent_changed.clear()
+                            await turn_submission.intent_changed.wait()
+                        if accepted is not None:
+                            accepted.cancelled_approvals += (
+                                await self._approvals._cancel_turn_locked(
+                                    task_id,
+                                    state.epoch,
+                                    approval_ids=frozenset((appr.approval_id,)),
+                                )
+                            )
+                finally:
+                    if turn_submission is not None:
+                        turn_submission.opening = False
             except StoreIntegrityError:
                 self._halt_globally()
                 raise
