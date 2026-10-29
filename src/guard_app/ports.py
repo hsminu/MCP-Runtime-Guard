@@ -47,6 +47,7 @@ from guard_app.domain.models import (
 from guard_app.domain.queries import (
     ApprovalListPage,
     ApprovalListQuery,
+    ApprovalRow,
     CallDetail,
     CallListPage,
     CallListQuery,
@@ -83,6 +84,13 @@ class StoreQueries(Protocol):
     """
 
     async def list_approvals(self, query: ApprovalListQuery) -> ApprovalListPage: ...
+
+    async def get_approval_row(self, approval_id: str) -> ApprovalRow | None:
+        """화면용 단건 조회. 승인 서비스용 Store.get_approval과 다름.
+
+        상태와 무관하게 한 읽기 트랜잭션에서 조회하며 원문 인자 없이 revision을 포함한다.
+        """
+        ...
 
     async def list_calls(self, query: CallListQuery) -> CallListPage: ...
 

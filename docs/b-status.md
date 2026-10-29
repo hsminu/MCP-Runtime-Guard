@@ -109,6 +109,7 @@
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [x] B6.15 규칙 버전 감사(AGT-02) · Task 연결 사건은 불변 `tasks.policy_version`으로 간접 추적, Task 없는 비판정 사건은 범위 밖, 직접 저장·과거 보정 없음([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
 - [x] B6.16 화면용 권위 조회 · #76 A·C 합의(10-29), #86 병합 · A 승인 목록·호출 기록 연결 [#92](https://github.com/hsminu/MCP-Runtime-Guard/pull/92) · [C 계수 대조](https://github.com/hsminu/MCP-Runtime-Guard/pull/86#issuecomment-6494025432) · [기록](archive/b/B6.16-store-queries.md)
+  - 화면용 승인 단건 조회 `StoreQueries.get_approval_row` B 구현 완료 · [#20 A 요청](https://github.com/hsminu/MCP-Runtime-Guard/issues/20) · 승인 서비스용 `Store.get_approval`은 유지. A가 연결할 때 `session_runtime._store_queries` 판별 목록과 `test_store_query_link.py` 대역에 `get_approval_row`를 더할 것.
 - [x] B6.17 SEQ·REC B 결정안·A·C 동의(#37), 사용자 contracts 반영 완료 · B6.8 영속 순번·실패 감사 독립 확인은 후속 · [기록](archive/b/B6.17-seq-rec-decisions.md)
 - [x] B6.18 RegistryStore 계약·C4.10(#46) 사본 교체/승인 무효화와 C4.19(#53) 연결 완료 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) · 후속(제출 범위 밖, [#106 8번](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)): 정의 전용 generation·예약/소비 TX 대조·worker 전송 직전 확인. 제출 시연은 고정 등록 목록·변경 시 정지/재시작. I10 동시 경쟁 해결 주장 안 함
