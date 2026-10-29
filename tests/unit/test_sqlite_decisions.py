@@ -303,7 +303,7 @@ def test_status_change_audit_abort_rolls_back_and_can_retry(store: SQLiteStore) 
 @pytest.mark.parametrize("choice", list(Decision))
 def test_decision_records_only_metadata_and_audit(store: SQLiteStore, choice: Decision) -> None:
     req = request()
-    result = decision(decision=choice, reasons=(Reason.OK, Reason.AGT_DENY))
+    result = decision(decision=choice, reasons=(Reason.OK, Reason.ACCESS_DENY))
     record(store, req, result)
     connection = writer_connection(store)
     row = connection.execute("SELECT * FROM requests").fetchone()
@@ -314,7 +314,7 @@ def test_decision_records_only_metadata_and_audit(store: SQLiteStore, choice: De
     assert row["tool_name"] == req.tool.tool_name
     assert row["arguments_digest"] == json_digest(req.arguments)
     assert row["decision"] == int(choice)
-    assert json.loads(row["reasons"]) == ["OK", "AGT_DENY"]
+    assert json.loads(row["reasons"]) == ["OK", "ACCESS_DENY"]
     assert row["status"] == ("DENIED" if choice is Decision.DENY else "DECIDED")
     assert row["dispatch_reserved_at_utc"] is None
     audit = connection.execute("SELECT * FROM audit_events").fetchone()
