@@ -37,7 +37,6 @@ from guard_app.security.codex_l2 import MockModel, run_l2
 from guard_app.security.ids import new_token
 from guard_app.security.launcher import CodexLauncher, ExecutablePin, LaunchedProcess
 from guard_app.security.paths import AppFolders
-from guard_app.services import session_runtime
 from guard_app.services.codex_preparation import configuration_receipt, l2_thread_params
 from guard_app.services.product_assembly import ProductInputs
 from guard_app.services.product_settings import read_settings
@@ -222,9 +221,11 @@ async def codex_flow(
             json.dumps({"schema_version": 1, "settings": settings}), encoding="utf-8"
         )
         tasks = CodexTasks(run.folders, Path(REAL_CODEX), scripts, wrong_token_launches)
-        # 제품 조립 입력에 없는 두 값만 더한다(머리말 "제품과 다른 점").
+        # 제품 조립 입력에 없는 두 값만 더한다(머리말 "제품과 다른 점"). `bootstrap_product`가
+        # 정의된 모듈의 이름을 바꾼다. 재수출만 하는 모듈을 바꾸면 효과가 없다(#87 A153).
         inputs = partial(ProductInputs, resource_resolver=identity, call_timeout_s=call_timeout_s)
-        with mock.patch.object(session_runtime, "ProductInputs", inputs):
+        startup = sys.modules[bootstrap_product.__module__]
+        with mock.patch.object(startup, "ProductInputs", inputs):
             bindings = await bootstrap_product(
                 run.folders, preparation=tasks.preparation(), settings=read_settings(run.folders)
             )
