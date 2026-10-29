@@ -1,12 +1,12 @@
 # C 현황
 
-갱신: 2026-10-29 · main `b14c181` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-30 · main `194352d` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| Store 계약 회신(B6-01–05) | B·A | C1.8, C3.5 |
+| Store 계약 회신(B6-01–05) | B·A | C1.8 |
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
 | 설치판 리소스 위치(패키징) | A | C6.20 |
@@ -51,16 +51,16 @@
 
 ## C3 · B SQLite 리뷰와 독립 검증
 
-- [ ] C3.1 단일 writer·WAL·foreign_keys·synchronous FULL·명시적 트랜잭션 리뷰
-- [ ] C3.2 바인딩 SQL·FK·UNIQUE·관계·epoch·revision 독립 계약 검증
-- [ ] C3.3 READ 관측 원자성과 커밋 전 공개 0
-- [ ] C3.4 SEND 성공에서 Task 보안 상태 불변
-- [ ] C3.5 승인 생성·종결·소비 원자성과 중복 소비 — 막힘: B6-01
+- [x] C3.1 단일 writer·WAL·foreign_keys·synchronous FULL·명시적 트랜잭션 리뷰: 실제 Store 연결을 감싸 T01·T02·T03·응답 유실 동안 실행된 SQL 전부로 확인(연결 설정·첫 PRAGMA 둘·WAL, 쓰기는 연결마다 writer 스레드 하나·명시적 트랜잭션 안에서만) · [기록](archive/c/C3.1-C3.2-store-wiring.md)
+- [x] C3.2 바인딩 SQL·FK·UNIQUE·관계·epoch·revision 독립 계약 검증: ID는 SQL 문에 없고 바인딩 값에만, 인자 원문은 바인딩 값에도 없음. 시나리오 뒤 integrity·FK 검사 통과, 직접 쓰기 9가지를 제약이 막음, 낡은 revision·다른 epoch는 변화·전송 0 · [기록](archive/c/C3.1-C3.2-store-wiring.md)
+- [x] C3.3 READ 관측 원자성과 커밋 전 공개 0: 실제 서버로 관측 커밋 전에는 `submit`이 끝나지 않음(wire 1·OBSERVED 0), 커밋 실패는 `Withheld`·요청 WITHHELD·등급 반쪽 상승 0·Task HALTED · [기록](archive/c/C3.3-C3.4-C3.7-gate-and-disk.md)
+- [x] C3.4 SEND 성공에서 Task 보안 상태 불변: ALLOW 전송은 Task 행 전체 불변, 승인 전송은 등급·미분류·승격 이력·보안 버전 불변 · [기록](archive/c/C3.3-C3.4-C3.7-gate-and-disk.md)
+- [ ] C3.5 승인 생성·종결·소비 원자성과 중복 소비(B6-01은 #89로 풀림, 결함 주입 인수는 C3.6과 함께 다음 PR)
 - [ ] C3.6 쓰기·감사·잠금·COMMIT/ROLLBACK 실패와 중단 결함 주입
-- [ ] C3.7 원문 비기록·재시작 승인 미복원·SEND 재전송 0
+- [x] C3.7 원문 비기록·재시작 승인 미복원·SEND 재전송 0: 전송 다섯 종류의 인자 표지가 DB·WAL·앱 폴더 전 파일에 0(자원 ID 양성 대조), 재시작 미복원은 T11·재전송 0은 C5.6. 결과 본문 표지는 C5.2 뒤 · [기록](archive/c/C3.3-C3.4-C3.7-gate-and-disk.md)
 - [ ] C3.8 (Store 조회 `list_calls`·`get_call`·`list_approvals`와 요청별 계수 대조는 정식 시험으로 완료(stdio·HTTP, T01·T02·T03·응답 유실), [C3.8-1](archive/c/C3.8-1-query-counts.md)) A 화면 연결 뒤 화면 쪽 대조 — 막힘: A 화면 연결
-- [ ] C3.9 DB를 직접 고친 비정상 행(관계 깨짐·모르는 상태값·등급 하향)을 시작 점검이 잡고 멈추는지 검증 · [결정](contracts.md#사용자-결정)
-- [ ] C3.10 시작 복구가 감사 기록과 맞지 않는 등급·미분류 표시를 복구하지 않는지 검증 — 막힘: B6.8
+- [x] C3.9 DB를 직접 고친 비정상 행(관계 깨짐·모르는 상태값·등급 하향)을 시작 점검이 잡고 멈추는지 검증: 13가지 × 정상·비정상 종료. 관계·상태값·legacy는 `STORE_INTEGRITY_FAILED`로 멈춤, 요청 epoch·kind·revision 변조는 멈추지 않고 복구(실행 0, C-C3-01 B 판단 대기) · [결정](contracts.md#사용자-결정) · [기록](archive/c/C3.9-C3.10-startup-tamper.md)
+- [x] C3.10 시작 복구가 감사 기록과 맞지 않는 등급·미분류 표시를 복구하지 않는지 검증: 등급 하향·승격 이력 삭제·미분류 해제는 멈춤, 감사까지 함께 낮춘 변조는 근거가 없어 복구(실행 0, 결정의 한계) · [기록](archive/c/C3.9-C3.10-startup-tamper.md)
 
 ## C4 · Registry와 Scanner
 
