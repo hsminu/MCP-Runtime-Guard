@@ -94,10 +94,10 @@
 - [ ] A19·A20 실제 codex.exe 세션 — 막힘: 세션 관리자 공통 계약 합의(막힌 것 표). L2 연결은 A151, 실제 실행 확인 남음
 - [x] A151 제품 시작에 C `run_l2`(C6.14) 1회 연결·지문 대조·고정 실패 코드·진행 표시·종료 취소 정리 · [기록](archive/a/A151-l2-startup-connection.md)
 - [x] A151 실제 codex.exe L2·API 키/ChatGPT 로그인한 CODEX_HOME 시작·정리 시간 측정(정규 앱 경로 지정) · [기록](archive/a/A151-logged-in-startup-timing.md)
-- [ ] A151 기본 제품 MSIX 경로의 L2 성공 재확인·C 인수 — 사용자 결정으로 C가 경로 비교 수정을 맡음 · C PR 대기 · [근거](archive/a/A161-msix-l2-path-observation.md)
+- [x] A151 기본 제품 MSIX 경로의 L2 성공 재확인·C 인수 — C6.14-2(#98)의 같은 파일 비교 병합 뒤 main에서 논리·물리 경로 모두 통과(A181) · [기록](archive/a/A181-l2-items-closed-after-c6-14-2.md)
 - [x] A151 MSIX 경로 L2 재확인(수정 없음): Claude 데스크톱이 띄운 셸에서도 같은 두 코드로 실패, 패키지 밖 프로세스에서는 논리 경로도 통과 · [기록](archive/a/A168-msix-l2-host-check.md)
 - [x] A161 실제 데스크톱 MSIX 가상 경로의 L2 실패 재현·정규 경로 대조·시작/종료 계측 · [기록](archive/a/A161-msix-l2-path-observation.md)
-- [ ] A151 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인 — 막힘: C 답([#21 알림](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6496456303), 관찰은 [A162](archive/a/A162-real-run-display-followups.md))
+- [x] A151 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인 — C6.14-2: Codex가 두 검사 호출 순서를 가끔 바꿔 판정이 거짓 실패, C가 순서를 보지 않게 수정(A181) · [기록](archive/a/A181-l2-items-closed-after-c6-14-2.md)
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
 - [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
 - [x] A109 기기 코드 제한 안내·브라우저 로그인 A 연결부·취소/시간초과·중복 요청 처리 · [기록](archive/a/A109-browser-login-wiring.md)
