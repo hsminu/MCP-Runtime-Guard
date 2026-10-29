@@ -70,6 +70,7 @@ from guard_app.services.bridge_types import QueryReply as QueryReply
 from guard_app.services.bridge_types import QueryRequest
 from guard_app.services.bridge_types import RegistrationRequest as RegistrationRequest
 from guard_app.services.bridge_types import RegistrationView as RegistrationView
+from guard_app.services.bridge_types import ScanState as ScanState
 from guard_app.services.bridge_types import SessionCreated as SessionCreated
 from guard_app.services.bridge_types import SessionOptions as SessionOptions
 from guard_app.services.bridge_types import SessionStartError as SessionStartError
@@ -142,6 +143,7 @@ class BackendBridge(QObject):
     policy_changed = Signal(object)
     settings_changed = Signal(object)
     registration_changed = Signal(object)
+    scan_changed = Signal(object)
     recovery_changed = Signal(object)
     recovery_page_changed = Signal(object)
     # B6-05: whether this run answers approval/call queries, then QueryReply values.
@@ -179,6 +181,7 @@ class BackendBridge(QObject):
             account_changed=self.account_changed.emit,
             policy_changed=self.policy_changed.emit,
             registration_changed=self.registration_changed.emit,
+            scan_changed=self.scan_changed.emit,
         )
         lifecycle = LifecycleOutlet(
             self.lifecycle_changed.emit,
@@ -298,6 +301,8 @@ class BackendBridge(QObject):
             "confirm",
             "recheck",
             "list",
+            "scan",
+            "scan_status",
             "activation_preview",
             "tool_settings_preview",
             "tool_settings_save",

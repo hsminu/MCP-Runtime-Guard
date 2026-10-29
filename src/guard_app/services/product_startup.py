@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -18,7 +18,7 @@ from guard_app.services.bridge_types import (
     BackendBindings,
     BackendCleanupError,
 )
-from guard_app.services.catalog import GuardSettings
+from guard_app.services.catalog import GuardSettings, ServerSettings
 from guard_app.services.codex_composition import codex_session_factory
 from guard_app.services.guard import durable_failure_audit
 from guard_app.services.guard_relay import ApprovalOutcomes
@@ -34,7 +34,9 @@ from guard_app.services.product_settings import (
     SettingsFileSaver,
     load_settings_profile,
 )
-from guard_app.services.registry import ServerRegistry
+from guard_app.services.registration_scans import RegistrationScans
+from guard_app.services.registry import ServerRegistry, ToolListingView
+from guard_app.services.scanner import ScanService, cisco_connector
 from guard_app.services.session_cleanup import BackgroundWork, CleanupLimits
 from guard_app.services.session_execution import ExecutionGate
 from guard_app.services.session_policy import ProfileSaver
@@ -55,6 +57,13 @@ async def _close_failed_start(store: SQLiteStore) -> None:
     store.close()
     if not await store.wait_closed(CleanupLimits().store_close_s):
         raise BackendCleanupError
+
+
+def _registration_scans(
+    registry: ServerRegistry,
+    collect: Callable[[ServerSettings], Awaitable[ToolListingView]],
+) -> RegistrationScans:
+    return RegistrationScans(registry, ScanService(registry, cisco_connector()), collect)
 
 
 async def bootstrap_product(
@@ -85,6 +94,7 @@ async def bootstrap_product(
     assembled: AssembledGuard | None = None
     runtime: SessionRuntime | None = None
     adopted = False
+    scans: RegistrationScans | None = None
     progress = BackgroundWork()
 
     def step(value: StorePrepareStep) -> None:
@@ -185,15 +195,31 @@ async def bootstrap_product(
             and (settings.document is None or settings_status == SETTINGS_LOADED)
             else None
         )
+
+        def collect(server: ServerSettings) -> Awaitable[ToolListingView]:
+            return collect_registration_listing(server, folders)
+
+        scans = _registration_scans(registration_registry, collect)
+
+        async def close() -> None:
+            try:
+                await scans.aclose()
+            finally:
+                await runtime.close()
+
         registrations = runtime.registration_commands(
             registration_registry,
             store,
-            lambda server: collect_registration_listing(server, folders),
+            collect,
             saver=registration_saver,
+            scans=scans,
         )
         bindings = replace(
             runtime.bindings(),
             registration=registrations,
+            scan_events=scans.listen,
+            scan_for_review=scans.reviewed,
+            close=close,
             recovery_report=report,
             recovery_page=first_page,
             recovery_next=next_page,
@@ -204,7 +230,7 @@ async def bootstrap_product(
     finally:
         if not adopted:
             if runtime is not None:
-                cleanup = asyncio.create_task(runtime.close())
+                cleanup = asyncio.create_task(close() if scans is not None else runtime.close())
                 cleanup.add_done_callback(
                     lambda task: None if task.cancelled() else task.exception()
                 )

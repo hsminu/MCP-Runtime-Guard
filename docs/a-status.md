@@ -216,9 +216,8 @@
 - [x] A127 현황 화면을 줄 목록·막대그래프로 줄임(시연 기준 5075px → 1673px) · [기록](archive/a/A127-overview-rows.md)
 - [x] A128 MCP 서버 추가: '초안' 표기 제거, 설정 붙여넣기로 칸 채우기, 표시 이름·ID 추천·찾아보기·명령줄 인자, `.exe`만 통과(EXE-01) · [기록](archive/a/A128-server-add-paste.md)
 - [x] A128 실제 Registry 등록·EXE-01 지문 확인(`command_sha256`·`command_size` 저장, C2.22)·변경 재확인·목록 반영 · [기록](archive/a/A128-registry-registration.md)
-- [ ] A128 등록 뒤 Scanner 검사·경고 표시 — 막힘: A47·SCAN-01
-  - 검사 서비스: `ScanService(registry, cisco_connector())`를 백엔드 루프 안에서 하나 만들고 그 루프에서만 부름. 앱 종료 때 진행 중 검사 Task를 먼저 취소한 뒤 `close()`([#59 A 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/59#issuecomment-6468803889))
-  - 흐름: `register` → `scan(on_started=)` → 경고(LLM 검사 빠짐 포함) → `activate(expected_row_revision=검사 뒤 row_revision, reviewed_scan_id=)`. `SCAN_RECORD_UNKNOWN`은 `refresh` 뒤 다시 검사 안내, revision 거부도 다시 검사 안내
+- [x] A128 등록 뒤 Scanner 검사·기록·활성화 연결: 등록 확인 뒤 같은 목록으로 자동 검사, 수동 재검사, 진행 신호, 보여 준 검사 ID를 `reviewed_scan_id`로 전달, 종료 때 검사 취소 뒤 `close()` · [기록](archive/a/A200-registration-scan-wiring.md)
+- [ ] A128 등록 화면·승인 창의 Scanner 경고 표시(C4.13)
 - [x] A128·A105 등록만 저장되고 설정 저장이 끝나지 않은 PENDING 행: 목록·상세에 "설정 없음" 표시, 같은 서버를 다시 입력해 도구 지문·경계가 등록과 같을 때만 설정 파일에 저장(Registry는 그대로) · [기록](archive/a/A165-registration-settings-restore.md)
 - [x] A128 실제 MCP 서버 PENDING 등록·EXE-01 화면 확인 · [기록](archive/a/A128-real-desktop-registration.md)
 - [x] A157 #83 C 리뷰 후속: 시작하지 못한 서버의 등록 거부 문구, 설정 파일 URL 거부를 그 서버만 격리, 시작 예산에 서버 조립, `main()` 시험의 로그 상태 복원 · [기록](archive/a/A157-pr83-c-review-followups.md)

@@ -42,6 +42,7 @@ from guard_app.services.product_settings import (
     SETTINGS_LOADED,
 )
 from guard_app.services.product_startup import bootstrap_product as bootstrap_product
+from guard_app.services.registration_scans import RegistrationScans
 from guard_app.services.registry import ServerRegistry, ToolListingView
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
@@ -296,6 +297,7 @@ class SessionRuntime:
         collect: Callable[[ServerSettings], Awaitable[ToolListingView]],
         *,
         saver: ProfileSaver | None = None,
+        scans: RegistrationScans | None = None,
     ) -> RegistrationCommands:
         """Bind registration to the same policy lock without exposing TaskPolicy."""
         if saver is not None:
@@ -307,6 +309,7 @@ class SessionRuntime:
             collect,
             self.close_policy_stopped,
             self.check_execution,
+            scans=scans,
         )
 
     def execution_allowed(self) -> bool:

@@ -244,9 +244,11 @@ class TaskPolicy:
         *,
         active: bool,
         operator_id: str,
+        reviewed_scan_id: str | None = None,
     ) -> None:
         """A105: serialize with policy edits and Task creation, including both writes.
 
+        The scan ID was shown at activation; Scanner warnings never prevent activation.
         Activation saves/applies permissions while still PENDING, then activates.
         Blocking reverses the order: revoke Registry authority before saving.
         Any incomplete write sequence closes Guard; never retry it in this run.
@@ -347,7 +349,7 @@ class TaskPolicy:
                         server_id,
                         expected_row_revision=expected_row_revision,
                         reviewed_by=operator_id,
-                        reviewed_scan_id=None,
+                        reviewed_scan_id=reviewed_scan_id,
                     )
                 completed = True
             finally:
