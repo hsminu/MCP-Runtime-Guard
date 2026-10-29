@@ -514,7 +514,8 @@ def test_settings_that_differ_from_the_registration_hide_only_that_server(tmp_pa
     issue, views, blocked, stored = run(scenario())
     assert issue == "REG_SETTINGS_MISMATCH"
     assert views == ()
-    assert blocked == frozenset({"docs"})
+    # B14(51번): REG_SETTINGS_MISMATCH 서버는 시작하지 않아 목록 대조가 없다. 숨김은 server_issue와 빈 tool views로 확인한다.
+    assert blocked == frozenset()
     assert stored is not None
     assert stored.status is RegStatus.ACTIVE
 
