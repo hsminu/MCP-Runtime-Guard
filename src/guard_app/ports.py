@@ -46,7 +46,31 @@ from guard_app.domain.models import (
     TaskState,
     ToolSpec,
 )
+from guard_app.domain.queries import (
+    ApprovalListPage,
+    ApprovalListQuery,
+    CallDetail,
+    CallListPage,
+    CallListQuery,
+)
 from guard_app.domain.reasons import Reason
+
+
+class StoreQueries(Protocol):
+    """합의 전 제안(B6-05, #76): 화면의 권위 있는 저장 사실을 조회한다.
+
+    각 조회는 한 읽기 트랜잭션에서 일관된 결과를 만든다.
+    인자·결과·예외 등의 원문을 반환하지 않는다.
+    각 행의 revision을 화면 명령의 기대값으로 전달한다.
+    정렬과 페이지 크기는 고정된 조회 계약을 따른다.
+    조회 실패는 결과 없음이 아닌 알 수 없음으로 표시한다.
+    """
+
+    async def list_approvals(self, query: ApprovalListQuery) -> ApprovalListPage: ...
+
+    async def list_calls(self, query: CallListQuery) -> CallListPage: ...
+
+    async def get_call(self, request_id: str) -> CallDetail | None: ...
 
 
 class PendingResult(Protocol):
