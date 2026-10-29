@@ -81,6 +81,7 @@ from guard_app.services.codex_account import AccountView as AccountView  # UI re
 from guard_app.services.policy_view import PolicyServer as PolicyServer  # UI re-export
 from guard_app.services.policy_view import PolicyTool as PolicyTool  # UI re-export
 from guard_app.services.policy_view import PolicyView as PolicyView  # UI re-export
+from guard_app.services.session_preparation import L2_FAILURE_CODES as L2_FAILURE_CODES
 
 
 def valid_server_id(server_id: object) -> bool:
@@ -643,6 +644,11 @@ class BackendBridge(QObject):
         if bindings.answer_partials is not None:
             bindings.answer_partials(self._streams.add)
         self._set_state(BridgeState.READY, "READY")
+
+    def codex_progress(self, code: str) -> None:
+        """Only the fixed startup phase crosses to Qt."""
+        if code == "CODEX_L2_CHECK" and self.state is BridgeState.STARTING:
+            self.lifecycle_changed.emit(LifecycleEvent(BridgeState.STARTING, code))
 
     def store_progress(self, step: StorePrepareStep) -> None:
         """Backend-loop callback; fixed progress values only, no state transition."""

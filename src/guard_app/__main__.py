@@ -248,6 +248,10 @@ def _run(
         )
     else:
         from guard_app.security.login_browser import open_login_browser
+        from guard_app.services.codex_preparation import (
+            PRODUCT_SHUTDOWN_TIMEOUT_S,
+            PRODUCT_STARTUP_TIMEOUT_S,
+        )
         from guard_app.services.session_runtime import bootstrap_product
 
         # A101: C's app folders and launcher behind each Task's Codex session.
@@ -264,8 +268,11 @@ def _run(
                 account=account,
                 on_step=lambda step: bridge.store_progress(step),
             ),
-            startup_timeout=90.0,
+            startup_timeout=PRODUCT_STARTUP_TIMEOUT_S,
+            shutdown_timeout=PRODUCT_SHUTDOWN_TIMEOUT_S,
         )
+
+        codex.set_progress_listener(bridge.codex_progress)
 
     close_limit_s = bridge.shutdown_timeout + CLOSE_OBSERVATION_S
     closing_since: list[float] = []

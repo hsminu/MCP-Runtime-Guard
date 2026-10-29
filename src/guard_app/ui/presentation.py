@@ -6,6 +6,8 @@ import unicodedata
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 
+from guard_app.services.bridge import L2_FAILURE_CODES
+
 # Current operational records use KST (UTC+09:00). This avoids a runtime tzdata
 # dependency on Windows; historical Korea daylight-saving dates need a separate
 # Asia/Seoul database decision before they can be displayed as local time.
@@ -196,6 +198,7 @@ APPROVAL_RESULTS = {
 # Bridge lifecycle codes -> current backend state for the operator. The code
 # itself stays visible only as secondary text.
 LIFECYCLE_MESSAGES = {
+    "CODEX_L2_CHECK": "Codex 시작 검사 중 · 잠시 기다리세요.",
     "STORE_CHECK": "저장소 구조 확인 중",
     "STORE_BACKUP": "이관 전 저장소 백업 중",
     "STORE_MIGRATE": "저장소 이관 중",
@@ -281,6 +284,7 @@ _CODEX_FAILURE_DETAILS = {
     "SETTINGS_PROFILE_INVALID": "설정 파일의 Guard 정책(Profile) 내용이 올바르지 않음.",
     "REGISTRY_UNAVAILABLE": "서버 등록 기록을 불러오지 못함.",
 }
+_CODEX_FAILURE_DETAILS.update(dict.fromkeys(L2_FAILURE_CODES, "Codex 시작 검사를 통과하지 못함."))
 # What the start made of the CFG-01 settings file (settings screen). The file
 # location is fixed (C2.13), never a path the backend reported.
 SETTINGS_FILE_LOCATION = r"%LOCALAPPDATA%\MCPRuntimeGuard\config\settings.json"

@@ -34,6 +34,7 @@ def owner(monkeypatch, tmp_path):
         close=lambda: events.append("close"),
         preparation=lambda: None,
         account_access=lambda **kw: None,
+        set_progress_listener=lambda callback: setattr(owner, "progress", callback),
         events=events,
     )
     monkeypatch.setattr(codex_preparation, "CodexProcessPreparation", lambda **kw: owner)
@@ -134,6 +135,10 @@ def test_run_wires_real_window_without_keeping_key(monkeypatch, owner, mode, cap
         pass
 
     def start(bridge):
+        if mode != "demo":
+            assert owner.progress == bridge.codex_progress
+            assert bridge._startup_timeout >= 60 + 50 + 20
+            assert bridge.shutdown_timeout >= 20 + 5
         window = next(
             w for w in app.topLevelWidgets() if isinstance(w, GuardWindow) and w.isVisible()
         )

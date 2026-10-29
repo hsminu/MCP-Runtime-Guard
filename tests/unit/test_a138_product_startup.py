@@ -465,6 +465,7 @@ def test_product_window_returns_start_failure_exit_code(monkeypatch, code):
         folders=object(),
         preparation=lambda: None,
         account_access=lambda **kw: None,
+        set_progress_listener=lambda callback: None,
     )
     timeout = QTimer()
     timeout.setSingleShot(True)
