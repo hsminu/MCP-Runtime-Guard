@@ -131,14 +131,14 @@ async def bootstrap(
         # 기존 행은 조회·수정하지 않고 새 실행만 허용한다. 실패 시 Guard도 만들지 않는다.
         store = SQLiteStore(os.fspath(db_path), audit_id_factory=lambda: f"audit-{uuid4().hex}")
 
-        def close_store():
-            try:
-                store.close()
-            except StoreError:
-                # bootstrap 도중 실패해도 bridge가 정리 확인으로 오인하지 않게 한다.
-                raise BackendCleanupError() from None
+        async def close_store():
+            # close는 writer 종료만 요청한다(#58). 임시 폴더를 지우기 전에 연결 종료를 확인하고,
+            # 확인하지 못하면 bootstrap 도중 실패해도 bridge가 정리 확인으로 오인하지 않게 한다.
+            store.close()
+            if not await store.wait_closed(5.0):
+                raise BackendCleanupError()
 
-        lifetime.callback(close_store)  # 임시 폴더 다음으로 등록해 같은 백엔드 스레드에서 종료.
+        lifetime.push_async_callback(close_store)  # 임시 폴더 다음으로 등록해 먼저 닫는다.
         state = TaskState(
             task_id=f"synthetic-{uuid4().hex}" if store_kind == "sqlite" else "synthetic-task",
             epoch=1,

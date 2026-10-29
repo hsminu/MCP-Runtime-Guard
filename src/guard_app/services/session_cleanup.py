@@ -37,6 +37,10 @@ class CleanupLimits:
     # this long for it after the transport has settled reserved calls, before
     # Guard and the Store close; what remains is then reported unconfirmed.
     stop_record_s: float = 5.0
+    # SQLiteStore.close() only asks its writer to finish and close the connection
+    # (B6.13, #58). B's shutdown order waits wait_closed(5.0) for it; unconfirmed,
+    # the app ends still holding its lock (A136, REC-01).
+    store_close_s: float = 5.0
 
 
 class BackgroundWork:
