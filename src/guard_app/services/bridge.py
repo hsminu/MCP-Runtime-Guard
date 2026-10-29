@@ -314,6 +314,7 @@ class BackendBridge(QObject):
             "tool_settings_save",
             "activate",
             "block",
+            "delete",
         ):
             raise ValueError("REG_REQUEST_INVALID")
         return self._host.commands.submit(

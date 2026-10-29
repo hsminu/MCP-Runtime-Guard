@@ -359,6 +359,10 @@ _CODEX_STOP_NOTICES = {
     "REG_ACTIVATION_UNKNOWN": (
         "서버 설정 결과를 확인하지 못해 Guard를 정지함. 앱을 다시 시작하세요."
     ),
+    "REG_DELETE_RESTART_REQUIRED": "서버를 삭제함. 앱을 다시 시작하세요.",
+    "REG_DELETE_UNKNOWN": (
+        "삭제가 끝났는지 확인하지 못함. 앱을 다시 시작한 뒤 서버 목록을 확인하세요."
+    ),
     "REG_TOOLS_RESTART_REQUIRED": (
         "도구 설정 저장 완료 · Task 정지됨. 앱을 다시 시작한 뒤 서버 목록에서 활성화하세요."
     ),

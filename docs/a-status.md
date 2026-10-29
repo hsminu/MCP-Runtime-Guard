@@ -257,6 +257,7 @@
 - [x] A205 드롭다운 휠 무시: `SelectionBox`는 휠로 값을 바꾸지 않고 페이지가 스크롤됨(`StrongFocus`), 호출 로그 필터도 `SelectionBox`로, A204 생각 중 줄 색은 `$mute` · [기록](archive/a/A205-selection-wheel.md)
 - [x] A206 서버 상세 창: 받는 곳 없던 A32 검사 카드를 지우고 `scan_status` 등록 요청과 A201 `ScanReportPanel`로 마지막 저장 검사를 표시(무한 로딩 제거), 상태·연결 설정·최근 검사 세 묶음 두 열 배치 · [기록](archive/a/A206-server-detail-scan.md)
 - [x] A207 A199가 깨뜨린 구조 시험(A 모듈 `import os` 금지): 실행 파일 비교를 `Path` 동등 비교로 바꾸고 `os` import 제거, `/` 경로 사례 추가 · [기록](archive/a/A207-architecture-os-import.md)
+- [x] A208 MCP 서버 삭제: 차단 → 설정 파일에서 서버 기록·선택·출처·접근 규칙 제거 → Registry 삭제(BLOCKED만, CAS, 등록·도구·검사 행 한 트랜잭션, `REGISTRY_DELETED` 감사) → 재시작 필요, 사용자 지시로 B·C 부분까지 A가 구현(B·C 리뷰 대기) · [기록](archive/a/A208-server-delete.md)
 
 ## 통합·패키징
 

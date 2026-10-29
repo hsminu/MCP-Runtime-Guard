@@ -329,22 +329,7 @@ class TaskPolicy:
                 if saved is not True:
                     raise SessionRuntimeError("POLICY_SAVE_FAILED")
                 self._document = change.document
-                if self._assembled is not None and self._task_source is not None:
-                    await stop_sessions(
-                        await self._apply(self._assembled, change, self._task_source)
-                    )
-                    if not change.changed:
-                        # policy_version is a content hash: a re-activation may
-                        # keep it. Still stop sessions before requiring restart.
-                        control = self._assembled.guard.human_control(self._assembled.operator_id)
-                        running = tuple(
-                            state.task_id
-                            for state in await self._task_source()
-                            if state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
-                        )
-                        for task_id in running:
-                            await control.emergency_halt(task_id)
-                        await stop_sessions(running)
+                await self._apply_registration_change(change, stop_sessions)
                 if active:
                     await registry.activate(
                         server_id,
@@ -356,6 +341,112 @@ class TaskPolicy:
             finally:
                 code = "REG_ACTIVATION_RESTART_REQUIRED" if completed else "REG_ACTIVATION_UNKNOWN"
                 self._admission.require_restart(code)
+                if self._assembled is not None:
+                    await self._assembled.guard.aclose()
+
+    async def _apply_registration_change(
+        self,
+        change: PreparedPolicyChange,
+        stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
+    ) -> None:
+        """Caller holds the policy lock; unchanged policy still stops live Tasks."""
+        if self._assembled is None or self._task_source is None:
+            return
+        await stop_sessions(await self._apply(self._assembled, change, self._task_source))
+        if not change.changed:
+            control = self._assembled.guard.human_control(self._assembled.operator_id)
+            running = tuple(
+                state.task_id
+                for state in await self._task_source()
+                if state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+            )
+            for task_id in running:
+                await control.emergency_halt(task_id)
+            await stop_sessions(running)
+
+    async def delete_server(
+        self,
+        server_id: str,
+        expected_row_revision: int,
+        registry: ServerRegistry,
+        stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
+        *,
+        operator_id: str,
+    ) -> None:
+        """A208: revoke, save/apply removal, delete; never retry partial writes (I6/I8)."""
+        async with self.lock:
+            self.check_registration()
+            entry = registry.entry(server_id)
+            if (
+                entry is None
+                or type(expected_row_revision) is not int
+                or entry.registration.row_revision != expected_row_revision
+            ):
+                raise SessionRuntimeError("REG_ACTIVATION_STALE")
+            # The removal is prepared and validated before the first write, as
+            # set_server_active does; a refusal here leaves Guard running.
+            current = self.registration_document()
+            document = FrozenJsonObject(current).to_dict()
+            servers = document.get("servers")
+            profile = document.get("profile")
+            if (
+                not isinstance(servers, list)
+                or not isinstance(profile, dict)
+                or not isinstance(profile.get("servers"), list)
+            ):
+                raise SessionRuntimeError("POLICY_CHANGE_INVALID")
+            servers[:] = [server for server in servers if server["id"] != server_id]
+            profile["servers"] = [s for s in profile["servers"] if s != server_id]
+            if "sources" in profile:
+                profile["sources"] = [
+                    source for source in profile["sources"] if source["server"] != server_id
+                ]
+            rules = document.get("access_rules")
+            if isinstance(rules, dict):
+                document["access_rules"] = {
+                    key: [pair for pair in rules[key] if pair[0] != server_id]
+                    for key in ("allow", "deny")
+                    if key in rules
+                }
+            try:
+                change = prepare_policy_change(
+                    current,
+                    document,
+                    self._assembled.registry if self._assembled else registry,
+                    resource_resolver=self._assembled.resource_resolver
+                    if self._assembled
+                    else None,
+                )
+            except CatalogConfigError:
+                raise SessionRuntimeError("POLICY_CHANGE_INVALID") from None
+            completed = False
+            try:
+                if entry.registration.status in (RegStatus.PENDING, RegStatus.ACTIVE):
+                    entry = await registry.block(
+                        server_id, expected_row_revision=expected_row_revision
+                    )
+                # Compare documents so an already absent server causes no file write.
+                if document != FrozenJsonObject(current).to_dict():
+                    if self._saver is None:
+                        raise SessionRuntimeError("REG_SETTINGS_UNAVAILABLE")
+                    try:
+                        saved = await self._saver(change)
+                    except SettingsFileChangedError:
+                        raise SessionRuntimeError("POLICY_SAVE_FILE_CHANGED") from None
+                    except SaveOutcomeUnknownError:
+                        raise SessionRuntimeError("POLICY_SAVE_UNKNOWN") from None
+                    if saved is not True:
+                        raise SessionRuntimeError("POLICY_SAVE_FAILED")
+                    self._document = change.document
+                await self._apply_registration_change(change, stop_sessions)
+                await registry.delete(
+                    server_id, expected_row_revision=entry.registration.row_revision
+                )
+                completed = True
+            finally:
+                self._admission.require_restart(
+                    "REG_DELETE_RESTART_REQUIRED" if completed else "REG_DELETE_UNKNOWN"
+                )
                 if self._assembled is not None:
                     await self._assembled.guard.aclose()
 
