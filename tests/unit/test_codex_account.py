@@ -245,3 +245,81 @@ def test_unfinished_device_login_times_out_as_not_completed(app, monkeypatch) ->
         assert views[-1].state == "SIGNED_OUT"
     finally:
         close_bridge(app, bridge)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_device_wait_before_closing_account_resources(app):
+    # A137 M16, I6/T20 support: leftover-loop cancellation must not mask omission.
+    account = await client(FakeAppServer())
+    checked = []
+    waiters = ()
+
+    async def close():
+        checked.append(all(task.cancelled() or task.cancelling() for task in waiters))
+        await account.aclose()
+
+    async def bootstrap():
+        return BackendBindings(lambda _: None, FakeControl(), close=close, account=account)
+
+    bridge = BackendBridge(bootstrap)
+    boot = asyncio.create_task(bootstrap())
+    bindings = await asyncio.wait_for(boot, 2)
+    assert bridge._bindings.adopt(boot)
+    from guard_app.services.bridge_ingress import account_command
+
+    try:
+        await asyncio.wait_for(
+            bridge._accounts.account(
+                bindings, account_command("account_login_device", "account", None)
+            ),
+            2,
+        )
+        waiters = tuple(bridge._accounts._waits)
+        assert len(waiters) == 1
+        assert not waiters[0].done()
+        await asyncio.wait_for(bridge._shut_down(), 2)
+        assert checked == [True]
+    finally:
+        for waiter in waiters:
+            waiter.cancel()
+        await asyncio.wait_for(asyncio.gather(*waiters, return_exceptions=True), 2)
+        await asyncio.wait_for(account.aclose(), 2)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_logout_republishes_session_capability_even_on_error(app, fails):
+    # A137 M30, I6: readiness is re-read after logout, not a stale startup value.
+    capabilities, views = [], []
+    blocker = "LOGOUT_IN_PROGRESS"
+
+    class Account:
+        async def logout(self):
+            nonlocal blocker
+            blocker = "LOGIN_REQUIRED"
+            if fails:
+                raise AccountError()
+            return AccountView("SIGNED_OUT")
+
+    async def bootstrap():
+        return BackendBindings(
+            lambda _: None,
+            FakeControl(),
+            account=Account(),
+            create_session=lambda _: None,
+            session_blocker=lambda: blocker,
+        )
+
+    bridge = BackendBridge(bootstrap)
+    bridge.session_capability_changed.connect(capabilities.append)
+    bridge.account_changed.connect(views.append)
+    receiver = attach(bridge)
+    try:
+        bridge.start()
+        pump_until(app, lambda: bridge.state is BridgeState.READY and bool(capabilities))
+        assert capabilities == ["LOGOUT_IN_PROGRESS"]
+        command = bridge.request_account("account_logout")
+        pump_until(app, lambda: receiver.has_stage(command))
+        assert capabilities == ["LOGOUT_IN_PROGRESS", "LOGIN_REQUIRED"]
+        assert views[-1].state == ("FAILED" if fails else "SIGNED_OUT")
+    finally:
+        close_bridge(app, bridge)

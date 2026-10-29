@@ -153,3 +153,37 @@ def test_picked_reasoning_level_reaches_the_runner_and_unknown_levels_never_queu
         assert runner.efforts == ["high"]
     finally:
         close_bridge(app, bridge)
+
+
+@pytest.mark.asyncio
+async def test_partial_size_limit_applies_to_accumulated_text():
+    # A137 M22, I6/I9: exactly the cap is publishable; one more char is dropped.
+    from guard_app.services.bridge_streams import MAX_PARTIAL_CHARS, AnswerStreams
+
+    seen = []
+    streams = AnswerStreams(seen.append, lambda: False)
+    stream = streams.open("task", 1, "command")
+    for piece in ("x" * (MAX_PARTIAL_CHARS - 1), "y", "overflow"):
+        streams.add("task", 1, piece)
+    streams.close("task", stream)
+    assert [event.text for event in seen] == ["x" * (MAX_PARTIAL_CHARS - 1) + "y"]
+    assert stream.chars == MAX_PARTIAL_CHARS
+    assert streams.active() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_before_add", [False, True])
+async def test_stopped_stream_drops_buffered_and_new_pieces(stop_before_add):
+    # A137 M24, I6/I9: stop between add and flush also suppresses publication.
+    from guard_app.services.bridge_streams import AnswerStreams
+
+    seen, stopped = [], False
+    streams = AnswerStreams(seen.append, lambda: stopped)
+    stream = streams.open("task", 1, "command")
+    stopped = stop_before_add
+    streams.add("task", 1, "PRIVATE_PIECE")
+    stopped = True
+    streams.close("task", stream)
+    assert seen == []
+    assert stream.chars == (0 if stop_before_add else len("PRIVATE_PIECE"))
+    assert streams.active() == 0

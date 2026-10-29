@@ -337,13 +337,18 @@ def test_initial_snapshot_failure_or_stop_closes_resources():
             )
 
         bridge = BackendBridge(boot, startup_timeout=0.1)
-        bridge.start()
-        wait_until(app, entered.is_set)
-        if mode == "close":
+        try:
+            bridge.start()
+            wait_until(app, entered.is_set, timeout=2)
+            if mode == "close":
+                bridge.close()
+            wait_until(app, lambda: bridge.thread_done, timeout=2)
+            assert cleaned.is_set()
+            assert bridge.state is (BridgeState.CLOSED if mode == "close" else BridgeState.FAILED)
+        finally:
+            # M20: a failed assertion must not leave a live non-daemon backend.
             bridge.close()
-        wait_until(app, lambda: bridge.thread_done)
-        assert cleaned.is_set()
-        assert bridge.state is (BridgeState.CLOSED if mode == "close" else BridgeState.FAILED)
+            wait_until(app, lambda: bridge.thread_done, timeout=2)
 
     for mode in ["error", "timeout", "close"]:
         with pytest.MonkeyPatch.context() as patch:

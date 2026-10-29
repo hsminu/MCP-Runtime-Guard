@@ -8,7 +8,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -35,7 +35,15 @@ from guard_app.services.bridge import (
     LifecycleEvent,
     TaskProjection,
 )
+from guard_app.services.bridge_bindings import BindingsOwner
 from guard_app.services.bridge_commands import review_fields, review_header
+from guard_app.services.bridge_ingress import (
+    ACCOUNT_ACTIONS,
+    BridgeCommand,
+    CommandIngress,
+    CommandLedger,
+    account_command,
+)
 from guard_app.services.runner import RunUpdate
 
 
@@ -587,6 +595,8 @@ def test_completed_run_does_not_exhaust_control_command_ids(app) -> None:
 def test_startup_failure_is_fixed_code_and_shutdown_refuses_work(app):
     def check(mode, patch):
         async def bootstrap():
+            if mode == "human_control":
+                return BackendBindings(lambda _: None, object())
             if mode == "binding":
                 return BackendBindings(lambda _: None, FakeControl(), discard_queued="not callable")
             if mode == "thread":
@@ -602,7 +612,11 @@ def test_startup_failure_is_fixed_code_and_shutdown_refuses_work(app):
         receiver = attach(bridge)
         bridge.start()
         if mode != "thread":
-            pump_until(app, lambda: bridge.state is BridgeState.FAILED)
+            try:
+                pump_until(app, lambda: bridge.state is BridgeState.FAILED)
+            finally:
+                if bridge.state is not BridgeState.FAILED:
+                    close_bridge(app, bridge)
         app.processEvents()
         assert bridge.state is BridgeState.FAILED
         if mode == "thread":
@@ -616,7 +630,7 @@ def test_startup_failure_is_fixed_code_and_shutdown_refuses_work(app):
         late = bridge.request_control(ControlAction.CANCEL, "task-1")
         assert receiver.stages(late)[-1].code == "CLOSING"
 
-    for mode in ("thread", "startup", "binding"):
+    for mode in ("thread", "startup", "binding", "human_control"):
         with pytest.MonkeyPatch.context() as patch:
             patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
             check(mode, patch)
@@ -1126,7 +1140,11 @@ def test_confirmed_cleanup_allows_new_bridge_but_not_same_instance(app, monkeypa
                 if ending == "closed":
                     pump_until(app, lambda: first.state is BridgeState.READY)
                     first.close()
-                pump_until(app, lambda: first.thread_done and not first.backend_alive)
+                try:
+                    pump_until(app, lambda: first.thread_done and not first.backend_alive)
+                finally:
+                    if not first.thread_done:
+                        close_bridge(app, first)
         app.processEvents()
         assert (
             events.states[-1].code
@@ -1289,3 +1307,113 @@ def test_distinct_tasks_run_while_same_task_commands_wait_and_shutdown_settles_a
         second_gate.set()
         if not bridge.thread_done:
             close_bridge(app, bridge)
+
+
+@pytest.mark.parametrize(
+    ("lane", "action"), [("run", "advance"), ("control", "approve"), ("control", "cancel")]
+)
+def test_closed_ingress_refuses_new_and_replayed_commands(lane, action):
+    # A137 M05, I6: no scheduler call or queued work after close.
+    ingress, ledger, scheduled = CommandIngress(2, 2), CommandLedger(2), []
+    command = BridgeCommand("old", lane, action, "task")
+    assert ingress.offer(command, ledger, lambda: scheduled.append(True)) is None
+    assert ingress.close() == [command]
+    ledger.record(command.event(CommandStage.UNCONFIRMED, "ADMISSION_UNCONFIRMED"))
+    for key in ("old", "new"):
+        assert (
+            ingress.offer(
+                BridgeCommand(key, lane, action, "task"), ledger, lambda: scheduled.append(True)
+            )
+            == "CLOSING"
+        )
+    assert scheduled == [True]
+    assert ingress.waiting() == 0 and not ingress.scheduled
+    assert ingress.take() is None
+
+
+def test_ledger_remembers_unconfirmed_admission_and_evicts_only_old_settled_ids():
+    # A137 M06/M07, I6/I8: even admission failures have a replay record.
+    ledger = CommandLedger(2)
+    active = BridgeCommand("active", "run", "advance", "task")
+    ledger.record(active.event(CommandStage.PROCESSING, "BACKEND_STARTED"))
+    events = []
+    for index in range(3):
+        command = BridgeCommand(str(index), "run", "advance", "task")
+        event = command.event(CommandStage.UNCONFIRMED, "ADMISSION_UNCONFIRMED")
+        ledger.record(event)
+        events.append(event)
+        assert ledger.previous(command.command_id) == event
+        assert ledger.settled() == tuple(events[-2:])
+    assert ledger.previous("0") is None
+    assert ledger.unsettled() == (active.event(CommandStage.PROCESSING, "BACKEND_STARTED"),)
+
+
+@pytest.mark.parametrize("action", sorted(ACCOUNT_ACTIONS))
+def test_only_api_key_account_command_carries_the_secret(action):
+    # A137 M09, I9/S04: other actions must not retain an accidentally supplied key.
+    command = account_command(action, "account", "PRIVATE_KEY")
+    assert command.user_text == ("PRIVATE_KEY" if action == "account_login_api_key" else None)
+    assert "PRIVATE_KEY" not in repr(command)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_rejects_each_backend_lane_before_unconfirmed_fallback(app):
+    # A137 M14, I6/T20 support: enqueue before workers can take the commands.
+    async def bootstrap():
+        return BackendBindings(lambda _: None, FakeControl())
+
+    bridge = BackendBridge(bootstrap)
+    receiver = attach(bridge)
+    bridge._lanes.open()
+    commands = [
+        BridgeCommand(lane, lane, "advance", "task") for lane in ("run", "control", "urgent")
+    ]
+    for command in commands:
+        bridge._lanes.queue(command.lane).put_nowait(command)
+        bridge._ledger.record(command.event(CommandStage.ACCEPTED, "QUEUED"))
+    try:
+        await asyncio.wait_for(bridge._shut_down(), 2)
+        for command in commands:
+            assert receiver.stages(command.command_id) == [
+                command.event(CommandStage.REJECTED, "SHUTTING_DOWN")
+            ]
+            await asyncio.wait_for(bridge._lanes.queue(command.lane).join(), 2)
+        assert bridge._ledger.unsettled() == ()
+    finally:
+        bridge._lanes.cancel_workers()
+        await asyncio.wait_for(asyncio.gather(*bridge._lanes.active(), return_exceptions=True), 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("late", [False, True], ids=["done", "after-cancel"])
+@pytest.mark.parametrize("confirmed", [False, True], ids=["unconfirmed", "confirmed"])
+async def test_late_bootstrap_requires_confirmed_cleanup(late, confirmed):
+    # A137 M18, I6: a successful bootstrap, even one finishing after discard's
+    # cancel, counts as cleaned up only when its close returns in the window.
+    owner = BindingsOwner(0.05, BackendBridge._consume_task)
+    started, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    if confirmed:
+        release.set()
+
+    async def cleanup():
+        entered.set()
+        await asyncio.wait_for(release.wait(), 2)
+
+    async def bootstrap():
+        if late:
+            started.set()
+            # Stands in for a bootstrap that finishes despite the cancel.
+            with suppress(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.Event().wait(), 2)
+        return BackendBindings(lambda _: None, FakeControl(), close=cleanup)
+
+    boot = asyncio.create_task(bootstrap())
+    await asyncio.wait_for(started.wait() if late else boot, 2)
+    try:
+        assert await asyncio.wait_for(owner.discard(boot), 2) is confirmed
+        assert boot.done() and not boot.cancelled()
+        assert entered.is_set()
+        assert owner.current is None
+    finally:
+        release.set()
+        await asyncio.wait_for(owner.close(), 2)
