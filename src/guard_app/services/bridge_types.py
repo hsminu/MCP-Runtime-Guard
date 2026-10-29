@@ -13,6 +13,7 @@ from enum import StrEnum
 from guard_app.adapters.codex_protocol import REASONING_EFFORTS
 from guard_app.domain.enums import Label, TaskStatus
 from guard_app.domain.errors import StoreError
+from guard_app.domain.models import RecoveryItemPage, RecoveryReport
 from guard_app.services.approvals import HumanControl
 from guard_app.services.codex_account import CodexAccountPort
 from guard_app.services.policy_view import PolicyView
@@ -106,6 +107,9 @@ class BackendBindings:
     # Fixed code of what the start made of the CFG-01 settings file
     # (product_settings); None when this run reads no file (demo, tests).
     settings_status: str | None = None
+    recovery_report: RecoveryReport | None = None
+    recovery_page: RecoveryItemPage | None = None
+    recovery_next: Callable[[], Awaitable[RecoveryItemPage]] | None = None
 
 
 # The only model pinned by C's config/codex/codex.lock.json (allowed_models).

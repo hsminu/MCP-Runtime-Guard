@@ -29,6 +29,10 @@ from typing import Any
 
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
 
+from guard_app.domain.enums import StorePrepareStep
+from guard_app.domain.errors import StorePrepareError
+from guard_app.domain.models import RecoveryItemPage as RecoveryItemPage
+from guard_app.domain.models import RecoveryReport as RecoveryReport
 from guard_app.services import catalog_sources
 from guard_app.services.bridge_bindings import BindingsOwner, usable
 from guard_app.services.bridge_commands import (
@@ -171,6 +175,8 @@ class BackendBridge(QObject):
     account_changed = Signal(object)
     policy_changed = Signal(object)
     settings_changed = Signal(object)
+    recovery_changed = Signal(object)
+    recovery_page_changed = Signal(object)
 
     def __init__(
         self,
@@ -195,6 +201,7 @@ class BackendBridge(QObject):
         )
         super().__init__()
         self._bootstrap = bootstrap
+        self._recovery_loading = False
         self._start_gate = _PROCESS_START_GATE if start_gate is None else start_gate
         self._start_owner = object()
         self._state_code = "NEW"
@@ -583,7 +590,9 @@ class BackendBridge(QObject):
             return_when=asyncio.FIRST_COMPLETED,
         )
         if boot not in done or boot.cancelled() or boot.exception() is not None:
-            self._end_startup(await self._bindings.discard(boot), "STARTUP_FAILED")
+            error = boot.exception() if boot.done() and not boot.cancelled() else None
+            code = error.code.value if isinstance(error, StorePrepareError) else "STARTUP_FAILED"
+            self._end_startup(await self._bindings.discard(boot), code)
             return None
         adopted = self._bindings.adopt(boot)
         bindings = self._bindings.current
@@ -626,12 +635,41 @@ class BackendBridge(QObject):
         )
         self.policy_changed.emit(bindings.policy)
         status = bindings.settings_status
+        self.recovery_changed.emit(bindings.recovery_report)
+        self.recovery_page_changed.emit(bindings.recovery_page)
         self.settings_changed.emit(status if type(status) is str else None)
         if bindings.task_events is not None:
             bindings.task_events(self._views.task_event)
         if bindings.answer_partials is not None:
             bindings.answer_partials(self._streams.add)
         self._set_state(BridgeState.READY, "READY")
+
+    def store_progress(self, step: StorePrepareStep) -> None:
+        """Backend-loop callback; fixed progress values only, no state transition."""
+        if isinstance(step, StorePrepareStep) and self.state is BridgeState.STARTING:
+            self.lifecycle_changed.emit(LifecycleEvent(BridgeState.STARTING, step.value))
+
+    def load_recovery_page(self) -> None:
+        loop = self._loop
+        if loop is not None and self.state is BridgeState.READY:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._start_recovery_page)
+
+    def _start_recovery_page(self) -> None:
+        bindings = self._bindings.current
+        if self._recovery_loading or bindings is None or bindings.recovery_next is None:
+            return
+        self._recovery_loading = True
+        task = asyncio.ensure_future(bindings.recovery_next())
+
+        def finished(result: asyncio.Future[RecoveryItemPage]) -> None:
+            self._recovery_loading = False
+            if result.cancelled() or result.exception() is not None:
+                self.recovery_page_changed.emit(None)
+            elif self.state is BridgeState.READY:
+                self.recovery_page_changed.emit(result.result())
+
+        task.add_done_callback(finished)
 
     async def _shut_down(self) -> None:
         self._set_state(BridgeState.CLOSING, "CLOSING")

@@ -33,11 +33,16 @@ unknown outcome. A call already reserved when it failed keeps its outcome.
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.mcp_transport import McpTransport, StreamFactory, ToolListLimits
+from guard_app.adapters.mcp_transport.streams import (
+    http_stream_factory,
+    validated_stdio_stream_factory,
+)
 from guard_app.domain.contracts import RegisteredServer, ToolView
 from guard_app.domain.enums import RegStatus
 from guard_app.domain.errors import StoreError
@@ -45,7 +50,10 @@ from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ToolSpec
 from guard_app.ports import Registry, Store
 from guard_app.security.digest import JcsCanonicalizationError, tool_fingerprint
+from guard_app.security.endpoints import normalize_endpoint
 from guard_app.security.ids import new_id
+from guard_app.security.launcher import ExecutablePin, LaunchedProcess, launch_mcp_server
+from guard_app.security.paths import AppFolders
 from guard_app.services.catalog import (
     CatalogConfigError,
     GuardSettings,
@@ -267,6 +275,7 @@ class AssembledGuard:
     tool_views: tuple[ToolView, ...]
     operator_id: str
     call_timeout_s: float = 30.0
+    close_servers: Callable[[], Awaitable[None]] | None = None
 
     @property
     def settings(self) -> GuardSettings:
@@ -297,7 +306,11 @@ class AssembledGuard:
                 if settle is not None:
                     await settle()
             finally:
-                await self.guard.aclose()
+                try:
+                    await self.guard.aclose()
+                finally:
+                    if self.close_servers is not None:
+                        await self.close_servers()
 
 
 async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
@@ -346,6 +359,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             approval_id_factory=lambda: new_id("approval"),
             next_call_seq=inputs.next_call_seq,
             failure_audit=inputs.failure_audit,
+            on_global_halt=getattr(store, "halt_execution", None),
             monotonic=time.monotonic,
             approval_ttl_seconds=settings.approval_ttl_seconds,
             taint_mode=settings.taint_mode,
@@ -369,3 +383,53 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     finally:
         if not adopted:
             await transport.close()
+
+
+class ProductServerStreams:
+    """C owns process creation; this composition owns confirmation of every exit."""
+
+    def __init__(self, folders: AppFolders) -> None:
+        self._folders = folders
+        self._processes: list[LaunchedProcess] = []
+
+    def streams(self, loaded: LoadedProfile) -> dict[str, StreamFactory]:
+        return {server.id: self._stream(server) for server in loaded.selected_servers}
+
+    def _stream(self, server: ServerSettings) -> StreamFactory:
+        if server.transport == "streamable_http":
+            return http_stream_factory(normalize_endpoint(server.url).url)
+
+        @asynccontextmanager
+        async def connect() -> AsyncIterator[tuple[object, ...]]:
+            pin = (
+                None
+                if server.command_size is None or server.command_sha256 is None
+                else ExecutablePin(server.command_size, server.command_sha256)
+            )
+            process = await launch_mcp_server(
+                self._folders.server_folder(server.id),
+                server.command,
+                server.args,
+                server.env_allow,
+                pin,
+            )
+            self._processes.append(process)
+            factory = validated_stdio_stream_factory(
+                process.read_bytes, process.write_bytes, process.drain
+            )
+            async with factory() as streams:
+                yield streams
+
+        return connect
+
+    async def close(self) -> None:
+        import asyncio
+
+        from guard_app.services.bridge_types import BackendCleanupError
+
+        results = await asyncio.gather(
+            *(process.close(grace_s=1.0, kill_s=1.0) for process in self._processes),
+            return_exceptions=True,
+        )
+        if any(result is not True for result in results):
+            raise BackendCleanupError

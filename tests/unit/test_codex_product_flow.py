@@ -28,6 +28,7 @@ from guard_app.services.session_preparation import (
 from guard_app.services.session_runtime import bootstrap_product
 
 from .fake_codex_app_server import FakeAppServer
+from .product_folders import product_folders
 from .test_product_assembly import (
     INTERNAL_SOURCE,
     PARTNER,
@@ -70,7 +71,7 @@ def preparation(servers: list[FakeAppServer], script) -> SessionPreparation:
 
 @asynccontextmanager
 async def _bindings(*args, **kwargs):
-    bindings = await bootstrap_product(*args, **kwargs)
+    bindings = await bootstrap_product(product_folders(args[0]), *args[1:], **kwargs)
     try:
         yield bindings
     finally:
@@ -319,7 +320,7 @@ async def test_ask_call_waits_with_its_approval_id_and_approval_completes_the_tu
         assert events == [task_id, task_id]  # wait start and end are republished
 
 
-async def stop_session_during_guard_submit(tmp_path, *, resume_first: bool):
+async def stop_session_during_guard_submit(tmp_path, monkeypatch, *, resume_first: bool):
     """Park Task 1's Guard submit before reservation (in `next_call_seq`), stop
     its Codex session with an L3 item, then run a READ in a second Task either
     while that submit is still parked or after it has resumed and settled."""
@@ -328,13 +329,18 @@ async def stop_session_during_guard_submit(tmp_path, *, resume_first: bool):
     release = asyncio.Event()
     sequence = count(1)
 
-    async def gated_call_seq(_task_id: str) -> int:
+    from guard_app.storage.sqlite_store import SQLiteStore
+
+    allocate = SQLiteStore.allocate_call_seq
+
+    async def gated_call_seq(self, _task_id: str) -> int:
         value = next(sequence)
         if value == 1:
             entered.set()
             await release.wait()
-        return value
+        return await allocate(self, _task_id)
 
+    monkeypatch.setattr(SQLiteStore, "allocate_call_seq", gated_call_seq)
     servers: list[FakeAppServer] = []
 
     async def script(server: FakeAppServer, turn_id: str, text: str) -> None:
@@ -352,7 +358,9 @@ async def stop_session_during_guard_submit(tmp_path, *, resume_first: bool):
         next_call_seq=gated_call_seq,
     )
     bindings = await bootstrap_product(
-        str(tmp_path / "shield.db"), preparation=preparation(servers, script), product=product
+        product_folders(str(tmp_path / "shield.db")),
+        preparation=preparation(servers, script),
+        product=product,
     )
     try:
         assert bindings.create_session is not None
@@ -386,11 +394,13 @@ async def stop_session_during_guard_submit(tmp_path, *, resume_first: bool):
 
 
 @pytest.mark.asyncio
-async def test_stopped_submit_is_isolated_before_and_after_resuming(tmp_path, subtests):
+async def test_stopped_submit_is_isolated_before_and_after_resuming(
+    tmp_path, subtests, monkeypatch
+):
     """B7.2/I8, STOP-01: a shielded submit cannot halt other Tasks."""
     async with asyncio.timeout(30):
         for resume_first in (False, True):
-            with subtests.test(resume_first=resume_first):
+            with subtests.test(resume_first=resume_first), monkeypatch.context() as patch:
                 folder = tmp_path / str(resume_first)
                 folder.mkdir()
                 (
@@ -401,7 +411,7 @@ async def test_stopped_submit_is_isolated_before_and_after_resuming(tmp_path, su
                     parked,
                     peer,
                     servers,
-                ) = await stop_session_during_guard_submit(folder, resume_first=resume_first)
+                ) = await stop_session_during_guard_submit(folder, patch, resume_first=resume_first)
                 assert parked is not resume_first
                 assert update.status == "complete"
                 result = servers[1].last_reply["result"]

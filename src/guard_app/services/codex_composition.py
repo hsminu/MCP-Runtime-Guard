@@ -41,6 +41,7 @@ def codex_session_factory(
     approvals: ApprovalOutcomes,
     *,
     limits: SessionLimits | None = None,
+    execution_allowed: Callable[[], bool] | None = None,
 ) -> Callable[[TaskState, SessionOptions, TaskResources], Awaitable[CodexSession]]:
     bounded = replace(limits or SessionLimits(), call_watchdog_s=watchdog_seconds(assembled))
     version = app_version()
@@ -68,6 +69,7 @@ def codex_session_factory(
             base_instructions=BASE_INSTRUCTIONS,
             version=version,
             limits=bounded,
+            execution_allowed=execution_allowed,
         )
         try:
             await session.start()

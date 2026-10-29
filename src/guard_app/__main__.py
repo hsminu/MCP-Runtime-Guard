@@ -201,7 +201,7 @@ def _run(
     from PySide6.QtGui import QCloseEvent
     from PySide6.QtWidgets import QApplication
 
-    from guard_app.services.bridge import BackendBridge
+    from guard_app.services.bridge import BackendBridge, BridgeState
     from guard_app.ui.runtime import RuntimePanel
     from guard_app.ui.window import GuardWindow
 
@@ -230,15 +230,23 @@ def _run(
         # A52: the login screen's app-server and logout cleanup go through it too.
         preparation = codex.preparation()
         account = codex.account_access(open_browser=open_login_browser)
-        db_file = str(codex.db_file)
         bridge = BackendBridge(
             lambda: bootstrap_product(
-                db_file, preparation=preparation, settings=settings, account=account
-            )
+                codex.folders,
+                preparation=preparation,
+                settings=settings,
+                account=account,
+                on_step=lambda step: bridge.store_progress(step),
+            ),
+            startup_timeout=90.0,
         )
 
     close_limit_s = bridge.shutdown_timeout + CLOSE_OBSERVATION_S
     closing_since: list[float] = []
+    start_failed: list[bool] = []
+    bridge.lifecycle_changed.connect(
+        lambda event: start_failed.append(True) if event.state is BridgeState.FAILED else None
+    )
 
     class ApplicationWindow(GuardWindow):
         def closeEvent(self, event: QCloseEvent) -> None:
@@ -274,7 +282,7 @@ def _run(
     # A quit from elsewhere (session end) also gets the observation window.
     waited_s = time.monotonic() - closing_since[0] if closing_since else 0.0
     done = bridge.wait_done(close_limit_s - waited_s)
-    return code, done and not bridge.cleanup_unconfirmed
+    return (1 if start_failed else code), done and not bridge.cleanup_unconfirmed
 
 
 if __name__ == "__main__":

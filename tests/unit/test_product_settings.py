@@ -58,6 +58,7 @@ from guard_app.ui.window import GuardWindow
 
 from .fake_codex_app_server import FakeAppServer
 from .logging_state import preserve_logging_state  # noqa: F401
+from .product_folders import product_folders
 from .test_codex_product_flow import preparation, read_then_answer
 from .test_product_assembly import READ_DEFINITION, Peer, Registry, document, inputs
 
@@ -246,11 +247,21 @@ async def refuse_session(*_args):
     raise AssertionError("no session in this test")
 
 
-def test_product_start_reports_the_settings_and_refuses_tasks_without_a_profile(tmp_path, subtests):
+def test_product_start_reports_the_settings_and_refuses_tasks_without_a_profile(
+    tmp_path, subtests, monkeypatch
+):
+    monkeypatch.setattr(
+        session_runtime.ProductServerStreams,
+        "streams",
+        lambda self, loaded: (
+            inputs(Peer([READ_DEFINITION]), registry_stub(), document()).server_streams
+        ),
+    )
+
     def check(doc, status, blocker, tmp_path):
         async def start():
             bindings = await bootstrap_product(
-                str(tmp_path / "start.db"),
+                product_folders(str(tmp_path / "start.db")),
                 session_factory=refuse_session,
                 preparation=preparation([], read_then_answer),
                 settings=SettingsFile(object(), doc, None),  # type: ignore[arg-type]
@@ -289,7 +300,7 @@ def test_save_with_unknown_outcome_closes_guard_until_restart(tmp_path) -> None:
 
     async def scenario():
         bindings = await bootstrap_product(
-            str(tmp_path / "policy.db"),
+            product_folders(str(tmp_path / "policy.db")),
             preparation=preparation(servers, read_then_answer),
             product=inputs(Peer([READ_DEFINITION]), registry_stub(), document()),
             profile_saver=unknown_saver,
@@ -330,7 +341,7 @@ def test_save_cancelled_mid_write_closes_guard_until_restart(tmp_path) -> None:
             return True
 
         bindings = await bootstrap_product(
-            str(tmp_path / "policy.db"),
+            product_folders(str(tmp_path / "policy.db")),
             preparation=preparation(servers, read_then_answer),
             product=inputs(peer, registry_stub(), document()),
             profile_saver=hanging_saver,
@@ -351,9 +362,8 @@ def test_save_cancelled_mid_write_closes_guard_until_restart(tmp_path) -> None:
             with pytest.raises(SessionRuntimeError) as created:
                 await bindings.create_session(SessionOptions())
             runner = bindings.runner_for_task(old.task_id)
-            runner.add_user_message("summarize the public document")
-            update = await asyncio.wait_for(runner.advance(), 5)
-            return blocker, (again.value.code, created.value.code), update
+            assert not runner.can_accept_message
+            return blocker, (again.value.code, created.value.code), runner
         finally:
             assert bindings.close is not None
             await bindings.close()
@@ -362,9 +372,9 @@ def test_save_cancelled_mid_write_closes_guard_until_restart(tmp_path) -> None:
     assert blocker == "POLICY_SAVE_UNKNOWN"
     assert codes == ("POLICY_SAVE_UNKNOWN", "POLICY_SAVE_UNKNOWN")
     # The old session's READ is refused by the closed Guard, never dispatched.
-    assert update.status == "complete"
+    assert not update.can_advance
     assert peer.calls == []
-    assert servers[0].last_reply["result"]["success"] is False  # type: ignore[attr-defined]
+    assert not hasattr(servers[0], "last_reply")
     assert len(servers) == 1
 
 
@@ -380,7 +390,7 @@ def test_file_changed_outside_the_app_refuses_saves_and_keeps_guard_running(tmp_
 
     async def scenario():
         bindings = await bootstrap_product(
-            str(tmp_path / "policy.db"),
+            product_folders(str(tmp_path / "policy.db")),
             preparation=preparation(servers, read_then_answer),
             product=inputs(peer, registry_stub(), document()),
             profile_saver=changed_saver,
@@ -577,7 +587,7 @@ def test_main_starts_without_a_settings_file_and_hands_the_first_run_on(
     class StoppedError(Exception):
         pass
 
-    def bridge(bootstrap) -> None:
+    def bridge(bootstrap, **_kwargs) -> None:
         bootstrap()
         raise StoppedError
 

@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from .product_folders import product_folders
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
@@ -333,7 +335,7 @@ def test_product_start_shows_why_sessions_are_refused(tmp_path, pin, subtests):
 
         async def run():
             bindings = await bootstrap_product(
-                str(tmp_path / "product.db"), preparation=owner.preparation()
+                product_folders(str(tmp_path / "product.db")), preparation=owner.preparation()
             )
             try:
                 assert bindings.session_blocker is not None
@@ -450,14 +452,14 @@ def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
     class StoppedError(Exception):
         pass
 
-    def bridge(bootstrap: Callable[[], object]) -> None:
+    def bridge(bootstrap: Callable[[], object], **_kwargs) -> None:
         assert_lock_held(root)
         seen.append(db.exists())
         bootstrap()
         raise StoppedError
 
     def recording_bootstrap(db_path: str, **kwargs: object) -> None:
-        opened.append(db_path)
+        opened.append(str(db_path.db_path()))
         accounts.append(kwargs.get("account"))
 
     monkeypatch.setattr(paths, "app_root", lambda: root)
