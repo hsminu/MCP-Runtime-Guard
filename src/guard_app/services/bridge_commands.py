@@ -232,6 +232,21 @@ class AccountCommands:
         self._out.policy_changed(view)
         return "POLICY_CHANGED"
 
+    async def policy_destinations(self, bindings: BackendBindings, command: BridgeCommand) -> str:
+        change = bindings.policy_destinations
+        if change is None:
+            return "POLICY_CHANGE_UNAVAILABLE"
+        try:
+            view = await change(command.destination)
+        except SessionStartError as error:
+            return error.code
+        finally:
+            self._views.publish_capability()
+        if type(view) is not PolicyView:
+            return "POLICY_CHANGE_UNCONFIRMED"
+        self._out.policy_changed(view)
+        return "POLICY_CHANGED" if command.destination is not None else "POLICY_READ"
+
     async def _await_login(self, account: CodexAccountPort, login_id: str, generation: int) -> None:
         expired = False
         try:
@@ -329,6 +344,8 @@ class CommandExecutor:
             return await self._run(bindings, command, execution)
         if command.action in ACCOUNT_ACTIONS:
             return await self._accounts.account(bindings, command)
+        if command.action == "policy_destinations":
+            return await self._accounts.policy_destinations(bindings, command)
         if command.action == "policy_access":
             return await self._accounts.policy_access(bindings, command)
         control = bindings.human_control

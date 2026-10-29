@@ -18,7 +18,8 @@ class ToolSettingsDialog(QDialog):
         self.warning = plain_label(
             "저장하면 실행 중인 Task가 모두 정지됨. 앱을 다시 시작하세요.\n"
             "다시 시작한 뒤 서버 목록에서 활성화하세요. ACTIVE 서버도 다시 활성화해야 함.\n"
-            "보내기는 목적지 인자만 설정함. 등록된 목적지가 없으면 전송이 거부됨."
+            "보내기는 목적지 인자만 설정함. 등록된 목적지가 없으면 전송이 거부됨.\n"
+            "목적지는 정책 화면에서 등록하세요."
         )
         layout.addWidget(self.warning)
         scroll = QScrollArea()

@@ -9,7 +9,7 @@ from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.domain.enums import RegStatus, TaskStatus
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import TaskState
-from guard_app.services.bridge_types import ToolSettingsEdit
+from guard_app.services.bridge_types import DestinationEdit, ToolSettingsEdit
 from guard_app.services.catalog import (
     CatalogConfigError,
     GuardSettings,
@@ -27,6 +27,7 @@ from guard_app.services.product_settings import (
 )
 from guard_app.services.registry import ServerRegistry
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
+from guard_app.services.session_destinations import destination_document
 from guard_app.services.session_tool_settings import tool_settings_document
 
 # Stores B's prepared policy document (CFG-01: product_settings.SettingsFileSaver).
@@ -85,6 +86,7 @@ class TaskPolicy:
         self._admission = admission
         self._assembled = assembled
         self._document = document
+        self._applied_document = document
         self._saver = saver
         self._task_source = task_source
 
@@ -152,25 +154,69 @@ class TaskPolicy:
             # document the change before it saved, not the one it replaced (A117).
             document = self._document
             change = _server_access_change(document, assembled, server_id, allowed, denied)
-            if change.changed:
-                try:
-                    saved = await saver(change)
-                except SettingsFileChangedError:
-                    raise SessionRuntimeError("POLICY_SAVE_FILE_CHANGED") from None
-                except SaveOutcomeUnknownError:
-                    await self._require_restart(assembled, "POLICY_SAVE_UNKNOWN")
-                    raise SessionRuntimeError("POLICY_SAVE_UNKNOWN") from None
-                except asyncio.CancelledError:
-                    # The write may still finish after the cancel. Guard sets its
-                    # global stop before its first await, so a second cancel
-                    # during the close still leaves it stopped.
-                    await self._require_restart(assembled, "POLICY_SAVE_UNKNOWN")
-                    raise
-                if saved is not True:
-                    raise SessionRuntimeError("POLICY_SAVE_FAILED")
-                self._document = change.document
-                await stop_sessions(await self._apply(assembled, change, task_source))
-            return policy_view(assembled, change_available=True)
+            await self._save_change(assembled, saver, task_source, change, stop_sessions)
+            return policy_view(assembled, change_available=True, document=self._applied_document)
+
+    async def destinations(
+        self,
+        edit: DestinationEdit | None,
+        stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
+    ) -> PolicyView:
+        async with self.lock:
+            assembled, saver, task_source = self._assembled, self._saver, self._task_source
+            if assembled is None or self._document is None:
+                raise SessionRuntimeError("POLICY_CHANGE_UNAVAILABLE")
+            if edit is None:
+                return policy_view(
+                    assembled,
+                    change_available=self.available and self._admission.refusal() is None,
+                    document=self._applied_document,
+                )
+            if saver is None or task_source is None or self._admission.closed:
+                raise SessionRuntimeError("POLICY_CHANGE_UNAVAILABLE")
+            if self._admission.restart_code is not None:
+                raise SessionRuntimeError(self._admission.restart_code)
+            current = self._document
+            document = destination_document(current, edit)
+            try:
+                change = prepare_policy_change(
+                    current,
+                    document,
+                    assembled.registry,
+                    resource_resolver=assembled.resource_resolver,
+                )
+            except CatalogConfigError:
+                raise SessionRuntimeError("POLICY_DESTINATION_INVALID") from None
+            await self._save_change(assembled, saver, task_source, change, stop_sessions)
+            return policy_view(assembled, change_available=True, document=self._applied_document)
+
+    async def _save_change(
+        self,
+        assembled: AssembledGuard,
+        saver: ProfileSaver,
+        task_source: PolicyTaskSource,
+        change: PreparedPolicyChange,
+        stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
+    ) -> None:
+        """Shared save/apply failure semantics; caller holds the policy lock."""
+        if change.changed:
+            try:
+                saved = await saver(change)
+            except SettingsFileChangedError:
+                raise SessionRuntimeError("POLICY_SAVE_FILE_CHANGED") from None
+            except SaveOutcomeUnknownError:
+                await self._require_restart(assembled, "POLICY_SAVE_UNKNOWN")
+                raise SessionRuntimeError("POLICY_SAVE_UNKNOWN") from None
+            except asyncio.CancelledError:
+                # The write may still finish after the cancel. Guard sets its
+                # global stop before its first await, so a second cancel
+                # during the close still leaves it stopped.
+                await self._require_restart(assembled, "POLICY_SAVE_UNKNOWN")
+                raise
+            if saved is not True:
+                raise SessionRuntimeError("POLICY_SAVE_FAILED")
+            self._document = change.document
+            await stop_sessions(await self._apply(assembled, change, task_source))
 
     def check_registration(self) -> None:
         self._admission.check()
@@ -180,7 +226,11 @@ class TaskPolicy:
     def registration_policy_view(self) -> PolicyView | None:
         if self._assembled is None:
             return None
-        return policy_view(self._assembled, change_available=self._admission.refusal() is None)
+        return policy_view(
+            self._assembled,
+            change_available=self.available and self._admission.refusal() is None,
+            document=self._applied_document,
+        )
 
     async def set_server_active(
         self,
@@ -490,6 +540,7 @@ class TaskPolicy:
             raise SessionRuntimeError("POLICY_APPLY_FAILED") from None
         # New Task rows and the policy screen follow the applied Profile.
         assembled.loaded = change.loaded_profile
+        self._applied_document = change.document
         self._settings = change.loaded_profile.guard_settings
         return result.stopped_task_ids
 

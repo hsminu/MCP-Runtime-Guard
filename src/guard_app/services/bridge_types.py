@@ -104,6 +104,8 @@ class BackendBindings:
     policy_access: (
         Callable[[str, tuple[str, ...], tuple[str, ...]], Awaitable[PolicyView]] | None
     ) = None
+    # None argument reads the current destination list; edits return the applied view.
+    policy_destinations: Callable[[DestinationEdit | None], Awaitable[PolicyView]] | None = None
     # Fixed code of what the start made of the CFG-01 settings file
     # (product_settings); None when this run reads no file (demo, tests).
     settings_status: str | None = None
@@ -190,6 +192,15 @@ class ApprovalReview:
     arguments_bytes: bytes
     # The same metadata as (label, value) pairs, shown one field per line.
     fields: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class DestinationEdit:
+    action: str
+    destination_id: str
+    tier: str = ""
+    max_label: str = ""
+    selected: bool = False
 
 
 @dataclass(frozen=True, slots=True, repr=False)

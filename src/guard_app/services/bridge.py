@@ -40,6 +40,7 @@ from guard_app.services.bridge_ingress import (
     account_command,
     bridge_id,
     control_command,
+    destination_command,
     message_command,
     policy_command,
     run_command,
@@ -62,6 +63,7 @@ from guard_app.services.bridge_types import CommandEvent as CommandEvent
 from guard_app.services.bridge_types import CommandStage as CommandStage
 from guard_app.services.bridge_types import ControlAction as ControlAction
 from guard_app.services.bridge_types import ConversationEvent as ConversationEvent
+from guard_app.services.bridge_types import DestinationEdit as DestinationEdit
 from guard_app.services.bridge_types import LifecycleEvent as LifecycleEvent
 from guard_app.services.bridge_types import RegistrationRequest as RegistrationRequest
 from guard_app.services.bridge_types import RegistrationView as RegistrationView
@@ -72,6 +74,7 @@ from guard_app.services.bridge_types import TaskProjection as TaskProjection
 from guard_app.services.bridge_types import ToolSettingsEdit as ToolSettingsEdit
 from guard_app.services.bridge_types import ToolSettingsRow as ToolSettingsRow
 from guard_app.services.codex_account import AccountView as AccountView  # UI re-export
+from guard_app.services.policy_view import PolicyDestination as PolicyDestination
 from guard_app.services.policy_view import PolicyServer as PolicyServer  # UI re-export
 from guard_app.services.policy_view import PolicyTool as PolicyTool  # UI re-export
 from guard_app.services.policy_view import PolicyView as PolicyView  # UI re-export
@@ -260,6 +263,10 @@ class BackendBridge(QObject):
 
         self._require_qt_thread()
         return self._host.commands.submit(account_command(action, target_id, secret))
+
+    def request_policy_destinations(self, edit: DestinationEdit | None = None) -> str:
+        self._require_qt_thread()
+        return self._host.commands.submit(destination_command(edit))
 
     def request_policy_access(
         self, server_id: str, allowed: tuple[str, ...], denied: tuple[str, ...]

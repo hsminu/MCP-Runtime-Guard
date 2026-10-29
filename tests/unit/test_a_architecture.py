@@ -39,6 +39,7 @@ A_SERVICES = frozenset(
         "runner",
         "session_admission",
         "session_cleanup",
+        "session_destinations",
         "session_execution",
         "session_policy",
         "session_tool_settings",

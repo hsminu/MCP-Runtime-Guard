@@ -532,6 +532,14 @@ class GuardWindow(QMainWindow):
                 bridge.request_policy_access(server_id, allowed, denied)
             )
         )
+        self.policy_page.destination_change_requested.connect(
+            lambda edit: self.policy_page.set_change_pending(
+                bridge.request_policy_destinations(edit)
+            )
+        )
+        self.policy_page.destination_read_requested.connect(
+            lambda: self.policy_page.set_change_pending(bridge.request_policy_destinations())
+        )
         login = self.codex_login_info
         login.read_requested.connect(lambda: bridge.request_account("account_read"))
         login.device_login_requested.connect(lambda: bridge.request_account("account_login_device"))

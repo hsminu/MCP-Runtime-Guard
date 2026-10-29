@@ -1,19 +1,18 @@
-"""Read-only policy view for the GUI (A91; #19 4번 화면은 A, 변경 명령은 B3.10).
+"""Policy projection from the applied Profile, settings and registration records.
 
-Built once from the loaded Profile and C's registration records. It carries no
-document text, paths, URLs or arguments: only identifiers, kinds and rule pairs.
-Changing rules is B's policy command (B3.10); until it exists the view says so
-and the GUI cannot save.
+Only identifiers, boundary metadata, tool kinds and rule pairs cross to the UI.
+The applied document also supplies registered but unselected destinations.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 
 from guard_app.adapters.codex_protocol import build_dynamic_tools
 from guard_app.core.access_rules import normalize_access_rules
 from guard_app.domain.enums import ToolKind
+from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.services.product_assembly import AssembledGuard
 
 type AccessRuleSaver = Callable[[str, tuple[str, ...], tuple[str, ...]], Awaitable[bool]]
@@ -33,6 +32,14 @@ class PolicyServer:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyDestination:
+    destination_id: str
+    tier: str
+    max_label: str
+    selected: bool
+
+
+@dataclass(frozen=True, slots=True)
 class PolicyView:
     profile_id: str
     policy_version: str
@@ -44,9 +51,32 @@ class PolicyView:
     change_available: bool = False
     # (server__tool, fixed reason code) left out of Codex by its name rules.
     codex_excluded: tuple[tuple[str, str], ...] = ()
+    destinations: tuple[PolicyDestination, ...] = ()
 
 
-def policy_view(assembled: AssembledGuard, *, change_available: bool = False) -> PolicyView:
+def destination_rows(
+    document: Mapping[str, object] | None, selected: tuple[str, ...]
+) -> tuple[PolicyDestination, ...]:
+    if document is None:
+        return ()
+    rows = FrozenJsonObject(document).to_dict().get("destinations", [])
+    if not isinstance(rows, list):
+        return ()
+    result = []
+    for row in rows:
+        if isinstance(row, dict):
+            identifier, tier, label = row.get("id"), row.get("tier"), row.get("max_label")
+            if isinstance(identifier, str) and isinstance(tier, str) and isinstance(label, str):
+                result.append(PolicyDestination(identifier, tier, label, identifier in selected))
+    return tuple(result)
+
+
+def policy_view(
+    assembled: AssembledGuard,
+    *,
+    change_available: bool = False,
+    document: Mapping[str, object] | None = None,
+) -> PolicyView:
     loaded = assembled.loaded
     rules = normalize_access_rules(loaded.access_rules)
     servers = []
@@ -75,6 +105,7 @@ def policy_view(assembled: AssembledGuard, *, change_available: bool = False) ->
         allow=tuple((pair[0], pair[1]) for pair in rules["allow"]),
         deny=tuple((pair[0], pair[1]) for pair in rules["deny"]),
         servers=tuple(servers),
+        destinations=destination_rows(document, loaded.profile.destination_ids),
         change_available=change_available,
         codex_excluded=tuple(
             (item.tool_ref, item.reason)

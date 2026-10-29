@@ -26,6 +26,7 @@ from guard_app.services.bridge_types import (
     BackendBindings,
     BackendCleanupError,
     ControlAction,
+    DestinationEdit,
     SessionOptions,
     TaskProjection,
 )
@@ -33,7 +34,7 @@ from guard_app.services.catalog import GuardSettings, ServerSettings
 from guard_app.services.codex_composition import app_version
 from guard_app.services.guard import PolicyTaskSource, SystemControl
 from guard_app.services.guard_relay import ApprovalOutcomes
-from guard_app.services.policy_view import PolicyView, policy_view
+from guard_app.services.policy_view import PolicyView
 from guard_app.services.product_assembly import (
     AssembledGuard,
 )
@@ -541,6 +542,9 @@ class SessionRuntime:
             server_id, allowed, denied, self.close_policy_stopped
         )
 
+    async def destinations(self, edit: DestinationEdit | None) -> PolicyView:
+        return await self._policy.destinations(edit, self.close_policy_stopped)
+
     async def close_policy_stopped(self, task_ids: tuple[str, ...]) -> None:
         """Close the sessions of Tasks Guard stopped for a change, under the policy lock."""
         for task_id in task_ids:
@@ -684,12 +688,11 @@ class SessionRuntime:
             create_session=self.create_session,
             stop_session=self.stop_session,
             session_blocker=self.creation_blocker,
-            policy=None
-            if assembled is None
-            else policy_view(assembled, change_available=available),
+            policy=None if assembled is None else self._policy.registration_policy_view(),
             task_events=self._events.set_task_listener,
             answer_partials=self._events.set_partial_listener,
             policy_access=self.change_server_access if available else None,
+            policy_destinations=self.destinations if assembled is not None else None,
             settings_status=self._settings_status,
             account=self._account,
         )
