@@ -3093,8 +3093,10 @@ class SQLiteStore:
                                   THEN r.call_seq END ASC,
                         CASE WHEN :task_id IS NULL THEN d.at_utc IS NULL ELSE 0 END ASC,
                         CASE WHEN :task_id IS NULL AND :newest=1 THEN d.at_utc END DESC,
+                        CASE WHEN :task_id IS NULL AND :newest=1 THEN d.rowid END DESC,
                         CASE WHEN :task_id IS NULL AND :newest=1 THEN r.request_id END DESC,
                         CASE WHEN :task_id IS NULL AND :newest=0 THEN d.at_utc END ASC,
+                        CASE WHEN :task_id IS NULL AND :newest=0 THEN d.rowid END ASC,
                         CASE WHEN :task_id IS NULL AND :newest=0 THEN r.request_id END ASC
                     LIMIT :limit OFFSET :offset""",
                     parameters,

@@ -7,6 +7,7 @@ import time
 from contextlib import contextmanager
 from datetime import timedelta
 from itertools import count
+from pathlib import Path
 
 import pytest
 
@@ -186,6 +187,59 @@ def test_call_list_detail_and_payload_redaction(seeded):
             assert RAW_MARKER not in repr(value.model_dump())
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("sort", "expected"),
+    [
+        (ListSort.OLDEST, ["z-first", "a-second"]),
+        (ListSort.NEWEST, ["a-second", "z-first"]),
+    ],
+)
+def test_unscoped_calls_with_equal_decision_times_follow_insertion_order(seeded, sort, expected):
+    def record(connection):
+        for seq, request_id in enumerate(("z-first", "a-second"), start=3):
+            connection.execute(
+                "INSERT INTO requests (request_id,task_id,call_seq,server_id,tool_name,"
+                "destination_id,arguments_digest,decision,reasons,status,dispatch_reserved_at_utc,"
+                "epoch,kind,row_revision,legacy_source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    request_id,
+                    "task-1",
+                    seq,
+                    "ties",
+                    "tool",
+                    None,
+                    "a" * 64,
+                    1,
+                    '["OK"]',
+                    "DENIED",
+                    None,
+                    1,
+                    "read",
+                    2,
+                    None,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?)",
+                (f"decision-{seq}", request_id, "task-1", "DECIDED", "OK", None, None, STAMP),
+            )
+
+    seeded._run_on_writer(record)
+
+    async def scenario():
+        page = await seeded.list_calls(call_query(server_id="ties", sort=sort))
+        assert [row.request_id for row in page.rows] == expected
+
+    asyncio.run(scenario())
+
+
+def test_guard_app_source_does_not_use_vacuum():
+    source = Path(__file__).resolve().parents[2] / "src" / "guard_app"
+    assert all(
+        "vacuum" not in path.read_text(encoding="utf-8").lower() for path in source.rglob("*.py")
+    )
 
 
 @pytest.mark.parametrize("status", [RequestStatus.UNKNOWN_OUTCOME, RequestStatus.FAILED])
