@@ -540,12 +540,13 @@ class SQLiteStore:
         self._owner_thread = get_ident()
         failed = False
         no_close_checkpoint = getattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE", None)
-        if self._startup == "explicit" and (
+        if (
             type(no_close_checkpoint) is not int
             or not callable(getattr(sqlite3.Connection, "setconfig", None))
             or not callable(getattr(sqlite3.Connection, "getconfig", None))
         ):
             raise StoreError()
+        option = no_close_checkpoint
         try:
             self._connection = sqlite3.connect(
                 path,
@@ -553,11 +554,9 @@ class SQLiteStore:
                 isolation_level=None,
                 check_same_thread=True,
             )
-            if self._startup == "explicit":
-                option = cast(int, no_close_checkpoint)
-                self._connection.setconfig(option, True)
-                if not self._connection.getconfig(option):
-                    raise StoreError()
+            self._connection.setconfig(option, True)
+            if not self._connection.getconfig(option):
+                raise StoreError()
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys=ON")
             self._connection.execute("PRAGMA synchronous=FULL")
@@ -570,7 +569,12 @@ class SQLiteStore:
             if self._startup == "immediate":
                 self._migrate()
             self._configure(busy_timeout_ms, set_wal=self._startup == "immediate")
-        except StoreError:
+            if self._startup == "immediate":
+                connection = self._owned_connection()
+                connection.setconfig(option, False)
+                if connection.getconfig(option):
+                    raise StoreError()
+        except (sqlite3.Error, ValueError, OverflowError, StoreError):
             failed = True
         if failed:
             self._discard_connection()
@@ -1301,7 +1305,7 @@ class SQLiteStore:
         self,
         connection: sqlite3.Connection,
         tasks: dict[str, TaskState],
-        requests: dict[str, _StoredRequest],
+        stored_requests: dict[str, _StoredRequest],
         deadline: float,
     ) -> None:
         """기록된 관찰이 현재 보안 상태와 모순되는 경우 복구하지 않는다."""
@@ -1313,7 +1317,7 @@ class SQLiteStore:
             task_id = _identifier(row["task_id"])
             request_id = _identifier(row["request_id"])
             task = tasks.get(task_id)
-            request = requests.get(request_id)
+            request = stored_requests.get(request_id)
             if task is None or request is None or request.task_id != task_id:
                 raise StoreError()
             _utc_value(row["at_utc"])
