@@ -15,6 +15,7 @@ from guard_app.domain.contracts import ScanReport
 from guard_app.domain.enums import Label, RegStatus, ToolKind, TrustTier
 from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
+from guard_app.domain.reasons import Reason
 from guard_app.services.catalog import ServerSettings, load_profile_settings
 from guard_app.services.registry import RegistryError, ServerRegistry, listing_fingerprints
 from guard_app.storage import SQLiteStore
@@ -47,6 +48,10 @@ DEFINITIONS = {
     # 설정에 없는 도구: OTHER로 등록되고 노출·실행되지 않는다.
     "extra": {"name": "extra", "inputSchema": {"type": "object"}},
 }
+
+
+# 설정에서 OTHER 도구(`extra`)를 도구 단위 READ로 바꾼 서버 레코드의 도구 목록(A155)
+EXTRA_AS_READ = [*SERVER["tools"], {"name": "extra", "kind": "read"}]
 
 
 def run(operation):
@@ -421,8 +426,23 @@ def _registered(registry: ServerRegistry) -> None:
             ),
             RegStatus.PENDING,
         ),
+        (
+            "record_settings_change",
+            _active,
+            lambda registry: registry.apply_settings(
+                settings(tools=EXTRA_AS_READ), expected_row_revision=_revision(registry)
+            ),
+            RegStatus.PENDING,
+        ),
     ],
-    ids=["register", "activate", "block", "request_review", "save_reviewed_descriptions"],
+    ids=[
+        "register",
+        "activate",
+        "block",
+        "request_review",
+        "save_reviewed_descriptions",
+        "apply_settings",
+    ],
 )
 def test_write_cancelled_after_commit_is_closed_until_reread(
     registry, store, monkeypatch, method, setup, operation, stored
@@ -682,8 +702,22 @@ def _scan_report(registry: ServerRegistry) -> ScanReport:
             ),
             RegStatus.PENDING,
         ),
+        (
+            _active,
+            lambda registry: registry.apply_settings(
+                settings(tools=EXTRA_AS_READ), expected_row_revision=_revision(registry)
+            ),
+            RegStatus.PENDING,
+        ),
     ],
-    ids=["register", "activate", "record_scan", "request_review", "save_reviewed_descriptions"],
+    ids=[
+        "register",
+        "activate",
+        "record_scan",
+        "request_review",
+        "save_reviewed_descriptions",
+        "apply_settings",
+    ],
 )
 def test_real_writer_cancel_at_commit_is_closed_until_reread(
     commit_barrier, setup, operation, stored
@@ -766,3 +800,166 @@ def test_errors_carry_no_server_text(registry):
         run(registry.register(settings(), marker))
     assert str(raised.value) == "REG_TOOL_SCHEMA_INVALID"
     assert "marker" not in repr(raised.value)
+
+
+# apply_settings(#46 B·C 합의): 설정에서 바꾼 도구 종류·인자를 B `record_settings_change`로 등록에
+# 먼저 반영한다. 정의·지문은 그대로이고 ACTIVE는 PENDING이 된다.
+
+
+def _invalidations() -> tuple[list[tuple[str, str]], object]:
+    calls: list[tuple[str, str]] = []
+
+    async def invalidate(server_id, tool_name):
+        calls.append((server_id, tool_name))
+        return 1
+
+    return calls, invalidate
+
+
+def test_apply_settings_changes_only_kinds_and_drops_active_to_pending(registry, store):
+    entry = run(registry.register(settings(), listing()))
+    run(
+        registry.save_reviewed_descriptions(
+            "docs",
+            {"read": "검토한 읽기", "extra": "검토한 기타"},
+            expected_row_revision=entry.registration.row_revision,
+        )
+    )
+    run(registry.activate("docs", expected_row_revision=_revision(registry), reviewed_by="op"))
+    before = {tool.tool_name: tool for tool in registry.registration("docs").tools}
+    calls, invalidate = _invalidations()
+    change = run(
+        registry.apply_settings(
+            settings(tools=EXTRA_AS_READ),
+            expected_row_revision=_revision(registry),
+            invalidate_tool=invalidate,
+        )
+    )
+    assert change.changed_tools == ("extra",)
+    assert calls == [("docs", "extra")]
+    assert registry.status("docs") is RegStatus.PENDING
+    assert registry.entry("docs") == change.entry == run(store.load_registration("docs"))
+    after = {tool.tool_name: tool for tool in registry.registration("docs").tools}
+    assert (after["extra"].kind, after["extra"].resource_arg) == (ToolKind.READ, None)
+    assert after["extra"].reviewed_description == ""  # 바뀐 도구는 다시 검토한다
+    assert after["read"].reviewed_description == "검토한 읽기"
+    for name, tool in before.items():  # 정의·지문은 그대로
+        assert (after[name].fingerprint, after[name].input_schema) == (
+            tool.fingerprint,
+            tool.input_schema,
+        )
+    # 같은 지문으로 사용자가 다시 확인하면 올릴 수 있다
+    run(registry.activate("docs", expected_row_revision=_revision(registry), reviewed_by="op"))
+    assert registry.status("docs") is RegStatus.ACTIVE
+
+
+def test_apply_settings_without_a_change_writes_nothing(registry, store):
+    _active(registry)
+    before = run(store.load_registration("docs"))
+    calls, invalidate = _invalidations()
+    change = run(
+        registry.apply_settings(
+            settings(), expected_row_revision=_revision(registry), invalidate_tool=invalidate
+        )
+    )
+    assert change.changed_tools == ()
+    assert calls == []
+    assert run(store.load_registration("docs")) == before == registry.entry("docs")
+    assert registry.status("docs") is RegStatus.ACTIVE
+
+
+def test_apply_settings_follows_the_registration_rules_for_missing_and_extra_tools(registry):
+    """`register`와 같은 규칙: 설정에서 빠진 등록 도구는 OTHER, 등록에 없는 설정 도구는 무시한다."""
+    _active(registry)
+    tools = [SERVER["tools"][0], {"name": "ghost", "kind": "read"}]
+    change = run(
+        registry.apply_settings(settings(tools=tools), expected_row_revision=_revision(registry))
+    )
+    assert change.changed_tools == ("send",)
+    after = {tool.tool_name: tool for tool in registry.registration("docs").tools}
+    assert set(after) == {"read", "send", "extra"}
+    assert (after["send"].kind, after["send"].destination_arg) == (ToolKind.OTHER, None)
+
+
+def test_apply_settings_keeps_a_blocked_server_blocked(registry, store):
+    _active(registry)
+    run(registry.block("docs", expected_row_revision=_revision(registry)))
+    change = run(
+        registry.apply_settings(
+            settings(tools=EXTRA_AS_READ), expected_row_revision=_revision(registry)
+        )
+    )
+    assert change.changed_tools == ("extra",)
+    assert registry.status("docs") is RegStatus.BLOCKED
+    assert run(store.load_registration("docs")).registration.status is RegStatus.BLOCKED
+
+
+@pytest.mark.parametrize(
+    ("server", "code"),
+    [
+        (settings(max_label="INTERNAL", tools=EXTRA_AS_READ), "REG_SETTINGS_MISMATCH"),
+        (settings(id="other"), "REG_SERVER_UNKNOWN"),
+        ({"id": "docs"}, "REG_SETTINGS_INVALID"),
+    ],
+    ids=["boundary-changed", "unknown-server", "not-settings"],
+)
+def test_apply_settings_refuses_before_writing(registry, store, server, code):
+    """경계(`tier`·`max_label`) 변경은 합의 범위 밖이다. 거부는 쓰기 전이라 캐시도 그대로다."""
+    _active(registry)
+    before = run(store.load_registration("docs"))
+    with pytest.raises(RegistryError) as raised:
+        run(registry.apply_settings(server, expected_row_revision=_revision(registry)))
+    assert str(raised.value) == code
+    assert run(store.load_registration("docs")) == before == registry.entry("docs")
+    assert registry.status("docs") is RegStatus.ACTIVE
+
+
+def test_apply_settings_with_a_stale_revision_is_closed_until_reread(registry, store):
+    _active(registry)
+    seen = _revision(registry)
+    run(registry.request_review("docs", expected_row_revision=seen))
+    run(registry.activate("docs", expected_row_revision=_revision(registry), reviewed_by="op"))
+    with pytest.raises(StoreError) as raised:
+        run(registry.apply_settings(settings(tools=EXTRA_AS_READ), expected_row_revision=seen))
+    assert raised.value.reason is Reason.APPROVAL_RACE
+    saved = run(store.load_registration("docs"))
+    assert saved.registration.status is RegStatus.ACTIVE  # 쓰지 않았다
+    assert registry.status("docs") is RegStatus.PENDING  # 결과를 확인하기 전까지는 닫는다
+    assert run(registry.refresh("docs")) == saved
+    assert registry.status("docs") is RegStatus.ACTIVE
+
+
+def test_apply_settings_lets_the_catalog_follow_the_new_settings(registry):
+    """A 순서(설정 변경 → 저장 → 정책 적용 → 다시 활성화)와 B Catalog 숨김이 맞물린다."""
+    _active(registry)
+    edited = {
+        **DOCUMENT,
+        "profile": {
+            **DOCUMENT["profile"],
+            "sources": [
+                *DOCUMENT["profile"]["sources"],
+                {"server": "docs", "tool": "extra", "prefix": [], "label": "PUBLIC"},
+            ],
+        },
+        "servers": [{**SERVER, "tools": EXTRA_AS_READ}],
+        "access_rules": {
+            "allow": [["docs", "read"], ["docs", "send"], ["docs", "extra"]],
+            "deny": [],
+        },
+    }
+    # 반영 전: 새 설정은 등록과 달라 그 서버만 숨긴다
+    assert load_profile_settings(edited, registry).server_issue("docs") == "REG_SETTINGS_MISMATCH"
+    run(
+        registry.apply_settings(
+            settings(tools=EXTRA_AS_READ), expected_row_revision=_revision(registry)
+        )
+    )
+    # 설정 저장 전에 멈추면: 이전 설정으로 시작해도 등록이 PENDING이라 노출하지 않는다
+    assert load_profile_settings(DOCUMENT, registry).catalog.tool_views(("docs",)) == ()
+    # 저장 뒤: 설정과 등록이 맞지만 PENDING이라 노출하지 않는다
+    saved = load_profile_settings(edited, registry)
+    assert saved.server_issue("docs") is None
+    assert saved.catalog.tool_views(("docs",)) == ()
+    run(registry.activate("docs", expected_row_revision=_revision(registry), reviewed_by="op"))
+    views = load_profile_settings(edited, registry).catalog.tool_views(("docs",))
+    assert {view.tool_ref for view in views} == {"docs__read", "docs__send", "docs__extra"}

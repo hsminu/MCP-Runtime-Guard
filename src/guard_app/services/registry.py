@@ -27,6 +27,8 @@
   본다.
 - ACTIVE로 올리는 것(`activate`)은 사용자 확인 뒤 A의 정책 저장·적용 흐름이 부른다. 넘기는 지문은
   캐시의 등록 지문, 곧 사용자가 화면에서 본 지문이다.
+- 사용자가 설정에서 도구 종류·인자를 바꾸면 `apply_settings`가 B `record_settings_change`로 등록에
+  먼저 반영한다(#46). 저장된 정의·지문은 그대로 두고 종류·인자만 새 설정으로 다시 계산한다.
 
 정의는 신뢰하지 않는 서버 데이터다. 오류에 서버 텍스트를 싣지 않고, 저장 실패는 B의 `StoreError`
 (고정 사유)를 그대로 올린다. transport 패키지는 `services.product_assembly`만 가져오므로(I1, A
@@ -270,6 +272,49 @@ class ServerRegistry:
                 ),
             )
 
+    async def apply_settings(
+        self,
+        server: ServerSettings,
+        *,
+        expected_row_revision: int,
+        invalidate_tool: InvalidateTool | None = None,
+    ) -> FingerprintChange:
+        """사용자가 바꾼 도구 종류·인자를 등록에 반영한다(#46 B·C 합의, B `record_settings_change`).
+
+        등록 도구마다 저장된 정의·지문에 새 설정의 종류·`destination_arg`·`resource_arg`를 얹어
+        넘긴다. 설정에 없는 등록 도구는 `OTHER`, 등록에 없는 설정 도구는 넘기지 않는다(`register`와
+        같은 규칙). 경계(`tier`·`max_label`) 변경은 합의 범위 밖이라 `REG_SETTINGS_MISMATCH`로
+        쓰지 않는다. 바뀐 도구가 있으면 저장소가 ACTIVE를 PENDING으로 내리고 그 도구의 검토 설명을
+        비운다. 반환 사본으로 캐시를 바꾼 뒤 바뀐 도구마다 `invalidate_tool`을 부른다(`observe`와
+        같은 순서).
+
+        A 순서는 `apply_settings` → 설정 저장 → 정책 적용 → 사용자 확인 뒤 `activate`다. 설정 저장
+        전에 멈춰도 등록은 PENDING이라 실행되지 않고, 이전 설정의 종류가 등록과 다르면 B Catalog가
+        그 서버를 `REG_SETTINGS_MISMATCH`로 숨긴다. 저장 호출이 사본을 돌려주지 않으면(revision 충돌
+        포함) 다른 제어 쓰기처럼 다시 읽을 때까지 그 서버를 PENDING으로 본다.
+        """
+        async with self._lock:
+            _check_settings(server)
+            await self._reread_if_stale(server.id)
+            current = self._entries.get(server.id)
+            if current is None:
+                raise RegistryError("REG_SERVER_UNKNOWN")
+            if server.as_boundary() != current.registration.boundary:
+                raise RegistryError("REG_SETTINGS_MISMATCH")
+            change = await self._write(
+                server.id,
+                self._store.record_settings_change(
+                    server.id,
+                    _with_settings(server, current.registration.tools),
+                    expected_row_revision=expected_row_revision,
+                    at_utc=self._clock(),
+                ),
+            )
+            if invalidate_tool is not None:
+                for name in change.changed_tools:
+                    await invalidate_tool(server.id, name)
+            return change
+
     async def record_scan(self, scan_id: str, report: ScanReport) -> RegistryEntry:
         """검사 보고서를 저장하고 그 서버의 `last_scan_id`를 캐시에 반영한다(C4.9).
 
@@ -328,18 +373,20 @@ class ServerRegistry:
 
     # 잠근 상태에서만 부른다.
 
-    async def _write(self, server_id: str, write: Awaitable[RegistryEntry]) -> RegistryEntry:
+    async def _write[W: (RegistryEntry, FingerprintChange)](
+        self, server_id: str, write: Awaitable[W]
+    ) -> W:
         # 예외를 잡지 않고 finally로 표시한다. 저장 호출이 사본을 돌려주지 않았다면 실패·취소·
         # 예상 밖 예외 모두 커밋됐는지 모른다(#53 B 리뷰).
         written = False
         try:
-            entry = await write
+            result = await write
             written = True
         finally:
             if not written:
                 self._stale.add(server_id)
-        self._entries[server_id] = entry
-        return entry
+        self._entries[server_id] = result if isinstance(result, RegistryEntry) else result.entry
+        return result
 
     async def _reread_if_stale(self, server_id: str) -> None:
         if server_id in self._stale:
@@ -360,6 +407,27 @@ def _check_settings(server: object) -> None:
         raise RegistryError("REG_SETTINGS_INVALID")
     if not valid_server_id(server.id):
         raise RegistryError("REG_SERVER_ID_INVALID")
+
+
+def _with_settings(server: ServerSettings, tools: tuple[ToolSpec, ...]) -> tuple[ToolSpec, ...]:
+    """등록 도구의 정의·지문은 두고 종류·인자만 설정 값으로 바꾼다. 설정에 없으면 `OTHER`다.
+
+    설정 값은 `ToolSettings`가 검증했고, 저장소가 입력 전체를 다시 검증한다.
+    """
+    configured = {tool.name: tool for tool in server.tools}
+    updated: list[ToolSpec] = []
+    for tool in tools:
+        settings = configured.get(tool.tool_name)
+        updated.append(
+            tool.model_copy(
+                update={
+                    "kind": ToolKind.OTHER if settings is None else settings.kind,
+                    "destination_arg": None if settings is None else settings.destination_arg,
+                    "resource_arg": None if settings is None else settings.resource_arg,
+                }
+            )
+        )
+    return tuple(updated)
 
 
 def _tool_specs(server: ServerSettings, listing: ToolListingView) -> tuple[ToolSpec, ...]:

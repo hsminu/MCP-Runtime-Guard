@@ -83,6 +83,7 @@
 - [x] C4.18 등록 때 서버 ID의 `__`·끝 `_` 거부: B `valid_server_id`를 그대로 쓰고 등록 화면은 bridge가 넘기는 같은 검사 결과를 씀. Registry `register`·`observe`가 설정 검증과 별도로 다시 검사 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.19 Registry 쓰기 결과를 모를 때 닫기(#46 B 리뷰): 제어 쓰기가 실패하거나 커밋 뒤 취소되면 그 서버의 ACTIVE를 PENDING으로 보고, 다음 제어 연산·`refresh`가 DB 행을 다시 읽어 맞춤. `observe` 취소는 기록 실패와 같이 이번 실행 PENDING. 실제 writer 재현은 C4.20 · [기록](archive/c/C4.19-registry-unknown-write.md)
 - [x] C4.20 C4.19 실제 writer 재현: B6.13 writer가 COMMIT을 실행한 직후 취소해도 `register`·`activate`·`record_scan`·`request_review`·`save_reviewed_descriptions`는 다시 읽기 전까지 ACTIVE로 보이지 않고 `refresh`가 DB와 맞춤, `observe`는 이번 실행 PENDING·활성화 거부. `block`·시작 전 취소·COMMIT 실패는 #58 B 시험 · [기록](archive/c/C4.20-registry-real-writer.md)
+- [x] C4.21 설정에서 바꾼 도구 종류·인자를 등록에 반영(`ServerRegistry.apply_settings`, #46 B·C 합의): 저장된 정의·지문에 새 설정의 종류·인자만 얹어 B `record_settings_change`(revision CAS)로 넘기고, 반환 사본으로 캐시 교체 뒤 바뀐 도구마다 `invalidate_tool`. 경계 변경은 쓰기 전 `REG_SETTINGS_MISMATCH`, 결과 불명은 C4.19처럼 다시 읽기 전까지 PENDING. 실제 Guard·서버로 승인 대기 중 종류 변경 → 승인 닫힘·계수 0(T10 변형). A155 이관·B 시작 목록 제외는 각 담당 · [기록](archive/c/C4.21-registry-apply-settings.md)
 
 ## C5 · fixture와 계수
 
