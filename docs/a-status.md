@@ -7,14 +7,14 @@
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
 | fixture·로그 정책·독립 인수 | C | A07–A12, A14–A16, A23, A36–A40 |
-| domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
-| `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22, A50 |
+| domain/ports 합의 | A·B·C | A01·A03 |
+| A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)). `ModelClient` 포트는 #109에서 `examples/`로 옮겨짐 | A·B·C | A19–A22, A50 |
 | T43/T46·수신 상한 독립 인수(C5.8) ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A52 |
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
-| mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
+| mcp 1.30.0 고정. main은 아직 1.29.0(`pyproject.toml`·`uv.lock`·`requirements.lock`). A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))는 main에 들어감 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
 
-**A가 막고 있는 것**: C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
+**A가 막고 있는 것**: C6.20 설치판 리소스 위치(패키징). C4.13 경고 표시 화면은 A201([#110](https://github.com/hsminu/MCP-Runtime-Guard/pull/110)) 병합 대기.
 
 ## 계약·환경
 
@@ -27,7 +27,7 @@
 - [x] A04 C Registry 제품 활성화·차단을 정책 잠금으로 연결 · [기록](archive/a/A105-activation-lock.md)
 - [ ] A04 활성화·차단 독립 수신·부작용 인수 — 막힘: C T/S
 - [x] A05 앱 내부 Task projection·사람 review 연결
-- [ ] A05 공통 조회 DTO — 막힘: B·C 계약 검토
+- [x] A05 공통 조회 DTO: B6-05 합의([#76](https://github.com/hsminu/MCP-Runtime-Guard/issues/76))대로 B `StoreQueries`를 승인 목록·호출 로그에 씀(A33–A35) · [기록](archive/a/A203-status-cleanup.md)
 
 ## transport·worker
 
@@ -154,7 +154,7 @@
 - [x] A135 설정 파일이 없을 때 첫 등록에서 파일을 만들고 활성화 저장까지 연결(#52 C 리뷰) · [기록](archive/a/A105-activation-lock.md)
 - [x] A24–A27 제품 설정 기반 Guard 조립·명시 Store 시작·활성화 ACK 뒤 접수·복구 화면 · [기록](archive/a/A138-product-store-startup.md)
 - [x] A138 #58 전역 정지 연결(`on_global_halt=store.halt_execution`), 새 Task·turn·도구 응답 전 `execution_state()` 확인과 `state_revision` 감시, B6.8 명시 시작·복구 화면([#69 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/69#issuecomment-6474818368)) · [기록](archive/a/A138-product-store-startup.md)
-- [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
+- [ ] A28–A32 Registry·Scanner 조회 화면 — 서버 목록·상세·추가(A128·A163)와 검사·활성화 분리·경고(A200·A201, #110)는 C Registry·`ScanService`에 연결됨. 남은 것: #110 병합 뒤 원래 완료 기준(A29 현황 숫자 원천, A30 ACTIVE≠연결됨≠검사 완료)과 대조 · [기록](archive/a/A203-status-cleanup.md)
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
 - [x] A33·A34 승인 목록(대기·이력)을 B Store 조회에 연결: 만료 표시는 저장된 만료 시각, `row_revision` 보관, 조회 실패는 불명, 검색어는 B 형식만 보냄(#86 후속) · [기록](archive/a/A163-pr86-followups.md)
 - [x] A33–A35 B6-05 조회 합의 확인: A 동의, C3.8 조건 충족, #86 구현 기준([#76 B 정리](https://github.com/hsminu/MCP-Runtime-Guard/issues/76#issuecomment-6497583247)). A163 변환이 그 구현을 그대로 씀 · [기록](archive/a/A163-pr86-followups.md)
@@ -252,6 +252,7 @@
 - [x] A192 호출 로그: 기본 다섯 열(ID는 선택 열), 판정·승인·현재 상태 알약 분리, 고정 헤더·열 너비 조절, 행 선택 시 옆 상세 패널, 서버 필터는 Store 질의·상태/기간은 현재 페이지(안내 표시), 실제 범위를 적은 CSV 복사 · [기록](archive/a/A192-call-log-readability.md)
 - [x] A198 #109 A 리뷰 후속: 등록과 다른 설정 서버를 띄우지 않음을 두 시험에 단언, 시험 이름·서버 상세 문구(연결하지 않음) 정리, Codex 스트림 기한 시험 간헐 실패(30ms→0.3s) · [기록](archive/a/A198-pr109-followups.md)
 - [x] A199 #94 B 답 3번: 조립이 파일 서버 루트를 args 모양과 앱 Python 실행 파일(`sys.executable`)이 모두 맞을 때만 인정, 아니면 자원형 READ는 예약 전 거부 · [기록](archive/a/A199-file-server-command.md)
+- [x] A203 현황 정리: 이미 풀린 막힘 줄(A05 조회 DTO, `ModelClient`, mcp 고정·A145, A가 막는 것) 고치기, B·C 현황의 낡은 A 대기 줄 확인 · [기록](archive/a/A203-status-cleanup.md)
 
 ## 통합·패키징
 
