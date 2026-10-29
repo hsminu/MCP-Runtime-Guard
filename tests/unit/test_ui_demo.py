@@ -91,15 +91,13 @@ def test_call_stages_stop_where_the_status_stops() -> None:
     assert ui_demo.call_stages(calls["WITHHELD"])[-1].stage_code == "WITHHELD"
 
 
-def test_details_answer_the_open_dialog(app, demo) -> None:
+def test_details_answer_the_selected_call_and_open_server_dialog(app, demo) -> None:
     window, _ = demo
     window.navigate("logs")
     window.log_page.select_call("call-0001")
-    window.log_page.detail_button.click()
-    dialog = window.log_page._detail_dialog
-    assert dialog is not None
-    assert settle(app, lambda: "처리 순서" in dialog.body.toPlainText())
-    dialog.close()
+    panel = window.log_page.detail_panel
+    assert settle(app, lambda: "최초 판정" in panel.stages.text())
+    assert panel.identifiers[0].text() == "호출 ID: call-0001"
     window.navigate("servers")
     window.server_page.select_server("crm")
     window.server_page.detail_button.click()

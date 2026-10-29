@@ -13,14 +13,24 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QBoxLayout, QLineEdit, QToolButton, QVBoxLayout, QWidget
 
 from guard_app.ui import icons, style
 from guard_app.ui.icons import line_icon
 from guard_app.ui.style import PALETTES, STYLE, TOKENS, apply_style, set_theme, style_sheet
+from guard_app.ui.widgets import (
+    Disclosure,
+    FitStack,
+    LabelPill,
+    ResponsiveRow,
+    SecretLineEdit,
+    SectionCard,
+    StatusPill,
+    plain_label,
+)
 
 _UI_SOURCES = sorted(
     path for path in Path(style.__file__).parent.glob("*.py") if path.name != "style.py"
@@ -158,10 +168,10 @@ def test_light_and_dark_palettes_define_the_same_roles() -> None:
         assert banned not in sheet
     boxed = set()
     for selector, body in _rules():
-        if "border: 1px solid" in body and "border-radius: 10px" in body:
+        if "border: 1px solid" in body and "border-radius: 8px" in body:
             boxed.update(re.findall(r"QFrame#(\w+)", selector))
     # Lists are one box of hairline rows; nothing inside a list is boxed again.
-    assert boxed == {"placeholderCard", "metricList", "rowList"}
+    assert boxed == {"placeholderCard", "metricList", "rowList", "sectionCard", "approvalBand"}
 
 
 def test_icons_follow_a_theme_switch_without_being_recreated(app: QApplication) -> None:
@@ -176,7 +186,7 @@ def test_icons_follow_a_theme_switch_without_being_recreated(app: QApplication) 
 
 
 # Style audit: deterministic checks that keep generated-looking defaults out
-# (one radius on every boxed card, an accent spread over everything, eyebrow
+# (semantic colors spread over everything, eyebrow
 # labels, colors and spacing that drift from the tokens).
 
 
@@ -187,17 +197,9 @@ def _rules() -> list[tuple[str, str]]:
     ]
 
 
-def test_ui_sources_use_palette_colors_brand_accent_and_grid_spacing() -> None:
-    failures, painted = [], {}
+def test_ui_sources_use_palette_colors_and_grid_spacing() -> None:
+    failures = []
     call = re.compile(r"\.(?:setContentsMargins|setSpacing|addSpacing)\(([^()]*)\)")
-    allowed = {
-        "QLabel#brandMark",
-        'QLabel#statusPill[tone="live"]',
-        'QLabel#answerLabel[tone="live"]',
-    }
-    for selector, body in _rules():
-        if re.search(r"\$accent(?:_soft|_line)?\b", body) and selector not in allowed:
-            failures.append((selector, "accent"))
     for path in _UI_SOURCES:
         text = path.read_text(encoding="utf-8")
         literals = re.findall(
@@ -207,15 +209,221 @@ def test_ui_sources_use_palette_colors_brand_accent_and_grid_spacing() -> None:
             failures.append((path.name, literals))
         if "eyebrow" in text.casefold():
             failures.append((path.name, "eyebrow"))
-        uses = re.findall(r'"(?:on_)?accent(?:_soft|_line)?"', text)
-        if uses:
-            painted[path.name] = len(uses)
+        if "accent" in text:
+            failures.append((path.name, "obsolete palette role"))
         for args in call.findall(text):
             for number in map(int, re.findall(r"\b\d+\b", args)):
                 if number not in (0, 2) and number % 4 != 0:
                     failures.append((path.name, args))
-    if painted != {"session_list.py": 1, "window.py": 1}:
-        failures.append(("accent counts", painted))
-    if PALETTES["light"]["selection"] == PALETTES["light"]["accent"]:
-        failures.append(("palette", "selection equals accent"))
     assert not failures, failures
+
+
+def test_semantic_colors_are_limited_to_explicit_selectors():
+    """I7/T18: selection/actions, state and grade keep separate visual meanings."""
+    primary = {
+        "QLabel#brandMark",
+        "QLabel#policyChanged",
+        'QLabel#statusPill[tone="live"]',
+        'QLabel#answerLabel[tone="live"]',
+        'QPushButton[variant="primary"]',
+        'QPushButton[variant="primary"]:hover',
+        'QPushButton[variant="primary"]:pressed',
+        'QPushButton[variant="primary"]:focus',
+        "QPushButton:focus",
+        "QPushButton#newSessionButton:focus",
+        "QPushButton#modelChip:focus",
+        "QPushButton#navButton:focus",
+        "QPushButton#ghostButton:focus",
+        "QPushButton#iconButton:focus",
+        "QPushButton#linkButton:focus",
+        'QPushButton#navButton[selected="true"]',
+        'QPushButton#ghostButton[selected="true"]',
+        "QPushButton#linkButton",
+        "QPushButton#linkButton:hover",
+        "QLineEdit:focus",
+        "QComboBox:focus",
+        "QPlainTextEdit:focus",
+        "QLineEdit#sidebarSearch:focus",
+        "QTabBar::tab:focus",
+        "QTabBar::tab:selected",
+        "QMenu::item:selected",
+    }
+    state = {
+        'QLabel#statusPill[tone="attn"]',
+        'QLabel#statusPill[tone="deny"]',
+        'QLabel#statusPill[tone="ok"]',
+        'QLabel#answerLabel[tone="stopped"]',
+        "QLabel#unverifiedNotice",
+        "QFrame#approvalBand",
+        'QFrame#approvalCard[attention="true"]',
+        'QLabel[validationError="true"]',
+        "QLabel#folderRootError",
+        "QLabel#folderRulesError",
+        "QLabel#folderRuleError",
+        'QPushButton[variant="danger"]',
+        'QPushButton[variant="danger"]:hover',
+    }
+    for selectors, body in _rules():
+        for selector in (part.strip() for part in selectors.split(",")):
+            if re.search(r"\$(?:primary(?:_\w+)?|on_primary)\b", body):
+                assert selector in primary, selector
+            if re.search(r"\$(?:ok|warn|danger)(?:_\w+)?\b", body):
+                assert selector in state, selector
+    assert "accent" not in style._SHEET
+
+
+def _contrast(first, second):
+    def luminance(color):
+        channels = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+        return sum(c * weight for c, weight in zip(linear, (0.2126, 0.7152, 0.0722), strict=True))
+
+    bright, dark = sorted((luminance(first), luminance(second)), reverse=True)
+    return (bright + 0.05) / (dark + 0.05)
+
+
+@pytest.mark.parametrize("theme", PALETTES)
+def test_palette_contrast_and_separate_security_colors(theme):
+    palette = PALETTES[theme]
+    pairs = [
+        (text, background, threshold)
+        for texts, backgrounds, threshold in (
+            (("ink", "body"), ("canvas", "surface"), 7),
+            (("mute",), ("canvas", "surface", "sidebar", "raised"), 4.5),
+            (("subtle",), ("canvas", "surface"), 4.5),
+            (("on_primary",), ("primary", "primary_hover", "primary_pressed"), 4.5),
+            (("primary_text",), ("canvas", "selected"), 4.5),
+            (("public", "internal", "confidential"), ("surface",), 4.5),
+            (("field_line",), ("surface",), 1.8),
+        )
+        for text in texts
+        for background in backgrounds
+    ]
+    pairs += [
+        (tone, background, 4.5)
+        for tone in ("ok", "warn", "danger")
+        for background in (tone + "_soft", "surface")
+    ]
+    for text, background, threshold in pairs:
+        ratio = _contrast(palette[text], palette[background])
+        assert ratio >= threshold, (theme, text, background, ratio, threshold)
+    assert {palette[role] for role in ("public", "internal", "confidential")}.isdisjoint(
+        palette[role] for role in ("ok", "warn", "danger")
+    )
+
+
+def test_disclosure_hides_body_and_returns_focus_to_toggle(app):
+    disclosure = Disclosure("<b>자세히</b>")
+    body = QLineEdit()
+    disclosure.set_body(body)
+    with closing_widgets(disclosure):
+        show_widget(app, disclosure, 300, 100)
+        assert body.isHidden()
+        assert "펼치기" in disclosure.button.accessibleName()
+        disclosure.button.click()
+        assert body.isVisible()
+        assert "접기" in disclosure.button.accessibleName()
+        body.setFocus()
+        disclosure.set_open(False)
+        assert body.isHidden()
+        assert disclosure.focusWidget() is disclosure.button
+        assert not disclosure.is_open()
+
+
+def test_fit_stack_follows_current_page_height(app):
+    stack = FitStack()
+    for height in (300, 40):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        content = plain_label("내용")
+        content.setFixedHeight(height)
+        layout.addWidget(content)
+        stack.addWidget(page)
+    with closing_widgets(stack):
+        tall = stack.sizeHint().height()
+        tall_min = stack.minimumSizeHint().height()
+        stack.setCurrentIndex(1)
+        assert stack.sizeHint().height() < tall
+        assert stack.minimumSizeHint().height() < tall_min
+
+
+def test_secret_field_never_copies_or_cuts_even_while_revealed(app):
+    """I9/T19: clipboard contains only the synthetic sentinel, never the key."""
+    field = SecretLineEdit()
+    with closing_widgets(field):
+        show_widget(app, field, 300, 60)
+        field.setText("synthetic-key")
+        assert field.echoMode() == QLineEdit.EchoMode.Password
+        assert field.visibility_action.text() == "키 표시"
+        field.visibility_action.trigger()
+        assert field.echoMode() == QLineEdit.EchoMode.Normal
+        assert field.findChild(QToolButton).accessibleName() == "키 숨기기"
+        assert not field.testAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled)
+        assert not field.dragEnabled()
+        assert field.contextMenuPolicy() == Qt.ContextMenuPolicy.NoContextMenu
+        clipboard = QApplication.clipboard()
+        clipboard.setText("sentinel")
+        field.selectAll()
+        for key, modifier in (
+            (Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier),
+            (Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier),
+            (Qt.Key.Key_Insert, Qt.KeyboardModifier.ControlModifier),
+            (Qt.Key.Key_Delete, Qt.KeyboardModifier.ShiftModifier),
+        ):
+            QTest.keyClick(field, key, modifier)
+            assert clipboard.text() == "sentinel"
+            assert field.text() == "synthetic-key"
+        field.copy()
+        field.cut()
+        assert clipboard.text() == "sentinel"
+        field.hide()
+        assert field.echoMode() == QLineEdit.EchoMode.Password
+        field.show()
+        field.visibility_action.trigger()
+        field.clear()
+        assert not field.text()
+        assert field.echoMode() == QLineEdit.EchoMode.Password
+        clipboard.clear()
+
+
+def test_status_and_grade_widgets_render_plain_text_in_both_themes(app):
+    pill, grade = StatusPill(), LabelPill("INTERNAL")
+    try:
+        for theme in PALETTES:
+            set_theme(theme)
+            for widget in (pill, grade):
+                apply_style(widget)
+            for tone in ("live", "attn", "deny", "ok", "neutral"):
+                pill.set_status("<b>상태</b>", tone)
+                assert pill.textFormat() == Qt.TextFormat.PlainText
+                assert not pill.grab().isNull()
+            assert not grade.grab().isNull()
+            assert grade.textFormat() == Qt.TextFormat.PlainText
+    finally:
+        set_theme("light")
+        pill.close()
+        grade.close()
+
+
+def test_responsive_row_reflows_and_card_has_plain_title(app):
+    row = ResponsiveRow(400)
+    field = QLineEdit()
+    row.add_widget(field, 1)
+    with closing_widgets(row):
+        show_widget(app, row, 600, 100)
+        assert row.row.direction() == QBoxLayout.Direction.LeftToRight
+        field.setFocus()
+        resize_widget(app, row, 300, 100)
+        assert row.row.direction() == QBoxLayout.Direction.TopToBottom
+        assert row.focusWidget() is field
+    card = SectionCard("<b>제목</b>")
+    with closing_widgets(card):
+        assert card.title.textFormat() == Qt.TextFormat.PlainText
+        assert card.content.contentsMargins().left() == 16
+        with pytest.raises(ValueError, match="cannot contain"):
+            card.add_widget(SectionCard("중첩"))
+
+
+def test_sheet_typography_has_no_text_below_twelve_pixels():
+    for _, body in _rules():
+        assert all(int(size) >= 12 for size in re.findall(r"font-size: (\d+)px", body))

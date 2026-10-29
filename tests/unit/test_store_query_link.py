@@ -63,6 +63,7 @@ from guard_app.ui.window import GuardWindow
 
 from .test_bridge import FakeControl, close_bridge, pump_until
 from .test_bridge import app as app
+from .test_call_logs import panel_text
 
 NOW = datetime(2026, 10, 29, 3, 0, tzinfo=UTC)
 
@@ -435,7 +436,7 @@ def test_link_fills_both_pages_from_the_store_and_shows_failures_as_unknown(
             app,
             lambda: (
                 approvals.state is LoadState.READY
-                and calls.count_label.text() == "전체 2건 · 현재 페이지 2건"
+                and calls.count_label.text() == "전체 2건 중 이 페이지 2건 · 필터 후 2건 표시"
             ),
         )
         assert approvals.table.rowCount() == 2
@@ -495,7 +496,8 @@ def test_link_fills_both_pages_from_the_store_and_shows_failures_as_unknown(
         calls.refresh()
         pump_until(app, lambda: calls.state_message.message.text() == QUERY_UNKNOWN)
         assert calls.table.rowCount() == 0
-        assert calls.count_label.text() == "총건수 미제공 · 현재 페이지 0건"
+        assert "불러오지 못함" in calls.count_label.text()
+        assert "0건" not in calls.count_label.text()
 
         queries.fail_calls.clear()
         calls.search.setText("")
@@ -503,18 +505,16 @@ def test_link_fills_both_pages_from_the_store_and_shows_failures_as_unknown(
         pump_until(app, lambda: calls.table.rowCount() == 2)
         for call_id, expected in (
             ("request-001", "결과 기록 · 성공 여부는 현재 실행 상태로 확인: 2026년"),
-            ("request-002", "호출 상세를 확인할 수 없음"),
+            ("request-002", "해당 호출 없음"),
         ):
             calls.select_call(call_id)
-            calls.detail_button.click()
-            dialog = calls._detail_dialog
+            dialog = calls.detail_panel
             assert dialog is not None
             pump_until(
                 app,
-                lambda dialog=dialog, expected=expected: expected in dialog.body.toPlainText(),
+                lambda dialog=dialog, expected=expected: expected in panel_text(dialog),
             )
-            assert "신뢰 경계" not in dialog.body.toPlainText()
-            dialog.close()
+            assert "신뢰 경계" not in panel_text(dialog)
             app.processEvents()
 
         # Leaving READY disconnects both pages instead of keeping old rows.

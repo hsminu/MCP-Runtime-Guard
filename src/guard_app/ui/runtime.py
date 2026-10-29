@@ -37,7 +37,7 @@ from .presentation import (
 )
 from .recovery import RecoveryPanel
 from .task_status import FINAL_STATUSES, status_code, status_detail, status_title
-from .widgets import KeyboardActionButton, plain_label
+from .widgets import Disclosure, KeyboardActionButton, plain_label
 
 _STOP_NAMES = {ControlAction.CANCEL: "작업 취소", ControlAction.EMERGENCY_HALT: "긴급 차단"}
 _RUN = "run"
@@ -99,6 +99,12 @@ class RuntimePanel(QWidget):
         self.summary.setMinimumWidth(0)
         self.summary.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.message = plain_label("상태 확인 대기", name="runtimeMessage")
+        self.diagnostics = Disclosure("진단 정보")
+        self.diagnostic_text = plain_label(name="secondary")
+        self.diagnostic_text.setAccessibleName("세션 진단 정보")
+        self.diagnostics.set_body(self.diagnostic_text)
+        self.diagnostics.hide()
+
         # Demos and support need the internal code, so it stays one click away
         # under the message instead of being part of it (#52 C review).
         self.code_toggle = KeyboardActionButton("내부 코드 ▸")
@@ -115,6 +121,7 @@ class RuntimePanel(QWidget):
         notice = QVBoxLayout()
         session_layout.addLayout(notice)
         notice.setSpacing(0)
+        notice.addWidget(self.diagnostics)
         notice.addWidget(self.message)
         notice.addWidget(self.code_toggle, 0, Qt.AlignmentFlag.AlignLeft)
         notice.addWidget(self.internal_code)
@@ -193,6 +200,15 @@ class RuntimePanel(QWidget):
     @property
     def busy_scopes(self) -> frozenset[tuple[str, int]]:
         return frozenset(self._command_scopes.values())
+
+    @property
+    def turn_scopes(self) -> frozenset[tuple[str, int]]:
+        """Only message/run commands qualify for the composer's stop action."""
+        return frozenset(
+            scope
+            for command, scope in self._command_scopes.items()
+            if self._commands.get(command) in (_RUN, "message")
+        )
 
     @property
     def _busy(self) -> bool:
@@ -356,6 +372,9 @@ class RuntimePanel(QWidget):
         if self.current is not None:
             self._render_snapshot(self.current)
         else:
+            self.diagnostics.set_open(False)
+            self.diagnostics.hide()
+            self.diagnostic_text.clear()
             self.summary.setText("새 세션 · Codex 연결을 확인한 뒤 세션을 시작하세요.")
         self._refresh()
 
@@ -424,6 +443,30 @@ class RuntimePanel(QWidget):
         self._refresh()
         self.bridge.request_run(self.current.task_id, command_id=command_id)
 
+    def stop_task(self, task_id: str, epoch: int) -> str | None:
+        """Request cancellation in an explicit confirmed scope, including background Tasks."""
+        scope = (task_id, epoch)
+        snapshot = self._snapshots.get(scope)
+        if (
+            not self._ready
+            or snapshot is None
+            or snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+        ):
+            return None
+        command_id = new_command_id()
+        self._commands[command_id] = ControlAction.CANCEL
+        self._command_scopes[command_id] = scope
+        message = "제어 요청됨 · 적용 여부 확인 중"
+        self._messages[scope] = (message, None)
+        if self.current is not None and (self.current.task_id, self.current.epoch) == scope:
+            self._clear_review()
+            self._show_message(message)
+        self._refresh()
+        self.bridge.request_control(
+            ControlAction.CANCEL, task_id, command_id=command_id, epoch=epoch
+        )
+        return command_id
+
     def _control(self, action: ControlAction) -> None:
         if self.current is None:
             return
@@ -471,14 +514,23 @@ class RuntimePanel(QWidget):
         self._refresh()
 
     def _render_snapshot(self, snapshot: TaskProjection) -> None:
+        self.diagnostic_text.setText(
+            "\n".join(
+                (
+                    f"Task ID: {snapshot.task_id}",
+                    f"epoch: {snapshot.epoch}",
+                    f"상태 코드: {status_code(snapshot.status)}",
+                    f"호스트 dispatch: {_count(snapshot.host_dispatch)}",
+                    f"수신 부작용: {_count(snapshot.receiver_effect)}",
+                    f"모델 모드: {snapshot.model_mode}",
+                )
+            )
+        )
+        self.diagnostics.show()
         lines = [
-            # The results page is the session's detail, so the enum stays here.
-            f"Task: {snapshot.task_id} · {status_title(snapshot.status)} "
-            f"({status_code(snapshot.status)})",
+            status_title(snapshot.status),
             task_label_text(snapshot.label, snapshot.unclassified),
-            f"모델: {snapshot.model_mode}",
-            f"호스트 dispatch: {_count(snapshot.host_dispatch)} "
-            f"· 수신 부작용: {_count(snapshot.receiver_effect)}",
+            f"모델: {snapshot.model_id or snapshot.model_mode or MISSING}",
         ]
         if snapshot.status in FINAL_STATUSES:
             lines.append(status_detail(snapshot.status))
@@ -492,6 +544,10 @@ class RuntimePanel(QWidget):
                 "다음 사용자 지시를 기다리는 중이라 실행할 모델 단계가 없음. "
                 "여기서 끝내려면 '작업 취소'를 누르세요."
             )
+        elif snapshot.status is TaskStatus.WAITING_APPROVAL:
+            lines.append("승인 사본에서 수신처와 인자를 확인하세요.")
+        elif snapshot.can_advance:
+            lines.append("실행 버튼을 눌러 다음 모델 단계를 진행하세요.")
         self.summary.setText("\n".join(lines))
 
     def _review(self, review: ApprovalReview) -> None:

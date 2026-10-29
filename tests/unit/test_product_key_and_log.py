@@ -155,12 +155,15 @@ def test_run_wires_real_window_without_keeping_key(monkeypatch, owner, mode, cap
         windows.append(window)
         form = window.scanner_key_form
         assert tails == ([] if mode == "demo" else [True])
-        expected = NOT_CONNECTED if mode == "demo" else NO_SAVED_KEY
+        # The saved-key state is the card's status pill; the line below it is
+        # for typing, saving and connection notices.
         if mode == "saved":
             assert form.saved_suffix == "9z7Q"
-            assert "끝 4자리 9z7Q" in form.status.text()
+            assert "끝 4자리 9z7Q" in form.status_pill.text()
+        elif mode == "demo":
+            assert form.status.text() == NOT_CONNECTED
         else:
-            assert form.status.text() == expected
+            assert form.status_pill.text() == NO_SAVED_KEY
         emitted = []
         form.key_saved.connect(lambda *args: emitted.append(args))
         for _ in range(2):

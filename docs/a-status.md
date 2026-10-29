@@ -243,6 +243,14 @@
 - [x] A180 #101 제안: 정책·목적지 저장 성공 뒤 B 적용 중 취소에도 재시작 요구·Guard 닫기, 일곱 저장 경로 취소 시험 · [기록](archive/a/A180-cancel-during-apply.md)
 - [x] A183 #107 C 리뷰 1번: UI 색 리터럴 검사가 주석의 이슈 번호(`#101`)를 색으로 읽지 않게 함 · [기록](archive/a/A183-color-check-skips-comments.md)
 - [x] A184 설정 파일이 없는 첫 실행도 기본 정책(서버·도구 없음)으로 바로 Task 시작, 파일은 첫 저장 때 만듦(사용자 결정 2026-10-30, CFG-01 문구 반영 필요) · [기록](archive/a/A184-first-run-default-profile.md)
+- [x] A185 공통 색·글자·컴포넌트: 파란 주 동작·선택, 상태 알약(모양+글자)과 등급 태그(방패 외곽선) 구분, `Disclosure`·`FitStack`·`SecretLineEdit`·`SectionCard` · [기록](archive/a/A185-ui-tokens-components.md)
+- [x] A186 서버 추가: 연결 방식 칸이 현재 방식 높이만 차지(`FitStack`), 필수 입력 오류는 칸을 고치거나 떠난 뒤·제출 뒤에만 표시, 남은 필수 수 안내 · [기록](archive/a/A186-server-add-fit-and-touched-errors.md)
+- [x] A187 epoch·Task ID·상태 코드·dispatch 수를 대화 머리·활동 요약에서 빼고 상태 알약 툴팁과 접힌 "진단 정보"로 옮김 · [기록](archive/a/A187-diagnostics-disclosure.md)
+- [x] A188 세션 `⋯`·우클릭·F2·Delete 메뉴, 이름 변경(수동 제목 유지), 상태별 삭제(진행 중은 CANCEL 뒤 종료 확인 시에만), 첫 사용자 메시지 자동 제목(민감값이면 `작업 HH:MM`) · [기록](archive/a/A188-session-menu-and-auto-title.md)
+- [x] A189 설정 화면 세 카드(정책·설정 파일 / LLM·Codex 인증 / Scanner 키), 인증 상태별 동작만 표시, 키 입력 가림·표시 전환과 입력·저장 중·저장됨·실패 구분 · [기록](archive/a/A189-settings-page.md)
+- [x] A190 정책 · 경계: 요약(모르면 "—"), 접근 규칙·목적지 탭, 거부 우선·기본 거부 표시, 서버·상태 필터, 진행·결과·"변경됨"은 성공 확인 뒤에만 · [기록](archive/a/A190-policy-tabs-and-summary.md)
+- [x] A191 대화: Enter 전송·Shift+Enter 줄바꿈·IME 조합 보호, PlainText 답변 블록·코드 복사, 최신 메시지 이동, 확인 뒤 Task 중지, 승인 대기 요약 카드, Ctrl+N/K/L(첨부·재생성·답변만 중단은 백엔드 미지원) · [기록](archive/a/A191-chat-usability.md)
+- [x] A192 호출 로그: 기본 다섯 열(ID는 선택 열), 판정·승인·현재 상태 알약 분리, 고정 헤더·열 너비 조절, 행 선택 시 옆 상세 패널, 서버 필터는 Store 질의·상태/기간은 현재 페이지(안내 표시), 실제 범위를 적은 CSV 복사 · [기록](archive/a/A192-call-log-readability.md)
 - [x] A198 #109 A 리뷰 후속: 등록과 다른 설정 서버를 띄우지 않음을 두 시험에 단언, 시험 이름·서버 상세 문구(연결하지 않음) 정리, Codex 스트림 기한 시험 간헐 실패(30ms→0.3s) · [기록](archive/a/A198-pr109-followups.md)
 
 ## 통합·패키징

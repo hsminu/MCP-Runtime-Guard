@@ -138,7 +138,8 @@ def test_all_approval_fields_are_literal_and_never_open_links(app, monkeypatch):
             ]
             # Four in the fields, one as the arguments; none split across lines.
             assert sum(line.count(visible_review_text(payload)) for line in shown) == 5
-            assert payload in panel.summary.text()
+            assert payload in panel.diagnostic_text.text()
+            assert panel.diagnostic_text.textFormat() == Qt.TextFormat.PlainText
             card = AttentionRow(
                 AttentionItem(
                     "attention",
