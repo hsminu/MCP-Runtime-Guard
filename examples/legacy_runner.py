@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import ValidationError
 
 from examples.legacy_model_client import (
+    ModelClient,
     ModelFormatError,
     validate_model_conversation_budget,
 )
@@ -33,7 +34,7 @@ from guard_app.domain.enums import ApprovalStatus, TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import ProposedCall, TaskState
 from guard_app.domain.reasons import Reason
-from guard_app.ports import ModelClient, Store
+from guard_app.ports import Store
 from guard_app.services.catalog import Catalog, CatalogConfigError
 from guard_app.services.guard import GuardService
 from guard_app.services.runner import RunStatus, RunUpdate, RunnerStateError
