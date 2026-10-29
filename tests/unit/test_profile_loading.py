@@ -171,15 +171,16 @@ def test_profile_scope_excludes_other_servers_and_destinations():
     assert error.value.reason is Reason.UNKNOWN_DESTINATION
 
 
-@pytest.mark.parametrize("status", [RegStatus.PENDING, RegStatus.BLOCKED, None])
-def test_registry_status_remains_live(status):
-    registry = _Registry()
-    loaded = load_profile_settings(_document(), registry)
-    registry.current_status = status
-    assert loaded.catalog.tool_views(("docs",)) == ()
-    with pytest.raises(ResolutionError) as error:
-        loaded.catalog.resolve_tool("docs__read")
-    assert error.value.reason is Reason.REG_NOT_ACTIVE
+def test_registry_status_remains_live(subtests):
+    for case_index, status in enumerate([RegStatus.PENDING, RegStatus.BLOCKED, None]):
+        with subtests.test(case=case_index):
+            registry = _Registry()
+            loaded = load_profile_settings(_document(), registry)
+            registry.current_status = status
+            assert loaded.catalog.tool_views(("docs",)) == ()
+            with pytest.raises(ResolutionError) as error:
+                loaded.catalog.resolve_tool("docs__read")
+            assert error.value.reason is Reason.REG_NOT_ACTIVE
 
 
 def test_registry_fingerprint_remains_live():
@@ -191,36 +192,44 @@ def test_registry_fingerprint_remains_live():
     assert error.value.reason is Reason.TOOL_FINGERPRINT_CHANGED
 
 
-@pytest.mark.parametrize("status", [RegStatus.ACTIVE, RegStatus.PENDING, RegStatus.BLOCKED])
-@pytest.mark.parametrize("change", ["tier", "max_label", "kind", "resource_arg", "destination_arg"])
-def test_registry_metadata_mismatch_hides_only_affected_server(change, status):
-    registry = _Registry()
-    loaded = load_profile_settings(_document(), registry)
-    server = "remote" if change == "destination_arg" else "docs"
-    other = "docs" if server == "remote" else "remote"
-    record = registry.records[server].model_copy(update={"status": status})
-    if change in {"tier", "max_label"}:
-        boundary = Boundary(
-            boundary_id="different-id-is-allowed",
-            tier=TrustTier.INTERNAL if change == "max_label" else TrustTier.GENERAL_EXTERNAL,
-            max_label=Label.INTERNAL,
-        )
-        record = record.model_copy(update={"boundary": boundary})
-    else:
-        tool = record.tools[0].model_copy(
-            update={change: ToolKind.OTHER if change == "kind" else "another"}
-        )
-        record = record.model_copy(update={"tools": (tool,)})
-    registry.records[server] = record
-    assert loaded.server_issue(server) == "REG_SETTINGS_MISMATCH"
-    assert loaded.server_issue(other) is None
-    with pytest.raises(ResolutionError) as error:
-        loaded.catalog.resolve_tool(f"{server}__{'send' if server == 'remote' else 'read'}")
-    assert error.value.reason is Reason.UNKNOWN_SERVER
-    assert [view.tool_ref for view in loaded.catalog.tool_views(("docs", "remote"))] == [
-        f"{other}__{'send' if other == 'remote' else 'read'}"
-    ]
-    assert loaded.catalog.resolve_tool(f"{other}__{'send' if other == 'remote' else 'read'}")
+def test_registry_metadata_mismatch_hides_only_affected_server(subtests):
+    for case_index, (status, change) in enumerate(
+        (status, change)
+        for status in [RegStatus.ACTIVE, RegStatus.PENDING, RegStatus.BLOCKED]
+        for change in ["tier", "max_label", "kind", "resource_arg", "destination_arg"]
+    ):
+        with subtests.test(case=case_index):
+            registry = _Registry()
+            loaded = load_profile_settings(_document(), registry)
+            server = "remote" if change == "destination_arg" else "docs"
+            other = "docs" if server == "remote" else "remote"
+            record = registry.records[server].model_copy(update={"status": status})
+            if change in {"tier", "max_label"}:
+                boundary = Boundary(
+                    boundary_id="different-id-is-allowed",
+                    tier=TrustTier.INTERNAL
+                    if change == "max_label"
+                    else TrustTier.GENERAL_EXTERNAL,
+                    max_label=Label.INTERNAL,
+                )
+                record = record.model_copy(update={"boundary": boundary})
+            else:
+                tool = record.tools[0].model_copy(
+                    update={change: ToolKind.OTHER if change == "kind" else "another"}
+                )
+                record = record.model_copy(update={"tools": (tool,)})
+            registry.records[server] = record
+            assert loaded.server_issue(server) == "REG_SETTINGS_MISMATCH"
+            assert loaded.server_issue(other) is None
+            with pytest.raises(ResolutionError) as error:
+                loaded.catalog.resolve_tool(f"{server}__{'send' if server == 'remote' else 'read'}")
+            assert error.value.reason is Reason.UNKNOWN_SERVER
+            assert [view.tool_ref for view in loaded.catalog.tool_views(("docs", "remote"))] == [
+                f"{other}__{'send' if other == 'remote' else 'read'}"
+            ]
+            assert loaded.catalog.resolve_tool(
+                f"{other}__{'send' if other == 'remote' else 'read'}"
+            )
 
 
 def test_registry_wrong_id_and_invalid_record_remain_configuration_errors():
@@ -304,110 +313,117 @@ def _set(document, path, value):
     target[path[-1]] = value
 
 
-@pytest.mark.parametrize(
-    ("path", "value"),
-    [
-        (("unknown",), "sensitive-input"),
-        (("profile", "unknown"), "sensitive-input"),
-        (("servers", 0, "unknown"), "sensitive-input"),
-        (("servers", 0, "tools", 0, "unknown"), "sensitive-input"),
-        (("destinations", 0, "unknown"), "sensitive-input"),
-        (("profile", "sources", 0, "unknown"), "sensitive-input"),
-        (("policy", "unknown"), "sensitive-input"),
-        (("access_rules", "unknown"), "sensitive-input"),
-        (("policy", "approval_ttl_seconds"), True),
-        (("policy", "approval_ttl_seconds"), "300"),
-        (("policy", "approval_ttl_seconds"), 300.0),
-        (("policy", "approval_ttl_seconds"), 0),
-        (("policy", "taint_mode"), "unknown"),
-        (("servers", 0, "max_label"), 2),
-        (("servers", 0, "max_label"), True),
-        (("servers", 1, "max_label"), "CONFIDENTIAL"),
-        (("destinations", 0, "max_label"), "CONFIDENTIAL"),
-        (("servers", 0, "tier"), "unknown"),
-        (("servers", 0, "transport"), "unknown"),
-        (("servers", 0, "command"), None),
-        (("servers", 0, "url"), "https://sensitive-input.invalid"),
-        (("servers", 1, "url"), None),
-        (("servers", 1, "args"), ["sensitive-input"]),
-        (("servers", 0, "args"), [123]),
-        (("servers", 0, "tools", 0, "kind"), "send"),
-        (("servers", 0, "tools", 0, "destination_arg"), "target"),
-        (("servers", 1, "tools", 0, "resource_arg"), "path"),
-        (("servers", 1, "tools", 0, "destination_arg"), None),
-        (("servers", 0, "tools", 0, "name"), "bad\nname"),
-        (("profile", "id"), ""),
-        (("profile", "servers"), ["missing"]),
-        (("profile", "destinations"), ["missing"]),
-        (("profile", "sources", 0, "server"), "missing"),
-        (("profile", "sources", 0, "tool"), "missing"),
-        (("profile", "sources", 0, "prefix"), [".."]),
-        (("profile", "sources", 0, "label"), "unknown"),
-        (("access_rules", "allow"), [["docs", "missing"]]),
-        (("access_rules", "deny"), [["missing", "read"]]),
-        (("access_rules", "allow"), [["docs"]]),
-        (("access_rules", "deny"), [["docs", "read", "extra"]]),
-        (("access_rules", "allow"), [["docs", ""]]),
-        (("access_rules", "allow"), "sensitive-input"),
-    ],
-)
-def test_invalid_configuration_is_rejected_with_sanitized_errors(path, value):
-    document = _document()
-    _set(document, path, value)
-    with pytest.raises(CatalogConfigError) as error:
-        load_profile_settings(document, _Registry())
-    assert "sensitive-input" not in str(error.value)
-    assert "sensitive-input" not in repr(error.value)
+def test_invalid_configuration_is_rejected_with_sanitized_errors(subtests):
+    for case_index, (path, value) in enumerate(
+        [
+            (("unknown",), "sensitive-input"),
+            (("profile", "unknown"), "sensitive-input"),
+            (("servers", 0, "unknown"), "sensitive-input"),
+            (("servers", 0, "tools", 0, "unknown"), "sensitive-input"),
+            (("destinations", 0, "unknown"), "sensitive-input"),
+            (("profile", "sources", 0, "unknown"), "sensitive-input"),
+            (("policy", "unknown"), "sensitive-input"),
+            (("access_rules", "unknown"), "sensitive-input"),
+            (("policy", "approval_ttl_seconds"), True),
+            (("policy", "approval_ttl_seconds"), "300"),
+            (("policy", "approval_ttl_seconds"), 300.0),
+            (("policy", "approval_ttl_seconds"), 0),
+            (("policy", "taint_mode"), "unknown"),
+            (("servers", 0, "max_label"), 2),
+            (("servers", 0, "max_label"), True),
+            (("servers", 1, "max_label"), "CONFIDENTIAL"),
+            (("destinations", 0, "max_label"), "CONFIDENTIAL"),
+            (("servers", 0, "tier"), "unknown"),
+            (("servers", 0, "transport"), "unknown"),
+            (("servers", 0, "command"), None),
+            (("servers", 0, "url"), "https://sensitive-input.invalid"),
+            (("servers", 1, "url"), None),
+            (("servers", 1, "args"), ["sensitive-input"]),
+            (("servers", 0, "args"), [123]),
+            (("servers", 0, "tools", 0, "kind"), "send"),
+            (("servers", 0, "tools", 0, "destination_arg"), "target"),
+            (("servers", 1, "tools", 0, "resource_arg"), "path"),
+            (("servers", 1, "tools", 0, "destination_arg"), None),
+            (("servers", 0, "tools", 0, "name"), "bad\nname"),
+            (("profile", "id"), ""),
+            (("profile", "servers"), ["missing"]),
+            (("profile", "destinations"), ["missing"]),
+            (("profile", "sources", 0, "server"), "missing"),
+            (("profile", "sources", 0, "tool"), "missing"),
+            (("profile", "sources", 0, "prefix"), [".."]),
+            (("profile", "sources", 0, "label"), "unknown"),
+            (("access_rules", "allow"), [["docs", "missing"]]),
+            (("access_rules", "deny"), [["missing", "read"]]),
+            (("access_rules", "allow"), [["docs"]]),
+            (("access_rules", "deny"), [["docs", "read", "extra"]]),
+            (("access_rules", "allow"), [["docs", ""]]),
+            (("access_rules", "allow"), "sensitive-input"),
+        ]
+    ):
+        with subtests.test(case=case_index):
+            document = _document()
+            _set(document, path, value)
+            with pytest.raises(CatalogConfigError) as error:
+                load_profile_settings(document, _Registry())
+            assert "sensitive-input" not in str(error.value)
+            assert "sensitive-input" not in repr(error.value)
 
 
-@pytest.mark.parametrize("bad_id", ["", "ambiguous__id", "trailing_", "line\nfeed", "\u200b"])
-@pytest.mark.parametrize("location", ["server", "profile", "source", "allow", "deny"])
-def test_every_server_reference_checks_namespace(bad_id, location):
-    document = _document()
-    if location == "server":
-        document["servers"][0]["id"] = bad_id
-    elif location == "profile":
-        document["profile"]["servers"] = [bad_id]
-    elif location == "source":
-        document["profile"]["sources"][0]["server"] = bad_id
-    else:
-        document["access_rules"][location] = [[bad_id, "read"]]
-    with pytest.raises(CatalogConfigError):
-        load_profile_settings(document, _Registry())
+def test_every_server_reference_checks_namespace(subtests):
+    for case_index, (bad_id, location) in enumerate(
+        (bad_id, location)
+        for bad_id in ["", "ambiguous__id", "trailing_", "line\nfeed", "\u200b"]
+        for location in ["server", "profile", "source", "allow", "deny"]
+    ):
+        with subtests.test(case=case_index):
+            document = _document()
+            if location == "server":
+                document["servers"][0]["id"] = bad_id
+            elif location == "profile":
+                document["profile"]["servers"] = [bad_id]
+            elif location == "source":
+                document["profile"]["sources"][0]["server"] = bad_id
+            else:
+                document["access_rules"][location] = [[bad_id, "read"]]
+            with pytest.raises(CatalogConfigError):
+                load_profile_settings(document, _Registry())
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        ("servers",),
-        ("destinations",),
-        ("profile", "servers"),
-        ("profile", "destinations"),
-        ("servers", 0, "tools"),
-    ],
-)
-def test_duplicate_ids_are_rejected(path):
-    document = _document()
-    target = document
-    for key in path:
-        target = target[key]
-    target.append(deepcopy(target[0]))
-    with pytest.raises(CatalogConfigError):
-        load_profile_settings(document, _Registry())
+def test_duplicate_ids_are_rejected(subtests):
+    for case_index, path in enumerate(
+        [
+            ("servers",),
+            ("destinations",),
+            ("profile", "servers"),
+            ("profile", "destinations"),
+            ("servers", 0, "tools"),
+        ]
+    ):
+        with subtests.test(case=case_index):
+            document = _document()
+            target = document
+            for key in path:
+                target = target[key]
+            target.append(deepcopy(target[0]))
+            with pytest.raises(CatalogConfigError):
+                load_profile_settings(document, _Registry())
 
 
-@pytest.mark.parametrize("invalid", [[], None, "sensitive-input", {"bad": object()}])
-def test_non_json_input_is_rejected(invalid):
-    with pytest.raises(CatalogConfigError):
-        load_profile_settings(invalid, _Registry())
+def test_non_json_input_is_rejected(subtests):
+    for case_index, invalid in enumerate([[], None, "sensitive-input", {"bad": object()}]):
+        with subtests.test(case=case_index), pytest.raises(CatalogConfigError):
+            load_profile_settings(invalid, _Registry())
 
 
-@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), 2**60, "\ud800", ("tuple",)])
-def test_non_json_nested_values_are_rejected(bad_value):
-    document = _document()
-    document["servers"][0]["args"] = [bad_value]
-    with pytest.raises(CatalogConfigError):
-        load_profile_settings(document, _Registry())
+def test_non_json_nested_values_are_rejected(subtests):
+    for case_index, bad_value in enumerate(
+        [float("nan"), float("inf"), 2**60, "\ud800", ("tuple",)]
+    ):
+        with subtests.test(case=case_index):
+            document = _document()
+            document["servers"][0]["args"] = [bad_value]
+            with pytest.raises(CatalogConfigError):
+                load_profile_settings(document, _Registry())
 
 
 def test_cyclic_mapping_is_rejected():
@@ -424,15 +440,16 @@ def test_invalid_core_access_rules_fail_loading(monkeypatch):
         load_profile_settings(_document(), _Registry())
 
 
-@pytest.mark.parametrize("mapping_type", [dict, UserDict, MappingProxyType])
-def test_root_mapping_and_key_order_and_whitespace_do_not_change_hash(mapping_type):
-    document = _document()
-    loaded = load_profile_settings(document, _Registry())
-    rearranged = json.loads(json.dumps(document, sort_keys=True, indent=4))
-    assert load_profile_settings(mapping_type(rearranged), _Registry()).policy_version == (
-        loaded.policy_version
-    )
-    assert len(loaded.policy_version) == 64
+def test_root_mapping_and_key_order_and_whitespace_do_not_change_hash(subtests):
+    for case_index, mapping_type in enumerate([dict, UserDict, MappingProxyType]):
+        with subtests.test(case=case_index):
+            document = _document()
+            loaded = load_profile_settings(document, _Registry())
+            rearranged = json.loads(json.dumps(document, sort_keys=True, indent=4))
+            assert load_profile_settings(mapping_type(rearranged), _Registry()).policy_version == (
+                loaded.policy_version
+            )
+            assert len(loaded.policy_version) == 64
 
 
 def test_access_rule_order_and_duplicates_are_normalized_in_hash():
@@ -449,29 +466,29 @@ def test_access_rule_order_and_duplicates_are_normalized_in_hash():
     assert not evaluate_access(third.access_rules, server_id="docs", tool_name="read").allowed
 
 
-@pytest.mark.parametrize(
-    ("path", "value"),
-    [
-        (("profile", "id"), "another"),
-        (("profile", "destinations"), ["issue-public", "vault"]),
-        (("profile", "sources", 0, "label"), "INTERNAL"),
-        (("policy", "taint_mode"), "none"),
-        (("policy", "approval_ttl_seconds"), 301),
-        (("servers", 0, "command"), "another-command"),
-        (("servers", 0, "args"), ["new", "arguments"]),
-        (("servers", 0, "env_allow"), ["TZ"]),
-        (("servers", 1, "url"), "https://another.invalid"),
-        (("servers", 0, "max_label"), "INTERNAL"),
-        (("destinations", 1, "max_label"), "INTERNAL"),
-        (("access_rules", "allow"), [["docs", "read"]]),
-        (("access_rules", "deny"), [["docs", "read"]]),
-    ],
-)
-def test_whole_configuration_changes_policy_version(path, value):
-    document = _document()
-    original = load_profile_settings(document, _Registry()).policy_version
-    _set(document, path, value)
-    assert load_profile_settings(document, _Registry()).policy_version != original
+def test_whole_configuration_changes_policy_version(subtests):
+    for case_index, (path, value) in enumerate(
+        [
+            (("profile", "id"), "another"),
+            (("profile", "destinations"), ["issue-public", "vault"]),
+            (("profile", "sources", 0, "label"), "INTERNAL"),
+            (("policy", "taint_mode"), "none"),
+            (("policy", "approval_ttl_seconds"), 301),
+            (("servers", 0, "command"), "another-command"),
+            (("servers", 0, "args"), ["new", "arguments"]),
+            (("servers", 0, "env_allow"), ["TZ"]),
+            (("servers", 1, "url"), "https://another.invalid"),
+            (("servers", 0, "max_label"), "INTERNAL"),
+            (("destinations", 1, "max_label"), "INTERNAL"),
+            (("access_rules", "allow"), [["docs", "read"]]),
+            (("access_rules", "deny"), [["docs", "read"]]),
+        ]
+    ):
+        with subtests.test(case=case_index):
+            document = _document()
+            original = load_profile_settings(document, _Registry()).policy_version
+            _set(document, path, value)
+            assert load_profile_settings(document, _Registry()).policy_version != original
 
 
 def test_defaults_have_same_version_as_explicit_values():

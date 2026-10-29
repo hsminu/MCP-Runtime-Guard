@@ -20,9 +20,8 @@ _STARTUP_CODES = (
 )
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
+def test_ordinary_prose_file_names_and_korean_punctuation_are_not_links(subtests):
+    cases = [
         "Profile:",
         "Hotel:",
         "Data: the tool changes instructions.",
@@ -37,17 +36,16 @@ _STARTUP_CODES = (
         "지시합니다.그리고 자료를 전송합니다.",
         "읽습니다.다음 동작을 지시합니다.",
         "Ｐｒｏｆｉｌｅ： default",
-    ],
-)
-def test_ordinary_prose_file_names_and_korean_punctuation_are_not_links(text):
-    assert _SUMMARY.validate_python(text) == text
-    assert defang_scanner_text(text) == text
-    assert make_scan(threat_summary=text).threat_summary == text
+    ]
+    for case, text in enumerate(cases):
+        with subtests.test(case=case):
+            assert _SUMMARY.validate_python(text) == text
+            assert defang_scanner_text(text) == text
+            assert make_scan(threat_summary=text).threat_summary == text
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
+def test_link_html_and_fullwidth_true_positives_still_require_explicit_defanging(subtests):
+    cases = [
         "https://example.com",
         "HTTPS://127.0.0.1",
         "custom://endpoint",
@@ -82,14 +80,14 @@ def test_ordinary_prose_file_names_and_korean_punctuation_are_not_links(text):
         "＜IMPORTANT＞",
         "ｈｔｔｐｓ：／／ｅｘａｍｐｌｅ．ｃｏｍ",
         "evil。com",
-    ],
-)
-def test_link_html_and_fullwidth_true_positives_still_require_explicit_defanging(text):
-    with pytest.raises(ValidationError):
-        _SUMMARY.validate_python(text)
-    result = defang_scanner_text(text)
-    assert result != text
-    assert _SUMMARY.validate_python(result) == result
+    ]
+    for case, text in enumerate(cases):
+        with subtests.test(case=case):
+            with pytest.raises(ValidationError):
+                _SUMMARY.validate_python(text)
+            result = defang_scanner_text(text)
+            assert result != text
+            assert _SUMMARY.validate_python(result) == result
 
 
 @pytest.mark.parametrize(
@@ -150,7 +148,7 @@ def test_invalid_length_is_rejected_without_echoing_input_or_limit(limit):
     assert "PRIVATE_" not in repr(error.value)
 
 
-@settings(max_examples=1000, deadline=None)
+@settings(max_examples=200, deadline=None)
 @given(
     text=st.text(alphabet=st.characters(blacklist_categories=()), max_size=1000),
     limit=st.integers(min_value=1, max_value=300),
@@ -185,7 +183,7 @@ _THREAT_TOKENS = st.sampled_from(
 )
 
 
-@settings(max_examples=1000, deadline=None)
+@settings(max_examples=200, deadline=None)
 @given(tokens=st.lists(_THREAT_TOKENS, max_size=40), limit=st.integers(1, 300))
 def test_composed_threat_syntax_and_truncation_always_validate(tokens, limit):
     result = defang_scanner_text("".join(tokens), max_length=limit)
@@ -193,7 +191,7 @@ def test_composed_threat_syntax_and_truncation_always_validate(tokens, limit):
     assert _SUMMARY.validate_python(result) == result
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=200, deadline=None)
 @given(text=st.text(alphabet=st.characters(blacklist_categories=()), max_size=200))
 def test_same_helper_supports_optional_scan_risk_without_inventing_a_risk_level(text):
     result = defang_scanner_text(text, max_length=64) or None

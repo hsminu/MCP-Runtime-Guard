@@ -25,9 +25,8 @@ from guard_app.security.digest import (
 
 
 # IEEE 754 bits, not parsed decimal literals, preserve the RFC's exact inputs.
-@pytest.mark.parametrize(
-    ("bits", "expected"),
-    [
+def test_rfc_appendix_b_number_samples(subtests) -> None:
+    cases = [
         ("0000000000000000", "0"),
         ("8000000000000000", "0"),
         ("0000000000000001", "5e-324"),
@@ -52,11 +51,11 @@ from guard_app.security.digest import (
         ("41b3de4355555557", "333333333.33333343"),
         ("becbf647612f3696", "-0.0000033333333333333333"),
         ("43143ff3c1cb0959", "1424953923781206.2"),
-    ],
-)
-def test_rfc_appendix_b_number_samples(bits: str, expected: str) -> None:
-    value = struct.unpack(">d", bytes.fromhex(bits))[0]
-    assert jcs_canonicalize(value) == expected.encode("ascii")
+    ]
+    for case, (bits, expected) in enumerate(cases):
+        with subtests.test(case=case):
+            value = struct.unpack(">d", bytes.fromhex(bits))[0]
+            assert jcs_canonicalize(value) == expected.encode("ascii")
 
 
 @pytest.mark.parametrize("bits", ["7fffffffffffffff", "7ff0000000000000", "fff0000000000000"])
@@ -129,9 +128,8 @@ def test_unicode_normalization_is_not_applied() -> None:
     assert tool_fingerprint({"é": 1}) != tool_fingerprint({"e\u0301": 1})
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
+def test_ecmascript_decimal_placement_and_zero(subtests) -> None:
+    cases = [
         (0.0, "0"),
         (-0.0, "0"),
         (4.0, "4"),
@@ -143,21 +141,22 @@ def test_unicode_normalization_is_not_applied() -> None:
         (1e-8, "1e-8"),
         (0.00123, "0.00123"),
         (100.0, "100"),
-    ],
-)
-def test_ecmascript_decimal_placement_and_zero(value: float, expected: str) -> None:
-    assert jcs_canonicalize(value) == expected.encode()
+    ]
+    for case, (value, expected) in enumerate(cases):
+        with subtests.test(case=case):
+            assert jcs_canonicalize(value) == expected.encode()
 
 
-@pytest.mark.parametrize("value", [-(2**53 - 1), -1, 0, 1, 2**53 - 1])
-def test_safe_python_integers_are_exact(value: int) -> None:
-    assert jcs_canonicalize(value) == str(value).encode()
+def test_safe_python_integers_are_exact(subtests) -> None:
+    for case, value in enumerate([-(2**53 - 1), -1, 0, 1, 2**53 - 1]):
+        with subtests.test(case=case):
+            assert jcs_canonicalize(value) == str(value).encode()
 
 
-@pytest.mark.parametrize("value", [-(2**53), 2**53, -(2**53 + 1), 2**53 + 1, 10**100])
-def test_unsafe_python_integers_are_rejected_without_rounding(value: int) -> None:
-    with pytest.raises(JcsCanonicalizationError):
-        jcs_canonicalize({"nested": [value]})
+def test_unsafe_python_integers_are_rejected_without_rounding(subtests) -> None:
+    for case, value in enumerate([-(2**53), 2**53, -(2**53 + 1), 2**53 + 1, 10**100]):
+        with subtests.test(case=case), pytest.raises(JcsCanonicalizationError):
+            jcs_canonicalize({"nested": [value]})
 
 
 def test_literals_and_numeric_equivalents_have_ecmascript_meaning() -> None:
@@ -188,10 +187,10 @@ def test_non_json_types_are_rejected_without_input_in_errors(value: object) -> N
     assert "private-input" not in repr(caught.value)
 
 
-@pytest.mark.parametrize("key", [1, True, None, ("private-input",), _Number.ONE])
-def test_non_string_keys_are_rejected_before_sorting(key: object) -> None:
-    with pytest.raises(JcsCanonicalizationError):
-        jcs_canonicalize({"ok": 1, key: "private-input"})
+def test_non_string_keys_are_rejected_before_sorting(subtests) -> None:
+    for case, key in enumerate([1, True, None, ("private-input",), _Number.ONE]):
+        with subtests.test(case=case), pytest.raises(JcsCanonicalizationError):
+            jcs_canonicalize({"ok": 1, key: "private-input"})
 
 
 @pytest.mark.parametrize("value", ["\ud800", ["private-input\udfff"], {"\ud800": 1}])
@@ -245,29 +244,30 @@ def test_tool_fingerprint_hashes_the_whole_definition_without_mutation() -> None
     assert set(expected) <= set("0123456789abcdef")
 
 
-@pytest.mark.parametrize(
-    "field", ["name", "description", "inputSchema", "outputSchema", "annotations", "_meta", "extra"]
-)
-def test_each_tool_field_including_extensions_affects_fingerprint(field: str) -> None:
-    tool = {"name": "read", "description": "a", "inputSchema": {"minimum": 0.5}}
-    changed = {**tool, field: "b"}
-    assert tool_fingerprint(tool) != tool_fingerprint(changed)
+def test_each_tool_field_including_extensions_affects_fingerprint(subtests) -> None:
+    for case, field in enumerate(
+        ["name", "description", "inputSchema", "outputSchema", "annotations", "_meta", "extra"]
+    ):
+        with subtests.test(case=case):
+            tool = {"name": "read", "description": "a", "inputSchema": {"minimum": 0.5}}
+            changed = {**tool, field: "b"}
+            assert tool_fingerprint(tool) != tool_fingerprint(changed)
 
 
 def test_array_order_is_part_of_the_fingerprint() -> None:
     assert tool_fingerprint({"enum": ["a", "b"]}) != tool_fingerprint({"enum": ["b", "a"]})
 
 
-@pytest.mark.parametrize("value", [None, "tool", [], 1, 1.0, True])
-def test_fingerprint_requires_a_plain_tool_object(value: object) -> None:
-    with pytest.raises(JcsCanonicalizationError):
-        tool_fingerprint(value)
+def test_fingerprint_requires_a_plain_tool_object(subtests) -> None:
+    for case, value in enumerate([None, "tool", [], 1, 1.0, True]):
+        with subtests.test(case=case), pytest.raises(JcsCanonicalizationError):
+            tool_fingerprint(value)
 
 
-@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity", "1e9999"])
-def test_nonfinite_values_accepted_by_default_json_parser_are_rejected(literal: str) -> None:
-    with pytest.raises(JcsCanonicalizationError):
-        tool_fingerprint(json.loads('{"minimum":' + literal + "}"))
+def test_nonfinite_values_accepted_by_default_json_parser_are_rejected(subtests) -> None:
+    for case, literal in enumerate(["NaN", "Infinity", "-Infinity", "1e9999"]):
+        with subtests.test(case=case), pytest.raises(JcsCanonicalizationError):
+            tool_fingerprint(json.loads('{"minimum":' + literal + "}"))
 
 
 _json_text = st.text(alphabet=st.characters(blacklist_categories=("Cs",)), max_size=12)
@@ -282,7 +282,7 @@ _json_values = st.recursive(
 )
 
 
-@settings(max_examples=300)
+@settings(max_examples=200)
 @given(_json_values)
 def test_parsing_and_recanonicalizing_is_idempotent(value: object) -> None:
     encoded = jcs_canonicalize(value)

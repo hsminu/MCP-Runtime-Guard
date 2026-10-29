@@ -3,7 +3,9 @@
 Guard 연결 뒤의 dispatch == 0 검증은 C의 독립 인수 대상이다.
 """
 
+from copy import deepcopy
 from dataclasses import FrozenInstanceError
+from itertools import product
 
 import pytest
 from hypothesis import assume, given, settings
@@ -42,26 +44,26 @@ def test_deny_wins_when_both_lists_contain_the_pair() -> None:
     assert result == AccessResult(allowed=False, reason="ACCESS_RULE_DENY", error=False)
 
 
-@pytest.mark.parametrize(
-    ("server_id", "tool_name"),
-    [
-        ("SERVER", "Read"),
-        ("server", "read"),
-        ("server-extra", "Read"),
-        ("server", "ReadExtra"),
-        ("server ", "Read"),
-        ("server", "Read "),
-        ("other", "Read"),
-    ],
-)
-def test_case_prefix_whitespace_and_server_names_are_not_normalized(
-    server_id: str, tool_name: str
-) -> None:
-    result = evaluate_access(
-        AccessRules(allow=[("server", "Read")]), server_id=server_id, tool_name=tool_name
-    )
-    assert not result.allowed
-    assert not result.error
+def test_case_prefix_whitespace_and_server_names_are_not_normalized(subtests) -> None:
+    for case_index, ((server_id, tool_name),) in enumerate(
+        product(
+            [
+                ("SERVER", "Read"),
+                ("server", "read"),
+                ("server-extra", "Read"),
+                ("server", "ReadExtra"),
+                ("server ", "Read"),
+                ("server", "Read "),
+                ("other", "Read"),
+            ]
+        )
+    ):
+        with subtests.test(case=case_index):
+            result = evaluate_access(
+                AccessRules(allow=[("server", "Read")]), server_id=server_id, tool_name=tool_name
+            )
+            assert not result.allowed
+            assert not result.error
 
 
 def test_wildcards_and_expression_shaped_names_are_only_literal_names() -> None:
@@ -78,80 +80,93 @@ def test_unicode_and_delimiter_shaped_names_remain_distinct() -> None:
     assert not evaluate_access(rules, server_id="a", tool_name="b__c").allowed
 
 
-@pytest.mark.parametrize(
-    "pairs",
-    [
-        [("server", "read")],
-        (("server", "read"),),
-        {("server", "read")},
-        frozenset({("server", "read")}),
-        [["server", "read"]],
-    ],
-)
-def test_supported_containers_are_copied_into_equivalent_rules(pairs: object) -> None:
-    assert AccessRules(allow=pairs) == AccessRules(allow=[("server", "read")])
+def test_supported_containers_are_copied_into_equivalent_rules(subtests) -> None:
+    for case_index, (pairs,) in enumerate(
+        product(
+            [
+                [("server", "read")],
+                (("server", "read"),),
+                {("server", "read")},
+                frozenset({("server", "read")}),
+                [["server", "read"]],
+            ]
+        )
+    ):
+        with subtests.test(case=case_index):
+            assert AccessRules(allow=pairs) == AccessRules(allow=[("server", "read")])
 
 
 class _String(str):
     pass
 
 
-@pytest.mark.parametrize(
-    "malformed",
-    [
-        None,
-        True,
-        "RAW_RULE",
-        b"RAW_RULE",
-        {"server": "tool"},
-        ["server", "tool"],
-        [("server",)],
-        [("server", "tool", "allow")],
-        [{"server_id": "server", "tool_name": "tool", "decision": "allow"}],
-        [(1, "tool")],
-        [("server", False)],
-        [("", "tool")],
-        [("server", "")],
-        [("server\ud800", "tool")],
-        [("server", "tool\udfff")],
-        [(_String("server"), "tool")],
-        [("server", "read"), ("partial-invalid",)],
-    ],
-)
-@pytest.mark.parametrize("side", ["allow", "deny"])
-def test_malformed_rules_in_either_list_invalidate_the_entire_set(
-    malformed: object, side: str
-) -> None:
-    inputs: dict[str, object] = {"allow": [("server", "read")], "deny": []}
-    inputs[side] = malformed
-    rules = AccessRules(**inputs)
-    assert not rules.is_valid
-    for server_id, tool_name in [("server", "read"), ("other", "tool")]:
-        result = evaluate_access(rules, server_id=server_id, tool_name=tool_name)
-        assert result == AccessResult(allowed=False, reason="ACCESS_RULES_INVALID", error=True)
-        assert "RAW_RULE" not in str(result)
-    with pytest.raises(AccessRulesError) as caught:
-        normalize_access_rules(rules)
-    assert "RAW_RULE" not in str(caught.value)
+def test_malformed_rules_in_either_list_invalidate_the_entire_set(subtests) -> None:
+    for case_index, (side, malformed) in enumerate(
+        product(
+            ["allow", "deny"],
+            [
+                None,
+                True,
+                "RAW_RULE",
+                b"RAW_RULE",
+                {"server": "tool"},
+                ["server", "tool"],
+                [("server",)],
+                [("server", "tool", "allow")],
+                [{"server_id": "server", "tool_name": "tool", "decision": "allow"}],
+                [(1, "tool")],
+                [("server", False)],
+                [("", "tool")],
+                [("server", "")],
+                [("server\ud800", "tool")],
+                [("server", "tool\udfff")],
+                [(_String("server"), "tool")],
+                [("server", "read"), ("partial-invalid",)],
+            ],
+        )
+    ):
+        with subtests.test(case=case_index):
+            inputs: dict[str, object] = {"allow": [("server", "read")], "deny": []}
+            inputs[side] = deepcopy(malformed)
+            rules = AccessRules(**inputs)
+            assert not rules.is_valid
+            for server_id, tool_name in [("server", "read"), ("other", "tool")]:
+                result = evaluate_access(rules, server_id=server_id, tool_name=tool_name)
+                assert result == AccessResult(
+                    allowed=False, reason="ACCESS_RULES_INVALID", error=True
+                )
+                assert "RAW_RULE" not in str(result)
+            with pytest.raises(AccessRulesError) as caught:
+                normalize_access_rules(rules)
+            assert "RAW_RULE" not in str(caught.value)
 
 
-@pytest.mark.parametrize("rules", [None, {}, [], (), frozenset(), "RAW_RULE", True])
-def test_unvalidated_rules_objects_cannot_grant_access(rules: object) -> None:
-    assert evaluate_access(rules, server_id="server", tool_name="tool") == AccessResult(
-        allowed=False, reason="ACCESS_RULES_INVALID", error=True
-    )
-    with pytest.raises(AccessRulesError):
-        normalize_access_rules(rules)
+def test_unvalidated_rules_objects_cannot_grant_access(subtests) -> None:
+    for case_index, (rules,) in enumerate(
+        product([None, {}, [], (), frozenset(), "RAW_RULE", True])
+    ):
+        with subtests.test(case=case_index):
+            assert evaluate_access(rules, server_id="server", tool_name="tool") == AccessResult(
+                allowed=False, reason="ACCESS_RULES_INVALID", error=True
+            )
+            with pytest.raises(AccessRulesError):
+                normalize_access_rules(rules)
 
 
-@pytest.mark.parametrize("name", [None, 1, True, [], "", "RAW_NAME\ud800", _String("server")])
-@pytest.mark.parametrize("field", ["server_id", "tool_name"])
-def test_malformed_request_names_are_fixed_errors(name: object, field: str) -> None:
-    request: dict[str, object] = {"server_id": "server", "tool_name": "tool"}
-    request[field] = name
-    result = evaluate_access(AccessRules(allow=[("server", "tool")]), **request)
-    assert result == AccessResult(allowed=False, reason="ACCESS_REQUEST_INVALID", error=True)
-    assert "RAW_NAME" not in str(result)
+def test_malformed_request_names_are_fixed_errors(subtests) -> None:
+    for case_index, (field, name) in enumerate(
+        product(
+            ["server_id", "tool_name"], [None, 1, True, [], "", "RAW_NAME\ud800", _String("server")]
+        )
+    ):
+        with subtests.test(case=case_index):
+            request: dict[str, object] = {"server_id": "server", "tool_name": "tool"}
+            request[field] = deepcopy(name)
+            result = evaluate_access(AccessRules(allow=[("server", "tool")]), **request)
+            assert result == AccessResult(
+                allowed=False, reason="ACCESS_REQUEST_INVALID", error=True
+            )
+            assert "RAW_NAME" not in str(result)
 
 
 def test_untrusted_iterators_are_not_executed() -> None:

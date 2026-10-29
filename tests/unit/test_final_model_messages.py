@@ -44,23 +44,25 @@ def final(cause="executed", outcome=None):
     )
 
 
-@pytest.mark.parametrize("cause", list(MESSAGES))
-@pytest.mark.parametrize(
-    "reason", [Reason.INTERNAL_TO_EXTERNAL, Reason.TOOL_FINGERPRINT_CHANGED, Reason.INTERNAL_ERROR]
-)
-def test_nonexecution_cause_uses_only_the_fixed_termination_message(cause, reason):
-    notice = final(cause, Denied(request_id="PRIVATE_request", reasons=(reason,)))
-    assert final_model_message(notice) == (False, MESSAGES[cause])
-    assert reason.value not in final_model_message(notice)[1]
-    assert "PRIVATE_" not in final_model_message(notice)[1]
+def test_nonexecution_cause_uses_only_the_fixed_termination_message(subtests):
+    for case_0, cause in enumerate(list(MESSAGES)):
+        for case_1, reason in enumerate(
+            [Reason.INTERNAL_TO_EXTERNAL, Reason.TOOL_FINGERPRINT_CHANGED, Reason.INTERNAL_ERROR]
+        ):
+            with subtests.test(case_0=case_0, case_1=case_1):
+                notice = final(cause, Denied(request_id="PRIVATE_request", reasons=(reason,)))
+                assert final_model_message(notice) == (False, MESSAGES[cause])
+                assert reason.value not in final_model_message(notice)[1]
+                assert "PRIVATE_" not in final_model_message(notice)[1]
 
 
-@pytest.mark.parametrize("reason", list(Reason))
-def test_executed_denial_reuses_existing_reason_visibility(reason):
-    denied = Denied(request_id="PRIVATE_request", reasons=(reason,))
-    assert final_model_message(final(outcome=denied)) == outcome_model_message(denied)
-    if reason not in MODEL_VISIBLE_REASONS:
-        assert reason.value not in final_model_message(final(outcome=denied))[1]
+def test_executed_denial_reuses_existing_reason_visibility(subtests):
+    for case_0, reason in enumerate(list(Reason)):
+        with subtests.test(case_0=case_0):
+            denied = Denied(request_id="PRIVATE_request", reasons=(reason,))
+            assert final_model_message(final(outcome=denied)) == outcome_model_message(denied)
+            if reason not in MODEL_VISIBLE_REASONS:
+                assert reason.value not in final_model_message(final(outcome=denied))[1]
 
 
 def test_private_reason_masks_other_reasons_in_executed_denial():

@@ -33,85 +33,85 @@ def source(
     return SourceRule.model_validate(values)
 
 
-@pytest.mark.parametrize(
-    "segment", ["", ".", "..", "a/b", "a\\b", "\0", "\n", "\x7f", "\x85", "\u202e", "\ud800"]
-)
-def test_source_configuration_rejects_invalid_prefix_segments(segment: str) -> None:
+def test_source_configuration_rejects_invalid_prefix_segments(subtests) -> None:
     """I6: 설정을 조용히 정규화하거나 민감 경로 규칙을 추측하지 않는다."""
-    with pytest.raises(ValidationError):
-        source((segment,))
+    for case_index, segment in enumerate(
+        ["", ".", "..", "a/b", "a\\b", "\x00", "\n", "\x7f", "\x85", "\u202e", "\ud800"]
+    ):
+        with subtests.test(case=case_index), pytest.raises(ValidationError):
+            source((segment,))
 
 
-@pytest.mark.parametrize("prefix", [["company"], (1,), (None,), "company"])
-def test_source_configuration_requires_strict_immutable_segments(prefix: object) -> None:
-    with pytest.raises(ValidationError):
-        source((), prefix=prefix)
+def test_source_configuration_requires_strict_immutable_segments(subtests) -> None:
+    for case_index, prefix in enumerate([["company"], (1,), (None,), "company"]):
+        with subtests.test(case=case_index), pytest.raises(ValidationError):
+            source((), prefix=prefix)
 
 
-@pytest.mark.parametrize(
-    "server_id", ["", "docs__remote", "docs_", "docs\0", "docs\n", "docs\u202e", "\udfff", None, 1]
-)
-def test_server_identifier_rejects_ambiguous_namespace_or_control_values(server_id: object) -> None:
-    assert valid_server_id(server_id) is False
-    with pytest.raises(ValidationError):
-        source((), server_id=server_id)
+def test_server_identifier_rejects_ambiguous_namespace_or_control_values(subtests) -> None:
+    for case_index, server_id in enumerate(
+        ["", "docs__remote", "docs_", "docs\x00", "docs\n", "docs\u202e", "\udfff", None, 1]
+    ):
+        with subtests.test(case=case_index):
+            assert valid_server_id(server_id) is False
+            with pytest.raises(ValidationError):
+                source((), server_id=server_id)
 
 
-@pytest.mark.parametrize("server_id", ["docs", "local_docs", "회사", "CaseSensitive"])
-def test_server_identifier_preserves_valid_exact_names(server_id: str) -> None:
-    assert valid_server_id(server_id) is True
-    assert source((), server_id=server_id).server_id == server_id
+def test_server_identifier_preserves_valid_exact_names(subtests) -> None:
+    for case_index, server_id in enumerate(["docs", "local_docs", "회사", "CaseSensitive"]):
+        with subtests.test(case=case_index):
+            assert valid_server_id(server_id) is True
+            assert source((), server_id=server_id).server_id == server_id
 
 
-@pytest.mark.parametrize("tool_name", ["", "read\0", "read\n", "\ud800", True])
-def test_source_configuration_rejects_invalid_tool_identity(tool_name: object) -> None:
-    with pytest.raises(ValidationError):
-        source((), tool_name=tool_name)
+def test_source_configuration_rejects_invalid_tool_identity(subtests) -> None:
+    for case_index, tool_name in enumerate(["", "read\x00", "read\n", "\ud800", True]):
+        with subtests.test(case=case_index), pytest.raises(ValidationError):
+            source((), tool_name=tool_name)
 
 
-@pytest.mark.parametrize(
-    "resource_id",
-    [
-        None,
-        False,
-        1,
-        ["company"],
-        "/company/plan",
-        "//company/plan",
-        "company\\plan",
-        "company//plan",
-        "./company/plan",
-        "company/./plan",
-        "company/../plan",
-        "../company/plan",
-        "company/plan/",
-        "company/\0plan",
-        "company/\nplan",
-        "company/\u202eplan",
-        "company/\ud800",
-    ],
-)
-def test_resource_id_requires_canonical_relative_posix_segments(resource_id: object) -> None:
-    assert canonical_resource_parts(resource_id) is None
-    classifier = SourceClassifier((source((), Label.PUBLIC),))
-    assert classifier.classify("docs", "read_document", resource_id) is None
+def test_resource_id_requires_canonical_relative_posix_segments(subtests) -> None:
+    for case_index, resource_id in enumerate(
+        [
+            None,
+            False,
+            1,
+            ["company"],
+            "/company/plan",
+            "//company/plan",
+            "company\\plan",
+            "company//plan",
+            "./company/plan",
+            "company/./plan",
+            "company/../plan",
+            "../company/plan",
+            "company/plan/",
+            "company/\x00plan",
+            "company/\nplan",
+            "company/\u202eplan",
+            "company/\ud800",
+        ]
+    ):
+        with subtests.test(case=case_index):
+            assert canonical_resource_parts(resource_id) is None
+            classifier = SourceClassifier((source((), Label.PUBLIC),))
+            assert classifier.classify("docs", "read_document", resource_id) is None
 
 
-@pytest.mark.parametrize(
-    ("resource_id", "parts"),
-    [
-        ("", ()),
-        ("company", ("company",)),
-        ("company/plan.md", ("company", "plan.md")),
-        (" company /plan. ", (" company ", "plan. ")),
-        ("회사/계획", ("회사", "계획")),
-        ("é/e\u0301", ("é", "e\u0301")),
-    ],
-)
-def test_canonical_resource_parser_preserves_exact_text(
-    resource_id: str, parts: tuple[str, ...]
-) -> None:
-    assert canonical_resource_parts(resource_id) == parts
+def test_canonical_resource_parser_preserves_exact_text(subtests) -> None:
+    for case_index, (resource_id, parts) in enumerate(
+        [
+            ("", ()),
+            ("company", ("company",)),
+            ("company/plan.md", ("company", "plan.md")),
+            (" company /plan. ", (" company ", "plan. ")),
+            ("회사/계획", ("회사", "계획")),
+            ("é/é", ("é", "é")),
+        ]
+    ):
+        with subtests.test(case=case_index):
+            assert canonical_resource_parts(resource_id) == parts
 
 
 def test_prefix_match_uses_segments_and_exact_server_and_tool() -> None:
@@ -151,13 +151,13 @@ def test_tool_level_read_matches_only_empty_prefix() -> None:
     assert classifier.classify("docs", "read_document", "") is Label.PUBLIC
 
 
-@pytest.mark.parametrize(
-    ("server_id", "tool_name"),
-    [(None, "read_document"), ("docs", None), ("docs_", "read_document"), ("docs", "read\0")],
-)
-def test_dynamic_invalid_identity_is_unclassified(server_id: object, tool_name: object) -> None:
-    classifier = SourceClassifier((source((), Label.PUBLIC),))
-    assert classifier.classify(server_id, tool_name, "company/plan") is None
+def test_dynamic_invalid_identity_is_unclassified(subtests) -> None:
+    for case_index, (server_id, tool_name) in enumerate(
+        [(None, "read_document"), ("docs", None), ("docs_", "read_document"), ("docs", "read\x00")]
+    ):
+        with subtests.test(case=case_index):
+            classifier = SourceClassifier((source((), Label.PUBLIC),))
+            assert classifier.classify(server_id, tool_name, "company/plan") is None
 
 
 def test_rule_and_classifier_cannot_be_changed_after_creation() -> None:
