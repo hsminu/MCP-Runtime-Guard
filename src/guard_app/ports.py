@@ -59,13 +59,20 @@ from guard_app.domain.schema_jobs import SchemaJobRequest, SchemaJobResponse
 
 
 class SchemaJobRunner(Protocol):
-    """합의 전 제안(SCHEMA-01): 제한된 별도 프로세스의 스키마 작업.
+    """SCHEMA-01: 제한된 별도 프로세스의 스키마 작업.
 
-    C가 종료 가능한 프로세스에서 ``run_schema_job``을 실행한다. 시간 초과·자원 초과·
-    비정상 종료·응답 불명은 고정 실패이며 성공으로 취급하지 않는다. 늦은 결과는 버린다.
+    runner는 assemble_guard보다 먼저 살아 있어야 한다. run은 성공한 응답을 반환하고,
+    시간 초과는 SchemaJobRunnerError(TIMEOUT), 응답 상한 초과는 TOO_LARGE,
+    미기동·비정상 종료·응답 불명은 UNAVAILABLE로 알린다. 다른 예외도 호출자는
+    UNAVAILABLE로 보며 CancelledError는 전파한다. 늦은 결과는 버린다.
+
+    Guard 종료 뒤 Store 종료 전에 aclose를 기다린다. True는 종료 확인, False는
+    종료 미확인이며 CLEANUP_UNCONFIRMED로 나타낸다.
     """
 
     async def run(self, request: SchemaJobRequest, *, deadline: float) -> SchemaJobResponse: ...
+
+    async def aclose(self) -> bool: ...
 
 
 class StoreQueries(Protocol):
