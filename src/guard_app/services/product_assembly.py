@@ -269,6 +269,16 @@ async def _record_listings(
     return frozenset(failed)
 
 
+def _boundary_matches(registry: Registry, server: ServerSettings) -> bool:
+    # The fields B's Profile view compares before it compares the tools.
+    record = registry.registration(server.id)
+    return (
+        record is not None
+        and record.boundary.tier == server.tier
+        and record.boundary.max_label == server.max_label
+    )
+
+
 @dataclass(slots=True, repr=False)
 class AssembledGuard:
     loaded: LoadedProfile
@@ -416,11 +426,17 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             taint_mode=settings.taint_mode,
         )
         try:
-            # A blocked server offers nothing this run. Skipping it also keeps an
-            # unobserved A155 kind edit (settings ahead of the Registry) from
-            # failing every other server's tools.
+            # A blocked server offers nothing this run. One whose boundary still
+            # matches may hold an unobserved A155 kind edit (settings ahead of the
+            # Registry); leaving it out keeps it from failing every other server.
+            # A boundary that differs still stops the assembly (A129).
+            ahead = {
+                server.id
+                for server in loaded.selected_servers
+                if server.id in blocked and _boundary_matches(inputs.registry, server)
+            }
             tool_views = loaded.catalog.tool_views(
-                tuple(server_id for server_id in server_ids if server_id not in blocked)
+                tuple(server_id for server_id in server_ids if server_id not in ahead)
             )
         except CatalogConfigError:
             # One unsupported tool schema must not surface as a raw error.
