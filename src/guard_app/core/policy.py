@@ -44,7 +44,7 @@ def evaluate(inp: PolicyInput) -> PolicyDecision:
     final = max([verdict.decision for verdict in verdicts] + [access])
     reasons = tuple(verdict.reason for verdict in verdicts if verdict.decision is final)
     if access is Decision.DENY:
-        reasons += (Reason.AGT_ERROR if inp.access.error else Reason.AGT_DENY,)
+        reasons += (Reason.ACCESS_ERROR if inp.access.error else Reason.ACCESS_DENY,)
     return PolicyDecision(
         decision=final,
         reasons=reasons,

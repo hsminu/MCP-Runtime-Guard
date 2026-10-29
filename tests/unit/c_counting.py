@@ -134,7 +134,10 @@ DESTINATIONS = (
     {"id": "partner", "tier": "approved_external", "max_label": "INTERNAL"},
     # CONFIDENTIAL 자료는 max_label을 넘어 DENY다.
     {"id": "issue", "tier": "general_external", "max_label": "INTERNAL"},
+    # 기밀 자료를 받을 수 있게 등록한 사용자 본인의 목적지(T26·T30).
+    {"id": "mine", "tier": "internal", "max_label": "CONFIDENTIAL"},
 )
+ALLOWED = {"approval_consumed": 0, "host_dispatch": 1, "wire": 1, "effect": 1}
 _TOKEN_ARG = {"read": "path", "send": "body"}
 
 
@@ -454,11 +457,13 @@ def document(
     allow,
     deny,
     approval_ttl_seconds: int | None = None,
+    server_tier: str = "internal",
+    server_max_label: str = "CONFIDENTIAL",
 ) -> dict[str, object]:
     server: dict[str, object] = {
         "id": "docs",
-        "tier": "internal",
-        "max_label": "CONFIDENTIAL",
+        "tier": server_tier,
+        "max_label": server_max_label,
         "tools": [READ_SETTINGS, SEND_SETTINGS],
     }
     if kind == "stdio":
@@ -509,8 +514,13 @@ async def harness(
     approval_ttl_seconds: int | None = None,
     call_timeout_s: float = 30.0,
     assemble: bool = True,
+    server_tier: str = "internal",
+    server_max_label: str = "CONFIDENTIAL",
 ) -> AsyncIterator[Run]:
-    """서버를 띄워 실제 목록으로 등록·활성화하고(C4.10), 제품 조립으로 Guard를 만든다."""
+    """서버를 띄워 실제 목록으로 등록·활성화하고(C4.10), 제품 조립으로 Guard를 만든다.
+
+    `server_tier`·`server_max_label`은 MCP 서버 경계다. 기본은 내부 서버다.
+    """
     counters = Counters()
     if kind == "stdio":
         counters.wire_file = tmp_path / "wire.jsonl"
@@ -529,6 +539,8 @@ async def harness(
                 allow=allow,
                 deny=deny,
                 approval_ttl_seconds=approval_ttl_seconds,
+                server_tier=server_tier,
+                server_max_label=server_max_label,
             )
 
             async def connect() -> StreamFactory:

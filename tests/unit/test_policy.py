@@ -202,9 +202,9 @@ def test_all_precondition_reasons_are_retained_in_order() -> None:
     ("allowed", "error", "expected_reason"),
     [
         (True, False, Reason.OK),
-        (False, False, Reason.AGT_DENY),
-        (True, True, Reason.AGT_ERROR),
-        (False, True, Reason.AGT_ERROR),
+        (False, False, Reason.ACCESS_DENY),
+        (True, True, Reason.ACCESS_ERROR),
+        (False, True, Reason.ACCESS_ERROR),
     ],
 )
 def test_agt_error_denies_even_when_allowed_is_true(
@@ -292,7 +292,7 @@ def test_boundary_and_agt_denials_preserve_all_causes() -> None:
     assert result.reasons == (
         Reason.LABEL_EXCEEDS_BOUNDARY,
         Reason.LABEL_EXCEEDS_BOUNDARY,
-        Reason.AGT_DENY,
+        Reason.ACCESS_DENY,
     )
 
 
@@ -351,7 +351,7 @@ def test_server_destination_and_agt_composition(
         if decision is expected
     )
     if agt_denies:
-        expected_reasons += (Reason.AGT_ERROR if agt_error else Reason.AGT_DENY,)
+        expected_reasons += (Reason.ACCESS_ERROR if agt_error else Reason.ACCESS_DENY,)
     result = evaluate(
         _input(
             kind=ToolKind.SEND,
@@ -422,7 +422,7 @@ def test_comparison_modes_keep_registration_and_agt_checks(mode: str) -> None:
         )
     )
     assert agt.decision is Decision.DENY
-    assert agt.reasons == (Reason.AGT_DENY,)
+    assert agt.reasons == (Reason.ACCESS_DENY,)
 
 
 @pytest.mark.parametrize("mode", ["accumulate", "last_read", "none"])

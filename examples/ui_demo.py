@@ -169,7 +169,7 @@ _CALLS = (
         "UNKNOWN_OUTCOME",
         83,
     ),
-    ("docs", "send", "send", "internal", "DENY", "AGT_DENY", "NOT_REQUIRED", "DENIED", 96),
+    ("docs", "send", "send", "internal", "DENY", "ACCESS_DENY", "NOT_REQUIRED", "DENIED", 96),
     ("drive", "read", "read", "approved_external", "ALLOW", None, "NOT_REQUIRED", "SUCCEEDED", 110),
     (
         "mail",

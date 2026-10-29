@@ -1,6 +1,7 @@
 # Semgrep rules (C2.9, C6.3; technical design 13.4). CI runs them on `src/` in a Linux job:
 #   semgrep scan --config tools/ci/semgrep.yml --error --metrics=off src
-# Tests and attack fixtures use these APIs on purpose and are not scanned.
+# Tests and attack fixtures use these APIs on purpose and are not scanned (attack fixtures:
+# weakness register AF-01). `paths` patterns start with `/`: anchored at the repository root.
 # Rule tests: tools/ci/semgrep.py (`semgrep --test`). The inline exceptions must equal
 # SG-01..04 and the designed broad-except boundaries exactly:
 # tools/ci/check_semgrep_exceptions.py reads a `--disable-nosem` scan.
@@ -25,7 +26,7 @@ rules:
       - pattern: os.popen(...)
     paths:
       exclude:
-        - src/guard_app/security/launcher.py
+        - /src/guard_app/security/launcher.py
 
   - id: no-shell-true
     languages: [python]
@@ -40,7 +41,7 @@ rules:
     pattern: sqlite3.connect(...)
     paths:
       exclude:
-        - src/guard_app/storage/
+        - /src/guard_app/storage/
 
   - id: no-assert-for-checks
     languages: [python]

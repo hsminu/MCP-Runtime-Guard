@@ -645,12 +645,12 @@ def test_access_error_and_deny_do_not_dispatch():
         h.access.result = AccessResult(allowed=False, reason="", error=True)
         result = await h.guard.submit("task", _call())
         assert isinstance(result, Denied)
-        assert Reason.AGT_ERROR in result.reasons
+        assert Reason.ACCESS_ERROR in result.reasons
         assert not h.transport.calls
         h.access.result = AccessResult(allowed=False, reason="RAW", error=False)
         result = await h.guard.submit("task", _call())
         assert isinstance(result, Denied)
-        assert Reason.AGT_DENY in result.reasons
+        assert Reason.ACCESS_DENY in result.reasons
         assert not h.transport.calls
 
     asyncio.run(scenario())
