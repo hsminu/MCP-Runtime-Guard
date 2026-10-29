@@ -336,7 +336,7 @@ MUTATIONS = {
         lambda o: o.server_requests.append("item/commandExecution/requestApproval"),
         "L2_SERVER_REQUEST_UNEXPECTED",
     ),
-    "probe_overlap": (lambda o: setattr(o, "probe_overlap", True), "L2_PROBE_CALLS_UNEXPECTED"),
+    "probe_overlap": (lambda o: setattr(o, "probe_overlap", True), "L2_PROBE_CALLS_OVERLAP"),
     "probe_missing": (lambda o: o.probe_calls.pop(), "L2_PROBE_CALLS_UNEXPECTED"),
     "turn_failed": (lambda o: setattr(o, "turn_status", "failed"), "L2_TURN_NOT_COMPLETED"),
     "model_get": (
@@ -364,6 +364,43 @@ def test_each_departure_fails_with_its_code(name):
     observation = good()
     mutate(observation)
     assert code in _judge(observation)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="정션은 Windows 기능이다")
+def test_the_same_files_under_another_path_pass_and_other_files_fail(tmp_path):
+    """A161: 앱 패키지 가상화처럼 Codex가 같은 파일을 다른 경로로 보고해도 통과한다.
+    내용이 같아도 다른 파일이면 실패한다."""
+    home = tmp_path / "home"
+    other = tmp_path / "other"
+    for folder in (home, other):
+        folder.mkdir()
+        for name in ("config.toml", "model_catalog.json"):
+            (folder / name).write_text("same content", encoding="utf-8")
+    alias = tmp_path / "alias"
+    import _winapi
+
+    _winapi.CreateJunction(str(home), str(alias))
+
+    def reported(folder):
+        observation = good()
+        observation.config_layers[1]["name"]["file"] = str(folder / "config.toml")
+        observation.config["model_catalog_json"] = str(folder / "model_catalog.json")
+        return evaluate(observation, l1_config=L1, codex_home=home)
+
+    assert reported(home) == ()
+    assert reported(alias) == ()
+    assert reported(other) == ("L2_CONFIG_LAYERS_UNEXPECTED", "L2_CONFIG_MISMATCH")
+    assert reported(tmp_path / "missing") == ("L2_CONFIG_LAYERS_UNEXPECTED", "L2_CONFIG_MISMATCH")
+
+
+def test_probe_calls_in_either_order_pass():
+    """#21: 실제 0.162.1이 두 검사 호출을 바꾼 순서로 차례로 보낸 경우(40회 중 1회)는 통과다."""
+    swapped = good()
+    swapped.probe_calls.reverse()
+    assert _judge(swapped) == ()
+    doubled = good()
+    doubled.probe_calls.append(doubled.probe_calls[0])
+    assert "L2_PROBE_CALLS_UNEXPECTED" in _judge(doubled)
 
 
 def test_allowed_extra_feature_and_missing_config_shapes():
