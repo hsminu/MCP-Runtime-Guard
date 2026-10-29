@@ -128,7 +128,7 @@
 - [ ] B7.2 A의 Guard·Catalog 리뷰, C의 정책·승인·응답·예외·해시 리뷰 받기 — 막힘: A·C
 - [x] B7.3 10-15 AGT 제거 결정으로 대체 · [기록](archive/b/B7.3-agt-decision-superseded.md)
 - [x] B7.4 AGT-03 폐기 · [기록](archive/b/B7.4-agt-worker-retired.md)
-- [ ] B7.5 정규식 전체 스키마 검증을 종료 가능한 프로세스에서 실행(SCHEMA-01) · [연결안](archive/b-schema-validation-proposal.md)
+- [ ] B7.5 정규식 전체 스키마 검증(SCHEMA-01) · 1단계 B 구현(순수 연산·직렬화·포트), A·C SCHEMA-01 회신과 C launcher 연결 대기 · [기록](archive/b/B7.5-1-schema-jobs.md) · [연결안](archive/b-schema-validation-proposal.md)
 - [ ] B7.6 B6 저장소의 C 리뷰·독립 검증 받기 — 막힘: C
 - [ ] B7.7 C 보안 모듈·Registry·Scanner·CI·테스트 리뷰(PR #6·#8의 `adapters/cisco*.py`, `security/secrets.py`·`redact.py` 포함)
 - [ ] B7.8 C 독립 통합 인수 결과와 대상 커밋 기록 — 막힘: C
