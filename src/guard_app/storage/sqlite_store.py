@@ -94,6 +94,7 @@ _METHOD_WRITES = {
     "record_scan_report": True,
     "activate_server": True,
     "record_fingerprint_change": True,
+    "record_settings_change": True,
     "block_server": True,
     "request_review": True,
     "save_reviewed_descriptions": True,
@@ -137,6 +138,7 @@ _RECOVERED_WRITES = frozenset(
         "register_server",
         "record_scan_report",
         "record_fingerprint_change",
+        "record_settings_change",
         "block_server",
         "request_review",
         "save_reviewed_descriptions",
@@ -1832,6 +1834,88 @@ class SQLiteStore:
                 return FingerprintChange(entry=result, changed_tools=changed)
 
         return await self._submit(write, method="record_fingerprint_change")
+
+    async def record_settings_change(
+        self,
+        server_id: str,
+        tools: tuple[ToolSpec, ...],
+        *,
+        expected_row_revision: int,
+        at_utc: datetime,
+    ) -> FingerprintChange:
+        """도구 설정만 CAS 변경한다. 활성 서버는 재검토 전 PENDING으로 닫는다."""
+
+        def write() -> FingerprintChange:
+            timestamp, supplied = _registry_input(
+                lambda: (
+                    _registry_write_input(
+                        server_id, at_utc, expected_row_revision=expected_row_revision
+                    ),
+                    _observed_tools(server_id, tools, require_matching_server=False),
+                )
+            )
+            with self._transaction(write=True) as connection:
+                current = self._require_registration_locked(connection, server_id)
+                _registry_cas(current, expected_row_revision)
+                old = {tool.tool_name: tool for tool in current.registration.tools}
+                new = {tool.tool_name: tool for tool in supplied}
+                excluded = {"kind", "destination_arg", "resource_arg", "reviewed_description"}
+                if old.keys() != new.keys() or any(
+                    old[name].model_dump(mode="json", exclude=excluded)
+                    != new[name].model_dump(mode="json", exclude=excluded)
+                    for name in old
+                ):
+                    raise StoreError(Reason.TOOL_FINGERPRINT_CHANGED)
+                changed = tuple(
+                    sorted(
+                        name
+                        for name in old
+                        if (
+                            old[name].kind,
+                            old[name].destination_arg,
+                            old[name].resource_arg,
+                        )
+                        != (
+                            new[name].kind,
+                            new[name].destination_arg,
+                            new[name].resource_arg,
+                        )
+                    )
+                )
+                if not changed:
+                    return FingerprintChange(entry=current, changed_tools=())
+                updated = tuple(
+                    tool.model_copy(
+                        update={
+                            "kind": new[tool.tool_name].kind,
+                            "destination_arg": new[tool.tool_name].destination_arg,
+                            "resource_arg": new[tool.tool_name].resource_arg,
+                            "reviewed_description": ""
+                            if tool.tool_name in changed
+                            else tool.reviewed_description,
+                        }
+                    )
+                    for tool in current.registration.tools
+                )
+                status = current.registration.status
+                if status is RegStatus.ACTIVE:
+                    status = RegStatus.PENDING
+                registration = current.registration.model_copy(
+                    update={"status": status, "tools": updated}
+                )
+                result = self._write_registry_locked(
+                    connection,
+                    registration,
+                    previous=current,
+                    timestamp=timestamp,
+                    event="SETTINGS_CHANGED",
+                    reason=Reason.REG_NOT_ACTIVE,
+                    last_scan_id=current.last_scan_id,
+                    changed_count=len(changed),
+                )
+                return FingerprintChange(entry=result, changed_tools=changed)
+
+        return await self._submit(write, method="record_settings_change")
 
     async def block_server(
         self, server_id: str, *, expected_row_revision: int, at_utc: datetime
@@ -4002,13 +4086,15 @@ def _new_registration(value: RegisteredServer) -> RegisteredServer:
     return valid
 
 
-def _observed_tools(server_id: str, values: tuple[ToolSpec, ...]) -> tuple[ToolSpec, ...]:
+def _observed_tools(
+    server_id: str, values: tuple[ToolSpec, ...], *, require_matching_server: bool = True
+) -> tuple[ToolSpec, ...]:
     if type(values) is not tuple:
         raise ValueError("observed tools require a tuple")
     tools = tuple(ToolSpec.model_validate(value) for value in values)
-    if any(tool.server_id != server_id for tool in tools) or len(tools) != len(
-        {tool.tool_name for tool in tools}
-    ):
+    if (require_matching_server and any(tool.server_id != server_id for tool in tools)) or len(
+        tools
+    ) != len({tool.tool_name for tool in tools}):
         raise ValueError("observed tools require unique names and matching server")
     _tool_rows(tools)
     return tools

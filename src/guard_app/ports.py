@@ -313,6 +313,17 @@ class RegistryStore(Protocol):
         """
         ...
 
+    async def record_settings_change(
+        self,
+        server_id: str,
+        tools: tuple[ToolSpec, ...],
+        *,
+        expected_row_revision: int,
+        at_utc: datetime,
+    ) -> FingerprintChange:
+        """도구 설정 변경을 revision CAS로 기록한다(2026-10-28 B·C 합의, #46)."""
+        ...
+
     async def block_server(
         self, server_id: str, *, expected_row_revision: int, at_utc: datetime
     ) -> RegistryEntry: ...
