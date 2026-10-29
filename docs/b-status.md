@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-29 · main `db901d7` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-29 · main `b14c181` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -63,8 +63,8 @@
 - [ ] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 — 막힘: C2.14 파일 연산·A 연결
 - [ ] B3.13 DESC-01 A 검토 입력·C Registry 원본 분리/저장·설명 변경 적용 의미 합의 — 막힘: 3인 합의·A/C 연결
 - [x] B3.14 EXE-01 실행 파일 고정 설정 필드 B 구현 · A 등록 화면·launcher 연결 대기 · [기록](archive/b/B3.14-exe01-settings-fields.md)
-- [x] B3.15 URL-01 HTTP 서버 URL을 서버별 검사 · A 연결·표시 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
-- [x] B3.16 설정과 Registry가 다르면 해당 서버만 숨김 · A 재확인 화면 연결 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
+- [x] B3.15 URL-01 HTTP 서버 URL을 서버별 검사 · #86 병합 · A 연결·표시 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
+- [x] B3.16 설정과 Registry가 다르면 해당 서버만 숨김 · #86 병합 · A 재확인 화면 연결 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 
 ## B4 · Guard와 응답 게이트
 
@@ -77,6 +77,7 @@
 - [x] B4.7 본문이 섞인 오류 READ도 분류, 알려진 전송 실패와 예기치 않은 처리 오류 구분
 - [x] B4.8 SEND 응답은 commit_send_outcome으로 요청·감사만 저장
 - [x] B4.9 정책·Profile 불일치는 Task 정지·승인 무효, 기록 실패가 겹치면 global halt
+- [x] B4.10 Guard 정상 종료 사유 GUARD_CLOSED B 구현·합의 전 제안 · A 문구·3인 합의 대기 · [기록](archive/b/B4.10-guard-close-reason.md)
 
 ## B5 · 승인 프로토콜
 
@@ -106,20 +107,20 @@
 - [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
 - [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — 1단계·2a·2b B 단위 구현 완료, #69 `b796ff0` 병합 · A 제품 연결·C 독립 인수 대기 · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
   - #65(C2.7) 후속으로 명시 모드 기본 감사 ID 출처를 `security.ids`로 옮기고 B 모듈의 직접 생성 금지 정적 검사를 추가했다.
-- [ ] B6.9 승인 생성·종결 원자화(현재 두 커밋 간격) — 막힘: B6-01
+- [ ] B6.9 승인 생성·종결 원자화 B 단위 제안 구현 · A·C 확인(#76) 대기 · [기록](archive/b/B6.9-atomic-approvals.md)
 - [ ] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 — 막힘: B6-02
 - [ ] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 — 막힘: B6-03·B6-04
 - [ ] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙과 예산(잠금 대기 1000ms는 미측정 제안값) — 막힘: B6-03
 - [ ] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — B 단위 구현·C 독립 검증 및 측정 완료, A 연결·#55와 C 기록 PR 대기 · [기록](archive/b/B6.13-sqlite-writer.md) · [C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468999539)
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.15 규칙 버전 감사(AGT-02) — 막힘: 판정·감사 버전 추적 범위와 직접 저장·간접 조회 합의 · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
-- [ ] B6.16 화면용 권위 조회 B 단위 제안 구현 · C 계수 대조 완료(#86 C 리뷰), A 연결 대기 · #76 최종 합의 대기 · [기록](archive/b/B6.16-store-queries.md)
+- [ ] B6.16 화면용 권위 조회 B 단위 제안 구현 · #86 병합 · C 계수 대조 완료(#86 C 리뷰), A 연결 대기 · #76 최종 합의 대기 · [기록](archive/b/B6.16-store-queries.md)
 - [x] B6.17 SEQ·REC B 결정안·A·C 동의(#37), 사용자 contracts 반영 완료 · 구현 B6.8·B6.13 대기 · [기록](archive/b/B6.17-seq-rec-decisions.md)
 - [x] B6.18 RegistryStore 계약·C4.10(#46) 사본 교체/승인 무효화와 C4.19(#53) 연결 완료 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) 원자 조건·독립 검증 — 막힘: 3인 합의·A/C 연결
-- [x] B6.20 `record_settings_change` CAS·도구 설정 변경·감사 B 구현 · C Registry 연결 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
-- [x] B6.21 검사 보고서 저장 전 현재 등록 지문 집합 대조 · C 리뷰·독립 검증 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
-- [x] B6.22 요청 실패 감사의 예외 형식 이름 상한 64자 · [기록](archive/b/B3.15-B3.16-server-settings.md)
+- [x] B6.20 `record_settings_change` CAS·도구 설정 변경·감사 B 구현 · #86 병합 · C Registry 연결 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
+- [x] B6.21 검사 보고서 저장 전 현재 등록 지문 집합 대조 · #86 병합 · C 리뷰·독립 검증 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
+- [x] B6.22 요청 실패 감사의 예외 형식 이름 상한 64자 · #86 병합 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 
 ## B7 · 검증과 인수
 

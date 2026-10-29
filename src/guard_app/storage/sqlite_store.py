@@ -15,7 +15,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock, get_ident
@@ -25,6 +25,7 @@ from typing import Literal, cast
 from guard_app.core.approval_time import approval_event_time
 from guard_app.core.taint import merge
 from guard_app.domain.contracts import (
+    ApprovalCommit,
     ApprovalRecord,
     FingerprintChange,
     RegisteredServer,
@@ -50,7 +51,7 @@ from guard_app.domain.enums import (
     ToolKind,
     TrustTier,
 )
-from guard_app.domain.errors import StoreError, StorePrepareError
+from guard_app.domain.errors import StoreError, StoreIntegrityError, StorePrepareError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
     MAX_SAFE_SEQUENCE,
@@ -120,6 +121,8 @@ _METHOD_WRITES = {
     "record_decision": True,
     "reserve_dispatch": True,
     "create_approval": True,
+    "open_approval": True,
+    "finish_approval": True,
     "get_approval": False,
     "list_approvals": False,
     "list_calls": False,
@@ -455,6 +458,7 @@ class _ApprovalContext:
     record: ApprovalRecord
     request: _DecisionContext
     waiting: TaskState
+    latest_task: TaskState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -466,6 +470,10 @@ class _DispatchContext:
 
 class _ConsumeConflictError(Exception):
     """소비 조건 충돌만 구분하며 트랜잭션 전체 rollback 뒤 False로 바꾼다."""
+
+
+class _ApprovalIntegrityError(Exception):
+    """writer 내부 손상 신호. rollback 후 원문 없이 고정 결과로 바꾼다."""
 
 
 class SQLiteStore:
@@ -2600,6 +2608,7 @@ class SQLiteStore:
             for key, value in self._allowed_decisions.items()
             if value.state.task_id != task_id
         }
+        self._remember_approval_task(current, updated)
         return updated
 
     async def list_tasks(self) -> tuple[TaskState, ...]:
@@ -2888,6 +2897,173 @@ class SQLiteStore:
             )
         self._allowed_decisions.pop(request_id, None)
         self._dispatch_contexts[request_id] = _DispatchContext(allowed, current, timestamp)
+
+    def _approval_integrity_result(
+        self, operation: Callable[[], ApprovalCommit], *, task_id: str, at_utc: datetime
+    ) -> ApprovalCommit | None:
+        """손상 발견은 rollback 이후 실행을 닫고 별도 고정 감사를 시도한다."""
+        try:
+            return operation()
+        except _ApprovalIntegrityError:
+            self.halt_execution(Reason.INTERNAL_ERROR)
+            try:
+                with self._transaction(write=True) as connection:
+                    self._insert_audit(
+                        connection,
+                        "APPROVAL_INTEGRITY_FAILED",
+                        task_id=task_id,
+                        request_id=None,
+                        reason=Reason.INTERNAL_ERROR,
+                        timestamp=_utc_text(at_utc),
+                    )
+            except StoreError:
+                # 감사의 내구성을 확인하지 못하면 연결도 폐기한다. 이미 UNKNOWN이면 유지한다.
+                self._connection_fault(CommitOutcome.ROLLED_BACK)
+                self._discard_connection()
+                return None
+            return None
+
+    async def open_approval(
+        self, approval: ApprovalRecord, *, expected_task: TaskState
+    ) -> ApprovalCommit:
+        result = await self._submit(
+            lambda: self._approval_integrity_result(
+                lambda: self._open_approval(approval, expected_task),
+                task_id=expected_task.task_id,
+                at_utc=approval.created_at_utc,
+            ),
+            method="open_approval",
+        )
+        if result is None:
+            raise StoreIntegrityError()
+        return result
+
+    def _open_approval(self, approval: ApprovalRecord, expected_task: TaskState) -> ApprovalCommit:
+        approval = ApprovalRecord.model_validate(approval)
+        expected_task = TaskState.model_validate(expected_task)
+        _identifier(approval.approval_id)
+        _identifier(approval.request_id)
+        if approval.status is not ApprovalStatus.PENDING or approval.row_revision != 0:
+            raise StoreError(Reason.APPROVAL_STALE)
+        with self._transaction(write=True) as connection:
+            context = self._request_contexts.get(approval.request_id)
+            if context is None or context.decision is not Decision.ASK:
+                raise StoreError(Reason.APPROVAL_STALE)
+            if expected_task != context.state:
+                raise StoreError(Reason.APPROVAL_RACE)
+            self._require_current_task_owner(connection, expected_task.task_id)
+            try:
+                row = self._request_row_locked(connection, approval.request_id, context)
+                current = self._load_task_locked(connection, expected_task.task_id)
+            except (StoreError, TypeError, ValueError, OverflowError):
+                raise _ApprovalIntegrityError() from None
+            if (
+                row["epoch"] != context.state.epoch
+                or row["kind"] != context.kind.value
+                or row["status"] != RequestStatus.DECIDED.value
+                or row["row_revision"] != 0
+                or row["legacy_source"] is not None
+                or row["dispatch_reserved_at_utc"] is not None
+            ):
+                raise _ApprovalIntegrityError()
+            if (
+                current.epoch != expected_task.epoch
+                or current.row_revision != expected_task.row_revision
+            ):
+                raise StoreError(Reason.APPROVAL_RACE)
+            if current != expected_task:
+                raise _ApprovalIntegrityError()
+            if current.status is not TaskStatus.RUNNING or current.unclassified:
+                raise StoreError(Reason.APPROVAL_RACE)
+            now = self._fresh_utc()
+            if not approval.created_at_utc <= now < approval.expires_at_utc:
+                raise StoreError(Reason.APPROVAL_STALE)
+            waiting = current.model_copy(
+                update={
+                    "status": TaskStatus.WAITING_APPROVAL,
+                    "row_revision": _integer(current.row_revision + 1),
+                }
+            )
+            if (
+                connection.execute(
+                    """UPDATE tasks SET status=?,row_revision=?
+                WHERE task_id=? AND epoch=? AND row_revision=? AND status=?""",
+                    (
+                        waiting.status.value,
+                        waiting.row_revision,
+                        current.task_id,
+                        current.epoch,
+                        current.row_revision,
+                        current.status.value,
+                    ),
+                ).rowcount
+                != 1
+            ):
+                raise StoreError(Reason.APPROVAL_RACE)
+            self._insert_audit(
+                connection,
+                _TASK_AUDIT_EVENTS[waiting.status],
+                task_id=current.task_id,
+                request_id=None,
+                reason=Reason.INTERNAL_TO_EXTERNAL,
+                timestamp=_utc_text(approval.created_at_utc),
+            )
+            connection.execute(
+                """INSERT INTO approvals (approval_id,request_id,snapshot_hash,approver_id,status,
+                created_at_utc,expires_at_utc,decided_at_utc,consumed_at_utc,row_revision)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    approval.approval_id,
+                    approval.request_id,
+                    approval.snapshot_hash,
+                    approval.approver_id,
+                    approval.status.value,
+                    _utc_text(approval.created_at_utc),
+                    _utc_text(approval.expires_at_utc),
+                    None,
+                    None,
+                    approval.row_revision,
+                ),
+            )
+            if (
+                connection.execute(
+                    """UPDATE requests SET status=? WHERE request_id=? AND task_id=? AND epoch=?
+                AND decision=? AND status=? AND row_revision=?
+                AND dispatch_reserved_at_utc IS NULL""",
+                    (
+                        RequestStatus.WAITING_APPROVAL.value,
+                        approval.request_id,
+                        current.task_id,
+                        current.epoch,
+                        int(Decision.ASK),
+                        RequestStatus.DECIDED.value,
+                        0,
+                    ),
+                ).rowcount
+                != 1
+            ):
+                raise StoreError(Reason.APPROVAL_RACE)
+            self._insert_audit(
+                connection,
+                "APPROVAL_PENDING",
+                task_id=current.task_id,
+                request_id=approval.request_id,
+                reason=Reason.OK,
+                timestamp=_utc_text(now),
+            )
+            final_now = self._fresh_utc()
+            if final_now >= approval.expires_at_utc or final_now < now:
+                raise StoreError(Reason.APPROVAL_STALE)
+        self._allowed_decisions = {
+            key: value
+            for key, value in self._allowed_decisions.items()
+            if value.state.task_id != current.task_id
+        }
+        self._remember_approval_task(current, waiting)
+        self._approval_contexts[approval.approval_id] = _ApprovalContext(approval, context, waiting)
+        return ApprovalCommit(
+            approval=approval, task=waiting, request_status=RequestStatus.WAITING_APPROVAL
+        )
 
     async def create_approval(self, approval: ApprovalRecord) -> None:
         """PENDING 승인·ASK 요청 WAITING·감사를 함께 저장. Task 전이는 기존 별도 호출."""
@@ -3275,6 +3451,227 @@ class SQLiteStore:
             raise StoreError(Reason.STATE_MISSING)
         return result
 
+    async def finish_approval(
+        self,
+        approval_id: str,
+        status: ApprovalStatus,
+        *,
+        expected_approval_revision: int,
+        task_after: TaskStatus,
+        expected_task_revision: int,
+        reason: Reason,
+        halt_reason: Reason | None = None,
+        now_utc: datetime,
+    ) -> ApprovalCommit:
+        def write() -> ApprovalCommit | None:
+            context = self._approval_contexts.get(approval_id)
+            if context is None:
+                raise StoreError(Reason.APPROVAL_RACE)
+            return self._approval_integrity_result(
+                lambda: self._finish_approval(
+                    approval_id,
+                    status,
+                    expected_approval_revision,
+                    task_after,
+                    expected_task_revision,
+                    reason,
+                    halt_reason,
+                    now_utc,
+                ),
+                task_id=context.waiting.task_id,
+                at_utc=now_utc,
+            )
+
+        result = await self._submit(write, method="finish_approval")
+        if result is None:
+            raise StoreIntegrityError()
+        return result
+
+    def _finish_approval(
+        self,
+        approval_id: str,
+        status: ApprovalStatus,
+        expected_approval_revision: int,
+        task_after: TaskStatus,
+        expected_task_revision: int,
+        reason: Reason,
+        halt_reason: Reason | None,
+        now_utc: datetime,
+    ) -> ApprovalCommit:
+        _identifier(approval_id)
+        _integer(expected_approval_revision)
+        _integer(expected_task_revision)
+        _utc_text(now_utc)
+        if (
+            not isinstance(status, ApprovalStatus)
+            or not isinstance(task_after, TaskStatus)
+            or status
+            not in (
+                ApprovalStatus.REJECTED,
+                ApprovalStatus.EXPIRED,
+                ApprovalStatus.CANCELLED,
+                ApprovalStatus.INVALIDATED,
+            )
+            or task_after not in (TaskStatus.RUNNING, TaskStatus.HALTED)
+            or not isinstance(reason, Reason)
+            or (task_after is TaskStatus.HALTED and not isinstance(halt_reason, Reason))
+            or (task_after is TaskStatus.RUNNING and halt_reason is not None)
+        ):
+            raise StoreError(Reason.INVALID_ARGUMENTS)
+        with self._transaction(write=True) as connection:
+            context = self._approval_contexts.get(approval_id)
+            if (
+                context is None
+                or context.record.row_revision != expected_approval_revision
+                or (
+                    status not in _APPROVAL_TRANSITIONS.get(context.record.status, frozenset())
+                    and not (
+                        context.record.status is ApprovalStatus.PENDING
+                        and status is ApprovalStatus.INVALIDATED
+                        and reason is Reason.POLICY_CHANGED
+                    )
+                )
+            ):
+                raise StoreError(Reason.APPROVAL_RACE)
+            try:
+                record = self._approval_locked(connection, approval_id)
+                row = self._request_row_locked(
+                    connection, context.record.request_id, context.request
+                )
+                current = self._load_task_locked(connection, context.waiting.task_id)
+            except (StoreError, TypeError, ValueError, OverflowError):
+                raise _ApprovalIntegrityError() from None
+            if (
+                record != context.record
+                or row["epoch"] != context.waiting.epoch
+                or row["kind"] != context.request.kind.value
+                or row["status"] != RequestStatus.WAITING_APPROVAL.value
+                or row["row_revision"] != 0
+                or row["legacy_source"] is not None
+                or row["dispatch_reserved_at_utc"] is not None
+            ):
+                raise _ApprovalIntegrityError()
+            self._require_current_task_owner(connection, current.task_id)
+            if current.epoch != context.waiting.epoch:
+                raise StoreError(Reason.APPROVAL_RACE)
+            if current != (context.latest_task or context.waiting):
+                raise _ApprovalIntegrityError()
+            terminal = current.status in (
+                TaskStatus.HALTED,
+                TaskStatus.UNKNOWN_OUTCOME,
+                TaskStatus.CLOSED,
+            )
+            if not terminal and (
+                current.status is not TaskStatus.WAITING_APPROVAL
+                or current.row_revision != expected_task_revision
+            ):
+                raise StoreError(Reason.APPROVAL_RACE)
+            now = max(now_utc, self._fresh_utc())
+            if status is ApprovalStatus.REJECTED and now >= record.expires_at_utc:
+                raise StoreError(Reason.APPROVAL_STALE)
+            event_time = approval_event_time(record, now)
+            updated = record.model_copy(
+                update={
+                    "status": status,
+                    "decided_at_utc": event_time,
+                    "row_revision": _integer(record.row_revision + 1),
+                }
+            )
+            if (
+                connection.execute(
+                    """UPDATE approvals SET status=?,decided_at_utc=?,row_revision=?
+                WHERE approval_id=? AND request_id=? AND row_revision=? AND status=?""",
+                    (
+                        status.value,
+                        _utc_text(event_time),
+                        updated.row_revision,
+                        approval_id,
+                        record.request_id,
+                        expected_approval_revision,
+                        record.status.value,
+                    ),
+                ).rowcount
+                != 1
+            ):
+                raise StoreError(Reason.APPROVAL_RACE)
+            if (
+                connection.execute(
+                    """UPDATE requests SET status=? WHERE request_id=? AND task_id=? AND epoch=?
+                AND decision=? AND status=? AND row_revision=?
+                AND dispatch_reserved_at_utc IS NULL""",
+                    (
+                        RequestStatus.DENIED.value,
+                        record.request_id,
+                        current.task_id,
+                        current.epoch,
+                        int(Decision.ASK),
+                        RequestStatus.WAITING_APPROVAL.value,
+                        row["row_revision"],
+                    ),
+                ).rowcount
+                != 1
+            ):
+                raise StoreError(Reason.APPROVAL_RACE)
+            self._insert_audit(
+                connection,
+                "APPROVAL_" + status.name,
+                task_id=current.task_id,
+                request_id=record.request_id,
+                reason=reason,
+                timestamp=_utc_text(event_time),
+                system_expiry=status is ApprovalStatus.EXPIRED and reason is Reason.APPROVAL_STALE,
+            )
+            if terminal:
+                result_task = current
+            else:
+                if current.unclassified and task_after is TaskStatus.RUNNING:
+                    raise StoreError(Reason.TASK_UNCLASSIFIED)
+                result_task = current.model_copy(
+                    update={
+                        "status": task_after,
+                        "row_revision": _integer(current.row_revision + 1),
+                        "security_version": _integer(
+                            current.security_version + int(task_after is TaskStatus.HALTED)
+                        ),
+                    }
+                )
+                if (
+                    connection.execute(
+                        """UPDATE tasks SET status=?,security_version=?,row_revision=?
+                    WHERE task_id=? AND epoch=? AND row_revision=? AND status=?""",
+                        (
+                            task_after.value,
+                            result_task.security_version,
+                            result_task.row_revision,
+                            current.task_id,
+                            current.epoch,
+                            expected_task_revision,
+                            current.status.value,
+                        ),
+                    ).rowcount
+                    != 1
+                ):
+                    raise StoreError(Reason.APPROVAL_RACE)
+                self._insert_audit(
+                    connection,
+                    _TASK_AUDIT_EVENTS[task_after],
+                    task_id=current.task_id,
+                    request_id=None,
+                    reason=halt_reason if halt_reason is not None else reason,
+                    timestamp=_utc_text(event_time),
+                )
+        self._approval_contexts.pop(approval_id, None)
+        self._remember_approval_task(current, result_task)
+        self._drop_request(record.request_id)
+        self._allowed_decisions = {
+            key: value
+            for key, value in self._allowed_decisions.items()
+            if value.state.task_id != current.task_id
+        }
+        return ApprovalCommit(
+            approval=updated, task=result_task, request_status=RequestStatus.DENIED
+        )
+
     async def transition_approval(
         self,
         approval_id: str,
@@ -3387,7 +3784,7 @@ class SQLiteStore:
                     raise StoreError(Reason.APPROVAL_STALE)
         if status is ApprovalStatus.APPROVED:
             self._approval_contexts[approval_id] = _ApprovalContext(
-                updated, context.request, context.waiting
+                updated, context.request, context.waiting, context.latest_task
             )
         else:
             self._approval_contexts.pop(approval_id, None)
@@ -3460,6 +3857,10 @@ class SQLiteStore:
                 if (
                     row["status"] != RequestStatus.WAITING_APPROVAL.value
                     or row["dispatch_reserved_at_utc"] is not None
+                    or row["epoch"] != context.request.state.epoch
+                    or row["kind"] != context.request.kind.value
+                    or row["row_revision"] != 0
+                    or row["legacy_source"] is not None
                     or current != context.waiting
                     or current.unclassified
                     or current.security_version != expected_security_version
@@ -3519,6 +3920,7 @@ class SQLiteStore:
         except _ConsumeConflictError:
             return False
         self._approval_contexts.pop(approval_id, None)
+        self._remember_approval_task(current, running)
         self._dispatch_contexts[request_id] = _DispatchContext(
             context.request, running, _utc_text(now)
         )
@@ -3581,6 +3983,7 @@ class SQLiteStore:
                 timestamp=timestamp,
                 label=label,
             )
+        self._remember_approval_task(current, updated)
         self._drop_request(req.request_id)
         return updated
 
@@ -3709,6 +4112,7 @@ class SQLiteStore:
                 timestamp=timestamp,
                 exception_type=exception_type,
             )
+        self._remember_approval_task(current, updated)
         self._drop_request(req.request_id)
         return updated
 
@@ -3864,6 +4268,15 @@ class SQLiteStore:
                 raise _ConsumeConflictError()
             raise StoreError(Reason.STATE_COMMIT_FAILED)
         return new
+
+    def _remember_approval_task(self, before: TaskState, after: TaskState) -> None:
+        """커밋 ACK를 받은 정상 Task 변경만 승인 writer 사본에 반영한다."""
+        for approval_id, context in tuple(self._approval_contexts.items()):
+            if (
+                context.waiting.task_id == before.task_id
+                and (context.latest_task or context.waiting) == before
+            ):
+                self._approval_contexts[approval_id] = replace(context, latest_task=after)
 
     def _drop_request(self, request_id: str) -> None:
         self._allowed_decisions.pop(request_id, None)

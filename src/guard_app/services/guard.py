@@ -38,7 +38,7 @@ from guard_app.domain.enums import (
     TaskStatus,
     ToolKind,
 )
-from guard_app.domain.errors import DispatchError, ResolutionError, StoreError
+from guard_app.domain.errors import DispatchError, ResolutionError, StoreError, StoreIntegrityError
 from guard_app.domain.models import (
     AccessResult,
     FailureAuditRecord,
@@ -380,7 +380,7 @@ class GuardService:
 
     async def aclose(self) -> None:
         """앱 종료 시 A가 transport 종결과 함께 await한다. 새 submit은 즉시 거부한다."""
-        self._halt_globally()
+        self._halt_globally(Reason.GUARD_CLOSED)
         await self._approvals.aclose()
 
     async def apply_policy_change(
@@ -684,8 +684,24 @@ class GuardService:
         if self._global_halt:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
         if not self._policy_matches(state):
-            await self._halt_task(task_id, Reason.POLICY_CHANGED)
-            await self._approvals.invalidate_task(task_id, Reason.POLICY_CHANGED)
+            if not self._approvals._has_task_context(task_id):
+                await self._halt_task(task_id, Reason.POLICY_CHANGED)
+                return Denied(request_id=None, reasons=(Reason.POLICY_CHANGED,))
+            completed = False
+            try:
+                await self._approvals.invalidate_task(
+                    task_id, Reason.POLICY_CHANGED, notify=False, policy_mismatch=True
+                )
+                await self._halt_task(task_id, Reason.POLICY_CHANGED)
+                completed = True
+            except StoreError as error:
+                self._halt_globally(error.reason)
+                raise
+            finally:
+                if not completed:
+                    self._halt_globally()
+                    self._approvals._fail_locked_task_pending(task_id)
+            self._approvals._publish_task_invalidations(task_id, Reason.POLICY_CHANGED)
             return Denied(request_id=None, reasons=(Reason.POLICY_CHANGED,))
         if state.unclassified:
             return Denied(request_id=None, reasons=(Reason.TASK_UNCLASSIFIED,))
@@ -719,7 +735,18 @@ class GuardService:
         if decision.decision is Decision.DENY:
             return Denied(request_id=req.request_id, reasons=decision.reasons)
         if decision.decision is Decision.ASK:
-            appr = await self._approvals.open(req, state, decision)
+            try:
+                appr = await self._approvals.open(req, state, decision)
+            except StoreIntegrityError:
+                self._halt_globally()
+                raise
+            except StoreError as error:
+                if type(error) is StoreError and error.reason in (
+                    Reason.APPROVAL_RACE,
+                    Reason.APPROVAL_STALE,
+                ):
+                    return Denied(request_id=req.request_id, reasons=(error.reason,))
+                raise
             return Pending(
                 request_id=req.request_id,
                 approval_id=appr.approval_id,

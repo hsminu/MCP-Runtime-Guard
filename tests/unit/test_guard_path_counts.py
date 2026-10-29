@@ -7,6 +7,7 @@
 - T09: 승인은 승인한 사본에만 묶인다. 대기 중이나 승인 뒤 바꾼 인자는 그 승인으로 나가지 않고,
   저장된 승인 기록이 메모리 사본과 다르면 실행하지 않는다.
 - T10: 승인 대기 중 도구 정의가 바뀌면(Registry가 변경을 기록) 승인은 무효이고 Task는 멈춘다.
+  사용자가 설정에서 도구 종류를 바꿔도(`apply_settings`, #46) 같다.
 - T11: 앱을 다시 시작하면(B6.8 명시 시작·복구) 이전 승인은 복원되지 않고 실행 0이다.
 - T26: 기밀 자료를 외부 MCP 서버를 거쳐 내 목적지로 보내면 서버 경계로 DENY다.
 - T30: 기밀 자료를 받을 수 있게 등록한 내 목적지로는 내부 서버를 거쳐 ALLOW다(정상 작업 유지).
@@ -211,6 +212,41 @@ def test_definition_change_while_waiting_invalidates_the_approval(tmp_path, kind
     assert type(outcome) is Denied
     assert {Reason.REG_NOT_ACTIVE, Reason.TOOL_FINGERPRINT_CHANGED} & set(outcome.reasons)
     assert approval is ApprovalStatus.INVALIDATED
+    assert task_status is TaskStatus.HALTED
+    assert counts == ZERO
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_settings_change_while_waiting_closes_the_approval(tmp_path, kind, pin, dispatched):
+    """A가 설정 변경 때 부르는 순서(#46): `apply_settings`가 Guard 승인 무효화까지 부른다."""
+
+    async def scenario():
+        async with harness(tmp_path, kind, pin, dispatched) as run:
+            pending = await _ask(run, "c1")
+            server = dict(run.document["servers"][0])
+            server["tools"] = [server["tools"][0], {"name": "send", "kind": "other"}]
+            change = await run.registry.apply_settings(
+                ServerSettings.model_validate_json(json.dumps(server), strict=True),
+                expected_row_revision=run.registry.entry("docs").registration.row_revision,
+                invalidate_tool=run.guard.invalidate_tool,
+            )
+            approval = await _approval_status(run, pending.approval_id)
+            outcome = await run.human().approve(pending.approval_id)
+            task = await run.store.load_task("task-1")
+            return (
+                change.changed_tools,
+                approval,
+                outcome,
+                task.status,
+                run.request_counts(pending.request_id, "body-c1"),
+            )
+
+    changed, approval, outcome, task_status, counts = asyncio.run(scenario())
+    assert changed == ("send",)
+    # Guard 무효화(`invalidate_tool`)는 사람이 누르기 전에 대기 승인을 닫는다(B: CANCELLED)
+    assert approval is ApprovalStatus.CANCELLED
+    assert type(outcome) is Denied
+    assert outcome.reasons == (Reason.APPROVAL_RACE,)
     assert task_status is TaskStatus.HALTED
     assert counts == ZERO
 

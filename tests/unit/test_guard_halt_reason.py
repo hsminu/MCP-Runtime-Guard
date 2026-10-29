@@ -60,15 +60,23 @@ def test_submit_halt_during_sqlite_load_does_not_change_task_or_approval(tmp_pat
     asyncio.run(scenario())
 
 
-def _track_reasons(store):
+def _track_reasons(store, halt_reasons=None):
     observed = []
     original = store.transition_approval
+    original_finish = store.finish_approval
 
     async def transition(*args, **kwargs):
         observed.append((args[1], kwargs["reason"]))
         return await original(*args, **kwargs)
 
+    async def finish(*args, **kwargs):
+        observed.append((args[1], kwargs["reason"]))
+        if halt_reasons is not None:
+            halt_reasons.append(kwargs["halt_reason"])
+        return await original_finish(*args, **kwargs)
+
     store.transition_approval = transition
+    store.finish_approval = finish
     return observed
 
 
@@ -140,7 +148,8 @@ def test_resume_halt_during_read_preserves_prior_approval_reason():
         _prepare_host(host)
         approval = await _open(setup)
         snapshot = service._memory_snapshots[approval.approval_id]
-        reasons = _track_reasons(store)
+        halt_reasons = []
+        reasons = _track_reasons(store, halt_reasons)
         original = service._load_snapshot_task
 
         async def load_and_halt(current):
@@ -151,7 +160,7 @@ def test_resume_halt_during_read_preserves_prior_approval_reason():
         service._load_snapshot_task = load_and_halt
         await service._finish(approval, snapshot, ApprovalStatus.CANCELLED, Reason.OK, resume=True)
         assert reasons == [(ApprovalStatus.CANCELLED, Reason.OK)]
-        assert host.halted == [Reason.INTERNAL_ERROR]
+        assert halt_reasons == [Reason.INTERNAL_ERROR]
         assert store.state.status is TaskStatus.HALTED
         await service.aclose()
 

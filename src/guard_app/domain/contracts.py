@@ -9,7 +9,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
-from guard_app.domain.enums import ApprovalStatus, RegStatus, ScanErrorCode
+from guard_app.domain.enums import ApprovalStatus, RegStatus, RequestStatus, ScanErrorCode
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import Boundary, Frozen, ProposedCall, StrictLabel, TaskState, ToolSpec
 from guard_app.domain.reasons import Reason
@@ -185,6 +185,14 @@ class ApprovalRecord(Frozen):
         elif self.consumed_at_utc is not None:
             raise ValueError("only consumed approvals may carry consumption time")
         return self
+
+
+class ApprovalCommit(Frozen):
+    """합의 전 제안(B6-01): 승인과 Task의 원자적 확정 결과."""
+
+    approval: ApprovalRecord
+    task: TaskState
+    request_status: RequestStatus
 
 
 class Finding(Frozen):

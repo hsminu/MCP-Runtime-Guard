@@ -407,14 +407,14 @@ def test_stop_while_approval_is_being_saved_notifies_the_new_pending_once(monkey
     async def scenario():
         h, audit = _Harness(label=Label.INTERNAL), _Audit()
         entered, release = asyncio.Event(), asyncio.Event()
-        original = h.store.create_approval
+        original = h.store.open_approval
 
-        async def save(approval):
+        async def save(approval, *, expected_task):
             entered.set()
             await release.wait()
-            await original(approval)
+            return await original(approval, expected_task=expected_task)
 
-        monkeypatch.setattr(h.store, "create_approval", save)
+        monkeypatch.setattr(h.store, "open_approval", save)
         running = asyncio.create_task(h.guard.submit("task", _call("send")))
         await entered.wait()
         stopped = asyncio.create_task(h.guard.system_control(audit).stop_task(IDENTITY, STOP))

@@ -8,6 +8,7 @@ import pytest
 
 from guard_app.core.taint import merge
 from guard_app.domain.contracts import (
+    ApprovalCommit,
     Denied,
     OutcomeUnknown,
     Pending,
@@ -93,6 +94,78 @@ class _Store:
         self._fail("approval")
         self.approvals[approval.approval_id] = approval
         self.statuses[approval.request_id] = RequestStatus.WAITING_APPROVAL
+
+    async def open_approval(self, approval, *, expected_task):
+        self._fail("status")
+        self._fail("approval")
+        state = self.states[expected_task.task_id]
+        if state != expected_task:
+            raise StoreError(Reason.APPROVAL_RACE)
+        updated = state.model_copy(
+            update={"status": TaskStatus.WAITING_APPROVAL, "row_revision": state.row_revision + 1}
+        )
+        self.states[state.task_id] = updated
+        self.approvals[approval.approval_id] = approval
+        self.statuses[approval.request_id] = RequestStatus.WAITING_APPROVAL
+        self.trace.append(("status", TaskStatus.WAITING_APPROVAL))
+        return ApprovalCommit(
+            approval=approval, task=updated, request_status=RequestStatus.WAITING_APPROVAL
+        )
+
+    async def finish_approval(
+        self,
+        approval_id,
+        status,
+        *,
+        expected_approval_revision,
+        task_after,
+        expected_task_revision,
+        reason,
+        halt_reason=None,
+        now_utc,
+    ):
+        self._fail("transition")
+        approval = self.approvals[approval_id]
+        task_id = self.requests[approval.request_id].task_id
+        state = self.states[task_id]
+        if approval.row_revision != expected_approval_revision:
+            raise StoreError(Reason.APPROVAL_RACE)
+        terminal = state.status in (
+            TaskStatus.HALTED,
+            TaskStatus.UNKNOWN_OUTCOME,
+            TaskStatus.CLOSED,
+        )
+        if not terminal and state.row_revision != expected_task_revision:
+            raise StoreError(Reason.APPROVAL_RACE)
+        if not terminal:
+            self._fail("status")
+        updated_approval = approval.model_copy(
+            update={
+                "status": status,
+                "decided_at_utc": now_utc,
+                "row_revision": approval.row_revision + 1,
+            }
+        )
+        updated_task = (
+            state
+            if terminal
+            else state.model_copy(
+                update={
+                    "status": task_after,
+                    "row_revision": state.row_revision + 1,
+                    "security_version": state.security_version
+                    + int(task_after is TaskStatus.HALTED),
+                }
+            )
+        )
+        self.approvals[approval_id] = updated_approval
+        self.statuses[approval.request_id] = RequestStatus.DENIED
+        self.states[task_id] = updated_task
+        if not terminal:
+            self.trace.append(("status", task_after))
+        return ApprovalCommit(
+            approval=updated_approval, task=updated_task, request_status=RequestStatus.DENIED
+        )
 
     async def get_approval(self, approval_id):
         self._fail("get_approval")
@@ -817,7 +890,8 @@ def test_approval_wrong_task_identity_never_changes_task_rows_t09_t11_t20(
         assert h.store.trace == trace_before
         assert isinstance(result, Denied)
         assert result.reasons == (Reason.INTERNAL_ERROR,)
-        assert h.store.approvals[pending.approval_id].status not in (
+        # 원자 종결의 소유 Task가 어긋나면 승인·요청도 쓰지 않고 전역 정지한다.
+        assert h.store.approvals[pending.approval_id].status in (
             ApprovalStatus.PENDING,
             ApprovalStatus.APPROVED,
         )
@@ -874,7 +948,7 @@ def test_approval_halt_paths_never_stop_replacement_epoch_t09_t20(trigger):
         assert isinstance(result, Denied)
         assert result.reasons == (Reason.INTERNAL_ERROR,)
         assert not h.guard._approvals._memory_snapshots
-        assert h.store.approvals[pending.approval_id].status is ApprovalStatus.CANCELLED
+        assert h.store.approvals[pending.approval_id].status is ApprovalStatus.PENDING
         assert not h.guard._task_lock("task").locked()
         assert h.store.consume_count == 0
         assert not h.transport.calls

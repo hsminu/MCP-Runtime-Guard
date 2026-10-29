@@ -25,6 +25,13 @@ class StoreError(GuardError):
         super().__init__(reason)
 
 
+class StoreIntegrityError(StoreError):
+    """합의 전 제안(B6-01): DB 행이 writer가 쓴 관계나 사본과 다르다."""
+
+    def __init__(self) -> None:
+        super().__init__(Reason.INTERNAL_ERROR)
+
+
 class StorePrepareError(Exception):
     """Guard Reason과 별도인 원문 없는 저장소 시작 실패."""
 
