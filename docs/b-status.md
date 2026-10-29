@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-30 · 확인한 main `f0c2643`(#103·#104·#109 병합) · 완료 89/95, 남음 6 · [#106 결정 기록](archive/b/B-106-agreement-closure.md) · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-30 · 확인한 main `f0c2643`(#103·#104·#109 병합) · 완료 90/95, 남음 5 · [#106 결정 기록](archive/b/B-106-agreement-closure.md) · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -11,7 +11,6 @@
 | 자원 ID 판정기의 제품 조립 연결 | A | B3.3 |
 | 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 후속(제출 범위 밖) | A·B·C | B6.19 |
 | 독립 통합 인수 | C | B7.8 |
-| 설정 파일 안전 읽기·원자적 교체(C2.14)·A 시작/저장/Task 생성 직렬화와 거부·누락 전송 0 검증 | A·C | B3.12 |
 
 ## B1 · 공통 모델과 계약
 
@@ -52,8 +51,8 @@
 - [x] B3.8 DESC-01 검토된 설명 필드·Catalog 연결·합의 전 제안 · [기록](archive/b/B3.8-reviewed-description.md)
 - [x] B3.9 파싱된 설정·Profile 로딩 1단계와 policy_version 계산(10-18 결정) · [기록](archive/b/B3.9-profile-loading.md)
 - [x] B3.10 정책 변경 준비·적용·Task 정지·승인 무효화(10-18 결정) · [기록](archive/b/B3.10-policy-change.md)
-- [x] B3.11 CFG-01 B 변환 함수 완료, C 파일 연산(C2.14)·A 시작/저장 연결 병합([#44](https://github.com/hsminu/MCP-Runtime-Guard/pull/44)·[#52](https://github.com/hsminu/MCP-Runtime-Guard/pull/52)); B3.12 인수 범위는 별도 대조 · [기록](archive/b/B3.11-settings-file.md)
-- [ ] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 — 막힘: C2.14 파일 연산·A 연결
+- [x] B3.11 CFG-01 B 변환 함수 완료, C 파일 연산(C2.14)·A 시작/저장 연결 병합([#44](https://github.com/hsminu/MCP-Runtime-Guard/pull/44)·[#52](https://github.com/hsminu/MCP-Runtime-Guard/pull/52)); B3.12 인수 범위 대조 완료 · [기록](archive/b/B3.11-settings-file.md)
+- [x] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 완료 · [#83](https://github.com/hsminu/MCP-Runtime-Guard/pull/83)·[#44](https://github.com/hsminu/MCP-Runtime-Guard/pull/44)·[#52](https://github.com/hsminu/MCP-Runtime-Guard/pull/52)·[#43](https://github.com/hsminu/MCP-Runtime-Guard/pull/43)·[#56](https://github.com/hsminu/MCP-Runtime-Guard/pull/56) · A184 파일 누락 시 내장 빈 Profile로 Task 허용은 [#110](https://github.com/hsminu/MCP-Runtime-Guard/pull/110) 병합 대기; CFG-01 공통 문구 변경 제안 필요
 - [x] B3.13 DESC-01 검토 설명은 PENDING 저장→재활성화→재시작 후 새 세션에 적용, 원격 설명 별도 영속화 없음·화면 전 빈 설명([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · 후속: A 검토 입력 화면
 - [x] B3.14 EXE-01 실행 파일 고정 설정 필드 B 구현 · A 등록 화면·launcher 연결 대기 · [기록](archive/b/B3.14-exe01-settings-fields.md)
 - [x] B3.15 URL-01 HTTP 서버 URL을 서버별 검사 · #86 병합 · A 연결·표시 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
