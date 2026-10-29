@@ -33,6 +33,7 @@ import json
 import socket
 import sqlite3
 import sys
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, field
@@ -52,7 +53,8 @@ from guard_app.adapters.mcp_transport import (
 )
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import DispatchError
-from guard_app.domain.models import ProposedCall, TaskState
+from guard_app.domain.models import ProposedCall, RecoveryReport, TaskState
+from guard_app.security.ids import new_id
 from guard_app.security.launcher import ExecutablePin, LaunchedProcess, launch_mcp_server
 from guard_app.security.paths import AppFolders, prepare_app_folders
 from guard_app.services.catalog import ServerSettings
@@ -351,6 +353,8 @@ class Run:
     sequence: Iterator[int] = field(default_factory=lambda: itertools.count(1))
     # 조립한 Guard를 닫을 때 transport가 알린 실패 종류(`DispatchError.exception_type`)
     close_errors: list[str] = field(default_factory=list)
+    # `restart`가 다시 연 Store. 하니스가 끝날 때 닫는다.
+    reopened: list[SQLiteStore] = field(default_factory=list)
 
     @property
     def guard(self):
@@ -395,19 +399,46 @@ class Run:
                 call_timeout_s=self.call_timeout_s,
             ),
         )
-        settings = self.assembled.settings
         for task_id in ("task-1", "task-2") if create_tasks else ():
-            await self.store.create_task(
-                TaskState(
-                    task_id=task_id,
-                    epoch=1,
-                    profile_id=settings.profile_id,
-                    policy_version=settings.policy_version,
-                    status=TaskStatus.RUNNING,
-                ),
-                created_at_utc=datetime.now(UTC),
-            )
+            await self.create_task(task_id)
         return self.assembled
+
+    async def create_task(self, task_id: str) -> None:
+        """조립한 Guard의 Profile로 RUNNING Task를 만든다."""
+        assert self.assembled is not None
+        settings = self.assembled.settings
+        await self.store.create_task(
+            TaskState(
+                task_id=task_id,
+                epoch=1,
+                profile_id=settings.profile_id,
+                policy_version=settings.policy_version,
+                status=TaskStatus.RUNNING,
+            ),
+            created_at_utc=datetime.now(UTC),
+        )
+
+    async def restart(self) -> RecoveryReport:
+        """앱 재시작: Store를 닫고 B6.8 명시 시작(이관 준비·복구·새 회차 활성화)으로 다시 연 뒤
+        새 연결(stdio는 새 프로세스)로 Guard를 조립한다.
+
+        Guard는 부른 쪽이 먼저 닫거나 버린다. 제품은 Guard를 닫으면 그 회차의 실행 권한을 끄므로
+        (`on_global_halt`, #83 A138) 같은 회차에 다시 조립하지 않는다.
+        """
+        self.store.close()
+        assert await self.store.wait_closed(5.0)
+        store = SQLiteStore(self.db, startup="explicit")
+        self.reopened.append(store)
+        await store.prepare_schema(
+            deadline=time.monotonic() + 30, begin_backup=self.folders.begin_backup
+        )
+        report = await store.recover(deadline=time.monotonic() + 30, run_id=new_id("run"))
+        await store.activate_run()
+        self.store = store
+        self.registry = ServerRegistry(store)
+        await self.registry.load()
+        await self.assemble(create_tasks=False)
+        return report
 
     def _read_db(self) -> sqlite3.Connection:
         # sqlite3의 with는 트랜잭션만 끝낸다. closing으로 연결과 파일 핸들까지 닫는다(#56 B 리뷰).
@@ -527,6 +558,7 @@ async def harness(
     audits = iter(range(1_000_000))
     store = SQLiteStore(db, audit_id_factory=lambda: f"audit-{next(audits)}")
     launched: list[LaunchedProcess] = []
+    reopened: list[SQLiteStore] = []
     try:
         async with _endpoint(kind, counters) as endpoint:
             doc = document(
@@ -571,6 +603,7 @@ async def harness(
             )
             run = Run(kind, folders, store, db, registry, doc, counters, dispatched, connect)
             run.call_timeout_s = call_timeout_s
+            run.reopened = reopened
             if assemble:
                 await run.assemble()
             try:
@@ -580,7 +613,8 @@ async def harness(
     finally:
         for process in launched:
             assert await process.close() is True
-        store.close()
-        # 앱 잠금을 풀기 전에 Store가 실제로 닫혔는지 확인한다(REC-01, B6.13).
-        assert await store.wait_closed(5.0)
+        for opened in (store, *reopened):
+            opened.close()
+            # 앱 잠금을 풀기 전에 Store가 실제로 닫혔는지 확인한다(REC-01, B6.13).
+            assert await opened.wait_closed(5.0)
         folders.close()
