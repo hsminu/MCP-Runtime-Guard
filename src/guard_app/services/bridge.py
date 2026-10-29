@@ -351,6 +351,7 @@ class BackendBridge(QObject):
         self._require_qt_thread()
         if type(request) is not RegistrationRequest or request.action not in (
             "prepare",
+            "prepare_file",
             "confirm",
             "recheck",
             "list",

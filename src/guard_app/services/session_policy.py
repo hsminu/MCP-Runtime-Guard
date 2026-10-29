@@ -46,6 +46,7 @@ def _server_access_change(
         return prepare_server_access_change(
             document,
             assembled.registry,
+            resource_resolver=assembled.resource_resolver,
             server_id=server_id,
             tool_permissions={
                 **{name: True for name in allowed},
@@ -251,6 +252,9 @@ class TaskPolicy:
                     current,
                     document,
                     self._assembled.registry if self._assembled is not None else registry,
+                    resource_resolver=self._assembled.resource_resolver
+                    if self._assembled
+                    else None,
                 )
             except CatalogConfigError:
                 raise SessionRuntimeError("POLICY_CHANGE_INVALID") from None
@@ -323,6 +327,7 @@ class TaskPolicy:
         stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
         *,
         updating: bool,
+        sources: tuple[dict[str, object], ...] = (),
     ) -> None:
         async with self.lock:
             if self._saver is None or self._admission.closed:
@@ -345,7 +350,19 @@ class TaskPolicy:
                 if any(isinstance(s, dict) and s.get("id") == server.id for s in servers):
                     raise SessionRuntimeError("REG_SERVER_EXISTS")
                 servers.append(record)
-            change = prepare_policy_change(current, document, registry)
+            if sources:
+                profile = document.get("profile")
+                if not isinstance(profile, dict) or not isinstance(profile.get("servers"), list):
+                    raise SessionRuntimeError("REG_SETTINGS_INVALID")
+                if server.id not in profile["servers"]:
+                    profile["servers"].append(server.id)
+                profile.setdefault("sources", []).extend(sources)
+            change = prepare_policy_change(
+                current,
+                document,
+                registry,
+                resource_resolver=self._assembled.resource_resolver if self._assembled else None,
+            )
             completed = False
             try:
                 try:

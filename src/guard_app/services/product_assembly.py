@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.mcp_transport import McpTransport, StreamFactory, ToolListLimits
@@ -51,7 +51,8 @@ from guard_app.security.digest import JcsCanonicalizationError, tool_fingerprint
 from guard_app.security.endpoints import normalize_endpoint
 from guard_app.security.ids import new_id
 from guard_app.security.launcher import ExecutablePin
-from guard_app.security.paths import AppFolders
+from guard_app.security.paths import AppFolders, file_resource_resolver
+from guard_app.servers.file_server import file_server_root
 from guard_app.services.catalog import (
     CatalogConfigError,
     GuardSettings,
@@ -278,6 +279,8 @@ class AssembledGuard:
     operator_id: str
     call_timeout_s: float = 30.0
 
+    resource_resolver: ResourceResolver | None = None
+
     @property
     def settings(self) -> GuardSettings:
         return self.loaded.guard_settings
@@ -350,6 +353,23 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         raise ProductAssemblyError("PRODUCT_INPUTS_INVALID")
     registry = LiveCheckedRegistry(inputs.registry)
     try:
+        configured = load_profile_settings(inputs.profile_document, registry)
+        roots = {
+            server.id: root
+            for server in configured.servers
+            if server.transport == "stdio"
+            and (root := file_server_root(server.args or ())) is not None
+        }
+        if roots:
+            file_resolver = file_resource_resolver(roots)
+            fallback = inputs.resource_resolver
+
+            def resolve(tool: ToolSpec, path: str) -> str:
+                if tool.server_id in roots or fallback is None:
+                    return file_resolver(tool, path)
+                return fallback(tool, path)
+
+            inputs = replace(inputs, resource_resolver=resolve)
         loaded = load_profile_settings(
             inputs.profile_document, registry, resource_resolver=inputs.resource_resolver
         )
@@ -409,6 +429,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             tool_views,
             inputs.operator_id,
             inputs.call_timeout_s,
+            inputs.resource_resolver,
         )
         adopted = True
         return assembled

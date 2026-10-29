@@ -583,15 +583,10 @@ def test_folder_rules_stay_folded_until_opened(app: QApplication) -> None:
         window.show()
         app.processEvents()
         assert not window.folder_rules_form.isVisibleTo(window)
-        toggle = next(
-            button
-            for button in window.server_add_form.findChildren(QPushButton)
-            if button.text().startswith("로컬 파일 서버 폴더 등급")
-        )
-        toggle.click()
+        choice = window.server_add_form.transport
+        choice.setCurrentIndex(choice.findData("local_file"))
         assert window.folder_rules_form.isVisibleTo(window)
-        assert toggle.accessibleName().endswith("접기")
-        toggle.click()
+        choice.setCurrentIndex(choice.findData("stdio"))
         assert not window.folder_rules_form.isVisibleTo(window)
     finally:
         window.close()

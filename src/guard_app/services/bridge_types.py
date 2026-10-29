@@ -207,6 +207,11 @@ class RegistrationRequest:
     expected_row_revision: int = 0
     allowed: tuple[str, ...] = ()
     denied: tuple[str, ...] = ()
+    file_root: str | None = None
+    # Absolute folders selected by the human; backend derives source prefixes.
+    folder_labels: tuple[tuple[str, str], ...] = ()
+    root_label: str = ""
+    list_root_label: str = ""
 
 
 @dataclass(frozen=True, slots=True)

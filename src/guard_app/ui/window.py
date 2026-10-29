@@ -52,7 +52,7 @@ from .presentation import (
 from .runtime import RuntimePanel
 from .scan_status import ScanStatusProjection
 from .scanner_key import KeySaver, KeyTail, ScannerKeyForm
-from .server_add import LocalFolderRulesForm, ServerAddForm
+from .server_add import ServerAddForm
 from .servers import ServerListPage
 from .sessions import SessionWorkspace
 from .style import apply_style, current_theme, set_theme, system_theme
@@ -246,8 +246,7 @@ class GuardWindow(QMainWindow):
         # The add form scrolls itself; the folder rules ride in the same scroll,
         # folded, since only the app's local file server needs them.
         self.server_add_form = ServerAddForm()
-        self.folder_rules_form = LocalFolderRulesForm()
-        self.server_add_form.add_section(self.folder_rules_form, "로컬 파일 서버 폴더 등급")
+        self.folder_rules_form = self.server_add_form.file_folders
         self._page_indices["server_add"] = self.stack.addWidget(self.server_add_form)
         # A session's results and activity are one block that moves between
         # two hosts: the chat header's 활동 docks it beside the conversation,

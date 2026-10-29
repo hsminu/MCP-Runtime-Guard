@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -19,6 +22,15 @@ from guard_app.ports import RegistryStore
 from guard_app.security.endpoints import ENDPOINT_REJECT_CODES, EndpointError, normalize_endpoint
 from guard_app.security.ids import new_id
 from guard_app.security.launcher import LaunchError, check_stdio_values, pin_executable
+from guard_app.security.paths import SafePathError, real_root, safe_path
+from guard_app.servers.file_server import (
+    FILE_SERVER_TOOL_SETTINGS,
+    LIST_FOLDER,
+    LIST_ROOT,
+    READ_FILE,
+    file_server_args,
+    file_server_root,
+)
 from guard_app.services.bridge_types import RegistrationRequest, RegistrationRow, RegistrationView
 from guard_app.services.catalog import CatalogConfigError, ServerSettings, load_profile_settings
 from guard_app.services.policy_view import PolicyServer, PolicyTool, PolicyView
@@ -34,6 +46,61 @@ def endpoint_input(value: str) -> tuple[str | None, str | None]:
     except EndpointError as error:
         code = error.args[0] if error.args else None
         return None, code if code in ENDPOINT_REJECT_CODES else "URL_INVALID"
+
+
+def file_registration_sources(request: RegistrationRequest) -> tuple[dict[str, object], ...]:
+    """C-checked folder choices, converted to B source rules; no I/O in UI."""
+    if (
+        type(request.file_root) is not str
+        or type(request.folder_labels) is not tuple
+        or any(
+            type(pair) is not tuple
+            or len(pair) != 2
+            or any(type(value) is not str for value in pair)
+            for pair in request.folder_labels
+        )
+    ):
+        raise SafePathError("PATH_INVALID")
+    root = real_root(Path(request.file_root))
+    if request.root_label not in (
+        "PUBLIC",
+        "INTERNAL",
+        "CONFIDENTIAL",
+    ) or request.list_root_label not in ("PUBLIC", "INTERNAL", "CONFIDENTIAL"):
+        raise SafePathError("PATH_LABEL_INVALID")
+    sources: list[dict[str, object]] = [
+        {
+            "server": request.server_id,
+            "tool": LIST_ROOT,
+            "prefix": [],
+            "label": request.list_root_label,
+        }
+    ]
+    rules: list[tuple[tuple[str, ...], str]] = [((), request.root_label)]
+    seen: list[tuple[str, ...]] = []
+    for folder, label in request.folder_labels:
+        if label not in ("PUBLIC", "INTERNAL", "CONFIDENTIAL"):
+            raise SafePathError("PATH_LABEL_INVALID")
+        # relative_to is lexical only; all filesystem checks belong to C.
+        try:
+            relative = Path(folder).relative_to(root).as_posix()
+        except ValueError:
+            raise SafePathError("PATH_OUTSIDE_ROOT") from None
+        checked = safe_path(root, relative)
+        # real_root also requires a directory, not a regular file.
+        checked = real_root(checked)
+        parts = checked.relative_to(root).parts
+        key = tuple(part.casefold() for part in parts)
+        if any(key[: len(old)] == old or old[: len(key)] == key for old in seen):
+            raise SafePathError("PATH_RULE_OVERLAP")
+        seen.append(key)
+        rules.append((parts, label))
+    for parts, label in rules:
+        for tool in (LIST_FOLDER, READ_FILE):
+            sources.append(
+                {"server": request.server_id, "tool": tool, "prefix": list(parts), "label": label}
+            )
+    return tuple(sources)
 
 
 class RegistrationCommands:
@@ -56,7 +123,7 @@ class RegistrationCommands:
         self.execution_check = execution_check
         self._operator_id = operator_id
         self._lock = asyncio.Lock()
-        self._pending: tuple[str, ServerSettings, bool] | None = None
+        self._pending: tuple[str, ServerSettings, bool, RegistrationRequest | None] | None = None
         # Unknown Registry writes are not retried in this run.
         self._unknown = False
 
@@ -70,6 +137,8 @@ class RegistrationCommands:
             return RegistrationView(code if code in ENDPOINT_REJECT_CODES else "URL_INVALID")
         except (ValidationError, CatalogConfigError):
             return RegistrationView("REG_SETTINGS_INVALID")
+        except SafePathError:
+            return RegistrationView("REG_FOLDER_INVALID")
         except LaunchError:
             return RegistrationView("REG_EXECUTABLE_INVALID")
         except RegistryError as error:
@@ -178,9 +247,14 @@ class RegistrationCommands:
                 rows=await self._rows(),
                 current_policy=self.policy.registration_policy_view(),
             )
-        if request.action in ("prepare", "recheck"):
+        if request.action in ("prepare", "prepare_file", "recheck"):
             self._pending = None
             updating = request.action == "recheck"
+            file_request = request if request.action == "prepare_file" else None
+            if file_request is not None:
+                # Freeze the C-resolved root into the confirmation snapshot too.
+                root = real_root(Path(file_request.file_root or ""))
+                file_request = replace(file_request, file_root=str(root))
             if updating:
                 loaded = load_profile_settings(self.policy.registration_document(), self.registry)
                 server = next((s for s in loaded.servers if s.id == request.server_id), None)
@@ -203,7 +277,22 @@ class RegistrationCommands:
                     "max_label": request.max_label,
                     "tools": [],
                 }
-                if request.transport == "stdio":
+                if file_request is not None:
+                    file_registration_sources(file_request)
+                    command = sys.executable
+                    args = file_server_args(Path(file_request.file_root or ""))
+                    check_stdio_values(command, args, ())
+                    pin = await pin_executable(command)
+                    data.update(
+                        transport="stdio",
+                        command=command,
+                        args=args,
+                        env_allow=(),
+                        tools=FILE_SERVER_TOOL_SETTINGS,
+                        command_size=pin.size,
+                        command_sha256=pin.sha256,
+                    )
+                elif request.transport == "stdio":
                     check_stdio_values(request.command, request.args, request.env_allow)
                     pin = await pin_executable(request.command)
                     data.update(
@@ -224,7 +313,7 @@ class RegistrationCommands:
                 ):
                     return RegistrationView("REG_SERVER_EXISTS")
             token = new_id("registration")
-            self._pending = (token, server, updating)
+            self._pending = (token, server, updating, file_request)
             return self._preview(token, server, "REG_CONFIRM_REQUIRED")
         if (
             request.action != "confirm"
@@ -232,7 +321,7 @@ class RegistrationCommands:
             or request.token != self._pending[0]
         ):
             return RegistrationView("REG_CONFIRM_EXPIRED")
-        _, server, updating = self._pending
+        _, server, updating, file_request = self._pending
         self._pending = None  # single-use, also on errors/cancellation
         if server.transport == "stdio":
             check_stdio_values(server.command, server.args, server.env_allow)
@@ -242,8 +331,13 @@ class RegistrationCommands:
                     update={"command_size": pin.size, "command_sha256": pin.sha256}
                 )
                 token = new_id("registration")
-                self._pending = (token, server, updating)
+                self._pending = (token, server, updating, file_request)
                 return self._preview(token, server, "REG_PIN_CHANGED")
+        if file_request is not None and real_root(
+            Path(file_request.file_root or "")
+        ) != file_server_root(server.args or ()):
+            raise SafePathError("PATH_ROOT_INVALID")
+        sources = file_registration_sources(file_request) if file_request is not None else ()
         if updating:
             current = await self.registry.refresh(server.id)
             if current is None:
@@ -271,7 +365,7 @@ class RegistrationCommands:
                 if not written:
                     self._unknown = True
         await self.policy.save_registration(
-            server, self.registry, self.stop_sessions, updating=updating
+            server, self.registry, self.stop_sessions, updating=updating, sources=sources
         )
         return RegistrationView(
             "REG_PIN_SAVED" if updating else "REG_REGISTERED", rows=await self._rows()
