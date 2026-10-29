@@ -228,6 +228,7 @@
 - [x] A162 실제 실행 확인(A128·A151·A109, offscreen·로그인 없음) 후속: 지문 재확인 화면의 같은 ID 경고·등록 문구, 첫 화면의 시작 검사 진행 표시, 브라우저 열기 실패 안내의 중복 줄 · [기록](archive/a/A162-real-run-display-followups.md)
 - [x] A163 #86 후속: 조립·목록 기록은 `startable_servers`만 시작, A155 경계 비교 제거, 서버 목록·상세에 서버별 설정 확인(`server_issue`) 표시 · [기록](archive/a/A163-pr86-followups.md)
 - [x] A163 #92 창 확인(실제 SQLite Store 행·제품 bridge, offscreen과 실제 Windows 창): 호출 로그 페이지·검색, 승인 만료 표시, 서버 상세 설정 확인 줄. 건수 줄이 구절 중간에서 끊기던 것을 고침 · [기록](archive/a/A166-pr92-window-check.md)
+- [x] A170 #89의 `GUARD_CLOSED` 사유를 화면 문구로("미확인" 대신), 요청·승인 행 사유마다 문구가 있는지 시험 · [기록](archive/a/A170-guard-closed-reason-text.md)
 - [ ] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 — 막힘: C 상수 추가([#83 C 참고 4](https://github.com/hsminu/MCP-Runtime-Guard/pull/83#issuecomment-6493041009))
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)

@@ -13,6 +13,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QBoxLayout, QDialog
 
 from guard_app.domain.enums import ToolKind
+from guard_app.domain.reasons import Reason
 from guard_app.ui.approval_presentation import QUERY_TEXT_INVALID, QUERY_UNKNOWN
 from guard_app.ui.call_logs import (
     CALL_PAGE_SIZE,
@@ -27,6 +28,7 @@ from guard_app.ui.call_logs import (
     public_calls_csv,
 )
 from guard_app.ui.models import LoadState, Surface
+from guard_app.ui.presentation import REASONS
 
 from .test_bridge import app as app
 
@@ -441,3 +443,24 @@ def test_store_pages_follow_the_current_query_and_refuse_text_b_would_refuse(app
         assert page.state_message.message.text() == SOURCE_NOT_CONNECTED
     finally:
         page.close()
+
+
+# Not on request or approval rows: OK is no reason, and the Codex session
+# reasons only choose the model's text (core.model_messages).
+_NOT_ON_ROWS = {
+    Reason.OK,
+    Reason.SESSION_L3_VIOLATION,
+    Reason.SESSION_WATCHDOG_EXCEEDED,
+    Reason.SESSION_AUTH_FAILED,
+    Reason.SESSION_AUTH_REFRESH_CONFLICT,
+    Reason.SESSION_USAGE_LIMIT,
+    Reason.SESSION_PROCESS_FAILED,
+    Reason.SESSION_PROTOCOL_FAILED,
+}
+
+
+def test_every_reason_a_row_can_carry_has_its_own_text() -> None:
+    """#89 added GUARD_CLOSED with no text, so the log showed a normal close as 미확인."""
+    assert set(REASONS) == {reason.value for reason in set(Reason) - _NOT_ON_ROWS}
+    row = PublicCallSummary("call-1", reason_code="GUARD_CLOSED", reason_codes=("GUARD_CLOSED",))
+    assert "Guard 정상 종료로 실행하지 않음" in public_calls_csv((row,))
