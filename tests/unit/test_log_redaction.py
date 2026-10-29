@@ -81,6 +81,23 @@ def test_guard_log_exceptions_keep_only_the_type(redaction, capture):
     assert "Traceback" not in capture.stream.getvalue()
 
 
+@pytest.mark.parametrize(
+    "name", [f"Leak {MARKER}", f"{MARKER}é", "E" * 65], ids=["space", "non-ascii", "long"]
+)
+def test_exception_type_names_follow_the_audit_rule(redaction, capture, name):
+    kind = type(name, (ValueError,), {})
+    try:
+        raise kind("x")
+    except ValueError:
+        logging.getLogger("guard_app.test").exception("STORE_FAILED")
+        logging.getLogger("asyncio").error("Task exception", exc_info=True)
+    assert capture.lines == [
+        "guard_app.test|ERROR|STORE_FAILED [Exception]",
+        f"asyncio|ERROR|{LOG_WITHHELD} [Exception]",
+    ]
+    assert MARKER not in capture.stream.getvalue()
+
+
 def test_library_logs_are_withheld(redaction, capture):
     logging.getLogger("httpx").warning("POST %s body=%s", "https://example.test/x", PLAIN_MARKER)
     logging.getLogger("mcp.client.streamable_http").warning("Raw result: %s", PLAIN_MARKER)

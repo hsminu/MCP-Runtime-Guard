@@ -64,7 +64,8 @@ def install_log_redaction() -> None:
     - `guard_app` 로거: 메시지를 만든 뒤 인증정보 모양을 가리고 500자로 자른다.
     - 그 밖의 로거(SDK·라이브러리·asyncio·warnings): 메시지 원문을 버리고 `LOG_WITHHELD`만 둔다.
       라이브러리는 서버 응답·요청 원문을 메시지에 넣기도 한다.
-    - 모든 레코드: 예외는 형식 이름만 남기고 메시지·traceback·stack을 버린다.
+    - 모든 레코드: 예외는 형식 이름만 남기고 메시지·traceback·stack을 버린다. 이름이 ASCII
+      식별자·64자 이하가 아니면 `Exception`으로 남긴다.
     - 처리되지 않은 예외(`sys`·`threading` excepthook, unraisable)와 `warnings`도 로그로 보내 같은
       규칙을 따르게 한다.
 
@@ -108,9 +109,15 @@ def _redact(record: logging.LogRecord) -> None:
     else:
         text = LOG_WITHHELD
     if exc_type is not None:
-        text = f"{text} [{exc_type.__name__}]"
+        text = f"{text} [{_type_name(exc_type)}]"
     record.msg, record.args = text, ()
     record.exc_info = record.exc_text = record.stack_info = None
+
+
+def _type_name(kind: type[BaseException]) -> str:
+    # 감사 `exception_type`과 같은 규칙: 동적으로 만든 형식 이름에는 원문이 실릴 수 있다.
+    name = kind.__name__
+    return name if name.isascii() and name.isidentifier() and len(name) <= 64 else "Exception"
 
 
 _UNCAUGHT = logging.getLogger("guard_app.uncaught")
