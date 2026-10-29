@@ -95,7 +95,8 @@ def test_real_launcher_guard_listing_call_and_exit(tmp_path, monkeypatch, mode):
                 doc["servers"].append(bad)
                 doc["profile"]["servers"].append("bad")
             elif mode == "badurl":
-                # A hand-edited URL that C2.5 refuses blocks only that server (#83 C review 3.2).
+                # A hand-edited URL that C2.5 refuses blocks only that server (#83 C review 3.2)
+                # and is not started at all (#86 startable_servers).
                 remote = {
                     "id": "remote",
                     "transport": "streamable_http",
@@ -169,6 +170,8 @@ def test_real_launcher_guard_listing_call_and_exit(tmp_path, monkeypatch, mode):
                 if mode == "mixed":
                     assert assembled.registry.status("bad") is not RegStatus.ACTIVE
                 if mode == "badurl":
+                    assert (assembled.loaded.server_issue("remote") or "").startswith("URL_")
+                    assert "remote" not in assembled.transport._workers
                     assert assembled.transport.tool_listing("remote") is None
         finally:
             if assembled is not None:

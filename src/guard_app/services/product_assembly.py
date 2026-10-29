@@ -272,16 +272,6 @@ async def _record_listings(
     return frozenset(failed)
 
 
-def _boundary_matches(registry: Registry, server: ServerSettings) -> bool:
-    # The fields B's Profile view compares before it compares the tools.
-    record = registry.registration(server.id)
-    return (
-        record is not None
-        and record.boundary.tier == server.tier
-        and record.boundary.max_label == server.max_label
-    )
-
-
 @dataclass(slots=True, repr=False)
 class AssembledGuard:
     loaded: LoadedProfile
@@ -327,7 +317,11 @@ class AssembledGuard:
 
 
 def _server_streams(loaded: LoadedProfile, inputs: ProductInputs) -> Mapping[str, StreamFactory]:
-    """Product folders and test/demo stream injection are mutually exclusive."""
+    """Product folders and test/demo stream injection are mutually exclusive.
+
+    Only startable servers get a stream: one whose stored URL B's Profile check
+    refuses is not started at all (#86).
+    """
     if inputs.folders is not None and inputs.server_streams is not None:
         raise ProductAssemblyError("PRODUCT_INPUTS_INVALID")
     if inputs.folders is None:
@@ -335,7 +329,7 @@ def _server_streams(loaded: LoadedProfile, inputs: ProductInputs) -> Mapping[str
             raise ProductAssemblyError("PROFILE_SERVER_UNAVAILABLE")
         return inputs.server_streams
     streams: dict[str, StreamFactory] = {}
-    for server in loaded.selected_servers:
+    for server in loaded.startable_servers:
         if server.transport == "stdio":
             pin = (
                 ExecutablePin(server.command_size, server.command_sha256)
@@ -367,8 +361,10 @@ def _server_streams(loaded: LoadedProfile, inputs: ProductInputs) -> Mapping[str
 class _RefusedStream(AbstractAsyncContextManager[tuple[Any, ...]]):
     """A stored URL that C2.5 refuses (a hand-edited settings file, #83 C review 3.2).
 
-    The connection fails on entry, so the product transport isolates this server
-    like a stdio start failure instead of failing the whole assembly.
+    startable_servers already leaves such a server out (#86); this stays in case
+    B's canonical check and C's normalization ever disagree. The connection
+    fails on entry, so the product transport isolates this server like a stdio
+    start failure instead of failing the whole assembly.
     """
 
     def __init__(self, code: str) -> None:
@@ -410,7 +406,8 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         )
     except CatalogConfigError:
         raise ProductAssemblyError("PROFILE_INVALID") from None
-    server_ids = loaded.profile.server_ids
+    startable = loaded.startable_servers
+    server_ids = tuple(server.id for server in startable)
     streams = _server_streams(loaded, inputs)
     if any(server_id not in streams for server_id in server_ids):
         raise ProductAssemblyError("PROFILE_SERVER_UNAVAILABLE")
@@ -433,7 +430,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         await transport.start()
         # Compare first: observe rewrites the registration it compares against.
         live = live_fingerprints(inputs.registry, transport, server_ids)
-        unrecorded = await _record_listings(inputs.registry, loaded.selected_servers, transport)
+        unrecorded = await _record_listings(inputs.registry, startable, transport)
         blocked = live.blocked_servers | unrecorded
         registry.seal(LiveFingerprints(live.live, live.mismatched, blocked))
         settings = loaded.guard_settings
@@ -456,18 +453,9 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             taint_mode=settings.taint_mode,
         )
         try:
-            # A blocked server offers nothing this run. One whose boundary still
-            # matches may hold an unobserved A155 kind edit (settings ahead of the
-            # Registry); leaving it out keeps it from failing every other server.
-            # A boundary that differs still stops the assembly (A129).
-            ahead = {
-                server.id
-                for server in loaded.selected_servers
-                if server.id in blocked and _boundary_matches(inputs.registry, server)
-            }
-            tool_views = loaded.catalog.tool_views(
-                tuple(server_id for server_id in server_ids if server_id not in ahead)
-            )
+            # Settings that differ from the registration (an A155 kind edit not
+            # observed yet, or another boundary) hide only that server (#86).
+            tool_views = loaded.catalog.tool_views(server_ids)
         except CatalogConfigError:
             # One unsupported tool schema must not surface as a raw error.
             raise ProductAssemblyError("PROFILE_TOOL_INVALID") from None

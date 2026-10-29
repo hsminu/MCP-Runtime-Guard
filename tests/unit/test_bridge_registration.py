@@ -255,6 +255,58 @@ async def test_settings_failure_leaves_pending_and_requires_restart(tmp_path):
         assert h.admission.restart_code == "POLICY_SAVE_UNKNOWN"
 
 
+@pytest.mark.asyncio
+async def test_list_rows_carry_the_profile_settings_issue(tmp_path):
+    """#86: rows show B's server_issue for selected servers; it is display only."""
+    async with harness(tmp_path) as h:
+        assert (await confirm(h, await h.commands(HTTP))).code == "REG_REGISTERED"
+
+        async def issue_with(**changes):
+            document = dict(h.policy.registration_document())
+            document["profile"] = {**document["profile"], "servers": ["remote"]}
+            document["servers"] = [{**document["servers"][0], **changes}]
+            h.policy._document = document
+            rows = (await h.commands(RegistrationRequest("list"))).rows
+            assert [row.server_id for row in rows] == ["remote"]
+            return rows[0].settings_issue
+
+        rows = (await h.commands(RegistrationRequest("list"))).rows
+        assert rows[0].settings_issue is None  # not selected: not checked
+        assert await issue_with() is None
+        assert await issue_with(tier="internal") == "REG_SETTINGS_MISMATCH"
+        assert (await issue_with(url="http://example.com/mcp")).startswith("URL_")
+        assert h.registry.status("remote") is RegStatus.PENDING
+
+
+def test_server_screen_shows_a_settings_issue_without_echoing_the_code():
+    from guard_app.ui.models import LoadState, ServerSummary, Surface
+    from guard_app.ui.servers import ServerDetailDialog, ServerListPage
+
+    app = QApplication.instance() or QApplication([])
+    base = ServerSummary("remote", "remote", "PUBLIC", "general_external", "pending")
+    cases = [
+        (None, "", "확인된 문제 없음"),
+        ("URL_HTTP_NOT_LOOPBACK", " · 설정 확인 필요", "저장된 URL을 쓸 수 없음"),
+        ("REG_SETTINGS_MISMATCH", " · 설정 확인 필요", "설정 파일과 등록 내용이 다름"),
+        ("NEW_B_CODE", " · 설정 확인 필요", "설정 확인 필요"),
+    ]
+    page = ServerListPage()
+    dialog = ServerDetailDialog(base)
+    try:
+        for issue, suffix, detail in cases:
+            server = replace(base, settings_issue=issue)
+            page.set_servers(Surface(LoadState.READY, (server,)))
+            assert page.table.item(0, 4).text() == "등록 검토 중" + suffix
+            dialog.set_server(server)
+            assert dialog._issue_value.text().startswith(detail)
+            assert "NEW_B_CODE" not in dialog._issue_value.text()
+            assert "NEW_B_CODE" not in page.table.item(0, 4).text()
+    finally:
+        dialog.close()
+        page.close()
+        app.processEvents()
+
+
 def test_url_code_messages_and_paste_use_c_normalization():
     with registration_form() as form:
         assert set(URL_MESSAGES) == ENDPOINT_REJECT_CODES

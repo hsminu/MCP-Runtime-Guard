@@ -64,6 +64,7 @@ class ServerSummary:
     session_status: str | None = None
     transport: str | None = None
     executable_pinned: bool | None = None
+    settings_issue: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

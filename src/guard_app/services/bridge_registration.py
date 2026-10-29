@@ -162,7 +162,8 @@ class RegistrationCommands:
 
     async def _rows(self) -> tuple[RegistrationRow, ...]:
         document = self.policy.registration_document()
-        configured = {s.id: s for s in load_profile_settings(document, self.registry).servers}
+        loaded = load_profile_settings(document, self.registry)
+        configured = {s.id: s for s in loaded.servers}
         entries = await self.store.list_registrations()
         pins: dict[str, bool] = {}
         for server in configured.values():
@@ -186,6 +187,7 @@ class RegistrationCommands:
                 if e.registration.server_id in configured
                 else None,
                 pins.get(e.registration.server_id, False),
+                loaded.server_issue(e.registration.server_id),
             )
             for e in entries
         )

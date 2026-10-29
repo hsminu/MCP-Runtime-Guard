@@ -253,6 +253,9 @@ class RegistrationRow:
     max_label: str
     transport: str | None
     pinned: bool
+    # B's LoadedProfile.server_issue (URL_* or REG_SETTINGS_MISMATCH); checked
+    # only for servers the Profile selects. Never an execution permit (#86).
+    settings_issue: str | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)

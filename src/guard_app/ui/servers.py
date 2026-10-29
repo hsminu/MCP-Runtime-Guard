@@ -63,6 +63,18 @@ def _pin_status(server: ServerSummary) -> str:
     return "저장 지문과 일치" if server.executable_pinned else "지문 재확인 필요"
 
 
+def _settings_issue(server: ServerSummary) -> str:
+    # B's fixed issue codes only; an unknown one is never echoed (#86).
+    issue = server.settings_issue
+    if issue is None:
+        return "확인된 문제 없음 · Profile에서 고른 서버만 확인함"
+    if issue.startswith("URL_"):
+        return "저장된 URL을 쓸 수 없음. 이 서버는 연결하지 않음."
+    if issue == "REG_SETTINGS_MISMATCH":
+        return "설정 파일과 등록 내용이 다름. 이 서버의 도구는 숨겨짐."
+    return "설정 확인 필요"
+
+
 def _detail_field(title: str, value: str) -> tuple[QWidget, QLabel]:
     field = QWidget()
     field.setObjectName("infoField")
@@ -128,6 +140,8 @@ class ServerDetailDialog(QDialog):
         layout.addWidget(transport_field)
         pin_field, self._pin_value = _detail_field("실행 파일 지문", _pin_status(server))
         layout.addWidget(pin_field)
+        issue_field, self._issue_value = _detail_field("설정 확인", _settings_issue(server))
+        layout.addWidget(issue_field)
         self.scan_status_card = ScanStatusCard()
         self.scan_status_card.setMinimumWidth(0)
         self.scan_status_card.setSizePolicy(
@@ -154,6 +168,7 @@ class ServerDetailDialog(QDialog):
         self._server_id_value.setText(public_display_text(server.server_id))
         self._transport_value.setText(fixed(TRANSPORTS, server.transport))
         self._pin_value.setText(_pin_status(server))
+        self._issue_value.setText(_settings_issue(server))
         self.scan_status_card.set_snapshot(Surface(LoadState.LOADING))
 
 
@@ -372,7 +387,8 @@ class ServerListPage(QWidget):
                 (fixed(TIER_NAMES, server.tier), fixed_code(TIERS, server.tier)),
                 (self._label_text(server.max_label), fixed_code(LABELS, server.max_label)),
                 (
-                    fixed(REGISTRY_NAMES, server.registry_status),
+                    fixed(REGISTRY_NAMES, server.registry_status)
+                    + (" · 설정 확인 필요" if server.settings_issue is not None else ""),
                     fixed_code(REGISTRY_STATUSES, server.registry_status).upper(),
                 ),
                 (fixed(SESSION_STATUSES, server.session_status), ""),

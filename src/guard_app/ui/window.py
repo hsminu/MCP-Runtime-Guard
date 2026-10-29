@@ -708,6 +708,7 @@ class GuardWindow(QMainWindow):
                         registry_status=row.status,
                         transport=row.transport,
                         executable_pinned=row.pinned if row.transport == "stdio" else None,
+                        settings_issue=row.settings_issue,
                     )
                     for row in view.rows
                 ),
