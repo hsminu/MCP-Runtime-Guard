@@ -247,6 +247,7 @@
 - [x] A187 epoch·Task ID·상태 코드·dispatch 수를 대화 머리·활동 요약에서 빼고 상태 알약 툴팁과 접힌 "진단 정보"로 옮김 · [기록](archive/a/A187-diagnostics-disclosure.md)
 - [x] A188 세션 `⋯`·우클릭·F2·Delete 메뉴, 이름 변경(수동 제목 유지), 상태별 삭제(진행 중은 CANCEL 뒤 종료 확인 시에만), 첫 사용자 메시지 자동 제목(민감값이면 `작업 HH:MM`) · [기록](archive/a/A188-session-menu-and-auto-title.md)
 - [x] A189 설정 화면 세 카드(정책·설정 파일 / LLM·Codex 인증 / Scanner 키), 인증 상태별 동작만 표시, 키 입력 가림·표시 전환과 입력·저장 중·저장됨·실패 구분 · [기록](archive/a/A189-settings-page.md)
+- [x] A190 정책 · 경계: 요약(모르면 "—"), 접근 규칙·목적지 탭, 거부 우선·기본 거부 표시, 서버·상태 필터, 진행·결과·"변경됨"은 성공 확인 뒤에만 · [기록](archive/a/A190-policy-tabs-and-summary.md)
 
 ## 통합·패키징
 

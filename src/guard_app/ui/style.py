@@ -373,6 +373,10 @@ QMenu::separator { height: 1px; background: $hairline; margin: 4px 6px; }
 QToolTip { background: $popover; color: $ink; border: 1px solid $hairline_strong;
     padding: 4px 8px; }
 QFrame#sectionCard { background: $surface; border: 1px solid $hairline_strong; border-radius: 8px; }
+QLabel#policyTool, QLabel#policyValue { font-weight: 600; }
+QLabel#policyDestination { font-family: $mono; font-size: 12px; font-weight: 600;
+    padding: 6px 10px; }
+QLabel#policyChanged { color: $primary_text; font-size: 12px; font-weight: 600; }
 QDialog { background: $canvas; }
 """
 

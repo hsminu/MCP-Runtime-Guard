@@ -222,6 +222,7 @@ def test_semantic_colors_are_limited_to_explicit_selectors():
     """I7/T18: selection/actions, state and grade keep separate visual meanings."""
     primary = {
         "QLabel#brandMark",
+        "QLabel#policyChanged",
         'QLabel#statusPill[tone="live"]',
         'QLabel#answerLabel[tone="live"]',
         'QPushButton[variant="primary"]',
