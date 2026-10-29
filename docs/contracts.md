@@ -114,12 +114,12 @@ Scanner 결과는 아직 B ScanReport에 연결하지 않았다. `ScanReport` �
 
 | ID | 대상 | 상태 |
 | --- | --- | --- |
-| B6-01 | 승인 생성·종결 원자 API/DTO | 요청 초안 |
-| B6-02 | 상태·보안 버전·객체 revision·요청 관계 | 요청 초안 |
-| B6-03 | 내구성 ACK·충돌·커밋 불명·만료·취소 | 요청 초안 |
-| B6-04 | SEND 실패 상태·시작 정리·recovery epoch | 요청 초안 |
-| B6-05 | 권위 조회·사람 상세·명령 접수/적용 결과 | 요청 초안 |
-| B6-06 | Registry 등록·지문 영속화·단일 writer | 요청 초안 |
+| B6-01 | 승인 생성·종결 원자 API/DTO | 2026-10-29 합의(#76): Store `open_approval`·`finish_approval`이 생성·종결을 쓰기 트랜잭션 하나로 묶고, 결과는 성공·충돌·불명·손상 넷이다. 부분 상태 0은 Store 연산 단위로 센다. 구현 B6.9(#89). C 독립 결함 주입 인수(C3.5 4번)는 남았다 |
+| B6-02 | 상태·보안 버전·객체 revision·요청 관계 | 2026-10-29 닫힘(#76). 바인딩 SQL·관계·epoch·revision의 독립 검증은 C3.2로 따로 한다 |
+| B6-03 | 내구성 ACK·충돌·커밋 불명·만료·취소 | 2026-10-29 닫힘(#76). 남은 시간값(잠금 대기 등)은 C 측정(C3.6) 뒤 확정한다 |
+| B6-04 | SEND 실패 상태·시작 정리·recovery epoch | 2026-10-29 닫힘(#76). 재시작 뒤 재전송 0과 이전 승인 미복원을 C가 확인했다(#69 C 리뷰, C6.8-1 T11) |
+| B6-05 | 권위 조회·사람 상세·명령 접수/적용 결과 | 2026-10-29 합의(#76): `StoreQueries`(`list_approvals`·`list_calls`·`get_call`, 한 읽기 트랜잭션, 원문 없음, 행마다 `row_revision`)와 `approve`·`reject`의 기대 revision. 구현 B6.16(#86). C3.8 조건 1–6 확인(#86 C 리뷰). A 화면 연결은 #92 |
+| B6-06 | Registry 등록·지문 영속화·단일 writer | 2026-10-29 닫힘(#76). 구현 B6.18·B6.13, C Registry(C4.10·C4.19·C4.20) |
 | AGT-01 | 역할·관리 경로·규칙/버전·Task/승인 결속 | 2026-10-15 결정으로 대체: AGT 제거, 자체 규칙 목록·규칙 버전 결속 |
 | AGT-02 | mode/규칙 버전 감사·migration·실패 | AGT 제거로 mode 감사는 불필요. 접근 규칙은 `policy_version`에 포함되고 Task에 저장된다. 판정·감사 행마다 버전을 직접 저장할지와 Task 없는 사건의 감사 범위는 미결(요청 초안, B6.15) |
 | AGT-03 | 대기/실행·worker 교체·퇴역 예산·실제 종료 | AGT 제거로 폐기. 자체 규칙은 같은 프로세스의 동기 판정이라 worker가 없다. Guard의 대기 장치는 B2.9(#47)에서 지웠다 |
@@ -153,3 +153,4 @@ A·B·C의 실제 확인을 받은 것만 적는다. 결정 기록 없이 개발
 | --- | --- | --- | --- | --- | --- |
 | 2026-10-27 | SEQ-01–03·REC-01–05 / [B6.17](archive/b/B6.17-seq-rec-decisions.md) `f72bf46`(#36) | B6.17의 선택을 확정한다(사용자 결정 표 2026-10-27). 순번·epoch 상한 2^53−1과 백업 입구(`begin_backup`/`BackupTarget`)는 C 제안을 B가 받았다. B6.8·B6.13 구현, A 연결, C 측정·독립 인수는 남았다 | [동의 10-26](https://github.com/hsminu/MCP-Runtime-Guard/issues/37#issuecomment-6418946458). 그 뒤 B 답변(10-27)과 C 추가 제안은 따로 확인하지 않음 | [답변 10-27](https://github.com/hsminu/MCP-Runtime-Guard/issues/37#issuecomment-6433727204), [C 제안 수락·3인 동의 10-27](https://github.com/hsminu/MCP-Runtime-Guard/issues/37#issuecomment-6437157616) | [동의 10-27](https://github.com/hsminu/MCP-Runtime-Guard/issues/37#issuecomment-6435466529) |
 | 2026-10-28 | ACCESS-01·AGT-04 / B2.9·B2.11(#47 `21b68da`), [B2.10 제안](archive/b/B2.10-agt04-reason-proposal.md) | 동기 `AccessChecker`와 Guard 대기 장치 제거를 구현 문안까지 확정한다. AGT-04는 (b)에 B 변형(enum에서 `AGT_*` 삭제, 저장소가 옛 문자열을 `ACCESS_*`로 해석)을 더해 정한다(사용자 결정 표 2026-10-28). B2.10 구현과 C contract 테스트는 남았다 | [동의 10-18](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6251208623), [#47 승인·(b) 요청 10-27](https://github.com/hsminu/MCP-Runtime-Guard/pull/47#pullrequestreview-5669225500). B 변형은 그 뒤 제안이라 따로 확인하지 않음 | [(b)·변형 제안 10-27](https://github.com/hsminu/MCP-Runtime-Guard/pull/47#issuecomment-6446783941) | [동의 10-27](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6442964768), [(a) 철회·변형 동의 10-28](https://github.com/hsminu/MCP-Runtime-Guard/pull/47#issuecomment-6447317648) |
+| 2026-10-29 | B6-01·B6-02·B6-03·B6-04·B6-05·B6-06 / [#76](https://github.com/hsminu/MCP-Runtime-Guard/issues/76), B6.9(#89)·B6.16(#86) | B6-02·03·04·06은 닫는다. B6-05는 #86 구현 기준으로 합의한다. B6-01은 #89 구현 기준으로 합의하고, 부분 상태 0을 Store 연산 단위로 센다. A 화면 연결(#92), C3.5 결함 주입 인수(C 4번), C3.2 독립 검증, C3.6 시간값 측정은 남았다 | [동의 10-29](https://github.com/hsminu/MCP-Runtime-Guard/issues/76#issuecomment-6497426633) | [정리 10-29](https://github.com/hsminu/MCP-Runtime-Guard/issues/76#issuecomment-6497583247) | [B6-02·03·04 동의·조건 10-29](https://github.com/hsminu/MCP-Runtime-Guard/issues/76#issuecomment-6488739688), [B6-05 C3.8 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/86#issuecomment-6494025432), [B6-01 C3.5 1–3 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/89#issuecomment-6497627122) |
