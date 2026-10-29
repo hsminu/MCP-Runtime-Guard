@@ -26,7 +26,12 @@ from guard_app.services.bridge import (
     CommandStage,
 )
 
-from .presentation import CODEX_LOGIN_NOTICES, CODEX_LOGIN_TEXT
+from .presentation import (
+    ACCOUNT_REQUEST_REFUSED,
+    CODEX_LOGIN_NOTICES,
+    CODEX_LOGIN_TEXT,
+    COMMAND_REFUSALS,
+)
 from .widgets import KeyboardActionButton, plain_label
 
 UNAVAILABLE = "Codex 실행 기능이 아직 준비 중이라 지금은 로그인하거나 실행할 수 없음."
@@ -57,6 +62,13 @@ _NOTICES = {
 }
 # Logout stays available after these, so the cleanup can be asked again.
 _RETRY_LOGOUT = frozenset({"LOGOUT_CLEANUP_FAILED"})
+# An accepted account command whose result is unknown; login starts use
+# LOGIN_REQUEST_UNCONFIRMED. The state must be read again either way.
+_UNCONFIRMED = {
+    "account_read": "ACCOUNT_READ_UNCONFIRMED",
+    "account_cancel_login": "LOGIN_CANCEL_UNCONFIRMED",
+    "account_logout": "LOGOUT_REQUEST_UNCONFIRMED",
+}
 API_KEY_SENT = "API 키로 로그인을 요청함. 결과를 기다리는 중임."
 
 # Hands one key to the bridge's Codex login command; never stores it.
@@ -231,15 +243,19 @@ class CodexLoginInfo(QWidget):
         self.api_key_button.setEnabled(False)
 
     def account_command_changed(self, event: object) -> None:
-        if (
-            type(event) is CommandEvent
-            and event.action.startswith("account_")
-            and event.stage in (CommandStage.REJECTED, CommandStage.UNCONFIRMED)
-        ):
+        if type(event) is not CommandEvent or not event.action.startswith("account_"):
+            return
+        if event.stage is CommandStage.REJECTED:
+            # Nothing ran, so the last account state still holds. Restore the
+            # buttons a start disabled and say the request was not taken.
+            self.set_view(self._view)
+            refusal = COMMAND_REFUSALS.get(event.code, ACCOUNT_REQUEST_REFUSED)
+            self.status.setText(f"{self.status.text()}\n{refusal}")
+        elif event.stage is CommandStage.UNCONFIRMED:
             self.set_view(
                 AccountView(
                     "FAILED",
-                    notice="LOGIN_REQUEST_UNCONFIRMED",
+                    notice=_UNCONFIRMED.get(event.action, "LOGIN_REQUEST_UNCONFIRMED"),
                     browser_available=self._view.browser_available,
                 )
             )
