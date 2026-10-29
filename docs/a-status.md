@@ -209,6 +209,7 @@
 - [ ] A128·A105 등록과 설정 저장 중 하나만 성공해 남은 PENDING 행의 복구 화면 — A 차례
 - [ ] A128 실제 MCP 서버 PENDING 등록·EXE-01 화면 확인 — 사용자 실제 실행
 - [x] A157 #83 C 리뷰 후속: 시작하지 못한 서버의 등록 거부 문구, 설정 파일 URL 거부를 그 서버만 격리, 시작 예산에 서버 조립, `main()` 시험의 로그 상태 복원 · [기록](archive/a/A157-pr83-c-review-followups.md)
+- [x] A159 #83 B 리뷰 참고: 제품 조립은 Store 전역 정지(`halt_execution`) 없이 시작하지 않음, 주입 조립만 허용 · [기록](archive/a/A159-product-global-halt-required.md)
 - [ ] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 — 막힘: C 상수 추가([#83 C 참고 4](https://github.com/hsminu/MCP-Runtime-Guard/pull/83#issuecomment-6493041009))
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
