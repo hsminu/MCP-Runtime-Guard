@@ -124,6 +124,7 @@
 - [x] C6.23 #41 A 리뷰 후속(L2): 전체 시간 상한 `deadline_s`(기본 30초)와 `L2_DEADLINE_EXCEEDED`, 최악 시간·취소·예외 경로 설명, 가짜 모델 서버 밖 통신은 관찰하지 않는다는 범위 명시, L2·L3 허용 항목 같음 테스트 · [기록](archive/c/C6.23-l2-a-review-followup.md)
 - [ ] C6.24 의존성 취약점 정리(pip-audit 16건, C-DEP-01–03): certifi·cryptography·filelock lock 갱신 완료(C-DEP-03), litellm 1.93.2 두 ID는 예외 PA-01(Scanner 고정, 2026-10-29 사용자 결정). 남은 것: mcp 1.30.0(C-DEP-01, A·B 합의·A transport 재검증) 뒤 pip-audit을 실패로 막는 단계로 · [기록](archive/c/C2.9-ci-static-checks.md)
 - [x] C6.25 C 독립 검증 현황 요약(인수 기준 5 일부): C 담당 T/S 41개의 완료·부분·미실행, 완료 근거, 다른 담당 작업의 C 리뷰 프로브, 미실행·검증 불가 항목, 측정 원자료와 재현 명령 · [기록](archive/c/C6.25-verification-summary.md)
+- [x] C6.26 L2 실패 코드 상수 `codex_l2.L2_FAILURE_CODES`(28개): 모듈이 실제로 쓰는 코드와 AST로 대조하는 시험, A151 사본과 같음 확인. A 사본 교체는 A · [기록](archive/c/C6.26-l2-failure-codes.md)
 
 ## 인수 기준
 

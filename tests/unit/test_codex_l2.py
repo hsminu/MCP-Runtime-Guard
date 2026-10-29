@@ -553,6 +553,42 @@ def test_l2_allowed_items_match_the_l3_allowed_items():
     assert codex_l2.ALLOWED_ITEM_TYPES == L3_ALLOWED_ITEMS
 
 
+def _codes_in_module() -> set[str]:
+    """`codex_l2` 소스에서 `L2_` 고정 코드 문자열을 모은다. 상수 정의 자체는 뺀다."""
+    import ast
+    import re
+
+    tree = ast.parse(Path(codex_l2.__file__).read_text(encoding="utf-8"))
+    skip = {
+        id(node)
+        for assign in ast.walk(tree)
+        if isinstance(assign, ast.Assign)
+        and any(getattr(t, "id", None) == "L2_FAILURE_CODES" for t in assign.targets)
+        for node in ast.walk(assign)
+    }
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if id(node) not in skip
+        and isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and re.fullmatch(r"L2_[A-Z_]+", node.value)
+    }
+
+
+def test_l2_failure_codes_are_exactly_the_codes_the_module_uses():
+    """#83 C 리뷰 참고 4: A가 사본 대신 쓸 상수. 코드를 더하거나 빼면 상수도 함께 바뀐다."""
+    assert _codes_in_module() == codex_l2.L2_FAILURE_CODES
+    assert len(codex_l2.L2_FAILURE_CODES) == 28
+
+
+def test_a_l2_failure_codes_match_until_a_uses_the_constant():
+    """A151 사본(`session_preparation.L2_FAILURE_CODES`)이 C 상수와 같은지. A가 바꾸면 자명하다."""
+    from guard_app.services.session_preparation import L2_FAILURE_CODES
+
+    assert L2_FAILURE_CODES == codex_l2.L2_FAILURE_CODES
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deadline", [0, -1, float("inf"), float("nan"), True, "30", 601])
 async def test_invalid_deadline_is_refused_before_anything_starts(tmp_path, deadline):

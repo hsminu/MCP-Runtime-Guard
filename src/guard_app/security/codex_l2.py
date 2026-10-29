@@ -109,6 +109,43 @@ class L2Error(RuntimeError):
     """시험을 끝까지 하지 못한 고정 사유. `run_l2`는 이것을 실패 코드로 바꿔 담는다."""
 
 
+# 이 모듈이 `L2Report.failures`와 `L2Error`에 싣는 고정 코드 전체(28개). A 시작 화면은 이 집합에
+# 있는 코드만 그대로 알리고, 나머지(실행 입구 `LaunchError`·앱 폴더 `AppPathError`의 코드 등)는
+# 묶어서 알린다. 테스트가 이 모듈 안에서 쓰는 코드와 대조한다(#83 C 리뷰 참고 4).
+L2_FAILURE_CODES = frozenset(
+    {
+        "L2_CODEX_EXITED",
+        "L2_CONFIG_LAYERS_UNEXPECTED",
+        "L2_CONFIG_MISMATCH",
+        "L2_CONFIG_UNREADABLE",
+        "L2_DEADLINE_EXCEEDED",
+        "L2_DEADLINE_INVALID",
+        "L2_EXIT_UNCONFIRMED",
+        "L2_FEATURE_ENABLED",
+        "L2_FOLDER_NOT_REMOVED",
+        "L2_FORBIDDEN_NOT_REFUSED",
+        "L2_ITEM_UNEXPECTED",
+        "L2_MODEL_REQUEST_MISSING",
+        "L2_MODEL_TRAFFIC_UNEXPECTED",
+        "L2_PROBE_CALLS_UNEXPECTED",
+        "L2_PROMPT_UNEXPECTED",
+        "L2_PROTOCOL_INVALID",
+        "L2_READER_STUCK",
+        "L2_REMOTE_CONTROL_ENABLED",
+        "L2_REQUEST_REJECTED",
+        "L2_REQUEST_TIMEOUT",
+        "L2_REQUIREMENTS_PRESENT",
+        "L2_SERVER_REQUEST_UNEXPECTED",
+        "L2_SESSION_FLAGS_UNEXPECTED",
+        "L2_THREAD_PARAMS_UNSAFE",
+        "L2_THREAD_START_INVALID",
+        "L2_TOOLS_UNEXPECTED",
+        "L2_TURN_NOT_COMPLETED",
+        "L2_TURN_TIMEOUT",
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class L2Report:
     """L2 결과. `passed`가 True일 때만 세션을 시작한다. 원문·경로를 담지 않는다.
