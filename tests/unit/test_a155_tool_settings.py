@@ -25,9 +25,10 @@ from guard_app.services.guard import PolicyChangeError
 from guard_app.services.product_settings import (
     SaveOutcomeUnknownError,
     SettingsFileChangedError,
+    SettingsFileSaver,
     read_settings,
 )
-from guard_app.services.registry import ServerRegistry
+from guard_app.services.registry import RegistryError, ServerRegistry
 from guard_app.services.session_admission import SessionAdmission
 from guard_app.services.session_policy import TaskPolicy
 from guard_app.ui.models import LoadState, ServerSummary, Surface
@@ -141,7 +142,7 @@ async def test_rejects_without_any_write(tmp_path, case):
 
 
 @pytest.mark.asyncio
-async def test_document_and_restart_observe_enables_activation(tmp_path):
+async def test_document_and_restart_without_observe_enables_activation(tmp_path):
     async with tools_harness(tmp_path, selected=False) as h:
         assert h.preview.tool_settings[2].kind == "other"
         assert h.preview.tool_settings[2].registry_kind == "other"
@@ -161,11 +162,8 @@ async def test_document_and_restart_observe_enables_activation(tmp_path):
         await registry.load()
         policy = TaskPolicy(None, SessionAdmission(), document=saved, saver=h.saver)
         commands = RegistrationCommands(registry, h.store, policy, h.collect, h.stop)
-        # Before observe the persisted OTHER definition cannot be allowed.
-        before = await commands(RegistrationRequest("activation_preview", "docs"))
-        assert not before.activation.servers[0].tools[2].kind_fixed
-        server = load_profile_settings(saved, registry).servers[0]
-        await registry.observe(server, h.listing)
+        # A173: the saved metadata already matches, without starting the server.
+        assert load_profile_settings(saved, registry).server_issue("docs") is None
         assert registry.status("docs") is RegStatus.PENDING
         assert registry.entry("docs").registration.tools[2].kind is ToolKind.READ
         after = await commands(RegistrationRequest("activation_preview", "docs"))
@@ -249,35 +247,170 @@ async def test_other_and_identical_read_save_stop_tasks(tmp_path, kind):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failure",
-    ["success", "false", "unknown", "cancel", "external", "review", "review_committed", "apply"],
-)
-async def test_active_review_precedes_save_and_failures_close_guard(tmp_path, monkeypatch, failure):
-    async with tools_harness(tmp_path, active=True) as h:
+@pytest.mark.parametrize("active", [False, True])
+@pytest.mark.parametrize("assembled", [False, True])
+async def test_apply_settings_precedes_file_policy_and_close(
+    tmp_path, monkeypatch, active, assembled
+):
+    """A173 / I6,I10 / T10: persisted metadata precedes the file, even for PENDING."""
+    async with tools_harness(tmp_path, active=active) as h:
         calls = []
-        closes = []
+        apply_settings = h.registry.apply_settings
+        apply_policy = h.policy._apply
         close = h.assembled.guard.aclose
+        before_file = read_settings(h.folders).document
+        if not assembled:
+            h.policy._assembled = None
+
+        async def apply(server, **kwargs):
+            calls.append("settings")
+            assert read_settings(h.folders).document == before_file
+            assert server.tools[-1].name == "unknown"
+            assert server.tools[-1].kind is ToolKind.READ
+            assert kwargs["expected_row_revision"] == h.request.expected_row_revision
+            assert kwargs["invalidate_tool"] == (
+                h.assembled.guard.invalidate_tool if assembled else None
+            )
+            return await apply_settings(server, **kwargs)
+
+        async def save(change):
+            calls.append("file")
+            assert h.registry.entry("docs").registration.tools[2].kind is ToolKind.READ
+            assert h.registry.status("docs") is RegStatus.PENDING
+            return await h.saver(change)
+
+        async def policy(*args):
+            calls.append("policy")
+            assert read_settings(h.folders).document["servers"][0]["tools"][-1]["kind"] == "read"
+            return await apply_policy(*args)
 
         async def closed():
-            closes.append(1)
+            calls.append("close")
+            assert h.admission.restart_code == "REG_TOOLS_RESTART_REQUIRED"
             await close()
 
-        monkeypatch.setattr(h.assembled.guard, "aclose", closed)
-        review = h.registry.request_review
+        async def forbidden(*args, **kwargs):
+            pytest.fail("request_review/activate must not be used by tool settings")
 
-        async def reviewed(*args, **kwargs):
-            calls.append("review")
-            if failure != "review":
-                await review(*args, **kwargs)
-            if failure in ("review", "review_committed"):
+        monkeypatch.setattr(h.registry, "apply_settings", apply)
+        monkeypatch.setattr(h.registry, "request_review", forbidden)
+        monkeypatch.setattr(h.registry, "activate", forbidden)
+        monkeypatch.setattr(h.policy, "_apply", policy)
+        h.policy._saver = save
+        with monkeypatch.context() as scoped:
+            scoped.setattr(h.assembled.guard, "aclose", closed)
+            assert (await h.commands(h.request)).code == "REG_TOOLS_RESTART_REQUIRED"
+        assert calls == (
+            ["settings", "file", "policy", "close"] if assembled else ["settings", "file"]
+        )
+        assert not h.commands._unknown
+        assert h.peer.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code",
+    [
+        "REG_SETTINGS_INVALID",
+        "REG_SERVER_ID_INVALID",
+        "REG_SERVER_UNKNOWN",
+        "REG_SETTINGS_MISMATCH",
+    ],
+)
+async def test_registry_refusal_does_not_save_or_require_restart(tmp_path, monkeypatch, code):
+    async with tools_harness(tmp_path, active=True) as h:
+        calls = []
+        before = await h.store.load_registration("docs")
+        before_file = read_settings(h.folders).document
+
+        async def refuse(*args, **kwargs):
+            calls.append("settings")
+            raise RegistryError(code)
+
+        async def forbidden(*args, **kwargs):
+            pytest.fail("pre-write refusal must neither save nor close")
+
+        monkeypatch.setattr(h.registry, "apply_settings", refuse)
+        h.policy._saver = forbidden
+        with monkeypatch.context() as scoped:
+            scoped.setattr(h.assembled.guard, "aclose", forbidden)
+            assert (await h.commands(h.request)).code == "REG_TOOLS_INVALID"
+        assert calls == ["settings"]
+        assert h.admission.restart_code is None
+        assert not h.commands._unknown
+        assert read_settings(h.folders).document == before_file
+        assert await h.store.load_registration("docs") == before
+        assert h.peer.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active", [False, True])
+async def test_missing_saver_refuses_before_apply_settings(tmp_path, monkeypatch, active):
+    async with tools_harness(tmp_path, active=active) as h:
+        before = await h.store.load_registration("docs")
+        before_file = read_settings(h.folders).document
+
+        async def forbidden(*args, **kwargs):
+            pytest.fail("a missing saver must refuse before apply_settings")
+
+        monkeypatch.setattr(h.registry, "apply_settings", forbidden)
+        h.policy._saver = None
+        assert (await h.commands(h.request)).code == "REG_SETTINGS_UNAVAILABLE"
+        assert h.admission.restart_code is None
+        assert not h.commands._unknown
+        assert read_settings(h.folders).document == before_file
+        assert await h.store.load_registration("docs") == before
+        assert h.peer.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "false",
+        "unknown",
+        "cancel",
+        "external",
+        "store",
+        "revision",
+        "committed",
+        "settings_cancel",
+        "committed_cancel",
+        "invalidate",
+        "apply",
+    ],
+)
+async def test_unknown_settings_outcomes_block_registration_and_close(
+    tmp_path, monkeypatch, failure
+):
+    async with tools_harness(tmp_path, active=True) as h:
+        calls = []
+        apply_settings = h.registry.apply_settings
+
+        async def apply(server, **kwargs):
+            calls.append("settings")
+            if failure == "store":
                 raise StoreError()
+            if failure == "settings_cancel":
+                raise asyncio.CancelledError()
+            if failure == "revision":
+                kwargs["expected_row_revision"] -= 1
+            await apply_settings(server, **kwargs)
+            if failure == "committed":
+                raise StoreError()
+            if failure == "committed_cancel":
+                raise asyncio.CancelledError()
 
-        monkeypatch.setattr(h.registry, "request_review", reviewed)
+        async def invalidate(*args):
+            assert h.registry.entry("docs").registration.tools[2].kind is ToolKind.READ
+            raise RuntimeError()
+
+        monkeypatch.setattr(h.registry, "apply_settings", apply)
+        if failure == "invalidate":
+            monkeypatch.setattr(h.assembled.guard, "invalidate_tool", invalidate)
 
         async def save(change):
             calls.append("save")
-            assert h.registry.status("docs") is RegStatus.PENDING
             if failure == "false":
                 return False
             if failure == "external":
@@ -296,56 +429,95 @@ async def test_active_review_precedes_save_and_failures_close_guard(tmp_path, mo
                 raise PolicyChangeError("POLICY_CHANGE_INVALID")
 
             monkeypatch.setattr(h.assembled.guard, "apply_policy_change", refuse_apply)
-        if failure == "cancel":
-            with pytest.raises(asyncio.CancelledError):
+        if "cancel" in failure or failure == "invalidate":
+            with pytest.raises(RuntimeError if failure == "invalidate" else asyncio.CancelledError):
                 await h.commands(h.request)
         else:
-            result = await h.commands(h.request)
-            assert (
-                result.code
-                == {
-                    "success": "REG_TOOLS_RESTART_REQUIRED",
-                    "false": "POLICY_SAVE_FAILED",
-                    "unknown": "POLICY_SAVE_UNKNOWN",
-                    "external": "POLICY_SAVE_FILE_CHANGED",
-                    "review": "REG_STORE_UNKNOWN",
-                    "review_committed": "REG_STORE_UNKNOWN",
-                    "apply": "POLICY_APPLY_FAILED",
-                }[failure]
-            )
-        assert calls == (["review"] if failure.startswith("review") else ["review", "save"])
-        assert h.admission.restart_code == (
-            "REG_TOOLS_RESTART_REQUIRED" if failure == "success" else "REG_TOOLS_UNKNOWN"
-        )
-        assert h.commands._unknown == failure.startswith("review")
-        assert closes
-        assert (await h.commands(h.request)).code == h.admission.restart_code
-        assert len(calls) == (1 if failure.startswith("review") else 2)
+            assert (await h.commands(h.request)).code == {
+                "false": "POLICY_SAVE_FAILED",
+                "unknown": "POLICY_SAVE_UNKNOWN",
+                "external": "POLICY_SAVE_FILE_CHANGED",
+                "store": "REG_STORE_UNKNOWN",
+                "revision": "REG_STORE_UNKNOWN",
+                "committed": "REG_STORE_UNKNOWN",
+                "apply": "POLICY_APPLY_FAILED",
+            }[failure]
+        before_file = failure in {
+            "store",
+            "revision",
+            "committed",
+            "settings_cancel",
+            "committed_cancel",
+            "invalidate",
+        }
+        assert calls == (["settings"] if before_file else ["settings", "save"])
+        assert h.admission.restart_code == "REG_TOOLS_UNKNOWN"
+        assert h.commands._unknown
+        assert (await h.commands(h.request)).code == "REG_TOOLS_UNKNOWN"
+        assert len(calls) == (1 if before_file else 2)
         await assert_guard_closed(h)
 
 
 @pytest.mark.asyncio
-async def test_unrecorded_active_server_is_still_reviewed_before_save(tmp_path, monkeypatch):
+async def test_unrecorded_active_server_settings_are_applied_before_save(tmp_path):
     async with tools_harness(tmp_path, active=True) as h:
-        # A failed observe this run: status() reads PENDING, the Store row stays ACTIVE.
         h.registry._unrecorded.add("docs")
         assert h.registry.status("docs") is RegStatus.PENDING
-        calls = []
-        review = h.registry.request_review
-
-        async def reviewed(*args, **kwargs):
-            calls.append("review")
-            return await review(*args, **kwargs)
-
-        async def save(change):
-            calls.append("save")
-            return await h.saver(change)
-
-        monkeypatch.setattr(h.registry, "request_review", reviewed)
-        h.policy._saver = save
         assert (await h.commands(h.request)).code == "REG_TOOLS_RESTART_REQUIRED"
-        assert calls == ["review", "save"]
-        assert (await h.store.load_registration("docs")).registration.status is RegStatus.PENDING
+        stored = (await h.store.load_registration("docs")).registration
+        assert stored.status is RegStatus.PENDING
+        assert stored.tools[2].kind is ToolKind.READ
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["false", "unknown"])
+async def test_resave_clears_persisted_settings_mismatch_without_connecting(
+    tmp_path, monkeypatch, failure
+):
+    """#91 A promise 5 / I6,I10: real SQLite/Registry, no observe or startable_servers."""
+    async with tools_harness(tmp_path, active=True) as h:
+
+        async def failed_file(change):
+            if failure == "unknown":
+                raise SaveOutcomeUnknownError()
+            return False
+
+        h.request = replace(
+            h.request,
+            tool_settings=(ToolSettingsEdit("second", "send", destination_arg="destination"),),
+        )
+        h.policy._saver = failed_file
+        assert (await h.commands(h.request)).code == (
+            "POLICY_SAVE_UNKNOWN" if failure == "unknown" else "POLICY_SAVE_FAILED"
+        )
+        saved = read_settings(h.folders).document
+        assert (await h.store.load_registration("docs")).registration.tools[1].kind is ToolKind.SEND
+        assert (
+            load_profile_settings(saved, h.registry).server_issue("docs") == "REG_SETTINGS_MISMATCH"
+        )
+        registry = ServerRegistry(h.store)
+        await registry.load()
+        admission = SessionAdmission()
+        policy = TaskPolicy(
+            None, admission, document=saved, saver=SettingsFileSaver(read_settings(h.folders))
+        )
+
+        async def forbidden(*args, **kwargs):
+            pytest.fail("repair must not connect, observe, or activate")
+
+        monkeypatch.setattr(registry, "observe", forbidden)
+        monkeypatch.setattr(registry, "activate", forbidden)
+        commands = RegistrationCommands(registry, h.store, policy, forbidden, h.stop)
+        preview = await commands(RegistrationRequest("tool_settings_preview", "docs"))
+        assert preview.code == "REG_TOOLS_PREVIEW"
+        assert preview.tool_settings[1].registry_kind == "send"
+        assert preview.tool_settings[1].kind == "read"
+        result = await commands(replace(h.request, expected_row_revision=preview.row_revision))
+        assert result.code == "REG_TOOLS_RESTART_REQUIRED"
+        repaired = read_settings(h.folders).document
+        assert load_profile_settings(repaired, registry).server_issue("docs") is None
+        assert registry.status("docs") is RegStatus.PENDING
+        assert h.peer.calls == []
 
 
 @pytest.mark.asyncio

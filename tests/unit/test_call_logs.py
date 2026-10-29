@@ -464,3 +464,7 @@ def test_every_reason_a_row_can_carry_has_its_own_text() -> None:
     assert set(REASONS) == {reason.value for reason in set(Reason) - _NOT_ON_ROWS}
     row = PublicCallSummary("call-1", reason_code="GUARD_CLOSED", reason_codes=("GUARD_CLOSED",))
     assert "Guard 정상 종료로 실행하지 않음" in public_calls_csv((row,))
+
+
+def test_settings_change_reason_has_definition_and_settings_text() -> None:
+    assert REASONS["TOOL_FINGERPRINT_CHANGED"] == "도구 정의·설정 변경"

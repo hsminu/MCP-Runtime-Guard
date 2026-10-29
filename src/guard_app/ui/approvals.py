@@ -35,11 +35,13 @@ from .approval_presentation import (
 from .approval_presentation import (
     QUERY_TEXT_INVALID,
     QUERY_UNKNOWN,
+    SERVER_FILTER_INVALID,
     selected_detail_text,
     status_display,
     summary_columns,
     valid_page,
     valid_query_text,
+    valid_server_filter,
 )
 from .approval_presentation import (
     SOURCE_NOT_CONNECTED as SOURCE_NOT_CONNECTED,
@@ -341,13 +343,18 @@ class ApprovalListPage(QWidget):
             return
         self._sequence += 1
         search = self.search.text().strip()
-        server_id = self.server_filter.text().strip()
-        if not (valid_query_text(search) and valid_query_text(server_id)):
-            # Not sent: B accepts only this pattern, and the text stays as typed.
+        server_id = self.server_filter.text()
+        error = None
+        if not valid_query_text(search):
+            error = QUERY_TEXT_INVALID
+        elif not valid_server_filter(server_id):
+            error = SERVER_FILTER_INVALID
+        if error is not None:
+            # Invalid input is not sent or interpolated into the fixed message.
             self._query = None
             self._clear_rows()
             self._state = LoadState.ERROR
-            self.state_message.set_message(QUERY_TEXT_INVALID)
+            self.state_message.set_message(error)
             self.state_message.setVisible(True)
             self._update_pager()
             return

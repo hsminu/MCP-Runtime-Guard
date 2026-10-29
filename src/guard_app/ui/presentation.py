@@ -77,7 +77,7 @@ REASONS = {
     "TOOL_UNSUPPORTED": "등록되지 않은 도구",
     "INVALID_ARGUMENTS": "도구 인자 형식 오류",
     "REG_NOT_ACTIVE": "서버 등록 상태가 ACTIVE가 아님",
-    "TOOL_FINGERPRINT_CHANGED": "도구 정의 지문 변경",
+    "TOOL_FINGERPRINT_CHANGED": "도구 정의·설정 변경",
     "TASK_UNCLASSIFIED": "자료 등급을 분류할 수 없음",
     "TASK_NOT_RUNNING": "Task 실행 상태가 아님",
     "POLICY_CHANGED": "정책 변경으로 재평가 필요",
