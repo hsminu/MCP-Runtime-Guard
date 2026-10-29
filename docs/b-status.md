@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-27 · main `60cb165` · B 구현 기준 `36d4d45` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-29 · main `db901d7` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -8,14 +8,11 @@
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| ACCESS-01 동기 포트 A·C 리뷰·3인 합의 | A·B·C | B2.9 |
 | AGT-04 표시 문구 리뷰·contract 테스트 | A·C | B2.10 |
 | AGT-02 감사 범위 합의 | A·B·C | B6.15 |
 | A66 세션 관리자 계약 합의(legacy 시연이 ModelClient 사용) | A·B·C | B1.7 |
-| AGT 제거에서 바꾼 A 소유 파일 리뷰 | A | B2.11 |
-| B6-01–06 계약 회신 | A·C | B1.5, B1.6, B6.9–B6.12, B6.16 |
+| B6-01·B6-05 결정, B6-02–04 닫기 제안(#76) | A·B·C | B1.5, B1.6, B6.9–B6.12, B6.16 |
 | 자원 ID 판정기의 제품 조립 연결 | A | B3.3 |
-| Registry 영속화 B 제안 완료·C 검토·C4.10 연결 대기(B6-06) | A·C | B6.18 |
 | 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 합의 | A·B·C | B6.19 |
 | 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
 | NOTIFY-01 DTO·포트·종료 의미 합의와 A/C 연결·독립 검증 | A·B·C | B5.13 |
@@ -44,11 +41,11 @@
 - [x] B2.4 등록·지문·Task 상태·미분류·정책 버전·목적지 전제조건을 먼저 검사
 - [x] B2.5 `accumulate` 기본, last_read·none은 비교 모드
 - [x] B2.6 high-watermark 단조성·Unclassified 해제 금지, 보안 의미 변화에만 security_version 증가
-- [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증
+- [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증 · 순수 함수 속성 검사의 시간 제한 해제 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 - [x] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계) · [기록](archive/b/B2.8-access-rules.md)
-- [x] B2.9 AccessChecker 동기 포트·Guard 대기 장치 제거 구현 완료, 합의 전 제안(ACCESS-01 결정 이행) · A·C 리뷰·3인 합의 대기 · PR 미정 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
+- [x] B2.9 AccessChecker 동기 포트·Guard 대기 장치 제거(ACCESS-01 결정 이행) · #47 병합 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
 - [ ] B2.10 AGT-04 접근 사유 코드 교체·과거 저장값 판독 B 단위 구현 완료 · A 표시 문구 리뷰·C contract 테스트 대기 · [기록](archive/b/B2.10-agt04-access-reasons.md)
-- [x] B2.11 기존 AGT 코드 제거 구현 완료 · A 소유 파일 리뷰 대기 · PR 미정 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
+- [x] B2.11 기존 AGT 코드 제거 · #47 병합 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
 
 ## B3 · Catalog와 요청 해석
 
@@ -66,6 +63,8 @@
 - [ ] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 — 막힘: C2.14 파일 연산·A 연결
 - [ ] B3.13 DESC-01 A 검토 입력·C Registry 원본 분리/저장·설명 변경 적용 의미 합의 — 막힘: 3인 합의·A/C 연결
 - [x] B3.14 EXE-01 실행 파일 고정 설정 필드 B 구현 · A 등록 화면·launcher 연결 대기 · [기록](archive/b/B3.14-exe01-settings-fields.md)
+- [x] B3.15 URL-01 HTTP 서버 URL을 서버별 검사 · A 연결·표시 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
+- [x] B3.16 설정과 Registry가 다르면 해당 서버만 숨김 · A 재확인 화면 연결 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 
 ## B4 · Guard와 응답 게이트
 
@@ -116,8 +115,11 @@
 - [ ] B6.15 규칙 버전 감사(AGT-02) — 막힘: 판정·감사 버전 추적 범위와 직접 저장·간접 조회 합의 · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
 - [ ] B6.16 A 시작 게이트·조회 요구와 C 인수 기준을 대조해 API 합의 기록 — 막힘: A·C 회신
 - [x] B6.17 SEQ·REC B 결정안·A·C 동의(#37), 사용자 contracts 반영 완료 · 구현 B6.8·B6.13 대기 · [기록](archive/b/B6.17-seq-rec-decisions.md)
-- [ ] B6.18 RegistryStore 계약 합의·C4.10 사본 교체/승인 무효화 연결 — 막힘: A·C 검토·C 연결
+- [x] B6.18 RegistryStore 계약·C4.10(#46) 사본 교체/승인 무효화와 C4.19(#53) 연결 완료 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) 원자 조건·독립 검증 — 막힘: 3인 합의·A/C 연결
+- [x] B6.20 `record_settings_change` CAS·도구 설정 변경·감사 B 구현 · C Registry 연결 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
+- [x] B6.21 검사 보고서 저장 전 현재 등록 지문 집합 대조 · C 리뷰·독립 검증 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
+- [x] B6.22 요청 실패 감사의 예외 형식 이름 상한 64자 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 
 ## B7 · 검증과 인수
 
