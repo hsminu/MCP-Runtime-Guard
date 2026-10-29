@@ -115,7 +115,7 @@ async def bootstrap_product(
             settings_status, loaded = await load_settings_profile(settings, store)
             if loaded is not None:
                 guard_settings = loaded.guard_settings
-                profile_document = settings.document
+                profile_document = settings.profile_document
                 if profile_saver is None:
                     profile_saver = SettingsFileSaver(settings)
                 if product is None and profile_document is not None:

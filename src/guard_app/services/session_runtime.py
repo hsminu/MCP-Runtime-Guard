@@ -39,6 +39,7 @@ from guard_app.services.product_assembly import (
     AssembledGuard,
 )
 from guard_app.services.product_settings import (
+    SETTINGS_FILE_DEFAULT,
     SETTINGS_LOADED,
 )
 from guard_app.services.product_startup import bootstrap_product as bootstrap_product
@@ -237,7 +238,8 @@ class SessionRuntime:
             # Without a Profile, a settings-file failure says more than "not connected".
             missing_code=(
                 settings_status
-                if settings_status is not None and settings_status != SETTINGS_LOADED
+                if settings_status is not None
+                and settings_status not in (SETTINGS_LOADED, SETTINGS_FILE_DEFAULT)
                 else "GUARD_PROFILE_UNAVAILABLE"
             ),
         )
@@ -360,9 +362,12 @@ class SessionRuntime:
                 return blocker
         if self._signing_out():
             return "CODEX_SIGNING_OUT"
+        blocker = self._policy.blocker()
+        if blocker is not None:
+            return blocker
         if self._session_factory is None:
             return "CODEX_SESSION_UNAVAILABLE"
-        return self._policy.blocker()
+        return None
 
     async def prepare_startup(self) -> None:
         """Run the app-wide preparation once at product start (A101).
@@ -396,6 +401,9 @@ class SessionRuntime:
     ) -> TaskProjection:
         expected = await self._startup.check()
         await self._startup.verify(expected)
+        blocker = self._policy.blocker()
+        if blocker is not None:
+            raise SessionRuntimeError(blocker)
         factory = self._session_factory
         if factory is None:
             raise SessionRuntimeError("CODEX_SESSION_UNAVAILABLE")

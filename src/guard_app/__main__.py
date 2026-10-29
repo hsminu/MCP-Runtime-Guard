@@ -55,7 +55,7 @@ def main() -> int:
             print(_claim_refusal(error), file=sys.stderr)
             return 1
         # CFG-01: a settings file that cannot be read or parsed stops the start
-        # and is left as it is. No file is the first run.
+        # and is left as it is. No file uses the default Profile without writing it.
         try:
             settings = read_settings(codex.folders)
         except SettingsStartError as error:

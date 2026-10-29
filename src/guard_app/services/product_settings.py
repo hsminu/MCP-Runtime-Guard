@@ -3,11 +3,12 @@
 Reading is C then B: C's `read_settings_file` (C2.14) returns at most
 SETTINGS_MAX_BYTES + 1 bytes and their generation, and B's
 `parse_settings_bytes` (B3.11) removes the v1 envelope and judges the size.
-No file is the first run: the app opens, refuses new Tasks and never saves an
-empty draft on its own. A file that cannot be read or parsed refuses the app
-start and is never overwritten (#33). Only the fixed code is reported. The
-Profile in a parsed document is then checked on the backend loop against C's
-Registry restored from B's store; an invalid one refuses new Tasks only.
+With no file, the app uses the built-in default Profile in memory (no servers,
+tools or destinations) and allows new Tasks. Nothing is written until the user
+saves (A184, user decision 2026-10-30). A file that cannot be read or parsed
+refuses the app start and is never overwritten (#33). Only the fixed code is
+reported. The Profile is checked on the backend loop against C's Registry
+restored from B's store; an invalid one refuses new Tasks only.
 
 Saving is B then C: B's `serialize_settings_bytes` of the prepared document,
 then C's `replace_settings_file` against the generation last read or written.
@@ -52,10 +53,10 @@ _FILE_CHANGED = frozenset(
     {"SETTINGS_FILE_CHANGED", "SETTINGS_FILE_INVALID", "SETTINGS_FILE_READ_FAILED"}
 )
 
-# What the start made of the file, shown on the settings screen. Every code but
-# SETTINGS_LOADED also refuses new Tasks.
+# What the start made of the file, shown on the settings screen. Only
+# SETTINGS_LOADED and SETTINGS_FILE_DEFAULT allow new Tasks.
 SETTINGS_LOADED = "SETTINGS_LOADED"
-SETTINGS_FILE_MISSING = "SETTINGS_FILE_MISSING"
+SETTINGS_FILE_DEFAULT = "SETTINGS_FILE_DEFAULT"
 SETTINGS_PROFILE_INVALID = "SETTINGS_PROFILE_INVALID"
 REGISTRY_UNAVAILABLE = "REGISTRY_UNAVAILABLE"
 
@@ -81,6 +82,11 @@ def _code(error: Exception, fallback: str) -> str:
     return code if type(code) is str else fallback
 
 
+def default_settings_document() -> dict[str, object]:
+    """A fresh default Profile with no servers, tools or destinations."""
+    return {"profile": {"id": "local", "servers": []}, "servers": []}
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class SettingsFile:
     """What the start read. `document` is None when there was no file (first run)."""
@@ -88,6 +94,10 @@ class SettingsFile:
     folders: AppFolders
     document: dict[str, object] | None
     generation: SettingsGeneration | None
+
+    @property
+    def profile_document(self) -> dict[str, object]:
+        return self.document if self.document is not None else default_settings_document()
 
     def __repr__(self) -> str:
         return "SettingsFile(<redacted>)"
@@ -117,18 +127,17 @@ async def load_settings_profile(
     The Profile is checked against C's Registry restored from B's store (C4.10
     `load`), the Registry the Guard will use. Nothing is written.
     """
-    if settings.document is None:
-        return SETTINGS_FILE_MISSING, None
     registry = ServerRegistry(store)
     try:
         await registry.load()
     except StoreError:
         return REGISTRY_UNAVAILABLE, None
     try:
-        loaded = load_profile_settings(settings.document, registry)
+        loaded = load_profile_settings(settings.profile_document, registry)
     except CatalogConfigError:
         return SETTINGS_PROFILE_INVALID, None
-    return SETTINGS_LOADED, loaded
+    status = SETTINGS_FILE_DEFAULT if settings.document is None else SETTINGS_LOADED
+    return status, loaded
 
 
 class SettingsFileSaver:

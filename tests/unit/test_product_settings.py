@@ -38,7 +38,7 @@ from guard_app.services.catalog import (
 from guard_app.services.product_assembly import assemble_guard
 from guard_app.services.product_settings import (
     REGISTRY_UNAVAILABLE,
-    SETTINGS_FILE_MISSING,
+    SETTINGS_FILE_DEFAULT,
     SETTINGS_LOADED,
     SETTINGS_PROFILE_INVALID,
     SaveOutcomeUnknownError,
@@ -46,6 +46,7 @@ from guard_app.services.product_settings import (
     SettingsFileChangedError,
     SettingsFileSaver,
     SettingsStartError,
+    default_settings_document,
     load_settings_profile,
     read_settings,
 )
@@ -236,7 +237,13 @@ def test_settings_profile_status_names_what_the_start_found(tmp_path) -> None:
         return missing, loaded, invalid, failing
 
     missing, loaded, invalid, failing = run(statuses())
-    assert missing == (SETTINGS_FILE_MISSING, None)
+    status, profile = missing
+    assert status == SETTINGS_FILE_DEFAULT
+    assert profile is not None
+    assert (
+        profile.policy_version
+        == load_profile_settings(default_settings_document(), registry_stub()).policy_version
+    )
     status, profile = loaded
     assert status == SETTINGS_LOADED
     assert profile is not None
@@ -254,7 +261,7 @@ async def refuse_session(*_args):
 @pytest.mark.parametrize(
     ("doc", "status", "blocker"),
     [
-        (None, SETTINGS_FILE_MISSING, SETTINGS_FILE_MISSING),
+        (None, SETTINGS_FILE_DEFAULT, None),
         ({"profile": {"id": "unit"}}, SETTINGS_PROFILE_INVALID, SETTINGS_PROFILE_INVALID),
         (document(), SETTINGS_LOADED, None),
     ],
@@ -530,15 +537,15 @@ def app() -> QApplication:
     return instance if isinstance(instance, QApplication) else QApplication([])
 
 
-def test_settings_page_shows_the_status_and_opens_when_the_file_is_missing(app) -> None:
+def test_settings_page_shows_default_status_without_changing_the_page(app) -> None:
     window = GuardWindow()
     try:
         window.navigate("runs")
-        window.set_settings_status(SETTINGS_FILE_MISSING)
-        assert window._page == "settings"
-        assert window.settings_file_status.text() == SETTINGS_FILE_STATUS[SETTINGS_FILE_MISSING]
+        window.set_settings_status(SETTINGS_FILE_DEFAULT)
+        assert window._page == "runs"
+        assert window.settings_file_status.text() == SETTINGS_FILE_STATUS[SETTINGS_FILE_DEFAULT]
         window.navigate("logs")
-        window.set_settings_status(SETTINGS_FILE_MISSING)
+        window.set_settings_status(SETTINGS_FILE_DEFAULT)
         assert window._page == "logs"  # a page the user chose stays
         window.set_settings_status(SETTINGS_LOADED)
         assert window.settings_file_status.text() == SETTINGS_FILE_STATUS[SETTINGS_LOADED]

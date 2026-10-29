@@ -737,7 +737,7 @@ class GuardWindow(QMainWindow):
         return self.server_page.set_scan_snapshot(server_id, token, snapshot)
 
     def set_settings_status(self, code: object) -> None:
-        """Show the settings file status; with no file, open the settings page (CFG-01)."""
+        """Show the settings file status without changing the current page."""
 
         if code is None:
             self.settings_file_status.setText(SETTINGS_FILE_NOT_READ)
@@ -746,9 +746,6 @@ class GuardWindow(QMainWindow):
         self.settings_file_status.setText(
             text if text is not None else "설정 파일 상태를 확인하지 못함."
         )
-        # Only from the start page, so a page the user already chose stays.
-        if code == "SETTINGS_FILE_MISSING" and self._page == "runs":
-            self.navigate("settings")
 
     def set_approval_query_connected(self, connected: bool) -> None:
         """Enable approval listing only when something answers its queries."""

@@ -24,6 +24,7 @@ from guard_app.services.product_assembly import AssembledGuard
 from guard_app.services.product_settings import (
     SaveOutcomeUnknownError,
     SettingsFileChangedError,
+    default_settings_document,
 )
 from guard_app.services.registry import RegistryError, ServerRegistry
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
@@ -100,7 +101,7 @@ class TaskPolicy:
         )
 
     def blocker(self) -> str | None:
-        """Why no Profile is in force: no settings file, an invalid one, or none connected."""
+        """Why no Profile is in force: invalid settings, unavailable Registry or no connection."""
         return None if type(self._settings) is GuardSettings else self._missing_code
 
     def task_state(self, task_id: str) -> TaskState:
@@ -445,14 +446,7 @@ class TaskPolicy:
         if isinstance(self._document, FrozenJsonObject):
             return self._document.to_dict()
         # First registration selects no servers and grants no access.
-        return (
-            self._document
-            if self._document is not None
-            else {
-                "profile": {"id": "local", "servers": []},
-                "servers": [],
-            }
-        )
+        return self._document if self._document is not None else default_settings_document()
 
     def connect_registration_saver(self, saver: ProfileSaver) -> None:
         if self._saver is None:
