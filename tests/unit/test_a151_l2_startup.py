@@ -281,3 +281,23 @@ def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app
                 loop.call_soon_threadsafe(cleanup_release.set)
                 bridge.close()
                 pump_until(app, bridge._host._thread_done.is_set, timeout=5)
+
+
+def test_startup_budget_covers_one_window_of_server_starts():
+    """#83 C review 3.3: the bridge start budget names server assembly next to Store and L2."""
+    import inspect
+
+    from guard_app.adapters.mcp_transport import McpTransport, ToolListLimits
+    from guard_app.security.launcher import LaunchedProcess
+
+    start = inspect.signature(McpTransport).parameters["startup_timeout_s"].default
+    close = inspect.signature(LaunchedProcess.close).parameters
+    window = max(start, ToolListLimits().collection_timeout_s) + 1.0
+    assert window + close["grace_s"].default + close["kill_s"].default <= module.SERVER_ASSEMBLY_S
+    assert module.PRODUCT_STARTUP_TIMEOUT_S == (
+        module.STORE_STARTUP_S
+        + module.SERVER_ASSEMBLY_S
+        + module.L2_TOTAL_TIMEOUT_S
+        + module.L2_CANCEL_TIMEOUT_S
+        + 10.0
+    )

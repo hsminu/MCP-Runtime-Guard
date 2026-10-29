@@ -18,9 +18,7 @@ import asyncio
 import json
 import sqlite3
 import sys
-import time
 from contextlib import closing
-from datetime import UTC, datetime
 
 import pytest
 
@@ -28,12 +26,8 @@ from guard_app.adapters.mcp_transport.tool_listing import ToolListing
 from guard_app.domain.contracts import Denied, Pending, Released
 from guard_app.domain.enums import ApprovalStatus, TaskStatus
 from guard_app.domain.json_types import FrozenJsonObject
-from guard_app.domain.models import TaskState
 from guard_app.domain.reasons import Reason
-from guard_app.security.ids import new_id
 from guard_app.services.catalog import ServerSettings
-from guard_app.services.registry import ServerRegistry
-from guard_app.storage import SQLiteStore
 
 from .c_counting import (
     ALLOWED,
@@ -247,35 +241,13 @@ def test_restart_does_not_restore_a_pending_approval(
                 await run.close_guard()
             else:
                 abandoned, run.assembled = run.assembled, None
-            run.store.close()
-            assert await run.store.wait_closed(5.0)
-
-            store = SQLiteStore(run.db, startup="explicit")
             try:
-                await store.prepare_schema(
-                    deadline=time.monotonic() + 30, begin_backup=run.folders.begin_backup
-                )
-                report = await store.recover(deadline=time.monotonic() + 30, run_id=new_id("run"))
-                await store.activate_run()
-                run.store = store
-                run.registry = ServerRegistry(store)
-                await run.registry.load()
-                await run.assemble(create_tasks=False)
+                report = await run.restart()
                 late = await run.human().approve(pending.approval_id)
                 retry = await run.guard.submit("task-1", send("c1"), expected_epoch=1)
                 # 양성 대조(#79 B 리뷰): 새 회차의 새 Task는 정상으로 나간다. 그래서 위의 0은
                 # 실행 권한이 다 닫혀서가 아니라 옛 승인·옛 Task라서다.
-                settings = run.assembled.settings
-                await store.create_task(
-                    TaskState(
-                        task_id="task-3",
-                        epoch=1,
-                        profile_id=settings.profile_id,
-                        policy_version=settings.policy_version,
-                        status=TaskStatus.RUNNING,
-                    ),
-                    created_at_utc=datetime.now(UTC),
-                )
+                await run.create_task("task-3")
                 await run.guard.submit("task-3", read("public/new.txt", "n1"), expected_epoch=1)
                 fresh = await run.guard.submit(
                     "task-3", send("n2", to="issue", body="body-after"), expected_epoch=1
@@ -291,12 +263,9 @@ def test_restart_does_not_restore_a_pending_approval(
                     run.request_counts(fresh.request_id, "body-after"),
                 )
             finally:
-                await run.close_guard()
                 if abandoned is not None:
                     # 버린 Guard의 연결(stdio 프로세스)을 정리한다. Store는 이미 닫혔다.
                     await abandoned.transport.close()
-                store.close()
-                assert await store.wait_closed(5.0)
 
     changed, left, late, retry, status, counts, fresh, fresh_counts = asyncio.run(scenario())
     assert (status, changed) == expected

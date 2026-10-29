@@ -24,6 +24,7 @@ from guard_app.security.paths import prepare_app_folders
 from guard_app.services.product_assembly import assemble_guard
 from guard_app.storage.sqlite_store import SQLiteStore
 
+from .logging_state import preserve_logging_state  # noqa: F401
 from .test_a138_product_startup import read_product, tracked_launcher
 from .test_product_assembly import READ_DEFINITION, Peer, document, inputs
 from .test_product_settings import registered
@@ -57,7 +58,7 @@ for line in sys.stdin:
 
 
 @pytest.mark.parametrize(
-    "mode", ["normal", "changed", "crash", "oversize", "unpinned", "mismatch", "mixed"]
+    "mode", ["normal", "changed", "crash", "oversize", "unpinned", "mismatch", "mixed", "badurl"]
 )
 def test_real_launcher_guard_listing_call_and_exit(tmp_path, monkeypatch, mode):
     async def run():
@@ -93,6 +94,18 @@ def test_real_launcher_guard_listing_call_and_exit(tmp_path, monkeypatch, mode):
                 bad = {**doc["servers"][0], "id": "bad", "command_sha256": "0" * 64}
                 doc["servers"].append(bad)
                 doc["profile"]["servers"].append("bad")
+            elif mode == "badurl":
+                # A hand-edited URL that C2.5 refuses blocks only that server (#83 C review 3.2).
+                remote = {
+                    "id": "remote",
+                    "transport": "streamable_http",
+                    "url": "http://example.com/mcp",
+                    "tier": "general_external",
+                    "max_label": "PUBLIC",
+                    "tools": [],
+                }
+                doc["servers"].append(remote)
+                doc["profile"]["servers"].append("remote")
             observed = []
             observe = registry.observe
 
@@ -155,6 +168,8 @@ def test_real_launcher_guard_listing_call_and_exit(tmp_path, monkeypatch, mode):
                 assert registry.status("docs") is RegStatus.ACTIVE
                 if mode == "mixed":
                     assert assembled.registry.status("bad") is not RegStatus.ACTIVE
+                if mode == "badurl":
+                    assert assembled.transport.tool_listing("remote") is None
         finally:
             if assembled is not None:
                 await assembled.aclose()
@@ -282,8 +297,64 @@ async def test_product_rejects_folders_and_injected_streams(tmp_path):
         folders.close()
 
 
+@pytest.mark.asyncio
+async def test_product_refuses_a_store_without_global_halt(tmp_path, monkeypatch):
+    """I6: the product never runs without the Store-wide halt (#83 B review 1).
+
+    Only an injected composition (no folders) may assemble without it.
+    """
+    from guard_app.services.product_assembly import ProductAssemblyError
+
+    from .test_product_assembly import Registry, spec
+
+    launched = []
+
+    async def launch(*args):
+        launched.append(args)
+        raise AssertionError("no server may start")
+
+    monkeypatch.setattr(launcher_streams, "launch_mcp_server", launch)
+
+    class WithoutHalt:
+        def __init__(self, inner, halt):
+            self._inner = inner
+            self._halt = halt
+
+        def __getattr__(self, name):
+            if name == "halt_execution":
+                if self._halt is None:
+                    raise AttributeError(name)
+                return self._halt
+            return getattr(self._inner, name)
+
+    folders = prepare_app_folders(tmp_path / "app")
+    store = SQLiteStore(tmp_path / "guard.db", audit_id_factory=lambda: uuid4().hex)
+    peer = Peer([READ_DEFINITION])
+    injected = inputs(peer, Registry(spec(READ_DEFINITION).fingerprint), document())
+    product = replace(injected, folders=folders, server_streams=None)
+    assembled = None
+    try:
+        for halt in (None, "not callable"):
+            with pytest.raises(ProductAssemblyError, match="^GLOBAL_HALT_UNAVAILABLE$"):
+                await assemble_guard(WithoutHalt(store, halt), product)
+        assert launched == []
+        assert peer.calls == []
+        assembled = await assemble_guard(WithoutHalt(store, None), injected)
+        assert assembled.guard._on_global_halt is None
+    finally:
+        if assembled is not None:
+            await assembled.aclose()
+        store.close()
+        folders.close()
+
+
+@pytest.mark.usefixtures("preserve_logging_state")
 def test_main_settings_start_uses_launcher_folders(tmp_path, monkeypatch):
-    """I1/EXE-01/REC-01: real main -> bootstrap -> settings assembly, no Task."""
+    """I1/EXE-01/REC-01: real main -> bootstrap -> settings assembly, no Task.
+
+    main() installs C's log redaction process-wide (A146); without the fixture a
+    later test in the same run sees its own log records withheld (#83 C review).
+    """
     from PySide6.QtWidgets import QApplication
 
     from guard_app import __main__ as entry

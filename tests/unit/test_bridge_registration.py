@@ -12,7 +12,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from guard_app.domain.enums import RegStatus
-from guard_app.domain.errors import StoreError
+from guard_app.domain.errors import DispatchError, StoreError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.security.endpoints import ENDPOINT_REJECT_CODES
 from guard_app.security.ids import new_id
@@ -205,6 +205,41 @@ async def test_store_failure_is_not_retried_or_reported_as_registered(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_a_server_that_never_starts_is_refused_before_any_write(tmp_path):
+    """#83 C review 3.1: only a confirmed start failure is a refusal; teardown stays unknown."""
+
+    def failing(kind):
+        async def collect(server):
+            raise DispatchError(kind)
+
+        return collect
+
+    async with harness(tmp_path) as h:
+        collect = h.commands.collect
+        for kind in ("SessionStartFailed", "SessionStartTimeout"):
+            h.commands.collect = failing(kind)
+            preview = await h.commands(HTTP)
+            assert (await confirm(h, preview)).code == "REG_SERVER_UNREACHABLE"
+        assert await h.store.list_registrations() == ()
+        assert read_settings(h.folders).document is None
+        h.commands.collect = failing("SessionCloseFailed")
+        preview = await h.commands(HTTP)
+        with pytest.raises(DispatchError):
+            await confirm(h, preview)
+        h.commands.collect = collect
+        preview = await h.commands(HTTP)
+        assert (await confirm(h, preview)).code == "REG_REGISTERED"
+    with registration_form() as form:
+        for code, shown in [
+            ("REG_SERVER_UNREACHABLE", "서버에 연결하지 못해 등록하지 않음."),
+            ("REG_LISTING_INVALID", "도구 목록을 끝까지 받지 못했거나"),
+        ]:
+            form._registration_id = code
+            form._registration_result(RegistrationView(code, command_id=code))
+            assert form.status.text().startswith(shown)
+
+
+@pytest.mark.asyncio
 async def test_settings_failure_leaves_pending_and_requires_restart(tmp_path):
     async with harness(tmp_path) as h:
 
@@ -372,6 +407,40 @@ async def test_registration_collector_lists_without_tool_calls(tmp_path, monkeyp
         assert chosen == [("C:/server.exe", (), (), ExecutablePin(10, "a" * 64))]
     finally:
         folders.close()
+
+
+@pytest.mark.asyncio
+async def test_registration_collector_reports_a_closed_port_as_a_start_failure(tmp_path):
+    """#83 C review 3.1 with a real connection: a closed loopback port is a
+    confirmed start failure, so registration refuses it before any write."""
+    import json
+    import socket
+
+    from guard_app.services import product_assembly
+    from guard_app.services.catalog import ServerSettings
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    folders = prepare_app_folders(tmp_path / "app")
+    data = {
+        "id": "closed",
+        "transport": "streamable_http",
+        "url": f"http://127.0.0.1:{port}/mcp",
+        "tier": "internal",
+        "max_label": "PUBLIC",
+        "tools": [],
+    }
+    server = ServerSettings.model_validate_json(json.dumps(data), strict=True)
+    try:
+        with pytest.raises(DispatchError) as raised:
+            await asyncio.wait_for(
+                product_assembly.collect_registration_listing(server, folders), 30
+            )
+    finally:
+        folders.close()
+    assert raised.value.exception_type in module._SERVER_START_FAILURES
 
 
 @pytest.mark.asyncio
