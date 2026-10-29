@@ -13,10 +13,11 @@ import json
 import re
 import tomllib
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QDir, Qt, Signal
+from PySide6.QtCore import QDir, QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
@@ -28,7 +29,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QScrollArea,
     QSizePolicy,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -49,7 +49,7 @@ from guard_app.services.bridge import (
 from .presentation import LABELS, TIER_NAMES, is_hidden_char
 from .server_add_folders import FileServerFolders
 from .untrusted_text import untrusted_display_text
-from .widgets import KeyboardActionButton, SelectionBox, plain_label
+from .widgets import FitStack, KeyboardActionButton, ResponsiveRow, SelectionBox, plain_label
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _ENV_SEPARATORS = re.compile(r"[\s,]+")
@@ -345,6 +345,37 @@ def _form_label(title: str) -> QLabel:
     return label
 
 
+class _TouchedFields(QObject):
+    """Validation stays unconditional; only its presentation waits for interaction."""
+
+    def __init__(self, parent: QWidget, refresh: Callable[[], None]) -> None:
+        super().__init__(parent)
+        self.keys: set[str] = set()
+        self.submitted = False
+        self._fields: dict[QObject, str] = {}
+        self._refresh = refresh
+
+    def watch(self, field: QWidget, key: str) -> None:
+        self._fields[field] = key
+        field.installEventFilter(self)
+        if isinstance(field, (QLineEdit, QPlainTextEdit)):
+            field.textChanged.connect(lambda *_args: self.keys.add(key))
+        elif isinstance(field, SelectionBox):
+            field.currentIndexChanged.connect(lambda *_args: self.keys.add(key))
+
+    def touch(self, key: str) -> None:
+        self.keys.add(key)
+        self._refresh()
+
+    def shows(self, key: str) -> bool:
+        return self.submitted or key in self.keys
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.FocusOut and watched in self._fields:
+            self.touch(self._fields[watched])
+        return super().eventFilter(watched, event)
+
+
 class ServerAddForm(QWidget):
     """Prepare human input and send registration commands through the bridge."""
 
@@ -429,11 +460,9 @@ class ServerAddForm(QWidget):
         self.transport.addItem("로컬 파일 서버", "local_file")
         common.addRow(_form_label("연결 방식"), self.transport)
 
-        self.transport_fields = QStackedWidget()
+        self.transport_fields = FitStack()
         self.transport_fields.setObjectName("transportFields")
-        self.transport_fields.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
-        )
+        self.transport_fields.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
         self.transport_fields.addWidget(self._stdio_fields())
         self.transport_fields.addWidget(self._http_fields())
         self.file_folders = FileServerFolders()
@@ -495,10 +524,25 @@ class ServerAddForm(QWidget):
         self.recheck_button.hide()
         self.recheck_button.clicked.connect(self._recheck_registration)
         actions.addWidget(self.recheck_button)
+        self.required_hint = plain_label(name="secondary")
+        self.required_hint.setAccessibleName("남은 필수 입력 안내")
+        actions.addWidget(self.required_hint)
         actions.addStretch(1)
         scroll.setWidget(content)
         shell.addWidget(scroll)
 
+        self._touch = _TouchedFields(self, self._refresh)
+        for field, key in (
+            (self.server_id, "server_id"),
+            (self.display_name, "display_name"),
+            (self.command, "command"),
+            (self.args_json, "args"),
+            (self.env_allow, "env_allow"),
+            (self.url, "url"),
+            (self.tier, "tier"),
+            (self.max_label, "max_label"),
+        ):
+            self._touch.watch(field, key)
         self.server_id.textChanged.connect(self._input_changed)
         self.server_id.textEdited.connect(self._id_edited)
         self.display_name.textChanged.connect(self._input_changed)
@@ -577,7 +621,11 @@ class ServerAddForm(QWidget):
             self.paste_status.setText(str(error))
             return
         self.quick_input.clear()
+        self._touch.keys.update(
+            ("command", "args", "env_allow") if pasted.transport == "stdio" else ("url",)
+        )
         if pasted.server_id:
+            self._touch.keys.add("server_id")
             self.server_id.setText(pasted.server_id)
             self._id_from_name = False
         self.transport.setCurrentIndex(self.transport.findData(pasted.transport))
@@ -593,6 +641,7 @@ class ServerAddForm(QWidget):
         if pasted.skipped_servers:
             notes.append(f"첫 서버만 채움. 나머지 {pasted.skipped_servers}개는 따로 추가하세요.")
         self.paste_status.setText(" ".join(notes))
+        self._refresh()
 
     def _browse_executable(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(self, "실행 파일 선택", "", "실행 파일 (*.exe)")
@@ -623,10 +672,8 @@ class ServerAddForm(QWidget):
     def _stdio_fields(self) -> QWidget:
         page = QWidget()
         form = self._new_form(page)
-        command_row = QWidget()
-        command_layout = QHBoxLayout(command_row)
-        command_layout.setContentsMargins(0, 0, 0, 0)
-        command_layout.setSpacing(8)
+        command_row = ResponsiveRow(400)
+        command_layout = command_row.row
         self.command = QLineEdit()
         self.command.setObjectName("commandInput")
         self.command.setAccessibleName("stdio 실행 파일 절대 경로")
@@ -838,6 +885,7 @@ class ServerAddForm(QWidget):
         """
         self._recheck_id = ""
         self._restore_id = server_id
+        self._touch.keys.update(("server_id", "tier", "max_label"))
         self.server_id.setText(server_id)
         self._id_from_name = False
         self.tier.setCurrentIndex(max(0, self.tier.findData(tier)))
@@ -863,8 +911,11 @@ class ServerAddForm(QWidget):
             # The listed ID is the server being rechecked, not a new registration.
             del errors["server_id"]
         for key, widget in self._errors.items():
-            widget.setProperty("validationError", key in errors)
-            widget.setVisible(key in errors)
+            shown = key in errors and self._touch.shows(key)
+            widget.setProperty("validationError", shown)
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.setVisible(shown)
             if key in errors:
                 widget.setText(errors[key])
             else:
@@ -880,6 +931,8 @@ class ServerAddForm(QWidget):
                 notice += " CONFIDENTIAL 선택을 INTERNAL로 조정함."
             self.boundary_notice.setText(notice)
         self.prepare_button.setEnabled(draft is not None and not self._prepared)
+        self.required_hint.setText(f"필수 입력·선택 {len(errors)}개를 확인하세요" if errors else "")
+        self.required_hint.setVisible(bool(errors))
         self.confirm_button.setText(
             "확인한 지문 저장"
             if rechecking
@@ -908,6 +961,7 @@ class ServerAddForm(QWidget):
         )
 
     def _prepare_local_draft(self) -> None:
+        self._touch.submitted = True
         if self._prepared:
             return
         draft, errors = self._build_draft()
@@ -980,6 +1034,8 @@ class ServerAddForm(QWidget):
         bridge.request_registration(request, command_id=self._registration_id)
 
     def _confirm_registration(self) -> None:
+        self._touch.submitted = True
+        self._refresh()
         token = self._registration_token
         self._registration_token = ""
         if token:
@@ -1176,6 +1232,9 @@ class _FolderRuleRow(QWidget):
         self.error.setAccessibleName("폴더 규칙 입력 오류")
         self.error.setVisible(False)
         layout.addWidget(self.error)
+        self.touch = _TouchedFields(self, self.changed.emit)
+        self.touch.watch(self.prefix, "prefix")
+        self.touch.watch(self.label, "label")
         self.prefix.textChanged.connect(lambda _text: self.changed.emit())
         self.label.currentIndexChanged.connect(lambda _index: self.changed.emit())
         self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self))
@@ -1241,6 +1300,10 @@ class LocalFolderRulesForm(QWidget):
         self.status = plain_label(name="folderDraftStatus")
         outer.addWidget(self.status)
 
+        self.required_hint = plain_label(name="secondary")
+        actions.addWidget(self.required_hint)
+        self._touch = _TouchedFields(self, self._refresh)
+        self._touch.watch(self.root, "root")
         self.root.textChanged.connect(self._input_changed)
         self.add_button.clicked.connect(self.add_rule)
         self.prepare_button.clicked.connect(self._prepare)
@@ -1264,6 +1327,7 @@ class LocalFolderRulesForm(QWidget):
     def _remove_rule(self, row: _FolderRuleRow) -> None:
         if row not in self.rows:
             return
+        self._touch.keys.add("rules")
         self.rows.remove(row)
         self._rows_layout.removeWidget(row)
         row.deleteLater()
@@ -1283,7 +1347,7 @@ class LocalFolderRulesForm(QWidget):
         else:
             root_error = _folder_error(root)
         self.root_error.setText(root_error or "")
-        self.root_error.setVisible(root_error is not None)
+        self.root_error.setVisible(root_error is not None and self._touch.shows("root"))
         failed = root_error is not None
 
         rules: list[FolderLabelRule] = []
@@ -1291,13 +1355,17 @@ class LocalFolderRulesForm(QWidget):
         seen: set[tuple[str, ...]] = set()
         for row in self.rows:
             parts, error = _prefix_parts(row.prefix.text().strip())
+            error_key = "prefix"
             key = None if parts is None else tuple(part.casefold() for part in parts)
             if key is not None and key in seen:
                 error = "같은 폴더 규칙을 두 번 적지 마세요. 대소문자만 다른 이름도 같은 폴더임."
             elif error is None and row.label.currentData() is None:
+                error_key = "label"
                 error = "이 폴더의 등급을 선택하세요."
             row.error.setText(error or "")
-            row.error.setVisible(error is not None)
+            row.error.setVisible(
+                error is not None and (self._touch.submitted or row.touch.shows(error_key))
+            )
             if key is not None:
                 seen.add(key)
             if error is not None or parts is None:
@@ -1306,7 +1374,7 @@ class LocalFolderRulesForm(QWidget):
             rules.append(FolderLabelRule(parts, str(row.label.currentData())))
         rules_error = None if self.rows else "폴더 규칙을 하나 이상 추가하세요."
         self.rules_error.setText(rules_error or "")
-        self.rules_error.setVisible(rules_error is not None)
+        self.rules_error.setVisible(rules_error is not None and self._touch.shows("rules"))
         if failed or rules_error is not None:
             return None
         return LocalFolderDraft(root, tuple(rules))
@@ -1314,6 +1382,14 @@ class LocalFolderRulesForm(QWidget):
     def _refresh(self) -> None:
         draft = self._build_draft()
         self.prepare_button.setEnabled(draft is not None and not self._prepared)
+        remaining = sum(
+            bool(label.text())
+            for label in (self.root_error, self.rules_error, *(row.error for row in self.rows))
+        )
+        self.required_hint.setText(
+            f"필수 입력·선택 {remaining}개를 확인하세요" if remaining else ""
+        )
+        self.required_hint.setVisible(bool(remaining))
         self.status.setText(
             "폴더 등급 확인 완료 · 아직 등록되지 않음."
             if self._prepared
@@ -1321,6 +1397,7 @@ class LocalFolderRulesForm(QWidget):
         )
 
     def _prepare(self) -> None:
+        self._touch.submitted = True
         if self._prepared:
             return
         draft = self._build_draft()

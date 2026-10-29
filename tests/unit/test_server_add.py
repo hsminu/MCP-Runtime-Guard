@@ -821,3 +821,82 @@ def test_scan_card_state_transitions_and_safe_projection(app) -> None:
     assert (card.findings.text(), card.findings.textFormat()) == (summary, Qt.TextFormat.PlainText)
     with pytest.raises(FrozenInstanceError):
         projection.scan_state = "completed"  # type: ignore[misc]
+
+
+def test_errors_wait_for_each_field_or_submit_attempt(form, app):
+    """I7/T18: delayed error presentation never enables an invalid registration."""
+    assert all(error.isHidden() for error in form._errors.values())
+    assert not form.prepare_button.isEnabled()
+    assert form.required_hint.isVisible()
+    assert "4개" in form.required_hint.text()
+    form.server_id.setText("invalid_")
+    assert not form._errors["server_id"].isHidden()
+    assert form._errors["tier"].isHidden()
+    assert form._errors["max_label"].isHidden()
+    assert form._errors["command"].isHidden()
+    form._prepare_local_draft()
+    assert all(
+        not form._errors[key].isHidden() for key in ("server_id", "command", "tier", "max_label")
+    )
+    assert form.validated_draft is None
+    assert not form.prepare_button.isEnabled()
+
+
+def test_focus_out_marks_only_the_departed_field(form, app):
+    form.server_id.setFocus()
+    app.processEvents()
+    form.command.setFocus()
+    app.processEvents()
+    assert not form._errors["server_id"].isHidden()
+    assert form._errors["command"].isHidden()
+    assert form._errors["tier"].isHidden()
+
+
+def test_paste_and_restore_mark_even_unchanged_filled_fields(form):
+    form.quick_input.setPlainText('{"command": ""}')
+    form.fill_from_paste()
+    assert not form._errors["command"].isHidden()
+    assert form._errors["tier"].isHidden()
+    form.start_restore("", None, None)
+    assert not form._errors["server_id"].isHidden()
+    assert not form._errors["tier"].isHidden()
+    assert not form._errors["max_label"].isHidden()
+
+
+def test_transport_stack_shrinks_from_folders_to_http(form, app):
+    form.transport.setCurrentIndex(form.transport.findData("local_file"))
+    for _ in range(4):
+        form.file_folders.add_rule()
+    app.processEvents()
+    tall_hint = form.transport_fields.sizeHint().height()
+    tall_height = form.transport_fields.height()
+    form.transport.setCurrentIndex(form.transport.findData("streamable_http"))
+    app.processEvents()
+    assert form.transport_fields.sizeHint().height() < tall_hint
+    assert form.transport_fields.height() < tall_height
+    assert form._errors["url"].isHidden()
+
+
+def test_folder_errors_wait_for_their_own_field_and_submission(folder_form):
+    assert folder_form.root_error.isHidden()
+    assert folder_form.rows[0].error.isHidden()
+    assert folder_form.required_hint.isVisible()
+    folder_form.root.setText("relative")
+    assert not folder_form.root_error.isHidden()
+    assert folder_form.rows[0].error.isHidden()
+    folder_form._prepare()
+    assert not folder_form.rows[0].error.isHidden()
+    assert folder_form.validated_draft is None
+
+
+def test_folder_rule_prefix_and_label_have_separate_touch_state(folder_form):
+    row = folder_form.rows[0]
+    row.prefix.setText("docs")
+    assert row.error.isHidden()  # its label has not been visited
+    row.prefix.setText("../docs")
+    assert not row.error.isHidden()
+    row.prefix.setText("docs")
+    assert row.error.isHidden()
+    row.label.setCurrentIndex(row.label.findData("PUBLIC"))
+    row.label.setCurrentIndex(0)
+    assert not row.error.isHidden()
