@@ -75,6 +75,27 @@ def snapshot(**kwargs):
     return TaskProjection("task-one", 1, TaskStatus.RUNNING, **kwargs)
 
 
+def test_auth_failure_explains_invalid_key_and_settings_relogin(window):
+    """A149, I6/I8, T19: fixed stop guidance, no retry of the halted Task."""
+    shell, _, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True, model_mode="codex"))
+    bridge.task_changed.emit(
+        replace(
+            snapshot(model_mode="codex"),
+            status=TaskStatus.HALTED,
+            connection_code="CODEX_AUTH_FAILED",
+            runner_state="stopped",
+        )
+    )
+    view = shell.sessions.current
+    assert view.notice.text() == (
+        "API 키가 틀렸거나 Codex 인증이 만료되거나 갱신되지 않아 이 Task를 정지함. "
+        "실행 중인 세션을 모두 끝내고 설정에서 로그아웃한 뒤, "
+        "API 키 입력란에 올바른 키를 입력해 다시 로그인하세요. 새 세션에서 다시 시작하세요."
+    )
+    assert not view.send.isEnabled()
+
+
 def test_session_details_keep_draft_selection_and_both_scroll_positions(window, app):
     shell, _, bridge = window
     bridge.task_changed.emit(snapshot(can_accept_message=True))

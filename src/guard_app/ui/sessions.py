@@ -58,6 +58,7 @@ from guard_app.services.bridge import (
 
 from .icons import line_icon
 from .presentation import (
+    CODEX_AUTH_FAILED_NOTICE,
     COMMAND_REFUSALS,
     EFFORT_NAMES,
     MODEL_NAMES,
@@ -944,8 +945,7 @@ class SessionWorkspace(QWidget):
                 note = "승인 대기 중 · 결과 · 실행 활동에서 요청 사본을 확인하세요."
             elif snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
                 note = (
-                    "Codex 인증이 만료되거나 갱신되지 않아 이 Task를 정지함. "
-                    "새 세션에서 다시 시작하세요."
+                    CODEX_AUTH_FAILED_NOTICE
                     if snapshot.connection_code == "CODEX_AUTH_FAILED"
                     else "Task가 종료되거나 잠김. 대화·초안 원문을 지웠고 다시 실행할 수 없음."
                 )

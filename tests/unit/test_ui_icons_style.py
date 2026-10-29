@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 from pathlib import Path
@@ -49,6 +50,38 @@ def test_every_fixed_icon_renders_normal_and_disabled_pixmaps(app):
                 assert painted > 0, (name, mode)
         except AssertionError as error:
             failures.append((name, str(error)))
+    assert not failures, failures
+
+
+def test_ui_sources_do_not_imply_openai_affiliation():
+    """A148 branding decision; I9/T19 UI support, not a trademark/legal audit."""
+    banned = (
+        "공식",
+        "OpenAI와",
+        "OpenAI 제공",
+        "OpenAI 제휴",
+        "OpenAI 파트너",
+        "OpenAI 로고",
+        "official",
+        "powered by OpenAI",
+        "OpenAI partner",
+        "OpenAI logo",
+        "openai_logo",
+        "openaiLogo",
+    )
+    failures = []
+    for path in sorted(Path(style.__file__).parent.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        # Include adjacent literal concatenation and names in icons/styles/titles.
+        strings = [source] + [
+            node.value
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        normalized = [re.sub(r"\s+", "", text).casefold() for text in strings]
+        for phrase in banned:
+            if any(re.sub(r"\s+", "", phrase).casefold() in text for text in normalized):
+                failures.append((path.name, phrase))
     assert not failures, failures
 
 

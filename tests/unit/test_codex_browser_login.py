@@ -290,7 +290,7 @@ def test_browser_open_failure_offers_device_and_api_key_without_url(app, caplog)
         assert not form.api_key_button.isEnabled()  # empty input stays disabled
         form.api_key_input.setText("sk-test-fallback")
         assert form.api_key_button.isEnabled()
-        assert "기기 코드 또는 API 키로 로그인하세요." in form.status.text()
+        assert "API 키 또는 기기 코드로 로그인하세요." in form.status.text()
         assert not form.cancel_button.isEnabled()
         assert AUTH_URL not in repr(views)
         assert "private-login-state" not in repr(views)

@@ -15,6 +15,86 @@ from guard_app.ui.model_settings import CodexLoginInfo
 from guard_app.ui.window import GuardWindow
 
 
+def test_api_key_precedes_chatgpt_controls_and_is_the_default_guidance():
+    """A148, I9/I11, T19/T43 UI support: layout never changes login ownership."""
+    from PySide6.QtCore import QPoint
+
+    from guard_app.services.bridge import AccountView
+
+    app = QApplication.instance() or QApplication([])
+    form = CodexLoginInfo()
+    form.set_api_key_sender(lambda _: None)
+    form.set_view(AccountView("SIGNED_OUT", browser_available=True))
+    form.show()
+    app.processEvents()
+    try:
+        key_bottom = form.api_key_input.mapTo(form, QPoint(0, form.api_key_input.height())).y()
+        for button in (form.login_button, form.browser_button):
+            assert key_bottom <= button.mapTo(form, QPoint(0, 0)).y()
+            assert "ChatGPT" in button.text()
+        text = " ".join(label.text() for label in form.findChildren(QLabel))
+        assert "Codex 로그인" in text
+        assert "기본 로그인은 API 키임. 아래에 API 키를 입력하세요." in text
+        assert "보조 방법 · ChatGPT 로그인" in text
+        assert "Codex가 처리함" in text
+    finally:
+        form.close()
+
+
+def test_both_chatgpt_buttons_still_route_account_commands():
+    """A148, I11, T19: secondary login stays on the bridge account path."""
+    from guard_app.services.bridge import AccountView, BackendBridge
+    from guard_app.ui.runtime import RuntimePanel
+
+    app = QApplication.instance() or QApplication([])
+
+    async def unused():
+        raise AssertionError("must not bootstrap")
+
+    bridge = BackendBridge(unused)
+    calls = []
+    bridge.request_account = lambda action, **kwargs: calls.append((action, kwargs)) or "c"
+    window = GuardWindow()
+    window.attach_runtime(RuntimePanel(bridge))
+    try:
+        form = window.codex_login_info
+        for button in (form.login_button, form.browser_button):
+            form.set_view(AccountView("SIGNED_OUT", browser_available=True))
+            assert button.isEnabled()
+            button.click()
+        assert calls == [("account_login_device", {}), ("account_login_browser", {})]
+        assert window.windowTitle().startswith("MCP Runtime Guard")
+        app.processEvents()
+    finally:
+        window.close()
+        bridge.close()
+
+
+def test_saved_api_key_notice_does_not_claim_validation():
+    """A149, I6/I9, T19/T43: both restored and newly saved keys are unverified."""
+    from guard_app.services.bridge import AccountView
+
+    app = QApplication.instance() or QApplication([])
+    form = CodexLoginInfo()
+    sent = []
+    form.set_api_key_sender(sent.append)
+    try:
+        form.set_view(AccountView("API_KEY"))
+        expected = "API 키를 저장함. 첫 요청에서 키를 확인함."
+        assert form.status.text() == expected
+        form.set_view(AccountView("SIGNED_OUT"))
+        form.api_key_input.setText("sk-invalid-test-9876")
+        form.api_key_button.click()
+        assert sent == ["sk-invalid-test-9876"]
+        form.set_view(AccountView("API_KEY"))
+        assert form.status.text() == "API 키를 저장함 · 끝 4자리 9876. 첫 요청에서 키를 확인함."
+        assert form.api_key_input.text() == ""
+        assert "sk-invalid" not in form.status.text()
+        app.processEvents()
+    finally:
+        form.close()
+
+
 def test_new_session_has_fixed_codex_model_and_settings_keep_only_scanner_key():
     app = QApplication.instance() or QApplication([])
     window = GuardWindow()
@@ -51,8 +131,8 @@ def test_api_key_goes_only_to_the_sender_and_leaves_just_four_characters():
     app = QApplication.instance() or QApplication([])
     form = CodexLoginInfo()
     text = " ".join(label.text() for label in form.findChildren(QLabel))
-    assert "ChatGPT 기기 코드와 API 키" in text
-    assert "Codex가 Windows 자격증명 관리자에 직접 저장" in text
+    assert "기본 로그인은 API 키임" in text
+    assert "자격증명은 Codex가 저장·관리함." in text
     assert "gpt-6.1-sol" in text
     assert "준비 중" in text
     assert form.findChildren(QLineEdit) == [form.api_key_input]
@@ -73,7 +153,7 @@ def test_api_key_goes_only_to_the_sender_and_leaves_just_four_characters():
     assert field.text() == ""
     assert not form.api_key_button.isEnabled()
     form.set_view(AccountView("API_KEY"))
-    assert form.status.text().endswith("끝 4자리 9876")
+    assert "끝 4자리 9876." in form.status.text()
     labels = " ".join(label.text() for label in form.findChildren(QLabel))
     assert "secret" not in labels
     assert "sk-unit" not in labels
