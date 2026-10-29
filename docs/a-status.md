@@ -7,7 +7,7 @@
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
 | fixture·로그 정책·독립 인수 | C | A07–A12, A14–A16, A23, A36–A40 |
-| 과거 승인·감사 조회 API(B-SQL). 시작 복구·영속 call_seq는 #69로 병합됨 | B | A33–A35 |
+| B6-05 조회 계약 합의. B 구현은 #86으로 병합됐고 A 연결은 A163 | A·B·C | A33–A35 |
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
 | `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22, A50 |
 | 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
@@ -152,9 +152,10 @@
 - [x] A138 #58 전역 정지 연결(`on_global_halt=store.halt_execution`), 새 Task·turn·도구 응답 전 `execution_state()` 확인과 `state_revision` 감시, B6.8 명시 시작·복구 화면([#69 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/69#issuecomment-6474818368)) · [기록](archive/a/A138-product-store-startup.md)
 - [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
-- [ ] A33·A34 과거 승인·제품 목록 통합 — 막힘: B-SQL-02/03
+- [x] A33·A34 승인 목록(대기·이력)을 B Store 조회에 연결: 만료 표시는 저장된 만료 시각, `row_revision` 보관, 조회 실패는 불명, 검색어는 B 형식만 보냄(#86 후속) · [기록](archive/a/A163-pr86-followups.md)
+- [ ] A33–A35 B6-05 조회 계약 합의 뒤 변환 맞춤 — 막힘: 3인 합의
 - [x] A35 로그 enum 매핑
-- [ ] A35 영속 감사 조회 — 막힘: B6 조회
+- [x] A35 호출 로그·상세를 B Store 조회에 연결: 페이지·서버 검색, B 단계만 사용(`COMMITTED`는 결과 기록), 신뢰 경계 열 제거(#86 후속) · [기록](archive/a/A163-pr86-followups.md)
 - [x] A36·A37 확정/요청 상태 분리·한글 표시
 - [ ] A36·A37 전체 GUI 인수 — 막힘: C
 - [x] A47 신뢰하지 않는 텍스트 표시 위젯(모델 답변·서버 설명·threat_summary) · [기록](archive/a/A47-untrusted-text-view.md)
@@ -166,6 +167,7 @@
 - [x] A49 로컬 파일 서버 루트·하위 폴더 등급 입력 폼 · [기록](archive/a/A49-local-folder-labels-form.md)
 - [x] A59 폴더 규칙 중복을 대소문자 무시로 검사 · [기록](archive/a/A59-folder-rule-case.md)
 - [x] A49 등록·출처 규칙 연결: 폴더 선택·루트/목록/하위 폴더 등급·C 파일 서버 등록 값·상위 폴더 등급 안내·등록 인자 기반 `file_resource_resolver`·READ 허용 활성화([#63 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/63#issuecomment-6472888055), [#64 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/64#issuecomment-6472888675)) · [기록](archive/a/A49-file-server-registration.md)
+  - 참고: 파일 서버 루트 안에서는 루트 등급이 항상 맞아 Unclassified가 생기지 않음. 2026-10-15 결정문의 'Unclassified로 Task 정지'는 어느 출처 규칙에도 맞지 않는 자원에 해당함.
 - [ ] A49 실제 로컬 파일 서버·Codex 제품 종단과 독립 T33 인수 — C와 함께
 - [x] A89 Codex 로그인 화면·`account/read`·기기 코드 로그인/취소/로그아웃 · [기록](archive/a/A89-codex-login-panel.md)
 - [x] A89 API 키 로그인 입력란(2026-10-18 결정, PR #31) · [기록](archive/a/A89-api-key-field.md)
@@ -215,6 +217,7 @@
 - [x] A157 #83 C 리뷰 후속: 시작하지 못한 서버의 등록 거부 문구, 설정 파일 URL 거부를 그 서버만 격리, 시작 예산에 서버 조립, `main()` 시험의 로그 상태 복원 · [기록](archive/a/A157-pr83-c-review-followups.md)
 - [x] A159 #83 B 리뷰 참고: 제품 조립은 Store 전역 정지(`halt_execution`) 없이 시작하지 않음, 주입 조립만 허용 · [기록](archive/a/A159-product-global-halt-required.md)
 - [x] A160 실제 실행 확인(A128·A151·A109, offscreen·로그인 없음) 후속: 지문 재확인 화면의 같은 ID 경고·등록 문구, 첫 화면의 시작 검사 진행 표시, 브라우저 열기 실패 안내의 중복 줄 · [기록](archive/a/A160-real-run-display-followups.md)
+- [x] A163 #86 후속: 조립·목록 기록은 `startable_servers`만 시작, A155 경계 비교 제거, 서버 목록·상세에 서버별 설정 확인(`server_issue`) 표시 · [기록](archive/a/A163-pr86-followups.md)
 - [ ] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 — 막힘: C 상수 추가([#83 C 참고 4](https://github.com/hsminu/MCP-Runtime-Guard/pull/83#issuecomment-6493041009))
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
