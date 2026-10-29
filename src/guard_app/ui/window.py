@@ -163,7 +163,7 @@ class GuardWindow(QMainWindow):
         side.addLayout(brand)
         brand.setContentsMargins(8, 0, 0, 0)
         brand.setSpacing(8)
-        brand.addWidget(IconMark("shield", "on_accent", 20, 13, name="brandMark"))
+        brand.addWidget(IconMark("shield", "on_primary", 20, 13, name="brandMark"))
         brand.addWidget(plain_label("MCP Runtime Guard", name="brandTitle"), 1)
         self.theme_button = KeyboardActionButton()
         self.theme_button.setObjectName("iconButton")
@@ -809,7 +809,9 @@ class GuardWindow(QMainWindow):
             self.sessions.return_to_conversation()
         for key, button in self._nav_buttons.items():
             button.setProperty("selected", key == page)
-            button.setIcon(line_icon(self._nav_icon(key), "ink" if key == page else "mute"))
+            button.setIcon(
+                line_icon(self._nav_icon(key), "primary_text" if key == page else "mute")
+            )
             button.style().unpolish(button)
             button.style().polish(button)
         for key, action in self._menu_actions.items():

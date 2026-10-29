@@ -9,6 +9,16 @@ from PySide6.QtSvg import QSvgRenderer
 from .style import TOKENS
 
 _SHAPES = {
+    "more": '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/>'
+    '<circle cx="19" cy="12" r="1"/>',
+    "copy": '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
+    "eye_off": '<path d="m3 3 18 18M9 5a12 12 0 0 1 13 7l-3 4M6 6a18 18 0 0 0-4 6s4 7 10 7l4-1'
+    'M10 10l4 4"/>',
+    "alert": '<path d="m12 3 10 18H2Z M12 9v5M12 17h.01"/>',
+    "edit": '<path d="m16 3 5 5-12 12H4v-5ZM13 6l5 5"/>',
+    "trash": '<path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7"/>',
+    "arrow_down": '<path d="M12 5v14M6 13l6 6 6-6"/>',
+    "filter": '<path d="M3 4h18l-7 8v7l-4 2v-9Z"/>',
     "send": '<path d="m3 3 18 9-18 9 4-9Z"/><path d="M7 12h14"/>',
     "results": '<path d="M8 6h12M8 12h12M8 18h12M3 6h.01M3 12h.01M3 18h.01"/>',
     "overview": '<rect x="3" y="3" width="7" height="7" rx="2"/>'
@@ -65,7 +75,7 @@ class _LineIconEngine(QIconEngine):
         self._cache: dict[tuple[str, int, int], QPixmap] = {}
 
     def _stroke(self, mode: QIcon.Mode) -> str:
-        return TOKENS["subtle" if mode is QIcon.Mode.Disabled else self._role]
+        return TOKENS["disabled_text" if mode is QIcon.Mode.Disabled else self._role]
 
     def _render(self, size: QSize, stroke: str) -> QPixmap:
         key = (stroke, size.width(), size.height())

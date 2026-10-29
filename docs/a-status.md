@@ -242,6 +242,7 @@
 - [x] A179 #101 B-ACCEPT-01: READY 뒤 예외에도 backend 종료 확인 전에는 앱 잠금 유지, 미확인이면 잠금을 쥔 채 종료 · [기록](archive/a/A179-ready-exception-lock-order.md)
 - [x] A180 #101 제안: 정책·목적지 저장 성공 뒤 B 적용 중 취소에도 재시작 요구·Guard 닫기, 일곱 저장 경로 취소 시험 · [기록](archive/a/A180-cancel-during-apply.md)
 - [x] A183 #107 C 리뷰 1번: UI 색 리터럴 검사가 주석의 이슈 번호(`#101`)를 색으로 읽지 않게 함 · [기록](archive/a/A183-color-check-skips-comments.md)
+- [x] A185 공통 색·글자·컴포넌트: 파란 주 동작·선택, 상태 알약(모양+글자)과 등급 태그(방패 외곽선) 구분, `Disclosure`·`FitStack`·`SecretLineEdit`·`SectionCard` · [기록](archive/a/A185-ui-tokens-components.md)
 
 ## 통합·패키징
 
