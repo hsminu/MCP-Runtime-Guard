@@ -313,8 +313,11 @@ def test_header_pill_states_the_confirmed_status_in_words(app):
             # Words carry the status; color only repeats it (technical design 12.4).
             assert view.pill.text() == status_title(status)
             assert view.pill.property("tone") == tone
-            assert status_title(status) not in view.status.text()
-            assert "task-one" in view.status.text()
+            assert "task-one" in view.pill.toolTip()
+            assert "epoch 1" in view.pill.toolTip()
+            assert status.name in view.pill.toolTip()
+            assert not hasattr(view, "epoch")
+            assert not hasattr(view, "status")
 
 
 def test_sidebar_results_open_a_full_page_with_the_selected_session_in_scope(window, app):
@@ -552,7 +555,7 @@ def test_task_adoption_keeps_friendly_title_and_reports_model_connection_needed(
         for index in range(shell.sessions.list.count())
     )
     assert "연결 필요" in shell.sessions.list.currentItem().text()
-    assert state.task_id in view.status.text()
+    assert state.task_id in view.pill.toolTip()
     shell.new_session_button.click()
     second = shell.sessions.current
     second.pending_command = "created-second"
@@ -850,9 +853,17 @@ def test_results_summary_never_prints_none_counters(window):
     _, panel, bridge = window
     bridge.task_changed.emit(snapshot(host_dispatch=None, receiver_effect=None))
     assert "None" not in panel.summary.text()
-    assert "호스트 dispatch: 미제공 · 수신 부작용: 미제공" in panel.summary.text()
+    assert "dispatch" not in panel.summary.text()
+    assert "None" not in panel.diagnostic_text.text()
+    assert "호스트 dispatch: 미제공\n수신 부작용: 미제공" in panel.diagnostic_text.text()
+    assert panel.diagnostic_text.isHidden()
+    panel.diagnostics.set_open(True)
+    assert not panel.diagnostic_text.isHidden()
+    assert "Task ID: task-one" in panel.diagnostic_text.text()
+    assert "epoch: 1" in panel.diagnostic_text.text()
+    assert "상태 코드: RUNNING" in panel.diagnostic_text.text()
     bridge.task_changed.emit(snapshot(host_dispatch=2, receiver_effect=1))
-    assert "호스트 dispatch: 2 · 수신 부작용: 1" in panel.summary.text()
+    assert "호스트 dispatch: 2\n수신 부작용: 1" in panel.diagnostic_text.text()
 
 
 def test_withheld_control_result_does_not_claim_a_single_cause():

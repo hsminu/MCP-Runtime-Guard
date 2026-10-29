@@ -244,6 +244,7 @@
 - [x] A183 #107 C 리뷰 1번: UI 색 리터럴 검사가 주석의 이슈 번호(`#101`)를 색으로 읽지 않게 함 · [기록](archive/a/A183-color-check-skips-comments.md)
 - [x] A185 공통 색·글자·컴포넌트: 파란 주 동작·선택, 상태 알약(모양+글자)과 등급 태그(방패 외곽선) 구분, `Disclosure`·`FitStack`·`SecretLineEdit`·`SectionCard` · [기록](archive/a/A185-ui-tokens-components.md)
 - [x] A186 서버 추가: 연결 방식 칸이 현재 방식 높이만 차지(`FitStack`), 필수 입력 오류는 칸을 고치거나 떠난 뒤·제출 뒤에만 표시, 남은 필수 수 안내 · [기록](archive/a/A186-server-add-fit-and-touched-errors.md)
+- [x] A187 epoch·Task ID·상태 코드·dispatch 수를 대화 머리·활동 요약에서 빼고 상태 알약 툴팁과 접힌 "진단 정보"로 옮김 · [기록](archive/a/A187-diagnostics-disclosure.md)
 
 ## 통합·패키징
 

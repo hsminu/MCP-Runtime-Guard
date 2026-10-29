@@ -84,7 +84,7 @@ from .session_transcript import (
 )
 from .task_status import status_code, status_title
 from .untrusted_text import untrusted_display_text
-from .widgets import IconMark, KeyboardActionButton, StatusPill, plain_label
+from .widgets import IconMark, KeyboardActionButton, LabelPill, StatusPill, plain_label
 
 MEMORY_NOTICE = "대화·초안은 메모리에만 있음. Task 종료나 앱 종료 시 원문을 지움."
 APPROVAL_BAND_TITLE = "승인이 필요한 도구 호출이 있음"
@@ -119,7 +119,6 @@ class SessionView:
     transcript: _Transcript
     draft: QPlainTextEdit
     notice: QLabel
-    status: QLabel
     send: KeyboardActionButton
     results: KeyboardActionButton
     model: ModelPicker
@@ -132,8 +131,7 @@ class SessionView:
     greeting: QWidget
     column: QVBoxLayout
     pill: StatusPill
-    epoch: QLabel
-    grade: QLabel
+    grade: LabelPill
     facts: QBoxLayout
     approval: QFrame
     band: QBoxLayout
@@ -237,11 +235,8 @@ class SessionWorkspace(QWidget):
         facts.setSpacing(16)
         pill = StatusPill()
         facts.addWidget(pill, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        status = plain_label("아직 연결된 Task가 없음", name="sessionMeta")
-        epoch = plain_label(name="sessionMeta")
-        grade = plain_label(name="sessionMeta")
-        for fact in (status, epoch, grade):
-            facts.addWidget(fact)
+        grade = LabelPill()
+        facts.addWidget(grade, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         facts.addStretch(1)
         results = KeyboardActionButton("활동")
         results.setObjectName("ghostButton")
@@ -343,7 +338,6 @@ class SessionWorkspace(QWidget):
             transcript,
             draft,
             notice,
-            status,
             send,
             results,
             model,
@@ -356,7 +350,6 @@ class SessionWorkspace(QWidget):
             greeting,
             column,
             pill,
-            epoch,
             grade,
             facts,
             approval,
@@ -543,13 +536,15 @@ class SessionWorkspace(QWidget):
             view.pill.set_status(
                 status_title(snapshot.status), _PILL_TONES.get(snapshot.status, "neutral")
             )
-            view.pill.setToolTip(status_code(snapshot.status))
-        view.epoch.setVisible(snapshot is not None)
+            view.pill.setToolTip(
+                f"Task {snapshot.task_id} · epoch {snapshot.epoch} · {status_code(snapshot.status)}"
+            )
         view.grade.setVisible(snapshot is not None)
         if snapshot is not None:
-            view.epoch.setText(f"epoch {snapshot.epoch}")
-            view.grade.setText(task_label_text(snapshot.label, snapshot.unclassified))
-        view.status.setText(display.text)
+            view.grade.set_label(
+                snapshot.label.name if snapshot.label is not None else None,
+                text=task_label_text(snapshot.label, snapshot.unclassified),
+            )
         view.notice.setText(display.note)
         waiting = display.waiting
         view.approval.setVisible(waiting)

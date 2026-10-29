@@ -77,6 +77,7 @@ def test_human_review_approve_and_shutdown_use_real_mcp(app):
         ):
             assert panel.current.model_mode == "mock"
             assert "모델: mock" in panel.summary.text()
+            assert "모델 모드: mock" in panel.diagnostic_text.text()
             assert "AGT" not in panel.summary.text()
             panel.run_button.click()
             assert not panel.run_button.isEnabled()
@@ -118,7 +119,9 @@ def test_access_denial_explains_result_and_disabled_run_button(app):
         assert "아직 이 화면에 연결되지 않음" in message
         assert panel.current.status is TaskStatus.RUNNING and panel.current.receiver_effect == 0
         assert not panel.run_button.isEnabled() and panel.cancel_button.isEnabled()
-        assert "진행 중 (RUNNING)" in panel.summary.text()
+        assert "진행 중" in panel.summary.text()
+        assert "RUNNING" not in panel.summary.text()
+        assert "상태 코드: RUNNING" in panel.diagnostic_text.text()
         assert "다음 사용자 지시를 기다리는 중" in panel.summary.text()
 
 
