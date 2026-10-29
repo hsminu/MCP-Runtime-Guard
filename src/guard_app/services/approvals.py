@@ -982,7 +982,7 @@ class ApprovalService:
             model_call_id="approval_recheck",
         )
         try:
-            req = self._catalog.resolve(
+            req = await self._catalog.aresolve(
                 state,
                 call,
                 request_id=snapshot.request.request_id,

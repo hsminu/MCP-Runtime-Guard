@@ -12,7 +12,7 @@ import json
 import math
 import re
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Protocol, cast
 
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import SchemaError
@@ -29,6 +29,16 @@ from guard_app.domain.contracts import (
 )
 from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.models import ProposedCall
+
+
+class ModelClient(Protocol):
+    """A 구현. 새 Task의 대화·캐시·클라이언트 상태를 다른 Task와 분리한다(10.4절).
+
+    tools는 ACTIVE 등록 ToolView만 받는다. 모델 제안은 ProposedCall로만 반환한다.
+    conversation에는 ReleasedResult 또는 안전한 고정 상태 문구만 도구 결과로 둔다.
+    """
+
+    async def step(self, conversation: Conversation, tools: tuple[ToolView, ...]) -> ModelTurn: ...
 
 
 class ModelFormatError(ValueError):

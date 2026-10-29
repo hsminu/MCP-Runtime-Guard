@@ -3,6 +3,7 @@
 import inspect
 from typing import get_type_hints
 
+import guard_app.ports as ports
 from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.schema_jobs import SchemaJobRequest, SchemaJobResponse
 from guard_app.ports import SchemaJobRunner
@@ -12,6 +13,10 @@ from guard_app.services.schema_jobs import (
     encode_request,
     run_schema_job,
 )
+
+
+def test_legacy_model_client_is_not_a_shared_port():
+    assert not hasattr(ports, "ModelClient")
 
 
 def _synchronous_job_double(request: SchemaJobRequest) -> SchemaJobResponse:

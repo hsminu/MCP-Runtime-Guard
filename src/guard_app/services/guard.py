@@ -718,7 +718,7 @@ class GuardService:
                 # 현재 Task ID는 위에서 검증했으므로 B allocator의 이 사유는 상한이다.
                 await self._halt_task(task_id, error.reason, expected_epoch=state.epoch)
             raise ResolutionError(error.reason) from None
-        req = self._catalog.resolve(
+        req = await self._catalog.aresolve(
             state,
             call,
             request_id=request_id,
@@ -863,7 +863,7 @@ class GuardService:
             or effective_label(state, self._mode) != effective_label(expected, self._mode)
         ):
             raise ResolutionError(Reason.TASK_NOT_RUNNING)
-        current = self._catalog.resolve(
+        current = await self._catalog.aresolve(
             state,
             ProposedCall(
                 tool_ref=f"{req.tool.server_id}__{req.tool.tool_name}",

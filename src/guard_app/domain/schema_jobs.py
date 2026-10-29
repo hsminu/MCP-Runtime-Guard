@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+from enum import StrEnum
 from typing import Annotated, Literal, Self, cast
 
 from pydantic import ConfigDict, Field, model_validator
@@ -17,9 +18,48 @@ MAX_JOB_BYTES = 1024 * 1024
 MAX_JOB_ELEMENTS = 100_000
 MAX_JOB_DEPTH = 64
 MAX_REGISTERED_SCHEMA_BYTES = 256 * 1024
+MAX_ARGUMENT_BYTES = 256 * 1024
+# 미측정 잠정값: SCHEMA-01 합의와 C 측정 뒤 확정한다.
+PREPARE_DEADLINE_S = 5.0
+VALIDATE_DEADLINE_S = 2.0
 INVALID_JOB_ID = "SCHEMA_JOB_INVALID"
 
 JobId = Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.:-]+$")]
+
+
+class SchemaToolIssueCode(StrEnum):
+    """실행 권한과 별개인 도구 준비 진단 코드."""
+
+    SCHEMA_PREPARE_FAILED = "SCHEMA_PREPARE_FAILED"
+    SCHEMA_PREPARE_TOO_LARGE = "SCHEMA_PREPARE_TOO_LARGE"
+    SCHEMA_PREPARE_TIMEOUT = "SCHEMA_PREPARE_TIMEOUT"
+    SCHEMA_WORKER_UNAVAILABLE = "SCHEMA_WORKER_UNAVAILABLE"
+
+
+class SchemaToolIssue(Frozen):
+    """원문을 포함하지 않는 도구 준비 진단."""
+
+    server_id: str
+    tool_name: str
+    code: SchemaToolIssueCode
+
+
+class SchemaRunnerFailure(StrEnum):
+    """제한된 worker가 돌려줄 원문 없는 실패 분류."""
+
+    TIMEOUT = "TIMEOUT"
+    UNAVAILABLE = "UNAVAILABLE"
+    TOO_LARGE = "TOO_LARGE"
+
+
+class SchemaJobRunnerError(Exception):
+    """runner 원문과 내부 예외를 싣지 않는 고정 실패."""
+
+    def __init__(self, failure: SchemaRunnerFailure) -> None:
+        if not isinstance(failure, SchemaRunnerFailure):
+            raise TypeError("스키마 runner 실패 분류가 유효하지 않다")
+        self.failure = failure
+        super().__init__(failure.value)
 
 
 class SchemaJobRequest(Frozen):

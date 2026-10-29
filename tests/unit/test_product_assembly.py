@@ -688,7 +688,10 @@ async def test_a_blocked_server_whose_settings_are_ahead_of_its_registration_is_
     try:
         assembled = await assemble_guard(store, inputs(peer, registry, document()))
         try:
-            assert assembled.registry.blocked_servers == frozenset({"docs"})
+            # B14(51번): REG_SETTINGS_MISMATCH 서버는 시작하지 않아 목록 대조가 없다.
+            # 숨김은 server_issue와 빈 tool views로 확인한다.
+            assert assembled.registry.blocked_servers == frozenset()
+            assert assembled.loaded.server_issue("docs") == "REG_SETTINGS_MISMATCH"
             assert assembled.tool_views == ()
         finally:
             await assembled.aclose()
