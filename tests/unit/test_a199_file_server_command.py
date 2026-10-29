@@ -103,3 +103,9 @@ async def test_app_python_with_file_server_args_resolves_resource(tmp_path, monk
 @pytest.mark.asyncio
 async def test_app_python_command_is_case_insensitive_on_windows(tmp_path, monkeypatch):
     await check_command(tmp_path, monkeypatch, sys.executable.upper(), accepted=True)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows path separator normalization")
+@pytest.mark.asyncio
+async def test_app_python_command_accepts_forward_slashes_on_windows(tmp_path, monkeypatch):
+    await check_command(tmp_path, monkeypatch, sys.executable.replace("\\", "/"), accepted=True)

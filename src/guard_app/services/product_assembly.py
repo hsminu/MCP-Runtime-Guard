@@ -33,7 +33,6 @@ unknown outcome. A call already reserved when it failed keeps its outcome.
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -385,7 +384,7 @@ def _file_server_root(server: ServerSettings) -> Path | None:
     if (
         server.transport != "stdio"
         or server.command is None
-        or os.path.normcase(server.command) != os.path.normcase(sys.executable)
+        or Path(server.command) != Path(sys.executable)
     ):
         return None
     return file_server_root(server.args or ())
