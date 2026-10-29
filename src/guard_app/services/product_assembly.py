@@ -394,9 +394,8 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         # Compare first: observe rewrites the registration it compares against.
         live = live_fingerprints(inputs.registry, transport, server_ids)
         unrecorded = await _record_listings(inputs.registry, loaded.selected_servers, transport)
-        registry.seal(
-            LiveFingerprints(live.live, live.mismatched, live.blocked_servers | unrecorded)
-        )
+        blocked = live.blocked_servers | unrecorded
+        registry.seal(LiveFingerprints(live.live, live.mismatched, blocked))
         settings = loaded.guard_settings
         guard = GuardService(
             store,
@@ -417,7 +416,12 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             taint_mode=settings.taint_mode,
         )
         try:
-            tool_views = loaded.catalog.tool_views(server_ids)
+            # A blocked server offers nothing this run. Skipping it also keeps an
+            # unobserved A155 kind edit (settings ahead of the Registry) from
+            # failing every other server's tools.
+            tool_views = loaded.catalog.tool_views(
+                tuple(server_id for server_id in server_ids if server_id not in blocked)
+            )
         except CatalogConfigError:
             # One unsupported tool schema must not surface as a raw error.
             raise ProductAssemblyError("PROFILE_TOOL_INVALID") from None

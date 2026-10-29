@@ -692,6 +692,35 @@ def test_unsupported_tool_schema_is_a_fixed_code_and_closes_the_transport(
     assert peer.calls == []
 
 
+def test_a_blocked_server_whose_settings_are_ahead_of_its_registration_is_left_out(
+    tmp_path,
+) -> None:
+    """A155: a kind edit is recorded by the next start's observe. When that
+    server's listing is not trusted, its Registry kinds stay OTHER while the
+    settings say READ; it offers nothing instead of failing the whole Profile."""
+    peer = Peer([READ_DEFINITION, READ_DEFINITION])  # a repeated name blocks the server
+    registry = Registry(tool_fingerprint(READ_DEFINITION))
+    other = registry.record.tools[0].model_copy(
+        update={"kind": ToolKind.OTHER, "resource_arg": None}
+    )
+    registry.record = registry.record.model_copy(update={"tools": (other,)})
+
+    async def run() -> None:
+        store = SQLiteStore(tmp_path / "ahead.db", audit_id_factory=lambda: "unit-audit")
+        try:
+            assembled = await assemble_guard(store, inputs(peer, registry, document()))
+            try:
+                assert assembled.registry.blocked_servers == frozenset({"docs"})
+                assert assembled.tool_views == ()
+            finally:
+                await assembled.aclose()
+        finally:
+            store.close()
+
+    asyncio.run(run())
+    assert peer.calls == []
+
+
 def test_invalid_profile_and_missing_server_stream_fail_closed(tmp_path) -> None:
     peer = Peer([READ_DEFINITION])
     registry = Registry(tool_fingerprint(READ_DEFINITION))
