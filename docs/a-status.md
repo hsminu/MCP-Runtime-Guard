@@ -15,6 +15,7 @@
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
 | mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
+| Windows MSIX 가상 경로의 L2 config·model catalog 비교 실패(사용자: C 수정 보류) | C | A151·A161 |
 
 **A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
 
@@ -92,12 +93,14 @@
 - [x] A136 #58 병합: Store 닫기 뒤 `wait_closed(5.0)`으로 연결 종료 확인, 미확인이면 `CLEANUP_UNCONFIRMED`·잠금 유지(시작 실패·시연 포함) · [기록](archive/a/A136-store-close-confirmed.md)
 - [ ] A19·A20 실제 codex.exe 세션 — 막힘: 세션 관리자 공통 계약 합의(막힌 것 표). L2 연결은 A151, 실제 실행 확인 남음
 - [x] A151 제품 시작에 C `run_l2`(C6.14) 1회 연결·지문 대조·고정 실패 코드·진행 표시·종료 취소 정리 · [기록](archive/a/A151-l2-startup-connection.md)
-- [ ] A151 실제 codex.exe L2·로그인한 CODEX_HOME 시작·정리 시간 확인 — 사용자 실제 실행, C 리뷰
+- [x] A151 실제 codex.exe L2·API 키/ChatGPT 로그인한 CODEX_HOME 시작·정리 시간 측정(정규 앱 경로 지정) · [기록](archive/a/A151-logged-in-startup-timing.md)
+- [ ] A151 기본 제품 MSIX 경로의 L2 성공 재확인·C 인수 — 사용자 결정으로 C 경로 비교 수정 보류 · [근거](archive/a/A161-msix-l2-path-observation.md)
+- [x] A161 실제 데스크톱 MSIX 가상 경로의 L2 실패 재현·정규 경로 대조·시작/종료 계측 · [기록](archive/a/A161-msix-l2-path-observation.md)
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
 - [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
 - [x] A109 기기 코드 제한 안내·브라우저 로그인 A 연결부·취소/시간초과·중복 요청 처리 · [기록](archive/a/A109-browser-login-wiring.md)
 - [x] A109 제품 시작부에서 C2.21 `open_login_browser` 연결, 열기 실패 안내를 API 키·기기 코드 로그인으로([#77](https://github.com/hsminu/MCP-Runtime-Guard/pull/77)) · [기록](archive/a/A109-product-browser-login.md)
-- [ ] A109 실제 PC에서 브라우저 로그인 완료와 `BROWSER_OPEN_FAILED` 대체 안내 확인 — 사용자 실제 실행
+- [x] A109 실제 브라우저 로그인 완료·재시작 유지 확인(`BROWSER_OPEN_FAILED` 대체 안내는 사용자 선행 확인) · [기록](archive/a/A109-real-browser-login.md)
 - [x] A142 A109 후속: app-server가 거절한 계정 요청은 프로세스 유지·거절된 취소는 종료, 계정 명령 거부·미확인 문구를 명령별로([#78](https://github.com/hsminu/MCP-Runtime-Guard/pull/78) main 병합) · [기록](archive/a/A142-account-refusal-and-command-notices.md)
 - [x] A109·A142 C 독립 리뷰: A109 [#70 C 리뷰 2](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474936812), A142 [#78 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/78#issuecomment-6487980338) 모두 막는 문제 없음
   - 실제 Codex 0.162.1 확인(C): JSON-RPC 오류는 요청 형식 검증(-32600)에서만 왔고 남는 것 없음. 로그인 취소의 `notFound`는 오류가 아니라 결과로 옴
@@ -106,7 +109,8 @@
 - [x] A149 API 키 로그인 뒤 "첫 요청에서 키를 확인함" 안내, `CODEX_AUTH_FAILED` 정지 문구에 틀린 키와 다시 로그인하는 방법(#78 C 리뷰 2) · [기록](archive/a/A149-api-key-unverified-notice.md)
 - [x] A148 C6.18 권고 반영: API 키를 기본 로그인으로, OpenAI 제휴 암시 문구는 정적 검사로 막음(사용자 결정, [#79](https://github.com/hsminu/MCP-Runtime-Guard/pull/79)) · [기록](archive/a/A148-api-key-default-login.md)
 - [x] A109·A146·A148·A149·A139·A137 C 독립 리뷰: [#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82) C 리뷰 막는 문제 없음(전체 단위·contract 시험 C 실행 통과)
-- [ ] A148·A149 실제 API 키·틀린 키의 첫 요청 안내 확인 — 사용자 실제 실행
+- [x] A148·A149 실제 API 키·틀린 키의 첫 요청 안내 확인(정규 앱 경로 지정, 기본 L2 경로 문제는 별도) · [기록](archive/a/A149-live-first-request.md)
+- [x] A160 실제 Codex HTTP 401 객체를 인증 실패 안내로 변환·잘못된 오류 형식의 고정 실패 · [기록](archive/a/A160-codex-http-auth-error.md)
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
 - [x] A58 JSON-RPC 전송 마감·처리기 안 close 교착·종료 사유 보정 · [기록](archive/a/A58-jsonrpc-send-and-close.md)
@@ -161,7 +165,7 @@
 - [ ] A47 등록 화면·Scanner 경고에 연결 — 막힘: UI 이벤트 계약(B1.5)·검토된 설명(#20 3번)·SCAN-01. 지금 활성화는 검사 미연결 안내와 `reviewed_scan_id=None`(A105)
 - [x] A48 Scanner API 키 입력 화면(가림·끝 4자리·주입형 저장) · [기록](archive/a/A48-scanner-key-form.md)
 - [x] A48 자격증명 관리자 저장 연결(C2.10 `save_scanner_key`, 끝 4자리는 `scanner_key_tail()`, [#62 요청](https://github.com/hsminu/MCP-Runtime-Guard/pull/62)) · [기록](archive/a/A48-scanner-key-credential-store.md)
-- [ ] A48 실제 Windows 자격 증명 관리자 저장·재시작 뒤 끝자리 조회 확인 — 사용자 실제 실행
+- [x] A48 실제 Windows 자격 증명 관리자 저장·재시작 뒤 끝자리 조회 확인 · [기록](archive/a/A48-real-windows-credential.md)
 - [x] A49 로컬 파일 서버 루트·하위 폴더 등급 입력 폼 · [기록](archive/a/A49-local-folder-labels-form.md)
 - [x] A59 폴더 규칙 중복을 대소문자 무시로 검사 · [기록](archive/a/A59-folder-rule-case.md)
 - [x] A49 등록·출처 규칙 연결: 폴더 선택·루트/목록/하위 폴더 등급·C 파일 서버 등록 값·상위 폴더 등급 안내·등록 인자 기반 `file_resource_resolver`·READ 허용 활성화([#63 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/63#issuecomment-6472888055), [#64 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/64#issuecomment-6472888675)) · [기록](archive/a/A49-file-server-registration.md)
@@ -169,7 +173,8 @@
 - [x] A89 Codex 로그인 화면·`account/read`·기기 코드 로그인/취소/로그아웃 · [기록](archive/a/A89-codex-login-panel.md)
 - [x] A89 API 키 로그인 입력란(2026-10-18 결정, PR #31) · [기록](archive/a/A89-api-key-field.md)
 - [x] A52 로그인 화면 전용 app-server, 로그아웃 뒤 자격증명 정리, 세션 중 로그아웃 막기([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) · [기록](archive/a/A52-account-app-server-logout.md)
-- [ ] A52 실제 codex.exe로 로그인·로그아웃 정리 확인 — C와 함께(T43)
+- [x] A52 실제 API 키·ChatGPT 로그인/로그아웃·암호문/primary 자격증명/Task 폴더 정리 관찰, C 관점 독립 읽기 검토 · [기록](archive/a/A52-real-login-logout-cleanup.md)
+- [ ] A52 T43 표지 도구 결과·앱 폴더 전체 잔류 검사와 C 독립 인수(실제 계정 정리 관찰과 별도)
 - [x] A54 등록 화면 서버 ID 즉시 안내·bridge에서 B 검사 결과 전달 · [기록](archive/a/A54-server-id-bridge-validation.md)
 - [x] A81 서버 활성화 단계의 도구별 허용 체크박스·Task 정지 안내(정책 화면) · [기록](archive/a/A91-policy-screen.md)
 - [x] A91 정책 화면(Profile·정책 버전·TTL·taint·접근 규칙 읽기 전용) · [기록](archive/a/A91-policy-screen.md)
@@ -210,7 +215,7 @@
   - 검사 서비스: `ScanService(registry, cisco_connector())`를 백엔드 루프 안에서 하나 만들고 그 루프에서만 부름. 앱 종료 때 진행 중 검사 Task를 먼저 취소한 뒤 `close()`([#59 A 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/59#issuecomment-6468803889))
   - 흐름: `register` → `scan(on_started=)` → 경고(LLM 검사 빠짐 포함) → `activate(expected_row_revision=검사 뒤 row_revision, reviewed_scan_id=)`. `SCAN_RECORD_UNKNOWN`은 `refresh` 뒤 다시 검사 안내, revision 거부도 다시 검사 안내
 - [ ] A128·A105 등록과 설정 저장 중 하나만 성공해 남은 PENDING 행의 복구 화면 — A 차례
-- [ ] A128 실제 MCP 서버 PENDING 등록·EXE-01 화면 확인 — 사용자 실제 실행
+- [x] A128 실제 MCP 서버 PENDING 등록·EXE-01 화면 확인 · [기록](archive/a/A128-real-desktop-registration.md)
 - [x] A157 #83 C 리뷰 후속: 시작하지 못한 서버의 등록 거부 문구, 설정 파일 URL 거부를 그 서버만 격리, 시작 예산에 서버 조립, `main()` 시험의 로그 상태 복원 · [기록](archive/a/A157-pr83-c-review-followups.md)
 - [x] A159 #83 B 리뷰 참고: 제품 조립은 Store 전역 정지(`halt_execution`) 없이 시작하지 않음, 주입 조립만 허용 · [기록](archive/a/A159-product-global-halt-required.md)
 - [ ] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 — 막힘: C 상수 추가([#83 C 참고 4](https://github.com/hsminu/MCP-Runtime-Guard/pull/83#issuecomment-6493041009))
