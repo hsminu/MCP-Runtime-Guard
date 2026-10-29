@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-29 · main `fa36962` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-29 · main `b14c181` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -10,6 +10,7 @@
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
 | 설치판 리소스 위치(패키징) | A | C6.20 |
+| 호출·승인 조회 화면 연결(B6.16) | A | C3.8 |
 
 ## C1 · 계약과 관측 기반
 
@@ -57,7 +58,7 @@
 - [ ] C3.5 승인 생성·종결·소비 원자성과 중복 소비 — 막힘: B6-01
 - [ ] C3.6 쓰기·감사·잠금·COMMIT/ROLLBACK 실패와 중단 결함 주입
 - [ ] C3.7 원문 비기록·재시작 승인 미복원·SEND 재전송 0
-- [ ] C3.8 A 연결 후 요청별 계수 대조 — 막힘: C5
+- [ ] C3.8 (Store 조회 `list_calls`·`get_call`·`list_approvals`와 요청별 계수 대조는 정식 시험으로 완료(stdio·HTTP, T01·T02·T03·응답 유실), [C3.8-1](archive/c/C3.8-1-query-counts.md)) A 화면 연결 뒤 화면 쪽 대조 — 막힘: A 화면 연결
 - [ ] C3.9 DB를 직접 고친 비정상 행(관계 깨짐·모르는 상태값·등급 하향)을 시작 점검이 잡고 멈추는지 검증 · [결정](contracts.md#사용자-결정)
 - [ ] C3.10 시작 복구가 감사 기록과 맞지 않는 등급·미분류 표시를 복구하지 않는지 검증 — 막힘: B6.8
 
@@ -83,6 +84,7 @@
 - [x] C4.18 등록 때 서버 ID의 `__`·끝 `_` 거부: B `valid_server_id`를 그대로 쓰고 등록 화면은 bridge가 넘기는 같은 검사 결과를 씀. Registry `register`·`observe`가 설정 검증과 별도로 다시 검사 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.19 Registry 쓰기 결과를 모를 때 닫기(#46 B 리뷰): 제어 쓰기가 실패하거나 커밋 뒤 취소되면 그 서버의 ACTIVE를 PENDING으로 보고, 다음 제어 연산·`refresh`가 DB 행을 다시 읽어 맞춤. `observe` 취소는 기록 실패와 같이 이번 실행 PENDING. 실제 writer 재현은 C4.20 · [기록](archive/c/C4.19-registry-unknown-write.md)
 - [x] C4.20 C4.19 실제 writer 재현: B6.13 writer가 COMMIT을 실행한 직후 취소해도 `register`·`activate`·`record_scan`·`request_review`·`save_reviewed_descriptions`는 다시 읽기 전까지 ACTIVE로 보이지 않고 `refresh`가 DB와 맞춤, `observe`는 이번 실행 PENDING·활성화 거부. `block`·시작 전 취소·COMMIT 실패는 #58 B 시험 · [기록](archive/c/C4.20-registry-real-writer.md)
+- [x] C4.21 설정에서 바꾼 도구 종류·인자를 등록에 반영(`ServerRegistry.apply_settings`, #46 B·C 합의): 저장된 정의·지문에 새 설정의 종류·인자만 얹어 B `record_settings_change`(revision CAS)로 넘기고, 반환 사본으로 캐시 교체 뒤 바뀐 도구마다 `invalidate_tool`. 경계 변경은 쓰기 전 `REG_SETTINGS_MISMATCH`, 결과 불명은 C4.19처럼 다시 읽기 전까지 PENDING. 실제 Guard·서버로 승인 대기 중 종류 변경 → 승인 닫힘·계수 0(T10 변형). A155 이관·B 시작 목록 제외는 각 담당 · [기록](archive/c/C4.21-registry-apply-settings.md)
 
 ## C5 · fixture와 계수
 
@@ -123,6 +125,7 @@
 - [x] C6.23 #41 A 리뷰 후속(L2): 전체 시간 상한 `deadline_s`(기본 30초)와 `L2_DEADLINE_EXCEEDED`, 최악 시간·취소·예외 경로 설명, 가짜 모델 서버 밖 통신은 관찰하지 않는다는 범위 명시, L2·L3 허용 항목 같음 테스트 · [기록](archive/c/C6.23-l2-a-review-followup.md)
 - [ ] C6.24 의존성 취약점 정리(pip-audit 16건, C-DEP-01–03): certifi·cryptography·filelock lock 갱신 완료(C-DEP-03), litellm 1.93.2 두 ID는 예외 PA-01(Scanner 고정, 2026-10-29 사용자 결정). 남은 것: mcp 1.30.0(C-DEP-01, A·B 합의·A transport 재검증) 뒤 pip-audit을 실패로 막는 단계로 · [기록](archive/c/C2.9-ci-static-checks.md)
 - [x] C6.25 C 독립 검증 현황 요약(인수 기준 5 일부): C 담당 T/S 41개의 완료·부분·미실행, 완료 근거, 다른 담당 작업의 C 리뷰 프로브, 미실행·검증 불가 항목, 측정 원자료와 재현 명령 · [기록](archive/c/C6.25-verification-summary.md)
+- [x] C6.26 L2 실패 코드 상수 `codex_l2.L2_FAILURE_CODES`(28개): 모듈이 실제로 쓰는 코드와 AST로 대조하는 시험, A151 사본과 같음 확인. A 사본 교체는 A · [기록](archive/c/C6.26-l2-failure-codes.md)
 
 ## 인수 기준
 
