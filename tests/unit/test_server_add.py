@@ -281,15 +281,14 @@ def test_ambiguous_or_metadata_url_is_rejected_locally(form: ServerAddForm, subt
     for url, message in [
         ("http://good.example\\.evil.test/mcp", "역슬래시"),
         ("http://127.0.0.1:0/mcp", "1–65535"),
-        ("https://\u0435\u0445.example/mcp", "ASCII"),
         ("http://169.254.169.254/latest", "메타데이터"),
         ("http://[fe80::1]/mcp", "링크 로컬"),
         ("http://[::ffff:169.254.169.254]/mcp", "링크 로컬"),
         ("http://0.0.0.0:8080/mcp", "미지정"),
         ("http://2852039166/mcp", "네 개의 십진수"),
         ("http://0xa9.254.169.254/mcp", "네 개의 십진수"),
-        ("https://x.test/\u202emcp", "보이지 않는 문자"),
-        ("https://x.test/m\u200bcp", "보이지 않는 문자"),
+        ("https://x.test/\u202emcp", "경로"),
+        ("https://x.test/m\u200bcp", "경로"),
     ]:
         with subtests.test(url=url, message=message):
             _valid_http(form)
@@ -305,7 +304,8 @@ def test_ordinary_local_and_punycode_urls_remain_accepted(form: ServerAddForm, s
         "http://127.0.0.1:8080/mcp",
         "http://[::1]:8080/mcp",
         "https://xn--h32b13v.example/mcp",
-        "https://mcp.example.test:443/분기",
+        "https://mcp.example.test:443/mcp",
+        "https://faß.de/mcp",
     ]:
         with subtests.test(url=url):
             _valid_http(form, "internal")

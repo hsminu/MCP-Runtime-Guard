@@ -51,6 +51,8 @@ from guard_app.services.product_assembly import (
 )
 from guard_app.storage.sqlite_store import SQLiteStore
 
+from .product_folders import product_folders
+
 READ_SCHEMA = {
     "type": "object",
     "properties": {"path": {"type": "string"}},
@@ -761,7 +763,7 @@ def test_product_bootstrap_with_inputs_connects_human_control_and_closes_transpo
 
     async def run() -> None:
         bindings = await bootstrap_product(
-            str(tmp_path / "product.db"),
+            product_folders(str(tmp_path / "product.db")),
             product=inputs(peer, Registry(tool_fingerprint(READ_DEFINITION)), document()),
         )
         try:
@@ -785,7 +787,7 @@ def test_product_bootstrap_with_invalid_profile_closes_the_store(tmp_path):
     async def run() -> None:
         with pytest.raises(ProductAssemblyError, match="PROFILE_INVALID"):
             await bootstrap_product(
-                str(path),
+                product_folders(str(path)),
                 product=inputs(peer, Registry("a" * 64), {"profile": {"id": "x"}}),
             )
 
@@ -811,7 +813,7 @@ def test_a_failed_start_whose_store_close_is_unconfirmed_reports_cleanup(tmp_pat
     async def run() -> None:
         with pytest.raises(BackendCleanupError):
             await session_runtime.bootstrap_product(
-                str(tmp_path / "late.db"),
+                product_folders(str(tmp_path / "late.db")),
                 product=inputs(peer, Registry("a" * 64), {"profile": {"id": "x"}}),
             )
 

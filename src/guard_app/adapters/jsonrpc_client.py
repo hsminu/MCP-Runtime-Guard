@@ -135,6 +135,7 @@ class JsonRpcClient:
         codec: MessageCodec | None = None,
         version_field: bool = True,
         on_reply_sent: Callable[[str], None] | None = None,
+        before_send: Callable[[str], None] | None = None,
     ) -> None:
         if type(version_field) is not bool:
             raise ValueError("boolean version_field required")
@@ -156,6 +157,7 @@ class JsonRpcClient:
         self._on_notification = on_notification
         self._on_server_request = on_server_request
         self._on_reply_sent = on_reply_sent
+        self._before_send = before_send
         self._ids = count(1)
         self._pending: dict[int, asyncio.Future[object]] = {}
         self._server_tasks: set[asyncio.Task[None]] = set()
@@ -239,7 +241,9 @@ class JsonRpcClient:
         message.update({key: value for key, value in fields.items() if value is not None})
         return message
 
-    async def _send(self, message: dict[str, object], *, deadline: float) -> None:
+    async def _send(
+        self, message: dict[str, object], *, deadline: float, reply_method: str = ""
+    ) -> None:
         """Send one frame by ``deadline``; close or a stuck peer never blocks forever.
 
         A frame that may be partly written leaves the stream unusable, so a
@@ -260,7 +264,16 @@ class JsonRpcClient:
         try:
             if self._closed_reason is not None:
                 raise JsonRpcError(self._closed_reason)
-            send = asyncio.ensure_future(self._channel.send(frame))
+
+            async def transmit() -> None:
+                # Check after acquiring the send lock and after scheduling this
+                # operation: a queued frame must not retain stale authority.
+                if self._before_send is not None:
+                    method = message.get("method", reply_method)
+                    self._before_send(method if isinstance(method, str) else "")
+                await self._channel.send(frame)
+
+            send = asyncio.ensure_future(transmit())
             closing = asyncio.ensure_future(self._closed.wait())
             try:
                 done, _ = await asyncio.wait(
@@ -371,7 +384,11 @@ class JsonRpcClient:
             result = await self._on_server_request(method, params)
             reply = self._message(id=request_id)
             reply["result"] = result
-        await self._send(reply, deadline=asyncio.get_running_loop().time() + self._timeout)
+        await self._send(
+            reply,
+            deadline=asyncio.get_running_loop().time() + self._timeout,
+            reply_method=method,
+        )
         if self._on_reply_sent is not None:
             # The whole reply frame was handed to the channel; the method lets
             # the owner act only after its answer has gone out.

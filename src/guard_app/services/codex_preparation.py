@@ -14,9 +14,8 @@ the copy `tools/install_codex.py` puts in the app folder; a developer may point
 at another copy. Startup checks that it exists with the pinned size, and the
 launcher compares its size and SHA-256 on every launch.
 
-L2 (C6.14) is not connected yet, so the startup receipt carries no L2 result
-and every session is refused with CODEX_L2_UNAVAILABLE (10.4: no development
-skip). Errors carry fixed codes only, never paths.
+L2 (C6.14) runs once after L1 and launcher preparation, before Store activation.
+Its receipt gates every session (T22); errors carry fixed codes only, never paths.
 
 Removing a Task folder after its session runs in a worker thread (A103, PR #35
 B review): the folder holds the Codex log DB, and deleting it on the backend
@@ -34,9 +33,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from guard_app.adapters.codex_protocol import DynamicToolsPlan, thread_start_params
 from guard_app.security.codex_home import (
     CODEX_CONFIG_DIR,
     CodexConfigError,
@@ -46,17 +47,46 @@ from guard_app.security.codex_home import (
     verify_codex_home,
     write_codex_home,
 )
+from guard_app.security.codex_l2 import L2_DEADLINE_S, L2Report, run_l2
 from guard_app.security.ids import new_id, new_token
 from guard_app.security.launcher import CodexLauncher, LaunchedProcess, LaunchError
 from guard_app.security.paths import AppFolders, AppPathError, prepare_app_folders
 from guard_app.services.account_runtime import AccountAccess, AccountUnavailableError
+from guard_app.services.bridge_types import CODEX_MODEL_ID, BackendCleanupError
 from guard_app.services.codex_account import AccountError, BrowserLoginOpener
+from guard_app.services.codex_prompt import BASE_INSTRUCTIONS
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
     SessionPreparation,
     StartupReceipt,
     TaskResources,
 )
+
+# C's 30 s drive plus about 15 s cleanup; also bound setup.
+L2_TOTAL_TIMEOUT_S = L2_DEADLINE_S + 20.0
+L2_CANCEL_TIMEOUT_S = 20.0
+# bootstrap_product's deadline for Store preparation and recovery.
+STORE_STARTUP_S = 60.0
+# One window of up to four server starts: listing bound 30 s (over the 10 s
+# start) + 1, then C's close of a server that failed to start (grace 5 + kill 5).
+# A fifth server starts in a later window that this budget does not cover
+# (#83 C review 3.3).
+SERVER_ASSEMBLY_S = 41.0
+# Store + server assembly + L2 50 + cancellation 20 + activation margin 10.
+PRODUCT_STARTUP_TIMEOUT_S = (
+    STORE_STARTUP_S + SERVER_ASSEMBLY_S + L2_TOTAL_TIMEOUT_S + L2_CANCEL_TIMEOUT_S + 10.0
+)
+# L2 cancellation 20 + runtime/Store cleanup 5 + margin.
+PRODUCT_SHUTDOWN_TIMEOUT_S = 30.0
+
+
+def l2_thread_params(tools: tuple[dict[str, object], ...]) -> dict[str, object]:
+    """Product builder, model and prompt; only the offered tools differ."""
+    return thread_start_params(
+        model=CODEX_MODEL_ID,
+        base_instructions=BASE_INSTRUCTIONS,
+        plan=DynamicToolsPlan(tools, (), frozenset()),
+    )
 
 
 class CodexPreparationError(RuntimeError):
@@ -130,6 +160,7 @@ class CodexProcessPreparation:
         root: Path | None = None,
         source_dir: Path = CODEX_CONFIG_DIR,
     ) -> None:
+        self._on_progress: Callable[[str], None] | None = None
         self._executable = executable
         self._root = root
         self._source_dir = source_dir
@@ -139,6 +170,9 @@ class CodexProcessPreparation:
         self._configuration: ConfigurationReceipt | None = None
         self._tasks: dict[str, _TaskProcess] = {}
         self._started = False
+
+    def set_progress_listener(self, listener: Callable[[str], None]) -> None:
+        self._on_progress = listener
 
     def preparation(self) -> SessionPreparation:
         return SessionPreparation(
@@ -210,8 +244,40 @@ class CodexProcessPreparation:
         )
         self._home_digest = home_digest
         self._configuration = configuration_receipt(home_digest, pins)
-        # C6.14 is not connected: no L2 result, so SessionRuntime refuses sessions.
-        return StartupReceipt(self._configuration, None, False)
+        if self._on_progress is not None:
+            self._on_progress("CODEX_L2_CHECK")
+        report = await self._run_l2(folders, self._launcher)
+        if report is None:
+            return StartupReceipt(self._configuration, None, False, ("CODEX_L2_FAILED",))
+        return StartupReceipt(
+            self._configuration,
+            ConfigurationReceipt(report.home_digest, report.executable_sha256, report.model_sha256),
+            report.passed,
+            report.failures,
+        )
+
+    async def _run_l2(self, folders: AppFolders, launcher: CodexLauncher) -> L2Report | None:
+        # A82 Task.exception() boundary: never forward exception text or type.
+        operation = asyncio.create_task(
+            run_l2(launcher, folders, thread_params=l2_thread_params, deadline_s=L2_DEADLINE_S)
+        )
+        operation.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+        try:
+            done, _ = await asyncio.wait({operation}, timeout=L2_TOTAL_TIMEOUT_S)
+            if not done:
+                return None
+            if operation.cancelled():
+                raise asyncio.CancelledError
+            if operation.exception() is not None:
+                return None
+            return operation.result()
+        finally:
+            if not operation.done():
+                operation.cancel()
+                done, _ = await asyncio.wait({operation}, timeout=L2_CANCEL_TIMEOUT_S)
+                if not done:
+                    # Never release the app lock with L2 cleanup unconfirmed.
+                    raise BackendCleanupError
 
     async def _verify_configuration(self, expected: ConfigurationReceipt) -> ConfigurationReceipt:
         folders, _ = self._ready()

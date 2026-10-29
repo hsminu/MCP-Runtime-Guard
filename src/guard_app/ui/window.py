@@ -20,13 +20,20 @@ from PySide6.QtWidgets import (
 )
 
 from guard_app.domain.enums import TaskStatus
-from guard_app.services.bridge import BridgeState, CommandStage, LifecycleEvent, TaskProjection
+from guard_app.services.bridge import (
+    BridgeState,
+    CommandStage,
+    LifecycleEvent,
+    RegistrationView,
+    TaskProjection,
+)
 
 from .approvals import ApprovalListPage, ApprovalPage, ApprovalQuery
 from .call_logs import CallLogPage, DetailRequest, PublicCallDetail, PublicCallSummary
 from .icons import line_icon
 from .model_settings import CodexLoginInfo
 from .models import (
+    LoadState,
     OverviewSnapshot,
     RuntimeIdentity,
     RuntimeMode,
@@ -44,7 +51,7 @@ from .presentation import (
 )
 from .runtime import RuntimePanel
 from .scan_status import ScanStatusProjection
-from .scanner_key import ScannerKeyForm
+from .scanner_key import KeySaver, KeyTail, ScannerKeyForm
 from .server_add import LocalFolderRulesForm, ServerAddForm
 from .servers import ServerListPage
 from .sessions import SessionWorkspace
@@ -92,7 +99,13 @@ class GuardWindow(QMainWindow):
     _COMPACT_NAV_WIDTH = 900
     _COMPACT_NAV_HEIGHT = 700
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        scanner_key_saver: KeySaver | None = None,
+        scanner_key_tail: KeyTail | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("MCP Runtime Guard")
         self.setMinimumSize(320, 360)
@@ -322,7 +335,7 @@ class GuardWindow(QMainWindow):
         settings_layout.addWidget(self.settings_file_status)
         settings_layout.addWidget(plain_label(SETTINGS_FILE_LOCATION, name="secondary"))
         settings_layout.addSpacing(12)
-        self.scanner_key_form = ScannerKeyForm()
+        self.scanner_key_form = ScannerKeyForm(saver=scanner_key_saver, tail=scanner_key_tail)
         self.codex_login_info = CodexLoginInfo()
         settings_layout.addWidget(self.codex_login_info)
         settings_layout.addWidget(self.scanner_key_form)
@@ -476,6 +489,9 @@ class GuardWindow(QMainWindow):
         panel.state_changed.connect(lambda: self.sessions.set_busy_scopes(panel.busy_scopes))
         panel.selected_snapshot_changed.connect(self._sync_selected_task)
         bridge = panel.bridge
+        self.server_add_form.attach_registration(bridge)
+        self.server_page.attach_activation(bridge)
+        bridge.registration_changed.connect(self._registration_rows)
         bridge.task_changed.connect(self.sessions.set_snapshot)
         bridge.session_created.connect(self.sessions.session_created)
         bridge.session_capability_changed.connect(self.sessions.set_session_blocker)
@@ -630,6 +646,30 @@ class GuardWindow(QMainWindow):
         """Called on the Qt thread with a bridge-approved public projection."""
 
         self.overview.set_snapshot(snapshot)
+
+    def _registration_rows(self, view: RegistrationView) -> None:
+        if view.code in ("REG_REGISTERED", "REG_PIN_SAVED"):
+            self.set_settings_status("SETTINGS_REGISTRATION_SAVED")
+        if view.rows is None:
+            return
+        self.set_server_snapshot(
+            Surface(
+                LoadState.READY,
+                tuple(
+                    ServerSummary(
+                        row.server_id,
+                        row.server_id,
+                        max_label=row.max_label,
+                        tier=row.tier,
+                        registry_status=row.status,
+                        transport=row.transport,
+                        executable_pinned=row.pinned if row.transport == "stdio" else None,
+                    )
+                    for row in view.rows
+                ),
+            )
+        )
+        self.server_add_form.set_known_ids({row.server_id for row in view.rows})
 
     def set_server_snapshot(self, snapshot: Surface[tuple[ServerSummary, ...]]) -> None:
         """Update Registry rows from their own query, never overview rows."""

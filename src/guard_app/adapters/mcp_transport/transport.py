@@ -61,6 +61,7 @@ class McpTransport:
         on_tools_changed: Callable[[str], None] | None = None,
         on_server_failed: Callable[[str], None] | None = None,
         on_listing_received: Callable[[str], None] | None = None,
+        isolate_start_failures: bool = False,
     ) -> None:
         if not isinstance(server_streams, Mapping):
             raise TypeError("server stream mapping required")
@@ -75,6 +76,7 @@ class McpTransport:
         require_result_copy_budget(max_result_copy_bytes)
         require_pending_limit(max_pending_commands)
 
+        self._isolate_start_failures = isolate_start_failures
         self._workers = {
             server_id: ServerWorker(
                 sdk_session_factory(
@@ -139,9 +141,15 @@ class McpTransport:
             # If several startups settle together, select a failure in
             # registration order and do not launch the next window first.
             for task in sorted(completed, key=starting.__getitem__):
-                del starting[task]
+                next_index_for_task = starting.pop(task)
                 try:
                     await task
+                except DispatchError:
+                    if not self._isolate_start_failures or self._closed:
+                        raise
+                    # Product keeps healthy servers usable. Confirm teardown
+                    # before treating this as a server-local start refusal.
+                    await workers[next_index_for_task].close()
                 except RuntimeError:
                     if self._closed:
                         raise DispatchError("WorkerClosed") from None

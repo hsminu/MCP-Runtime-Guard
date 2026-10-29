@@ -13,6 +13,7 @@ from enum import StrEnum
 from guard_app.adapters.codex_protocol import REASONING_EFFORTS
 from guard_app.domain.enums import Label, TaskStatus
 from guard_app.domain.errors import StoreError
+from guard_app.domain.models import RecoveryItemPage, RecoveryReport
 from guard_app.services.approvals import HumanControl
 from guard_app.services.codex_account import CodexAccountPort
 from guard_app.services.policy_view import PolicyView
@@ -106,6 +107,10 @@ class BackendBindings:
     # Fixed code of what the start made of the CFG-01 settings file
     # (product_settings); None when this run reads no file (demo, tests).
     settings_status: str | None = None
+    registration: Callable[[RegistrationRequest], Awaitable[RegistrationView]] | None = None
+    recovery_report: RecoveryReport | None = None
+    recovery_page: RecoveryItemPage | None = None
+    recovery_next: Callable[[], Awaitable[RecoveryItemPage]] | None = None
 
 
 # The only model pinned by C's config/codex/codex.lock.json (allowed_models).
@@ -185,3 +190,45 @@ class ApprovalReview:
     arguments_bytes: bytes
     # The same metadata as (label, value) pairs, shown one field per line.
     fields: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class RegistrationRequest:
+    action: str
+    server_id: str = ""
+    transport: str = "stdio"
+    tier: str = ""
+    max_label: str = ""
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    env_allow: tuple[str, ...] = ()
+    url: str | None = None
+    token: str = ""
+    expected_row_revision: int = 0
+    allowed: tuple[str, ...] = ()
+    denied: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RegistrationRow:
+    server_id: str
+    status: str
+    tier: str
+    max_label: str
+    transport: str | None
+    pinned: bool
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class RegistrationView:
+    code: str
+    command_id: str = ""
+    token: str = ""
+    command: str | None = None
+    size: int | None = None
+    sha256: str | None = None
+    url: str | None = None
+    rows: tuple[RegistrationRow, ...] | None = None
+    activation: PolicyView | None = None
+    row_revision: int = 0
+    current_policy: PolicyView | None = None

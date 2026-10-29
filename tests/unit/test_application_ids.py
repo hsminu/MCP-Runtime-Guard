@@ -19,6 +19,7 @@ from guard_app.services import (
 from guard_app.services.bridge import ControlAction, SessionOptions
 from guard_app.services.session_preparation import TaskResources
 
+from .product_folders import product_folders
 from .test_product_assembly import (
     READ_DEFINITION,
     Peer,
@@ -81,7 +82,9 @@ async def test_product_store_receives_distinct_audit_factory(tmp_path, monkeypat
 
     monkeypatch.setattr(session_runtime, "SQLiteStore", record)
     async with asyncio.timeout(10):
-        bindings = await session_runtime.bootstrap_product(str(tmp_path / "product.db"))
+        bindings = await session_runtime.bootstrap_product(
+            product_folders(str(tmp_path / "product.db"))
+        )
         try:
             assert len(factories) == 1
             assert_ids([factories[0]() for _ in range(32)], "audit-")

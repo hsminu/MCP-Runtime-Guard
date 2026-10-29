@@ -13,6 +13,7 @@ import guard_app
 from guard_app.security import redact
 
 from .logging_state import preserve_logging_state  # noqa: F401
+from .product_folders import product_folders
 
 pytestmark = pytest.mark.usefixtures("preserve_logging_state")
 
@@ -78,7 +79,7 @@ async def test_assembly_does_not_install_process_logging(monkeypatch, tmp_path):
     # Also catches an install bound before the patch (e.g. a module-level import).
     process_state = (logging.getLogRecordFactory(), sys.excepthook, redact._active)
     for assemble in (
-        lambda: bootstrap_product(str(tmp_path / "entry.db"), product=product),
+        lambda: bootstrap_product(product_folders(str(tmp_path / "entry.db")), product=product),
         bootstrap,
     ):
         bindings = await asyncio.wait_for(assemble(), 15)
