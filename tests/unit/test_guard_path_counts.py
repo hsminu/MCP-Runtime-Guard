@@ -20,6 +20,7 @@ import sqlite3
 import sys
 import time
 from contextlib import closing
+from datetime import UTC, datetime
 
 import pytest
 
@@ -27,6 +28,7 @@ from guard_app.adapters.mcp_transport.tool_listing import ToolListing
 from guard_app.domain.contracts import Denied, Pending, Released
 from guard_app.domain.enums import ApprovalStatus, TaskStatus
 from guard_app.domain.json_types import FrozenJsonObject
+from guard_app.domain.models import TaskState
 from guard_app.domain.reasons import Reason
 from guard_app.security.ids import new_id
 from guard_app.services.catalog import ServerSettings
@@ -143,6 +145,9 @@ def test_stored_approval_that_differs_from_the_copy_is_not_executed(
     """결함 주입: DB의 승인 사본 해시를 바꾸면 Guard 전체가 멈추고(INTERNAL_ERROR) 실행 0이다.
 
     Task 하나의 APPROVAL_STALE이 아니라 전역 정지다. 다른 Task의 새 호출도 거부된다.
+    무결성 손상은 전역 정지가 의도다(#76, #79 B 리뷰). writer가 쓰지 않은 값이 DB에 있으면
+    다른 행도 믿을 근거가 없다(REC-02 "파손은 게이트 닫힘"). B6-01이 이 경우를 "손상" 결과로
+    따로 두면 기대를 그에 맞춘다.
     """
 
     async def scenario():
@@ -258,12 +263,32 @@ def test_restart_does_not_restore_a_pending_approval(
                 await run.assemble(create_tasks=False)
                 late = await run.human().approve(pending.approval_id)
                 retry = await run.guard.submit("task-1", send("c1"), expected_epoch=1)
+                # 양성 대조(#79 B 리뷰): 새 회차의 새 Task는 정상으로 나간다. 그래서 위의 0은
+                # 실행 권한이 다 닫혀서가 아니라 옛 승인·옛 Task라서다.
+                settings = run.assembled.settings
+                await store.create_task(
+                    TaskState(
+                        task_id="task-3",
+                        epoch=1,
+                        profile_id=settings.profile_id,
+                        policy_version=settings.policy_version,
+                        status=TaskStatus.RUNNING,
+                    ),
+                    created_at_utc=datetime.now(UTC),
+                )
+                await run.guard.submit("task-3", read("public/new.txt", "n1"), expected_epoch=1)
+                fresh = await run.guard.submit(
+                    "task-3", send("n2", to="issue", body="body-after"), expected_epoch=1
+                )
                 return (
                     report.changed_approval_count,
+                    (report.unresolved_count, report.quarantined_count),
                     late,
                     retry,
                     await _approval_status(run, pending.approval_id),
                     run.request_counts(pending.request_id, "body-c1"),
+                    fresh,
+                    run.request_counts(fresh.request_id, "body-after"),
                 )
             finally:
                 await run.close_guard()
@@ -273,13 +298,16 @@ def test_restart_does_not_restore_a_pending_approval(
                 store.close()
                 assert await store.wait_closed(5.0)
 
-    changed, late, retry, status, counts = asyncio.run(scenario())
+    changed, left, late, retry, status, counts, fresh, fresh_counts = asyncio.run(scenario())
     assert (status, changed) == expected
+    assert left == (0, 0)
     assert type(late) is Denied
     assert late.reasons == (Reason.APPROVAL_RACE,)
     assert type(retry) is Denied
     assert retry.reasons == (Reason.TASK_NOT_RUNNING,)
     assert counts == ZERO
+    assert type(fresh) is Released
+    assert fresh_counts == ALLOWED
 
 
 # T26·T30
