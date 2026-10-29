@@ -34,6 +34,7 @@ from guard_app.security.launcher import (
     pin_executable,
 )
 from guard_app.security.paths import AppPathError, prepare_app_folders
+from guard_app.services.catalog import ServerSettings
 from guard_app.services.registry import listing_fingerprints
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="launcher는 Windows 전용이다")
@@ -344,6 +345,97 @@ async def test_tools_list_reaches_the_registry_through_a_transport(folders, pin)
     assert listing.complete
     assert [tool.get("name") for tool in listing.tools] == ["read"]
     assert set(listing_fingerprints(listing)) == {"read"}
+
+
+# 설정 레코드 → 실행(B3.14 `command_sha256`·`command_size`, EXE-01)
+
+
+def _record(command: str, args: tuple[str, ...] = (), **pin: object) -> ServerSettings:
+    # 설정 파일을 읽을 때와 같이 JSON에서 엄격 모드로 검증한다.
+    record = {
+        "id": "docs",
+        "transport": "stdio",
+        "command": command,
+        "args": list(args),
+        "tier": "internal",
+        "max_label": "CONFIDENTIAL",
+        "tools": [{"name": "read", "kind": "read", "resource_arg": "path"}],
+        **pin,
+    }
+    return ServerSettings.model_validate_json(json.dumps(record), strict=True)
+
+
+def _launch_pin(server: ServerSettings) -> ExecutablePin | None:
+    """B3.14가 A 연결에 정한 변환: 두 값이 있으면 `ExecutablePin`, 없으면 None."""
+    if server.command_sha256 is None or server.command_size is None:
+        return None
+    return ExecutablePin(server.command_size, server.command_sha256)
+
+
+@pytest.mark.asyncio
+async def test_registered_pin_in_the_settings_record_launches_the_server(folders):
+    registered = await pin_executable(str(PYTHON))
+    # 설정 파일의 JSON 문서에서 엄격 모드로 읽은 레코드에서 지문을 꺼낸다.
+    server = _record(
+        str(PYTHON),
+        ("-I", "-c", MCP_SERVER),
+        command_sha256=registered.sha256,
+        command_size=registered.size,
+    )
+    assert _launch_pin(server) == registered
+    launched = await launch_mcp_server(
+        folders.server_folder(server.id),
+        server.command,
+        server.args,
+        server.env_allow,
+        _launch_pin(server),
+    )
+    transport = McpTransport(
+        {
+            "docs": validated_stdio_stream_factory(
+                launched.read_bytes, launched.write_bytes, launched.drain
+            )
+        },
+        tool_list_limits=ToolListLimits(),
+    )
+    try:
+        await transport.start()
+        listing = transport.tool_listing("docs")
+    finally:
+        await transport.close()
+        assert await launched.close() is True
+    assert listing is not None
+    assert [tool.get("name") for tool in listing.tools] == ["read"]
+
+
+@pytest.mark.asyncio
+async def test_settings_record_without_a_pin_is_not_started(folders):
+    server = _record(str(PYTHON), ("-I", "-c", "pass"))
+    assert _launch_pin(server) is None
+    folder = folders.server_folder(server.id)
+    with pytest.raises(LaunchError) as raised:
+        await launch_mcp_server(
+            folder, server.command, server.args, server.env_allow, _launch_pin(server)
+        )
+    assert str(raised.value) == "LAUNCH_EXECUTABLE_UNPINNED"
+    assert list(folder.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_settings_pin_of_a_changed_file_is_not_started(folders, tmp_path):
+    tool = tmp_path / "tool.exe"
+    tool.write_bytes(b"MZ" + b"\0" * 64)
+    registered = await pin_executable(str(tool))
+    server = _record(str(tool), command_sha256=registered.sha256, command_size=registered.size)
+    tool.write_bytes(b"MZ" + b"\1" * 64)  # 같은 크기, 다른 내용
+    folder = folders.server_folder(server.id)
+    with pytest.raises(LaunchError) as raised:
+        await launch_mcp_server(
+            folder, server.command, server.args, server.env_allow, _launch_pin(server)
+        )
+    assert str(raised.value) == "LAUNCH_EXECUTABLE_MISMATCH"
+    assert registered.sha256 not in str(raised.value)
+    assert not any(entry.name.startswith("stderr-") for entry in folder.iterdir())
 
 
 # 서버 폴더

@@ -294,7 +294,8 @@ def test_roots_off_local_fixed_drives_are_refused(root, capsys):
 NOW = datetime(2026, 10, 28, 12, tzinfo=UTC)
 
 
-def _settings(args):
+def _settings(args, pin):
+    # A 등록 화면이 저장할 레코드: 루트는 `args`, 등록 지문은 B3.14 `command_sha256`·`command_size`.
     record = {
         "id": "files",
         "transport": "stdio",
@@ -303,14 +304,19 @@ def _settings(args):
         "tier": "internal",
         "max_label": "CONFIDENTIAL",
         "tools": [dict(tool) for tool in FILE_SERVER_TOOL_SETTINGS],
+        "command_sha256": pin.sha256,
+        "command_size": pin.size,
     }
     return ServerSettings.model_validate_json(json.dumps(record), strict=True)
 
 
 def test_real_process_serves_reads_that_classify_by_source_rules(root, tmp_path):
     data = Path(sys.executable).read_bytes()
-    pin = ExecutablePin(len(data), hashlib.sha256(data).hexdigest())
-    server = _settings(file_server_args(root))
+    server = _settings(
+        file_server_args(root), ExecutablePin(len(data), hashlib.sha256(data).hexdigest())
+    )
+    # A 연결이 할 변환(B3.14): 레코드의 두 값으로 지문을 만든다.
+    pin = ExecutablePin(server.command_size, server.command_sha256)
     folders = prepare_app_folders(tmp_path / "app")
     sequence = iter(range(10_000))
 
