@@ -7,11 +7,14 @@ from collections.abc import Awaitable, Callable, Mapping
 
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.domain.enums import TaskStatus
+from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import TaskState
 from guard_app.services.catalog import (
     CatalogConfigError,
     GuardSettings,
     PreparedPolicyChange,
+    ServerSettings,
+    prepare_policy_change,
     prepare_server_access_change,
 )
 from guard_app.services.guard import PolicyChangeError, PolicyTaskSource
@@ -21,6 +24,7 @@ from guard_app.services.product_settings import (
     SaveOutcomeUnknownError,
     SettingsFileChangedError,
 )
+from guard_app.services.registry import ServerRegistry
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 
 # Stores B's prepared policy document (CFG-01: product_settings.SettingsFileSaver).
@@ -164,6 +168,86 @@ class TaskPolicy:
                 self._document = change.document
                 await stop_sessions(await self._apply(assembled, change, task_source))
             return policy_view(assembled, change_available=True)
+
+    def check_registration(self) -> None:
+        self._admission.check()
+        if self._saver is None:
+            raise SessionRuntimeError("REG_SETTINGS_UNAVAILABLE")
+
+    def registration_document(self) -> Mapping[str, object]:
+        if isinstance(self._document, FrozenJsonObject):
+            return self._document.to_dict()
+        # First registration selects no servers and grants no access.
+        return (
+            self._document
+            if self._document is not None
+            else {
+                "profile": {"id": "local", "servers": []},
+                "servers": [],
+            }
+        )
+
+    def connect_registration_saver(self, saver: ProfileSaver) -> None:
+        if self._saver is None:
+            self._saver = saver
+
+    async def save_registration(
+        self,
+        server: ServerSettings,
+        registry: ServerRegistry,
+        stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
+        *,
+        updating: bool,
+    ) -> None:
+        async with self.lock:
+            if self._saver is None or self._admission.closed:
+                raise SessionRuntimeError("REG_SETTINGS_UNAVAILABLE")
+            if self._admission.restart_code is not None:
+                raise SessionRuntimeError(self._admission.restart_code)
+            current = self.registration_document()
+            document = FrozenJsonObject(current).to_dict()
+            servers = document.get("servers")
+            if not isinstance(servers, list):
+                raise SessionRuntimeError("REG_SETTINGS_INVALID")
+            record = server.model_dump(mode="json", exclude_none=True)
+            record["max_label"] = server.max_label.name
+            if updating:
+                servers[:] = [
+                    record if isinstance(s, dict) and s.get("id") == server.id else s
+                    for s in servers
+                ]
+            else:
+                if any(isinstance(s, dict) and s.get("id") == server.id for s in servers):
+                    raise SessionRuntimeError("REG_SERVER_EXISTS")
+                servers.append(record)
+            change = prepare_policy_change(current, document, registry)
+            completed = False
+            try:
+                try:
+                    saved = await self._saver(change)
+                except SettingsFileChangedError:
+                    raise SessionRuntimeError("POLICY_SAVE_FILE_CHANGED") from None
+                except SaveOutcomeUnknownError:
+                    raise SessionRuntimeError("POLICY_SAVE_UNKNOWN") from None
+                if saved is not True:
+                    raise SessionRuntimeError("REG_SETTINGS_SAVE_FAILED")
+                self._document = change.document
+                if self._assembled is not None and self._task_source is not None:
+                    await stop_sessions(
+                        await self._apply(self._assembled, change, self._task_source)
+                    )
+                if updating:
+                    self._admission.require_restart("REG_PIN_RESTART_REQUIRED")
+                    if self._assembled is not None:
+                        await self._assembled.guard.aclose()
+                completed = True
+            finally:
+                # Registry may already be PENDING. Never retry a partially saved
+                # registration or let new policy changes overwrite an unknown file.
+                if not completed:
+                    self._admission.require_restart("POLICY_SAVE_UNKNOWN")
+                    if self._assembled is not None:
+                        await self._assembled.guard.aclose()
 
     async def _apply(
         self,

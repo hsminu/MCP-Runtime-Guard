@@ -46,6 +46,12 @@ from .widgets import (
 )
 
 
+def _pin_status(server: ServerSummary) -> str:
+    if server.executable_pinned is None:
+        return "해당 없음 또는 미확인"
+    return "저장 지문과 일치" if server.executable_pinned else "지문 재확인 필요"
+
+
 def _detail_field(title: str, value: str) -> tuple[QWidget, QLabel]:
     field = QWidget()
     field.setObjectName("infoField")
@@ -109,6 +115,8 @@ class ServerDetailDialog(QDialog):
             "연결 방식 · transport", fixed(TRANSPORTS, server.transport)
         )
         layout.addWidget(transport_field)
+        pin_field, self._pin_value = _detail_field("실행 파일 지문", _pin_status(server))
+        layout.addWidget(pin_field)
         self.scan_status_card = ScanStatusCard()
         self.scan_status_card.setMinimumWidth(0)
         self.scan_status_card.setSizePolicy(
@@ -134,6 +142,7 @@ class ServerDetailDialog(QDialog):
         self._display_value.setText(public_display_text(server.display_name or server.server_id))
         self._server_id_value.setText(public_display_text(server.server_id))
         self._transport_value.setText(fixed(TRANSPORTS, server.transport))
+        self._pin_value.setText(_pin_status(server))
         self.scan_status_card.set_snapshot(Surface(LoadState.LOADING))
 
 
@@ -327,7 +336,11 @@ class ServerListPage(QWidget):
             )
             columns = (
                 (label, ""),
-                (fixed(TRANSPORTS, server.transport), ""),
+                (
+                    fixed(TRANSPORTS, server.transport)
+                    + (" · " + _pin_status(server) if server.executable_pinned is not None else ""),
+                    "",
+                ),
                 (fixed(TIER_NAMES, server.tier), fixed_code(TIERS, server.tier)),
                 (self._label_text(server.max_label), fixed_code(LABELS, server.max_label)),
                 (

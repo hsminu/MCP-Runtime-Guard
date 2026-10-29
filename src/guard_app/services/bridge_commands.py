@@ -31,6 +31,7 @@ from guard_app.services.bridge_types import (
     BackendBindings,
     ControlAction,
     ConversationEvent,
+    RegistrationView,
     SessionCreated,
     SessionStartError,
     TaskProjection,
@@ -58,6 +59,7 @@ class BridgeOutlet:
     session_capability: Callable[[str], None]
     account_changed: Callable[[AccountView], None]
     policy_changed: Callable[[PolicyView], None]
+    registration_changed: Callable[[RegistrationView], None] = lambda view: None
 
 
 class TaskViews:
@@ -281,6 +283,14 @@ class CommandExecutor:
         bindings = self._bindings.current
         if bindings is None:
             raise RuntimeError("BRIDGE_BINDINGS_UNAVAILABLE")
+        if command.action == "registration":
+            if bindings.registration is None or command.registration is None:
+                view = RegistrationView("REG_UNAVAILABLE")
+            else:
+                view = await bindings.registration(command.registration)
+            self._out.registration_changed(replace(view, command_id=command.command_id))
+            self._views.publish_capability()
+            return view.code
         if command.action == "new_session":
             return await self._new_session(bindings, command)
         if command.lane == "run":

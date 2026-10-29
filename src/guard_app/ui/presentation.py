@@ -291,6 +291,9 @@ SETTINGS_FILE_LOCATION = r"%LOCALAPPDATA%\MCPRuntimeGuard\config\settings.json"
 SETTINGS_FILE_PENDING = "설정 파일을 아직 확인하지 않음."
 SETTINGS_FILE_NOT_READ = "이 실행은 설정 파일을 읽지 않음(시연)."
 SETTINGS_FILE_STATUS = {
+    "SETTINGS_REGISTRATION_SAVED": (
+        "서버 등록 설정을 저장함. 첫 설정·실행 파일 변경 후에는 앱을 다시 시작하세요."
+    ),
     "SETTINGS_LOADED": "설정 파일을 읽고 Guard 정책(Profile)을 확인함.",
     "SETTINGS_FILE_MISSING": (
         "설정 파일이 없음(첫 실행). Guard 정책이 없어 새 세션을 시작할 수 없음. "
@@ -349,6 +352,7 @@ _CODEX_STOP_NOTICES = {
         "Codex 중단을 확인하지 못함. 앱을 종료하고 정리 상태를 확인하세요."
     ),
     "CODEX_SESSION_FAILED": "Codex 세션이 실패해 이 Task를 정지함. 새 세션에서 다시 시작하세요.",
+    "REG_PIN_RESTART_REQUIRED": "실행 파일 지문을 저장함. 다시 연결하려면 앱을 재시작하세요.",
     "CODEX_STORE_HALTED": "저장소 실행 권한이 닫혀 모든 세션을 정지함. 앱을 다시 시작하세요.",
 }
 

@@ -47,6 +47,7 @@ from guard_app.services.bridge_ingress import (
     CommandLedger,
     IngressItem,
     account_command,
+    bridge_id,
     control_command,
     ingress_lane,
     message_command,
@@ -57,6 +58,7 @@ from guard_app.services.bridge_ingress import (
 from guard_app.services.bridge_ingress import new_command_id as new_command_id
 from guard_app.services.bridge_ingress import new_draft_key as new_draft_key
 from guard_app.services.bridge_lanes import CommandLanes
+from guard_app.services.bridge_registration import endpoint_input as endpoint_input
 from guard_app.services.bridge_streams import MAX_PARTIAL_CHARS as MAX_PARTIAL_CHARS
 from guard_app.services.bridge_streams import PARTIAL_FLUSH_S as PARTIAL_FLUSH_S
 from guard_app.services.bridge_streams import AnswerStreams
@@ -73,6 +75,8 @@ from guard_app.services.bridge_types import CommandStage as CommandStage
 from guard_app.services.bridge_types import ControlAction as ControlAction
 from guard_app.services.bridge_types import ConversationEvent as ConversationEvent
 from guard_app.services.bridge_types import LifecycleEvent as LifecycleEvent
+from guard_app.services.bridge_types import RegistrationRequest as RegistrationRequest
+from guard_app.services.bridge_types import RegistrationView as RegistrationView
 from guard_app.services.bridge_types import SessionCreated as SessionCreated
 from guard_app.services.bridge_types import SessionOptions as SessionOptions
 from guard_app.services.bridge_types import SessionStartError as SessionStartError
@@ -176,6 +180,7 @@ class BackendBridge(QObject):
     account_changed = Signal(object)
     policy_changed = Signal(object)
     settings_changed = Signal(object)
+    registration_changed = Signal(object)
     recovery_changed = Signal(object)
     recovery_page_changed = Signal(object)
 
@@ -230,6 +235,7 @@ class BackendBridge(QObject):
             session_capability=self.session_capability_changed.emit,
             account_changed=self.account_changed.emit,
             policy_changed=self.policy_changed.emit,
+            registration_changed=self.registration_changed.emit,
         )
         self._streams = AnswerStreams(self.conversation_partial.emit, stopped)
         self._views = TaskViews(self._bindings, outlet, stopped, self._consume_task)
@@ -338,6 +344,27 @@ class BackendBridge(QObject):
 
         self._require_qt_thread()
         return self._submit(policy_command(server_id, allowed, denied))
+
+    def request_registration(
+        self, request: RegistrationRequest, *, command_id: str | None = None
+    ) -> str:
+        self._require_qt_thread()
+        if type(request) is not RegistrationRequest or request.action not in (
+            "prepare",
+            "confirm",
+            "recheck",
+            "list",
+        ):
+            raise ValueError("REG_REQUEST_INVALID")
+        return self._submit(
+            BridgeCommand(
+                bridge_id(command_id, generate=True),
+                "control",
+                "registration",
+                "registry",
+                registration=request,
+            )
+        )
 
     def request_new_session(
         self, draft_key: str, options: SessionOptions, *, command_id: str | None = None

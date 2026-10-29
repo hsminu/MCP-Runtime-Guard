@@ -20,13 +20,20 @@ from PySide6.QtWidgets import (
 )
 
 from guard_app.domain.enums import TaskStatus
-from guard_app.services.bridge import BridgeState, CommandStage, LifecycleEvent, TaskProjection
+from guard_app.services.bridge import (
+    BridgeState,
+    CommandStage,
+    LifecycleEvent,
+    RegistrationView,
+    TaskProjection,
+)
 
 from .approvals import ApprovalListPage, ApprovalPage, ApprovalQuery
 from .call_logs import CallLogPage, DetailRequest, PublicCallDetail, PublicCallSummary
 from .icons import line_icon
 from .model_settings import CodexLoginInfo
 from .models import (
+    LoadState,
     OverviewSnapshot,
     RuntimeIdentity,
     RuntimeMode,
@@ -482,6 +489,8 @@ class GuardWindow(QMainWindow):
         panel.state_changed.connect(lambda: self.sessions.set_busy_scopes(panel.busy_scopes))
         panel.selected_snapshot_changed.connect(self._sync_selected_task)
         bridge = panel.bridge
+        self.server_add_form.attach_registration(bridge)
+        bridge.registration_changed.connect(self._registration_rows)
         bridge.task_changed.connect(self.sessions.set_snapshot)
         bridge.session_created.connect(self.sessions.session_created)
         bridge.session_capability_changed.connect(self.sessions.set_session_blocker)
@@ -636,6 +645,30 @@ class GuardWindow(QMainWindow):
         """Called on the Qt thread with a bridge-approved public projection."""
 
         self.overview.set_snapshot(snapshot)
+
+    def _registration_rows(self, view: RegistrationView) -> None:
+        if view.code in ("REG_REGISTERED", "REG_PIN_SAVED"):
+            self.set_settings_status("SETTINGS_REGISTRATION_SAVED")
+        if view.rows is None:
+            return
+        self.set_server_snapshot(
+            Surface(
+                LoadState.READY,
+                tuple(
+                    ServerSummary(
+                        row.server_id,
+                        row.server_id,
+                        max_label=row.max_label,
+                        tier=row.tier,
+                        registry_status=row.status,
+                        transport=row.transport,
+                        executable_pinned=row.pinned if row.transport == "stdio" else None,
+                    )
+                    for row in view.rows
+                ),
+            )
+        )
+        self.server_add_form.set_known_ids({row.server_id for row in view.rows})
 
     def set_server_snapshot(self, snapshot: Surface[tuple[ServerSummary, ...]]) -> None:
         """Update Registry rows from their own query, never overview rows."""

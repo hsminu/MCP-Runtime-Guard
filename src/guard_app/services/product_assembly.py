@@ -61,7 +61,7 @@ from guard_app.services.catalog import (
     load_profile_settings,
 )
 from guard_app.services.guard import FailureEvent, GuardService
-from guard_app.services.registry import RegistryError, ServerRegistry
+from guard_app.services.registry import RegistryError, ServerRegistry, ToolListingView
 
 # Never equal to a SHA-256 hex digest, so Catalog/Guard see a changed fingerprint.
 _LIVE_MISMATCH = "live-definition-mismatch"
@@ -415,3 +415,29 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     finally:
         if not adopted:
             await transport.close()
+
+
+async def collect_registration_listing(
+    server: ServerSettings, folders: AppFolders
+) -> ToolListingView:
+    """Collect definitions only; this path has no tools/call operation (I1)."""
+    if server.transport == "stdio":
+        pin = (
+            ExecutablePin(server.command_size, server.command_sha256)
+            if server.command_size is not None and server.command_sha256 is not None
+            else None
+        )
+        stream = launcher_stdio_stream_factory(
+            folders.server_folder(server.id), server.command, server.args, server.env_allow, pin
+        )
+    else:
+        stream = http_stream_factory(normalize_endpoint(server.url).url)
+    transport = McpTransport({server.id: stream}, tool_list_limits=ToolListLimits())
+    try:
+        await transport.start()
+        listing = transport.tool_listing(server.id)
+        if listing is None or not listing.complete:
+            raise RegistryError("REG_LISTING_INCOMPLETE")
+        return listing
+    finally:
+        await transport.close()

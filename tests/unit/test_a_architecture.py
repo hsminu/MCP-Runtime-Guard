@@ -19,6 +19,7 @@ A_SERVICES = frozenset(
         "bridge_bindings",
         "bridge_commands",
         "bridge_ingress",
+        "bridge_registration",
         "bridge_lanes",
         "bridge_streams",
         "bridge_types",

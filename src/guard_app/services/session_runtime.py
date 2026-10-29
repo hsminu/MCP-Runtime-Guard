@@ -25,6 +25,7 @@ from guard_app.ports import SessionAudit, Store, StoreLifecycle
 from guard_app.security.ids import new_id
 from guard_app.security.paths import AppFolders
 from guard_app.services.account_runtime import AccountAccess, ProductAccount
+from guard_app.services.bridge_registration import RegistrationCommands
 from guard_app.services.bridge_types import (
     BackendBindings,
     BackendCleanupError,
@@ -41,6 +42,7 @@ from guard_app.services.product_assembly import (
     AssembledGuard,
     ProductInputs,
     assemble_guard,
+    collect_registration_listing,
 )
 from guard_app.services.product_settings import (
     SETTINGS_LOADED,
@@ -789,8 +791,28 @@ async def bootstrap_product(
             after = page.next_after
             return page
 
+        registration_registry = (
+            product.registry
+            if product is not None and isinstance(product.registry, ServerRegistry)
+            else ServerRegistry(store)
+        )
+        if product is None or registration_registry is not product.registry:
+            await registration_registry.load()
+        if settings is not None and (
+            settings.document is None or settings_status == SETTINGS_LOADED
+        ):
+            runtime._policy.connect_registration_saver(SettingsFileSaver(settings))
+        registrations = RegistrationCommands(
+            registration_registry,
+            store,
+            runtime._policy,
+            lambda server: collect_registration_listing(server, folders),
+            runtime._close_policy_stopped,
+            runtime._check_execution,
+        )
         bindings = replace(
             runtime.bindings(),
+            registration=registrations,
             recovery_report=report,
             recovery_page=first_page,
             recovery_next=next_page,
