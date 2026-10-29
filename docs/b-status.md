@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-30 · main `e0f08b3` · 완료 81/95, 남음 14 · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-30 · 확인한 main `1da2f1a`(#103·#104, 이 브랜치에는 미병합) · 완료 89/95, 남음 6 · [#106 결정 기록](archive/b/B-106-agreement-closure.md) · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -8,15 +8,9 @@
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| AGT-02 감사 범위 합의 | A·B·C | B6.15 |
-| ModelClient 예제 이동에 관한 결정 요청 답변 | A·C | B1.7 |
 | 자원 ID 판정기의 제품 조립 연결 | A | B3.3 |
-| 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 합의 | A·B·C | B6.19 |
-| 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
-| NOTIFY-01 DTO·포트·종료 의미 합의와 A/C 연결·독립 검증 | A·B·C | B5.13 |
-| STOP-01 TaskIdentity·사유·감사 포트 합의와 A 세션 관리자 연결·T41/T42 독립 검증 | A·B·C | B5.14 |
-| SCAN-01 필드·고정 오류 코드 합의와 C Scanner 번역·A 경고 표시 | A·B·C | B1.9 |
-| DESC-01 검토 입력·원본 분리·Registry 저장·설명 변경 적용 의미 | A·B·C | B3.13 |
+| 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 후속(제출 범위 밖) | A·B·C | B6.19 |
+| 독립 통합 인수 | C | B7.8 |
 | 설정 파일 안전 읽기·원자적 교체(C2.14)·A 시작/저장/Task 생성 직렬화와 거부·누락 전송 0 검증 | A·C | B3.12 |
 
 ## B1 · 공통 모델과 계약
@@ -25,11 +19,11 @@
 - [x] B1.2 모델·도구 출력에 ID·등급·경계·승인 결정권을 주지 않음. ID·epoch·call_seq는 Guard 관리
 - [x] B1.3 Label·Decision·TrustTier·ToolKind·상태 enum과 reason_code 초안
 - [x] B1.4 Guard 결과 타입과 Transport·AccessChecker·Scanner·Store·ModelClient 계약 초안
-- [ ] B1.5 명령·이벤트 payload, 원시 결과 격리·공개 결과 구분, 계수 연결 확정 — 막힘: A·C 합의
+- [x] B1.5 명령·이벤트 payload·원시 결과 격리: A 로컬 frozen bridge DTO를 v1으로 확정([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · 후속: C `count_dispatches`를 worker `_execute` 진입으로 정렬 중, 그 전까지 전체 계수 인수 완료 표시 보류
 - [x] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 대조 · [기록](archive/b/B6.10-B6.12-unblocked.md)
-- [ ] B1.7 ModelClient 공통 포트 제거 · B 구현(Protocol을 examples로 이동), [결정 요청 이슈](https://github.com/hsminu/MCP-Runtime-Guard/issues/106) 기본값 · A 예제 리뷰·A/C 답변 대기
-- [x] B1.8 SCAN-01 DTO 확장·표시 검사 오탐/명시적 무해화 보완·합의 전 제안 · [기록](archive/b/B1.8-scan-report.md) · Hypothesis 반복 수 1,000 → 200(#100 `17df1ce`, 나머지 두 시험은 300 → 200), C가 4개 시험을 5,000회로 1회 확인해 반례 없음([#100 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/100#issuecomment-6503859925))
-- [ ] B1.9 SCAN-01 B 도메인 Finding.code 제한 보완 · [결정 요청 이슈](https://github.com/hsminu/MCP-Runtime-Guard/issues/106) 기본값 · A 경고 화면·C 확인 대기
+- [x] B1.7 ModelClient 공통 포트 제거·Protocol의 examples 이동 `9dae11b` · [#106 A·C 동의](https://github.com/hsminu/MCP-Runtime-Guard/issues/106) · [기록](archive/b/B1.7-B1.9-code-s.md)
+- [x] B1.8 SCAN-01 DTO 확장·표시 검사 오탐/명시적 무해화 보완 · [#32 DTO 형식 합의](https://github.com/hsminu/MCP-Runtime-Guard/pull/32#pullrequestreview-5649334182) · [기록](archive/b/B1.8-scan-report.md) · Hypothesis 반복 수 1,000 → 200(#100 `17df1ce`, 나머지 두 시험은 300 → 200), C가 4개 시험을 5,000회로 1회 확인해 반례 없음([#100 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/100#issuecomment-6503859925))
+- [x] B1.9 SCAN-01 B `Finding.code`가 C 번역 집합과 일치 `e4c08d4` · [#106 C 조건부 동의](https://github.com/hsminu/MCP-Runtime-Guard/issues/106#issuecomment-6505180007), #57 사례 C 확인 대기 · 후속: A 경고 화면(A47·A128) · [기록](archive/b/B1.7-B1.9-code-s.md)
 
 ## B2 · 순수 정책과 등급 누적
 
@@ -52,6 +46,7 @@
 - [x] B3.3 자원형 READ의 expected_resource_id 계산·대조 B 구현 완료. C2.3(#63) `file_resource_resolver`가 Catalog `ResourceResolver`와 연결됨 · A `ProductInputs.resource_resolver` 제품 조립 연결 대기
 - [x] B3.4 출처 접두어 매칭·중복은 최고 등급·미매칭은 Unclassified
 - [x] B3.5 도구 단위 READ는 `prefix: []` 규칙만, 없으면 Unclassified
+  - 자원형 출처 규칙(prefix ≠ ())은 Guard가 기대 자원 ID를 계산하고 응답 ID를 신뢰 코드가 만드는 서버(현재 C 파일 서버)에만 적용한다. 그 밖의 서버는 도구 단위 READ만 쓴다. 도구 단위 READ 등급은 운영자가 그 도구의 모든 결과에 붙이는 선언이며 응답 `resource_id`는 거부에만 사용한다([#94 B 답](https://github.com/hsminu/MCP-Runtime-Guard/issues/94#issuecomment-6505157878)). 파일 서버 인정 조건의 실행 파일 확인은 A·C 결정 대기다.
 - [x] B3.6 목적지는 등록 목록 정확 일치, 이름·IP·DNS·stdio를 신뢰 근거로 쓰지 않음
 - [x] B3.7 FP-01 JCS 지문 함수 · [기록](archive/b/B3.7-jcs-fingerprint.md)
 - [x] B3.8 DESC-01 검토된 설명 필드·Catalog 연결·합의 전 제안 · [기록](archive/b/B3.8-reviewed-description.md)
@@ -59,7 +54,7 @@
 - [x] B3.10 정책 변경 준비·적용·Task 정지·승인 무효화(10-18 결정) · [기록](archive/b/B3.10-policy-change.md)
 - [x] B3.11 CFG-01 B 변환 함수 완료, C 파일 연산(C2.14)·A 시작/저장 연결(B3.12) 대기 · [기록](archive/b/B3.11-settings-file.md)
 - [ ] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 — 막힘: C2.14 파일 연산·A 연결
-- [ ] B3.13 DESC-01 A 검토 입력·C Registry 원본 분리/저장·설명 변경 적용 의미 합의 — 막힘: 3인 합의·A/C 연결
+- [x] B3.13 DESC-01 검토 설명은 PENDING 저장→재활성화→재시작 후 새 세션에 적용, 원격 설명 별도 영속화 없음·화면 전 빈 설명([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · 후속: A 검토 입력 화면
 - [x] B3.14 EXE-01 실행 파일 고정 설정 필드 B 구현 · A 등록 화면·launcher 연결 대기 · [기록](archive/b/B3.14-exe01-settings-fields.md)
 - [x] B3.15 URL-01 HTTP 서버 URL을 서버별 검사 · #86 병합 · A 연결·표시 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 - [x] B3.16 설정과 Registry가 다르면 해당 서버를 숨기고 시작에서 제외 · [기록](archive/b/B3.15-B3.16-server-settings.md) · [시작 제외](archive/b/B3.17-startable-settings-mismatch.md)
@@ -91,8 +86,8 @@
 - [x] B5.10 STOP-01 시스템 정지·사실 감사 B 구현·합의 전 제안 · [기록](archive/b/B5.10-system-stop.md)
 - [x] B5.11 모델에 돌려줄 고정 문구표 · [기록](archive/b/B5.11-model-messages.md)
 - [x] B5.12 모델 고정 문구표 A 검토·세션 관리자 연결 · [#20 A 검토 댓글(2026-10-28)](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6464059746)
-- [ ] B5.13 NOTIFY-01 DTO·포트·종료 의미 합의·A 대기/종료·C 지문 변경 연결·T45 독립 검증 — 막힘: 3인 합의·A/C 연결
-- [ ] B5.14 STOP-01 TaskIdentity·정지 사유·SessionAudit 합의·A 세션 관리자 연결·C T41/T42 계수 검증 — 막힘: 3인 합의·A/C 연결
+- [x] B5.13 NOTIFY-01 계약·연결 [#28](https://github.com/hsminu/MCP-Runtime-Guard/pull/28)·[#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106): 완료 전 콜백 실패는 알림 0·전역 정지·재발행 0 · 후속: C6.10 독립 주입 검증
+- [x] B5.14 STOP-01 계약·A 연결·T41 확인([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · 후속: 실제 Codex T42 승인 대기·A watchdog 경로 확인
 
 ## B6 · SQLite 저장소
 
@@ -103,7 +98,7 @@
 - [x] B6.5 UTC 만료·쓰기 중 만료·ACK 유실, 원문·인자·비밀값 비기록과 고정 오류 코드 · [기록](archive/b6-sqlite-lifecycle.md)
 - [x] B6.6 영속 순번·시작 복구 설계와 검증 시나리오 50개 · [설계](archive/b6-sequence-recovery-design.md) · [시나리오](archive/b6-sequence-recovery-validation.md)
 - [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
-- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — B 단위 구현 및 #69 `b796ff0` 병합, A 제품 시작 연결 [#83](https://github.com/hsminu/MCP-Runtime-Guard/pull/83) · C 독립 인수 대기([미실행 범위](archive/c/C6.25-2-verification-summary.md#미실행검증-불가)) · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
+- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — B 구현·A 제품 연결 [#83](https://github.com/hsminu/MCP-Runtime-Guard/pull/83), C 재시작·변조 [#103](https://github.com/hsminu/MCP-Runtime-Guard/pull/103)·강제 종료 60회 복구 [#104](https://github.com/hsminu/MCP-Runtime-Guard/pull/104) 확인 · 후속: C의 영속 순번 배정·허용 실패 감사 연산 자체 독립 확인 · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
   - #65(C2.7) 후속으로 명시 모드 기본 감사 ID 출처를 `security.ids`로 옮기고 B 모듈의 직접 생성 금지 정적 검사를 추가했다.
 - [x] B6.9 승인 생성·종결 원자화 · #89 병합, A·C 동의(C 독립 결함 주입 인수는 B7.6·B7.8) · [기록](archive/b/B6.9-atomic-approvals.md)
 - [x] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 · [기록](archive/b/B6.10-B6.12-unblocked.md)
@@ -111,11 +106,11 @@
 - [x] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙 구현·시험 완료, 잠금 대기 1000ms 확정, C 실측 중앙 1.17초(이 PC 한 대, [#104](https://github.com/hsminu/MCP-Runtime-Guard/pull/104)) · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — B 단위 구현·C 독립 검증 및 측정 완료, [A 연결](https://github.com/hsminu/MCP-Runtime-Guard/pull/83) · [#55 종료](https://github.com/hsminu/MCP-Runtime-Guard/issues/55) · C 기록 #79·[#93](https://github.com/hsminu/MCP-Runtime-Guard/pull/93) 병합 · 늦은 결과 전달 [#97](https://github.com/hsminu/MCP-Runtime-Guard/pull/97) 병합 · [기록](archive/b/B6.13-sqlite-writer.md) · [늦은 결과 전달](archive/b/B6.13-2-late-publish.md) · [C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468999539)
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
-- [ ] B6.15 규칙 버전 감사(AGT-02) — 막힘: 판정·감사 버전 추적 범위와 직접 저장·간접 조회 합의 · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
+- [x] B6.15 규칙 버전 감사(AGT-02) · Task 연결 사건은 불변 `tasks.policy_version`으로 간접 추적, Task 없는 비판정 사건은 범위 밖, 직접 저장·과거 보정 없음([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
 - [x] B6.16 화면용 권위 조회 · #76 A·C 합의(10-29), #86 병합 · A 승인 목록·호출 기록 연결 [#92](https://github.com/hsminu/MCP-Runtime-Guard/pull/92) · [C 계수 대조](https://github.com/hsminu/MCP-Runtime-Guard/pull/86#issuecomment-6494025432) · [기록](archive/b/B6.16-store-queries.md)
-- [x] B6.17 SEQ·REC B 결정안·A·C 동의(#37), 사용자 contracts 반영 완료 · 구현 B6.8·B6.13 대기 · [기록](archive/b/B6.17-seq-rec-decisions.md)
+- [x] B6.17 SEQ·REC B 결정안·A·C 동의(#37), 사용자 contracts 반영 완료 · B6.8 영속 순번·실패 감사 독립 확인은 후속 · [기록](archive/b/B6.17-seq-rec-decisions.md)
 - [x] B6.18 RegistryStore 계약·C4.10(#46) 사본 교체/승인 무효화와 C4.19(#53) 연결 완료 · [기록](archive/b/B6.14-registry-store.md)
-- [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) 원자 조건·독립 검증 — 막힘: 3인 합의·A/C 연결
+- [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) · 후속(제출 범위 밖, [#106 8번](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)): 정의 전용 generation·예약/소비 TX 대조·worker 전송 직전 확인. 제출 시연은 고정 등록 목록·변경 시 정지/재시작. I10 동시 경쟁 해결 주장 안 함
 - [x] B6.20 `record_settings_change` CAS·도구 설정 변경·감사 B 구현 · #86 병합 · C Registry 연결 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 - [x] B6.21 검사 보고서 저장 전 현재 등록 지문 집합 대조 · #86 병합 · C 리뷰·독립 검증 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 - [x] B6.22 요청 실패 감사의 예외 형식 이름 상한 64자 · #86 병합 · [기록](archive/b/B3.15-B3.16-server-settings.md)
@@ -127,7 +122,7 @@
 - [x] B7.3 10-15 AGT 제거 결정으로 대체 · [기록](archive/b/B7.3-agt-decision-superseded.md)
 - [x] B7.4 AGT-03 폐기 · [기록](archive/b/B7.4-agt-worker-retired.md)
 - [ ] B7.5 정규식 전체 스키마 검증(SCHEMA-01) · 2단계 B 구현(#B14 예정), A 조립 연결·C worker launcher 대기 · [기록](archive/b/B7.5-2-schema-boundary.md) · [1단계 기록](archive/b/B7.5-1-schema-jobs.md) · [연결안](archive/b-schema-validation-proposal.md)
-- [ ] B7.6 B6 저장소의 C 리뷰·독립 검증 받기 — 막힘: C
+- [x] B7.6 B6 저장소의 C 리뷰·독립 검증 [#103](https://github.com/hsminu/MCP-Runtime-Guard/pull/103)·[#104](https://github.com/hsminu/MCP-Runtime-Guard/pull/104) 병합 · B6.8의 영속 순번·실패 감사 후속은 별도
 - [x] B7.7 C 보안 모듈·Registry·Scanner·CI·테스트 B 리뷰 완료 · [#102](https://github.com/hsminu/MCP-Runtime-Guard/issues/102), C 결함 2건 후속 및 B 재확인 대기
 - [ ] B7.8 C 독립 통합 인수 결과와 대상 커밋 기록 — 막힘: C
 - [x] B7.9 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 A·C에 전달 · [기록](archive/b/B7.9-contract-handoff.md)
