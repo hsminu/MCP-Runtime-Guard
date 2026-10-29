@@ -478,7 +478,7 @@ class ServerWorker:
                 if not cmd.future.done():
                     cmd.future.set_exception(DispatchError("TimeoutError"))
                 return
-            except Exception as exc:  # noqa: BLE001 - designated ServerWorker._execute boundary
+            except Exception as exc:  # noqa: BLE001 - designated ServerWorker._execute boundary  # nosemgrep: broad-except-only-in-allowed
                 if _session_broken(exc):
                     self._stop_unhealthy()
                 if not cmd.future.done():
