@@ -233,7 +233,7 @@
 - [x] A172 #92 GC·메인 스레드 지연 삭제 중단 경로 조사(최종 C++ 대상 미확정) · [기록](archive/a/A172-store-query-link-abort-cause.md)
 - [ ] A 화면 시험 묶음이 모두 통과한 뒤 종료 중 abort(main에서도 재현) — A 화면 시험 전체의 Qt 객체 정리 방법 결정, 공용 conftest는 합의 필요 · [근거](archive/a/A172-store-query-link-abort-cause.md)
 - [ ] 제품 `run_application` 창·페이지 수명 정리(백엔드 종료 확인 → 남은 이벤트 처리 → 창 삭제) · [근거](archive/a/A172-store-query-link-abort-cause.md)
-- [ ] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 — 막힘: C 상수 추가([#83 C 참고 4](https://github.com/hsminu/MCP-Runtime-Guard/pull/83#issuecomment-6493041009))
+- [x] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 · [기록](archive/a/A174-l2-failure-codes-from-c.md)
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 
