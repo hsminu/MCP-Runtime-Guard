@@ -172,7 +172,8 @@
 - [x] A59 폴더 규칙 중복을 대소문자 무시로 검사 · [기록](archive/a/A59-folder-rule-case.md)
 - [x] A49 등록·출처 규칙 연결: 폴더 선택·루트/목록/하위 폴더 등급·C 파일 서버 등록 값·상위 폴더 등급 안내·등록 인자 기반 `file_resource_resolver`·READ 허용 활성화([#63 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/63#issuecomment-6472888055), [#64 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/64#issuecomment-6472888675)) · [기록](archive/a/A49-file-server-registration.md)
   - 참고: 파일 서버 루트 안에서는 루트 등급이 항상 맞아 Unclassified가 생기지 않음. 2026-10-15 결정문의 'Unclassified로 Task 정지'는 어느 출처 규칙에도 맞지 않는 자원에 해당함.
-- [ ] A49 실제 로컬 파일 서버·Codex 제품 종단과 독립 T33 인수 — C와 함께
+- [x] A49 실제 로컬 파일 서버 프로세스(C launcher)로 등록 목록 수집·활성화·제품 조립·Guard 읽기, 폴더 등급별 공개와 전달 전 거부(Codex 없음) · [기록](archive/a/A167-a49-real-file-server-process.md)
+- [ ] A49 Codex 제품 종단(실제 로그인 세션 또는 C 대본 모델)과 독립 T33 인수 — C와 함께
 - [x] A89 Codex 로그인 화면·`account/read`·기기 코드 로그인/취소/로그아웃 · [기록](archive/a/A89-codex-login-panel.md)
 - [x] A89 API 키 로그인 입력란(2026-10-18 결정, PR #31) · [기록](archive/a/A89-api-key-field.md)
 - [x] A52 로그인 화면 전용 app-server, 로그아웃 뒤 자격증명 정리, 세션 중 로그아웃 막기([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) · [기록](archive/a/A52-account-app-server-logout.md)
