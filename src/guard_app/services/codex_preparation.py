@@ -50,7 +50,7 @@ from guard_app.security.codex_home import (
 from guard_app.security.launcher import CodexLauncher, LaunchedProcess, LaunchError
 from guard_app.security.paths import AppFolders, AppPathError, prepare_app_folders
 from guard_app.services.account_runtime import AccountAccess, AccountUnavailableError
-from guard_app.services.codex_account import AccountError
+from guard_app.services.codex_account import AccountError, BrowserLoginOpener
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
     SessionPreparation,
@@ -149,8 +149,9 @@ class CodexProcessPreparation:
             self._cleanup_task,
         )
 
-    def account_access(self) -> AccountAccess:
-        return AccountAccess(self._launch_account, self._clear_credentials)
+    def account_access(self, *, open_browser: BrowserLoginOpener | None = None) -> AccountAccess:
+        """A109: composition supplies C's validated opener once that entry point exists."""
+        return AccountAccess(self._launch_account, self._clear_credentials, open_browser)
 
     def claim(self) -> None:
         """Take the single-instance lock and clear stale Task folders (A102).
