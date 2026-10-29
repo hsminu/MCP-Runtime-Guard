@@ -67,6 +67,9 @@ class ApprovalListPage(_QueryModel):
 
 
 class CallListQuery(_QueryModel):
+    search: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{0,64}$")] = Field(
+        default="", repr=False
+    )
     task_id: NonEmptyString | None = Field(default=None, repr=False)
     server_id: NonEmptyString | None = Field(default=None, repr=False)
     sort: ListSort

@@ -153,6 +153,29 @@ def test_approval_lanes_search_sort_pagination_and_latest_reason(seeded):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("search", "expected"),
+    [
+        ("a_", ["a_req"]),
+        ("task-2", ["third", "noaudit"]),
+        ("docs", ["a_req", "abreq"]),
+        ("too", ["a_req", "abreq", "third", "noaudit"]),
+    ],
+)
+def test_call_search_is_literal_prefix_of_each_field_and_counts_filtered_rows(
+    seeded, search, expected
+):
+    async def scenario():
+        page = await seeded.list_calls(call_query(search=search, limit=1))
+        assert page.total_count == len(expected)
+        assert [row.request_id for row in page.rows] == expected[:1]
+        remainder = await seeded.list_calls(call_query(search=search, offset=1))
+        assert remainder.total_count == len(expected)
+        assert [row.request_id for row in remainder.rows] == expected[1:]
+
+    asyncio.run(scenario())
+
+
 def test_call_list_detail_and_payload_redaction(seeded):
     async def scenario():
         calls = await seeded.list_calls(call_query())

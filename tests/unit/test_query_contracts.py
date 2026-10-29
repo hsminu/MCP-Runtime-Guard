@@ -72,15 +72,19 @@ def _call_row():
     )
 
 
+@pytest.mark.parametrize("query", [_approval_query, _call_query])
 @pytest.mark.parametrize("search", ["", "a_", "A.0:-z", "x" * 64])
-def test_search_accepts_literal_restricted_prefix(search):
-    assert _approval_query(search=search).search == search
+def test_search_accepts_literal_restricted_prefix(query, search):
+    assert query(search=search).search == search
+    if search:
+        assert search not in repr(query(search=search))
 
 
+@pytest.mark.parametrize("query", [_approval_query, _call_query])
 @pytest.mark.parametrize("search", ["x" * 65, "%", "a b", "a/b", "x\n", "한글"])
-def test_search_rejects_non_contract_values(search):
+def test_search_rejects_non_contract_values(query, search):
     with pytest.raises(ValidationError):
-        _approval_query(search=search)
+        query(search=search)
 
 
 @pytest.mark.parametrize("query", [_approval_query, _call_query])

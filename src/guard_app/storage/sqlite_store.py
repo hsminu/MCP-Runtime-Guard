@@ -3064,6 +3064,8 @@ class SQLiteStore:
             parameters = {
                 "task_id": valid.task_id,
                 "server_id": valid.server_id,
+                "search": valid.search,
+                "search_length": len(valid.search),
                 "newest": int(valid.sort is ListSort.NEWEST),
                 "limit": valid.limit,
                 "offset": valid.offset,
@@ -3072,7 +3074,11 @@ class SQLiteStore:
                 total = connection.execute(
                     """SELECT count(*) FROM requests AS r
                     WHERE (:task_id IS NULL OR r.task_id=:task_id)
-                      AND (:server_id IS NULL OR r.server_id=:server_id)""",
+                      AND (:server_id IS NULL OR r.server_id=:server_id)
+                      AND (:search='' OR substr(r.request_id,1,:search_length)=:search
+                           OR substr(r.task_id,1,:search_length)=:search
+                           OR substr(r.server_id,1,:search_length)=:search
+                           OR substr(r.tool_name,1,:search_length)=:search)""",
                     parameters,
                 ).fetchone()[0]
                 rows = connection.execute(
@@ -3087,6 +3093,10 @@ class SQLiteStore:
                         ORDER BY at_utc,event_id LIMIT 1)
                     WHERE (:task_id IS NULL OR r.task_id=:task_id)
                       AND (:server_id IS NULL OR r.server_id=:server_id)
+                      AND (:search='' OR substr(r.request_id,1,:search_length)=:search
+                           OR substr(r.task_id,1,:search_length)=:search
+                           OR substr(r.server_id,1,:search_length)=:search
+                           OR substr(r.tool_name,1,:search_length)=:search)
                     ORDER BY CASE WHEN :task_id IS NOT NULL AND :newest=1
                                   THEN r.call_seq END DESC,
                         CASE WHEN :task_id IS NOT NULL AND :newest=0
