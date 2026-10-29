@@ -382,6 +382,7 @@ class CallLogPage(QWidget):
         layout.addWidget(self.pager)
 
         self._actions_layout = QBoxLayout(QBoxLayout.Direction.TopToBottom)
+        layout.addLayout(self._actions_layout)
         self.detail_button = KeyboardActionButton("선택한 호출 상세 보기")
         self.detail_button.set_visual(icon="eye", variant="soft")
         self.detail_button.clicked.connect(self._open_selected)
@@ -390,7 +391,6 @@ class CallLogPage(QWidget):
         self.csv_button.clicked.connect(self._copy_csv)
         self._actions_layout.addWidget(self.csv_button)
         self._actions_layout.addStretch(1)
-        layout.addLayout(self._actions_layout)
         layout.addWidget(
             plain_label(
                 "CSV에는 현재 조회·필터 결과의 공개 메타데이터만 들어감. "

@@ -79,6 +79,7 @@ class OverviewPage(QWidget):
         outer.setContentsMargins(24, 24, 24, 40)
         outer.setSpacing(24)
         top = QVBoxLayout()
+        outer.addLayout(top)
         top.setSpacing(8)
         top.addWidget(plain_label("MCP 운영 현황", name="pageTitle"))
         self.metric_list = QFrame()
@@ -98,7 +99,6 @@ class OverviewPage(QWidget):
         top.addWidget(self.metric_list)
         self.metrics_state = plain_label("조회 기능 미연결", name="secondary")
         top.addWidget(self.metrics_state)
-        outer.addLayout(top)
 
         self.attention_section, attention, self.attention_title = _section("지금 확인할 항목")
         self.attention_state = StateMessage()
@@ -118,6 +118,7 @@ class OverviewPage(QWidget):
         self.servers_list = RowList()
         servers.addWidget(self.servers_list)
         footer = QHBoxLayout()
+        servers.addLayout(footer)
         footer.setSpacing(8)
         self.server_preview_note = plain_label(name="secondary")
         footer.addWidget(self.server_preview_note, 1)
@@ -125,7 +126,6 @@ class OverviewPage(QWidget):
         self.all_servers_button.setObjectName("linkButton")
         self.all_servers_button.clicked.connect(lambda: self.navigate_requested.emit("servers", ""))
         footer.addWidget(self.all_servers_button)
-        servers.addLayout(footer)
         outer.addWidget(self.servers_section)
 
         self.calls_section, calls, _ = _section(

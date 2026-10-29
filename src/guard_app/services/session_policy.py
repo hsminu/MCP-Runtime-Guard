@@ -134,6 +134,7 @@ class TaskPolicy:
         hold either document (C2.14). A file changed outside the app is not
         written and raises POLICY_SAVE_FILE_CHANGED; Guard keeps the rules it
         runs, and only a restart reads the file again.
+        Apply cancellation also requires POLICY_APPLY_FAILED, then propagates.
         """
         assembled, saver, task_source = self._assembled, self._saver, self._task_source
         if (
@@ -541,6 +542,11 @@ class TaskPolicy:
                 AccessRulesChecker(change.loaded_profile.access_rules),
                 task_source=task_source,
             )
+        except asyncio.CancelledError:
+            # The file already holds the new document and Guard may hold part of it:
+            # close Guard and require a restart, then keep cancelling (#101, A180).
+            await self._require_restart(assembled, "POLICY_APPLY_FAILED")
+            raise
         except PolicyChangeError:
             # The file holds the new rules; Guard keeps the old ones when it
             # refused before applying, and halted itself when applying failed.

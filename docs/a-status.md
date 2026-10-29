@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-29 · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-30 · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -14,8 +14,6 @@
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
 | mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
-| Windows MSIX 가상 경로의 L2 config·model catalog 비교 실패(사용자 결정으로 C가 경로 비교 수정을 맡음 · C PR 대기, MSIX 앱 아래에서만 실패) | C | A151·A161·A168 |
-| 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인([#21 알림](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6496456303)) | C | A151 |
 
 **A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
 
@@ -94,10 +92,10 @@
 - [ ] A19·A20 실제 codex.exe 세션 — 막힘: 세션 관리자 공통 계약 합의(막힌 것 표). L2 연결은 A151, 실제 실행 확인 남음
 - [x] A151 제품 시작에 C `run_l2`(C6.14) 1회 연결·지문 대조·고정 실패 코드·진행 표시·종료 취소 정리 · [기록](archive/a/A151-l2-startup-connection.md)
 - [x] A151 실제 codex.exe L2·API 키/ChatGPT 로그인한 CODEX_HOME 시작·정리 시간 측정(정규 앱 경로 지정) · [기록](archive/a/A151-logged-in-startup-timing.md)
-- [ ] A151 기본 제품 MSIX 경로의 L2 성공 재확인·C 인수 — 사용자 결정으로 C가 경로 비교 수정을 맡음 · C PR 대기 · [근거](archive/a/A161-msix-l2-path-observation.md)
+- [x] A151 기본 제품 MSIX 경로의 L2 성공 재확인·C 인수 — C6.14-2(#98)의 같은 파일 비교 병합 뒤 main에서 논리·물리 경로 모두 통과(A181) · [기록](archive/a/A181-l2-items-closed-after-c6-14-2.md)
 - [x] A151 MSIX 경로 L2 재확인(수정 없음): Claude 데스크톱이 띄운 셸에서도 같은 두 코드로 실패, 패키지 밖 프로세스에서는 논리 경로도 통과 · [기록](archive/a/A168-msix-l2-host-check.md)
 - [x] A161 실제 데스크톱 MSIX 가상 경로의 L2 실패 재현·정규 경로 대조·시작/종료 계측 · [기록](archive/a/A161-msix-l2-path-observation.md)
-- [ ] A151 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인 — 막힘: C 답([#21 알림](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6496456303), 관찰은 [A162](archive/a/A162-real-run-display-followups.md))
+- [x] A151 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인 — C6.14-2: Codex가 두 검사 호출 순서를 가끔 바꿔 판정이 거짓 실패, C가 순서를 보지 않게 수정(A181) · [기록](archive/a/A181-l2-items-closed-after-c6-14-2.md)
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
 - [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
 - [x] A109 기기 코드 제한 안내·브라우저 로그인 A 연결부·취소/시간초과·중복 요청 처리 · [기록](archive/a/A109-browser-login-wiring.md)
@@ -195,7 +193,7 @@
 - [x] A81·A91 제품 서버 목록의 활성화 확인·도구별 허용·정책 저장·Task 정지·재시작 안내 · [기록](archive/a/A105-activation-lock.md)
 - [x] A155 새로 등록한 도구(OTHER)의 종류·도구 단위 READ 등급·SEND 목적지 인자 편집, 정책 잠금 저장·ACTIVE 재검토·재시작 뒤 대조로 활성화 연결(A81·A91 후속) · [기록](archive/a/A155-tool-kind-settings.md)
 - [x] A156 SEND 목적지 경계 등록·변경·삭제와 Profile 선택, 정책 잠금 저장·즉시 적용·실행 Task 정지(정책 화면) · [기록](archive/a/A156-send-destinations.md)
-- [ ] A155·A156 독립 인수 — B: 정책 문서·부분 저장, C: 재검토·대조 순서, 목적지 판정 계수, 실제 서버 화면 확인
+- [ ] A155·A156 독립 인수 — B: 정책 문서·부분 저장 통과(#101), C: 재검토·대조 순서, 목적지 판정 계수, 실제 서버 화면 확인
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
@@ -231,14 +229,19 @@
 - [x] A170 #89의 `GUARD_CLOSED` 사유를 화면 문구로("미확인" 대신), 요청·승인 행 사유마다 문구가 있는지 시험 · [기록](archive/a/A170-guard-closed-reason-text.md)
 - [x] A171 #92 조회 연결 시험의 Qt 객체·순환 참조를 메인 스레드에서 정리(중단 원인 미확정) · [기록](archive/a/A171-store-query-link-qt-cleanup.md)
 - [x] A172 #92 GC·메인 스레드 지연 삭제 중단 경로 조사(최종 C++ 대상 미확정) · [기록](archive/a/A172-store-query-link-abort-cause.md)
-- [ ] A 화면 시험 묶음이 모두 통과한 뒤 종료 중 abort(main에서도 재현) — A 화면 시험 전체의 Qt 객체 정리 방법 결정, 공용 conftest는 합의 필요 · [근거](archive/a/A172-store-query-link-abort-cause.md)
-- [ ] 제품 `run_application` 창·페이지 수명 정리(백엔드 종료 확인 → 남은 이벤트 처리 → 창 삭제) · [근거](archive/a/A172-store-query-link-abort-cause.md)
+- [x] A 화면 시험 묶음이 모두 통과한 뒤 종료 중 abort(main에서도 재현) — 원인은 부모 없는 하위 레이아웃의 Qt 위젯 이중 소유, A178에서 제거(공용 conftest 불필요) · [기록](archive/a/A178-qt-double-ownership.md)
+- [x] A182 제품 `run_application` 창·페이지 수명 정리: 백엔드 종료가 확인된 경로에서 남은 이벤트 처리 뒤 창 삭제, 미확인 경로는 창 유지 · [기록](archive/a/A182-run-application-window-lifetime.md)
 - [x] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 · [기록](archive/a/A174-l2-failure-codes-from-c.md)
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 - [x] A173 #91 도구 설정 저장을 apply_settings로 전환·불일치 재저장 복구 · [기록](archive/a/A173-apply-settings-switch.md)
 - [x] A175 승인 목록 서버 거르기를 bridge의 B 서버 ID 규칙으로 검사 · [기록](archive/a/A175-approval-server-filter-id.md)
 - [x] A176 #99 B 리뷰 제안: 저장기 없음은 Registry 쓰기 전에 거부됨을 시험으로 고정 · [기록](archive/a/A176-missing-saver-order.md)
+- [x] A177 #94 F-02: 도구 설정 화면에 도구 단위 READ 등급 안내 추가 · [기록](archive/a/A177-tool-read-grade-hint.md)
+- [x] A178 #92 중단 원인: 부모 없는 하위 레이아웃이 남긴 Qt 위젯 이중 소유 제거·소유 회귀 시험 · [기록](archive/a/A178-qt-double-ownership.md)
+- [x] A179 #101 B-ACCEPT-01: READY 뒤 예외에도 backend 종료 확인 전에는 앱 잠금 유지, 미확인이면 잠금을 쥔 채 종료 · [기록](archive/a/A179-ready-exception-lock-order.md)
+- [x] A180 #101 제안: 정책·목적지 저장 성공 뒤 B 적용 중 취소에도 재시작 요구·Guard 닫기, 일곱 저장 경로 취소 시험 · [기록](archive/a/A180-cancel-during-apply.md)
+- [x] A183 #107 C 리뷰 1번: UI 색 리터럴 검사가 주석의 이슈 번호(`#101`)를 색으로 읽지 않게 함 · [기록](archive/a/A183-color-check-skips-comments.md)
 
 ## 통합·패키징
 
@@ -279,6 +282,7 @@
 - [x] A152 개요·승인 행과 화면 투영 분리 · [기록](archive/a/A152-overview-approvals-render.md)
 - [x] A153 `SessionRuntime`에서 제품 시작 조립 분리(공개 초기화·등록 경계, 기존 `bootstrap_product` 재수출) · [기록](archive/a/A153-session-runtime-boundary.md)
 - [x] A154 `BackendBridge`를 Qt 경계·생명주기 host·명령 접수 문맥·action 처리로 분리 · [기록](archive/a/A154-backend-bridge-commands.md)
-- [ ] A116·A152–A154 독립 리뷰 — C: 화면 격리·signal·로그 설치 순서, bridge 생명주기·replay·종료 순서. B: Store 활성화·종료 확인
+- [x] A116·A152–A154 B 인수(Store 활성화·종료 확인): [#107 B 재확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/107#issuecomment-6505436086) A179로 B-ACCEPT-01 해소
+- [ ] A116·A152–A154 C 독립 리뷰 — 화면 격리·signal·로그 설치 순서, bridge 생명주기·replay·종료 순서(예외 경로·창 정리 순서는 [#107 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/107#issuecomment-6505410334)에서 확인)
 - [x] A139 A 모듈 ID 생성을 `security/ids.py`로 통합([#65 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/65#issuecomment-6472889394)), B6.8 복구에 `new_id("run")` 연결(A138) · [기록](archive/a/A139-ids-module.md)
 - [x] A150 A 단위 시험 압축: 1차 같은 모양 시험 묶기([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)), 2차 줄 수 줄이기(목표 30% 미달) · [기록](archive/a/A150-a-test-compression.md)

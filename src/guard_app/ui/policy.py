@@ -128,6 +128,7 @@ class ToolAllowDialog(QDialog):
         )
         layout.addWidget(self.warning)
         buttons = QHBoxLayout()
+        layout.addLayout(buttons)
         self.save_button = KeyboardActionButton("저장")
         self.save_button.setEnabled(view.change_available)
         self.save_button.clicked.connect(self.accept)
@@ -135,7 +136,6 @@ class ToolAllowDialog(QDialog):
         close.clicked.connect(self.reject)
         buttons.addWidget(self.save_button)
         buttons.addWidget(close)
-        layout.addLayout(buttons)
 
     def selection(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """READ/SEND tools only: B3.10 takes exactly one choice per supported tool."""

@@ -112,6 +112,7 @@ class CodexLoginInfo(QWidget):
             )
         )
         key_row = QHBoxLayout()
+        layout.addLayout(key_row)
         self.api_key_input = QLineEdit()
         self.api_key_input.setAccessibleName("Codex API 키 입력")
         self.api_key_input.setPlaceholderText("OpenAI API 키")
@@ -125,7 +126,6 @@ class CodexLoginInfo(QWidget):
         self.api_key_button.clicked.connect(self._send_api_key)
         key_row.addWidget(self.api_key_input, 1)
         key_row.addWidget(self.api_key_button)
-        layout.addLayout(key_row)
         layout.addWidget(plain_label(CODEX_LOGIN_TEXT["chatgpt_alternative"], name="sectionTitle"))
         layout.addWidget(plain_label(CODEX_LOGIN_TEXT["device_help"], name="secondary"))
         self.browser_hint = plain_label(CODEX_LOGIN_TEXT["browser_unavailable"], name="secondary")
@@ -137,6 +137,7 @@ class CodexLoginInfo(QWidget):
         self.device.setVisible(False)
         layout.addWidget(self.device)
         buttons = QHBoxLayout()
+        layout.addLayout(buttons)
         self.read_button = KeyboardActionButton("상태 확인")
         self.login_button = KeyboardActionButton(CODEX_LOGIN_TEXT["device_button"])
         self.browser_button = KeyboardActionButton(CODEX_LOGIN_TEXT["browser_button"])
@@ -156,7 +157,6 @@ class CodexLoginInfo(QWidget):
         ):
             buttons.addWidget(button)
         buttons.addStretch(1)
-        layout.addLayout(buttons)
         layout.addWidget(
             plain_label("Scanner는 아래에서 별도 API 키를 설정하세요.", name="secondary")
         )

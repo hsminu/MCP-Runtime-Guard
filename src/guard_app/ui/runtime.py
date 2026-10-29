@@ -113,11 +113,11 @@ class RuntimePanel(QWidget):
         self._session_actions.setSpacing(12)
         session_layout.addLayout(self._session_actions)
         notice = QVBoxLayout()
+        session_layout.addLayout(notice)
         notice.setSpacing(0)
         notice.addWidget(self.message)
         notice.addWidget(self.code_toggle, 0, Qt.AlignmentFlag.AlignLeft)
         notice.addWidget(self.internal_code)
-        session_layout.addLayout(notice)
         layout.addWidget(session)
 
         approval = QFrame()

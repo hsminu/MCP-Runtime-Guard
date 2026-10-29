@@ -220,6 +220,7 @@ class ServerListPage(QWidget):
         layout.addWidget(self.state_message)
 
         filters = QVBoxLayout()
+        layout.addLayout(filters)
         filters.setSpacing(8)
         self.search = QLineEdit()
         self.search.setPlaceholderText("서버 ID 또는 표시 이름 검색")
@@ -227,6 +228,7 @@ class ServerListPage(QWidget):
         self.search.textChanged.connect(self._apply_filters)
         filters.addWidget(self.search)
         self._choices = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        filters.addLayout(self._choices)
         self._choices.setSpacing(8)
         self.transport_filter = SelectionBox()
         self.transport_filter.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -244,8 +246,6 @@ class ServerListPage(QWidget):
         self.status_filter.setAccessibleName("등록 상태 필터")
         self.status_filter.currentIndexChanged.connect(self._apply_filters)
         self._choices.addWidget(self.status_filter)
-        filters.addLayout(self._choices)
-        layout.addLayout(filters)
         layout.addWidget(
             plain_label("필터는 현재 전달된 Registry 조회 결과에만 적용됨.", name="secondary")
         )

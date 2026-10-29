@@ -140,6 +140,7 @@ class ListRow(QFrame):
         layout.setContentsMargins(16, 8, 12, 8)
         layout.setSpacing(4)
         top = QHBoxLayout()
+        layout.addLayout(top)
         top.setSpacing(8)
         if lead:
             top.addWidget(plain_label(lead, name="cardTitle", wrap=False))
@@ -152,14 +153,13 @@ class ListRow(QFrame):
             page, key = target
             self.link.clicked.connect(lambda: self.navigate_requested.emit(page, key))
         top.addWidget(self.link, 0, Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(top)
         meta = QHBoxLayout()
+        layout.addLayout(meta)
         meta.setSpacing(8)
         if badge is not None:
             meta.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
         self.facts = _flex_label(facts, name="secondary")
         meta.addWidget(self.facts, 1)
-        layout.addLayout(meta)
 
 
 class ServerRow(ListRow):

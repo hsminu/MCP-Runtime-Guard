@@ -28,6 +28,7 @@ class DestinationDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(plain_label(DESTINATION_NOTE))
         form = QFormLayout()
+        layout.addLayout(form)
         self.identifier = QLineEdit()
         self.identifier.setAccessibleName("목적지 ID")
         if row is None:
@@ -45,7 +46,6 @@ class DestinationDialog(QDialog):
         form.addRow("경계 종류", self.tier)
         form.addRow("최고 수신 등급", self.label)
         form.addRow(self.selected)
-        layout.addLayout(form)
         self.tier.currentIndexChanged.connect(self._labels)
         self._labels()
         if row is not None:

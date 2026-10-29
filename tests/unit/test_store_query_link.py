@@ -72,8 +72,9 @@ def cleanup_qt_objects():
     application = QApplication.instance()
     existing = set(application.topLevelWidgets()) if application is not None else set()
     yield
-    # Leftover Qt cycles may cause an abort if a later worker thread collects them.
-    # Delete this test's widgets and collect cycles on the main thread instead.
+    # Worker GC of page cycles queued double-owned children for main-thread deletion;
+    # Qt deleted them with the page first, causing an abort (ownership fixed in A178).
+    # Still delete this test's widgets and collect cycles on the main thread.
     assert threading.current_thread() is threading.main_thread()
     application = QApplication.instance()
     if application is not None:
