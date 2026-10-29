@@ -25,7 +25,7 @@ import asyncio
 import contextlib
 import json
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -264,13 +264,20 @@ class MockModel:
 
     첫 요청에는 `forced_calls()`를, 그 뒤로는 최종 답 하나를 스트리밍으로 돌려준다. 받은 요청
     본문은 판정에만 쓰고 밖으로 내보내지 않는다.
+
+    `then`은 C 시험 하니스용이다. 두 번째 요청부터 차례로 돌려줄 응답 항목 목록이고, 다 쓰면
+    최종 답이다. L2는 쓰지 않는다.
     """
 
     def __init__(
-        self, token: str, *, first_response: list[dict[str, object]] | None = None
+        self,
+        token: str,
+        *,
+        first_response: list[dict[str, object]] | None = None,
+        then: Sequence[list[dict[str, object]]] = (),
     ) -> None:
         self._token = token
-        self._first = forced_calls() if first_response is None else first_response
+        self._script = [forced_calls() if first_response is None else first_response, *then]
         self._server: asyncio.Server | None = None
         self.requests: list[dict[str, Any]] = []
         self.other_requests: list[str] = []
@@ -349,8 +356,8 @@ class MockModel:
         self.requests.append(parsed if type(parsed) is dict else {})
         response_id = f"resp_l2_{index}"
         events = (
-            _response_events(response_id, self._first)
-            if index == 0
+            _response_events(response_id, self._script[index])
+            if index < len(self._script)
             else _final_message(response_id)
         )
         stream = "".join(

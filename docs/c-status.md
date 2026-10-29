@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-29 · main `9d427a3` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-29 · main `48ea024` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -105,15 +105,15 @@
 - [ ] C6.5 실험 스크립트 Windows 수정(socket 차단·`PYTHONPATH`·인코딩)과 MCP 정의 수집기 저장소 반영
 - [ ] C6.6 Windows Cisco 실험(2026-10-14~15) 완료 기록 작성
 - [ ] C6.7 Fake·실제 Transport·Store·AccessChecker·Scanner에 같은 계약 테스트
-- [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05. 41개 중 완료 22·부분 3·미실행 16([현황](archive/c/C6.25-verification-summary.md)). Guard 경로 T01·T09·T10·T11(재시작)·T26·T30 계수와 T28 지연 측정 완료 · [기록](archive/c/C6.8-1-guard-path-counts.md)
+- [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05. 41개 중 완료 28·부분 3·미실행 10([현황](archive/c/C6.25-verification-summary.md), 그 뒤 C6.8-2로 6개 완료). Guard 경로 T01·T09·T10·T11(재시작)·T26·T30 계수와 T28 지연 측정 완료 · [기록](archive/c/C6.8-1-guard-path-counts.md). 실제 codex.exe(대본 가짜 모델)를 거친 T01–T03·T21·T41·T42·T43·T45·T46 완료 · [기록](archive/c/C6.8-2-codex-flow.md)
 - [x] C6.9 자체 접근 규칙의 거절·오류·누락(활성화 때 사용자가 끈 도구)에서 전송 0: 제품 조립의 실제 `AccessRulesChecker`·C `ServerRegistry`와 실제 stdio(C2.6)·HTTP 서버로 승인 소비·host_dispatch·wire `tools/call`·수신 효과 4개 계수 확인, 대조군 포함 28개 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C6.9-access-rule-counts.md)
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [x] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록: Bandit·Semgrep은 `src`만 봐서 빠지고 배포물에도 없음(AF-01), Semgrep 제외 경로를 루트 기준 `/src/...`로 고정 · [기록](archive/c/C6.12-attack-fixture-scan-scope.md)
 - [x] C6.13 Codex 0.162.1 L1 설정·모델 정보 파일·고정값(`config/codex/`)·설치 스크립트, CODEX_HOME에 쓰고 해시를 돌려주는 함수(#21 4번) · [기록](archive/c/C6.13-codex-l1.md)
 - [x] C6.14 L2 시작 시험(T22·T39·T40, `security/codex_l2.py`): 같은 codex.exe·CODEX_HOME·환경에 가짜 모델만 바꿔 requirements·설정 층·적용 값·원격 제어·도구 목록·프롬프트 블록·금지 호출 30종 거부·Guard 호출 순차·종료를 판정, `run_l2`가 A 입구에 줄 결과를 돌려줌. 진행 중 종료 0.05–0.11초 측정 · [기록](archive/c/C6.14-codex-l2.md)
-- [ ] C6.15 L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답, 원격 제어 상태가 `disabled`가 아닐 때 정지(C-CODEX-07) 검증 · [결정](contracts.md#사용자-결정)
-- [ ] C6.16 Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.sandbox_migration`·`tmp\arg0` 보조 파일·인증 파일(`secrets/*.age`는 C6.21에서 확인), T43·#21 8번)과 동시 실행 때 경합(T46) 확인. Codex가 TEMP에 쓰는 것을 보고 TEMP·TMP를 Task 폴더 아래로 둘지, `codex-stderr.log` 크기 상한(#35 B launcher 2·3번) · [대장](weakness_register.md#발견-항목과-조치)
+- [ ] C6.15 (허용 밖 항목 정지는 실제 codex.exe로 확인, [C6.8-2](archive/c/C6.8-2-codex-flow.md)) L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답, 원격 제어 상태가 `disabled`가 아닐 때 정지(C-CODEX-07) 검증 · [결정](contracts.md#사용자-결정)
+- [ ] C6.16 (DB 다섯 개의 Task 폴더 위치·CODEX_HOME 남는 항목·동시 실행 정리는 확인, [C6.8-2](archive/c/C6.8-2-codex-flow.md). TEMP 쓰기·stderr 크기 상한 남음) Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.sandbox_migration`·`tmp\arg0` 보조 파일·인증 파일(`secrets/*.age`는 C6.21에서 확인), T43·#21 8번)과 동시 실행 때 경합(T46) 확인. Codex가 TEMP에 쓰는 것을 보고 TEMP·TMP를 Task 폴더 아래로 둘지, `codex-stderr.log` 크기 상한(#35 B launcher 2·3번) · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C6.17 (후속·선택) codex.exe AppContainer 실행 실험(C-CODEX-04)
 - [x] C6.18 최종 제출 전 C-CODEX-05 약관 재확인(#19 8번): Sign in with ChatGPT 약관(자기 앱 이름, 사칭·제휴 암시 금지)과 오픈소스 토큰 공유 경로 확인. 위험 수준 그대로(위험 수용 유지), 제출·시연은 API 키 로그인 기본·OpenAI 제휴 암시 금지 권고 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C6.18-codex-terms-recheck.md)
 - [x] C6.19 CODEX_HOME 최상위 허용 항목 확인: 지시문 파일(AGENTS.md 등)·허용 밖 항목이 있으면 쓰기·Task 시작 거부(C-CODEX-06) · [기록](archive/c/C6.19-codex-home-allowlist.md)
