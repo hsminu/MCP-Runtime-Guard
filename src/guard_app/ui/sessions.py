@@ -44,6 +44,7 @@ from guard_app.services.bridge import (
     new_draft_key,
 )
 
+from .composer import ATTACHMENT_NOTICE, MessageDraft
 from .icons import line_icon
 from .presentation import (
     COMMAND_REFUSALS,
@@ -105,6 +106,7 @@ from .widgets import (
 
 MEMORY_NOTICE = "대화·초안은 메모리에만 있음. Task 종료나 앱 종료 시 원문을 지움."
 APPROVAL_BAND_TITLE = "승인이 필요한 도구 호출이 있음"
+APPROVAL_SUMMARY_UNAVAILABLE = "요청 요약을 불러오지 못함. 승인 사본 확인에서 내용을 확인하세요."
 APPROVAL_BAND_DETAIL = "수신처와 전체 인자를 확인한 뒤 승인하거나 거절하세요."
 
 # The conversation column width shared by header, transcript and composer.
@@ -152,17 +154,27 @@ class SessionView:
     facts: QBoxLayout
     approval: QFrame
     band: QBoxLayout
+    input_pill: StatusPill
+    stop: KeyboardActionButton
+    approval_summary: QLabel
+    approval_grade: LabelPill
     snapshot: TaskProjection | None = None
     updated: datetime = field(default_factory=datetime.now)
     pending_command: str | None = None
     content_present: bool = False
     focus_draft: bool = False
     command_notice: str = ""
+    command_code: str = ""
     partial: _PartialAnswer | None = None
     title_source: str = "auto"
     auto_title_set: bool = False
     pending_delete: str | None = None
     delete_notice: str = ""
+    pending_stop: str | None = None
+    stop_notice: str = ""
+    input_notice: str = ""
+    approval_id: str | None = None
+    approval_token: int | None = None
 
 
 class _SessionStack(QStackedWidget):
@@ -179,6 +191,7 @@ class SessionWorkspace(QWidget):
     message_requested = Signal(str, int, str, str, object)
     results_requested = Signal()
     approval_review_requested = Signal()
+    approval_lookup_requested = Signal(int, str)
     selection_changed = Signal(str)
     titles_changed = Signal()
     new_session_requested = Signal(str, object, str)
@@ -188,11 +201,13 @@ class SessionWorkspace(QWidget):
         self.sessions: dict[str, SessionView] = {}
         self.current_key = ""
         self._next_session_number = 0
+        self._next_approval_token = -1
         self._active_key: str | None = None
         self._ready = False
         self._session_blocker = ""
         self._startup_notice = ""
         self._busy_scopes: frozenset[tuple[str, int]] = frozenset()
+        self._turn_scopes: frozenset[tuple[str, int]] = frozenset()
         self._seen_events: set[tuple[str, int, str, str]] = set()
         self._terminal_keys: set[str] = set()
         self._removed_keys: set[str] = set()
@@ -525,7 +540,11 @@ class SessionWorkspace(QWidget):
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setSpacing(8)
         notice = plain_label("", name="sessionNotice")
-        bottom_layout.addWidget(notice)
+        status_line = QHBoxLayout()
+        bottom_layout.addLayout(status_line)
+        input_pill = StatusPill()
+        status_line.addWidget(input_pill, 0, Qt.AlignmentFlag.AlignTop)
+        status_line.addWidget(notice, 1)
         # A pending approval is the one thing here that waits on a person, so
         # it gets a tinted band over the composer instead of the gray notice.
         # Shown only while Guard reports WAITING_APPROVAL, so it never becomes
@@ -545,7 +564,10 @@ class SessionWorkspace(QWidget):
         band.addLayout(words, 1)
         words.setSpacing(2)
         words.addWidget(plain_label(APPROVAL_BAND_TITLE, name="approvalBandTitle"))
-        words.addWidget(plain_label(APPROVAL_BAND_DETAIL, name="approvalBandDetail"))
+        approval_summary = plain_label(APPROVAL_SUMMARY_UNAVAILABLE, name="approvalBandDetail")
+        words.addWidget(approval_summary)
+        approval_grade = LabelPill()
+        words.addWidget(approval_grade, 0, Qt.AlignmentFlag.AlignLeft)
         review = KeyboardActionButton("승인 사본 확인")
         review.setObjectName("approvalBandButton")
         review.set_visual(icon="eye")
@@ -560,10 +582,9 @@ class SessionWorkspace(QWidget):
         composer = QVBoxLayout(compose)
         composer.setContentsMargins(12, 12, 8, 8)
         composer.setSpacing(8)
-        draft = QPlainTextEdit()
+        draft = MessageDraft()
         draft.setObjectName("messageDraft")
         draft.setAccessibleName("세션 메시지 초안")
-        draft.setPlaceholderText("메시지를 입력하세요")
         composer.addWidget(draft)
         controls = QHBoxLayout()
         composer.addLayout(controls)
@@ -581,8 +602,14 @@ class SessionWorkspace(QWidget):
         send.set_visual(icon="arrow_up", variant="primary")
         send.setFixedSize(28, 28)
         send.setAccessibleName("보내기")
-        send.setToolTip("보내기")
+        send.setToolTip("보내기 (Enter / Ctrl+Enter)")
         controls.addWidget(send)
+        stop = KeyboardActionButton("작업 중지")
+        stop.setObjectName("stopButton")
+        stop.set_visual(icon="stop", variant="danger")
+        stop.setAutoDefault(False)
+        stop.setDefault(False)
+        controls.addWidget(stop)
         bottom_layout.addWidget(compose)
         bottom_layout.addWidget(plain_label(MEMORY_NOTICE, name="sessionFootnote"))
         column.addWidget(bottom)
@@ -609,11 +636,18 @@ class SessionWorkspace(QWidget):
             facts,
             approval,
             band,
+            input_pill,
+            stop,
+            approval_summary,
+            approval_grade,
         )
         self.sessions[key] = view
         self.stack.addWidget(page)
         draft.textChanged.connect(lambda: self._draft_changed(view))
         send.clicked.connect(lambda: self._send(view))
+        draft.send_requested.connect(lambda: self._send(view))
+        draft.attachment_rejected.connect(lambda: self._attachment_rejected(view))
+        stop.clicked.connect(lambda: self._request_stop(view))
         start.clicked.connect(lambda: self._start(view))
         transcript.changed.connect(lambda: self._show_greeting(view))
         self._show_greeting(view)
@@ -668,14 +702,15 @@ class SessionWorkspace(QWidget):
 
     @staticmethod
     def _fit_draft(draft: QPlainTextEdit) -> None:
-        """Start at two lines and grow to six before the draft scrolls."""
+        """Start at two lines and grow to eight before the draft scrolls."""
         draft.ensurePolished()
         lines = int(draft.document().documentLayout().documentSize().height())
-        rows = max(2, min(6, lines))
+        rows = max(2, min(8, lines))
         margin = 2 * draft.document().documentMargin() + 2
         draft.setFixedHeight(int(rows * draft.fontMetrics().lineSpacing() + margin))
 
     def _draft_changed(self, view: SessionView) -> None:
+        view.input_notice = ""
         self._fit_draft(view.draft)
         self._refresh_view(view)
 
@@ -716,8 +751,14 @@ class SessionWorkspace(QWidget):
         for view in self.sessions.values():
             self._refresh_view(view)
 
-    def set_busy_scopes(self, scopes: frozenset[tuple[str, int]]) -> None:
+    def set_busy_scopes(
+        self,
+        scopes: frozenset[tuple[str, int]],
+        *,
+        turn_scopes: frozenset[tuple[str, int]] | None = None,
+    ) -> None:
         self._busy_scopes = scopes
+        self._turn_scopes = scopes if turn_scopes is None else turn_scopes
         for view in self.sessions.values():
             self._refresh_view(view)
 
@@ -766,10 +807,14 @@ class SessionWorkspace(QWidget):
             command_notice=view.command_notice,
             session_blocker=self._session_blocker,
             startup_notice=self._startup_notice,
+            command_code=view.command_code,
         )
         writable, active = display.writable, display.active
         view.send.setEnabled(writable and bool(view.draft.toPlainText().strip()))
-        view.send.setVisible(snapshot is not None)
+        stopping = self._can_stop(view)
+        view.send.setVisible(snapshot is not None and not stopping)
+        view.stop.setVisible(stopping)
+        view.stop.setEnabled(stopping and view.pending_stop is None and view.pending_delete is None)
         view.start.setVisible(snapshot is None)
         view.start.setEnabled(
             self._ready and not self._session_blocker and view.pending_command is None
@@ -777,7 +822,7 @@ class SessionWorkspace(QWidget):
         view.results.setEnabled(active)
         if snapshot is not None:
             if snapshot.model_mode == "codex":
-                view.model.set_model_locked(True)
+                view.model.set_model_locked(True, snapshot.model_id)
             else:
                 view.model.set_fixed(f"모델: {snapshot.model_mode}")
         view.draft.setReadOnly(
@@ -802,13 +847,92 @@ class SessionWorkspace(QWidget):
                 snapshot.label.name if snapshot.label is not None else None,
                 text=task_label_text(snapshot.label, snapshot.unclassified),
             )
-        view.notice.setText(view.delete_notice or display.note)
-        waiting = display.waiting
-        view.approval.setVisible(waiting)
-        # The band says it; a failure notice still shows above it.
-        view.notice.setVisible(
-            not waiting or bool(display.failure_notice) or bool(view.delete_notice)
+        view.input_pill.set_status(display.pill, display.tone)
+        view.notice.setText(
+            view.delete_notice or view.stop_notice or view.input_notice or display.note
         )
+        view.notice.setVisible(True)
+        waiting = bool(display.waiting and snapshot is not None and snapshot.approval_id)
+        view.approval.setVisible(waiting)
+        approval_id = snapshot.approval_id if waiting and snapshot is not None else None
+        if snapshot is not None:
+            view.approval_grade.set_label(
+                snapshot.label.name if snapshot.label is not None else None,
+                text=task_label_text(snapshot.label, snapshot.unclassified),
+            )
+        if view.approval_id != approval_id:
+            view.approval_id = approval_id
+            view.approval_token = None
+            view.approval_summary.setText(APPROVAL_SUMMARY_UNAVAILABLE)
+            if approval_id is not None:
+                token = self._next_approval_token
+                self._next_approval_token -= 1
+                view.approval_token = token
+                self.approval_lookup_requested.emit(token, approval_id)
+
+    def set_session_approval(self, token: int, approval_id: str, summary: str) -> None:
+        for view in self.sessions.values():
+            if view.approval_token == token and view.approval_id == approval_id:
+                view.approval_summary.setText(summary or APPROVAL_SUMMARY_UNAVAILABLE)
+
+    def set_approval_source_available(self, available: bool) -> None:
+        for view in self.sessions.values():
+            view.approval_token = None
+            view.approval_summary.setText(APPROVAL_SUMMARY_UNAVAILABLE)
+            if available:
+                view.approval_id = None
+                self._refresh_view(view)
+
+    def _attachment_rejected(self, view: SessionView) -> None:
+        view.input_notice = ATTACHMENT_NOTICE
+        self._refresh_view(view)
+
+    def _can_stop(self, view: SessionView) -> bool:
+        snapshot = view.snapshot
+        return bool(
+            snapshot is not None
+            and snapshot.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+            and (
+                view.pending_command is not None
+                or view.pending_stop is not None
+                or (snapshot.task_id, snapshot.epoch) in self._turn_scopes
+            )
+        )
+
+    def _request_stop(self, view: SessionView) -> None:
+        if not self._can_stop(view) or view.pending_stop or view.key in self._dialogs:
+            return
+        dialog = ConfirmDialog(
+            "작업을 중지할까요?",
+            "Task가 정지되어 이 세션에서는 더 보낼 수 없음.\n"
+            "이미 전송된 쓰기와 외부 작업은 취소되지 않음.\n"
+            "모델 답변만 멈추는 기능은 아직 없음.",
+            "작업 중지",
+            dangerous=True,
+            parent=self,
+        )
+        dialog.accepted.connect(lambda: self._confirm_stop(view))
+        self._track_dialog(view.key, dialog)
+
+    def _confirm_stop(self, view: SessionView) -> None:
+        if self.sessions.get(view.key) is not view or not self._can_stop(view) or view.pending_stop:
+            return
+        snapshot = view.snapshot
+        if snapshot is None:
+            return
+        self._stop_results = {}
+        command = None if self._stopper is None else self._stopper(snapshot.task_id, snapshot.epoch)
+        results = self._stop_results
+        self._stop_results = None
+        view.pending_stop = command
+        view.stop_notice = (
+            "중지 요청됨 · 적용 여부 확인 중"
+            if command
+            else "작업 중지를 확인하지 못함. 상태를 확인하세요."
+        )
+        self._refresh_view(view)
+        if command in results:
+            self.settle_command(command, results[command])
 
     def _send(self, view: SessionView) -> None:
         if not view.send.isEnabled() or view.snapshot is None or view is not self.current:
@@ -819,6 +943,7 @@ class SessionWorkspace(QWidget):
             return
         command = new_command_id()
         view.command_notice = ""
+        view.command_code = ""
         view.pending_command = command
         self._refresh_view(view)
         self.message_requested.emit(
@@ -831,6 +956,7 @@ class SessionWorkspace(QWidget):
         options = SessionOptions(model=view.model.model)
         command = new_command_id()
         view.command_notice = "새 Task 생성 요청됨 · 연결과 시작 검사 확인 중"
+        view.command_code = ""
         view.pending_command = command
         self._refresh_view(view)
         self.new_session_requested.emit(view.key, options, command)
@@ -925,6 +1051,14 @@ class SessionWorkspace(QWidget):
         if self._stop_results is not None:
             self._stop_results[command_id] = code
         for view in tuple(self.sessions.values()):
+            if view.pending_stop == command_id:
+                view.pending_stop = None
+                view.stop_notice = (
+                    "작업 정지를 확인함. 이미 전송된 쓰기는 수신됐을 수 있음."
+                    if view.snapshot is not None and view.snapshot.status in FINAL_STATUSES
+                    else "작업 중지를 확인하지 못함. 상태를 확인하세요."
+                )
+                self._refresh_view(view)
             if view.pending_delete == command_id:
                 if view.snapshot is not None and view.snapshot.status in FINAL_STATUSES:
                     self._remove_session(view)
@@ -939,6 +1073,7 @@ class SessionWorkspace(QWidget):
                 self._stop_partial(view)
             if view.pending_command == command_id:
                 view.pending_command = None
+                view.command_code = code
                 # Always replace the pending notice, including unknown failures.
                 view.command_notice = ""
                 failure_notice = codex_failure_notice(code, creating=view.snapshot is None)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QGuiApplication, QResizeEvent
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -138,6 +138,28 @@ class GuardWindow(QMainWindow):
         work.addWidget(self.stack, 1)
         root.addWidget(workspace, 1)
         self._connect_shell()
+        for key, callback in (
+            ("Ctrl+N", self.sessions.new_session),
+            ("Ctrl+K", self._focus_session_search),
+            ("Ctrl+L", self._focus_message),
+        ):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.setAutoRepeat(False)
+            shortcut.activated.connect(callback)
+        self.new_session_button.setToolTip("새 세션 (Ctrl+N)")
+        self.sessions.search.setToolTip("세션 검색 (Ctrl+K)")
+        self.menu_button.setToolTip("메뉴 · 세션 검색 (Ctrl+K)")
+
+    def _focus_message(self) -> None:
+        self.navigate("runs")
+        self.sessions.current.draft.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def _focus_session_search(self) -> None:
+        if self.sidebar.isHidden():
+            self._nav_menu.popup(self.menu_button.mapToGlobal(QPoint(0, self.menu_button.height())))
+        else:
+            self.sessions.search.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def _assemble_shell(self) -> QHBoxLayout:
         central = QWidget()
@@ -523,12 +545,19 @@ class GuardWindow(QMainWindow):
 
     def _connect_runtime(self, panel: RuntimePanel) -> None:
         self.sessions.set_stopper(panel.stop_task)
-        panel.state_changed.connect(lambda: self.sessions.set_busy_scopes(panel.busy_scopes))
+        panel.state_changed.connect(
+            lambda: self.sessions.set_busy_scopes(panel.busy_scopes, turn_scopes=panel.turn_scopes)
+        )
         panel.selected_snapshot_changed.connect(self._sync_selected_task)
         bridge = panel.bridge
         self.server_add_form.attach_registration(bridge)
         self.server_page.attach_activation(bridge)
         self.store_queries = StoreQueryLink(bridge, self.approval_page, self.log_page, self)
+        self.sessions.approval_lookup_requested.connect(self.store_queries.lookup_session_approval)
+        self.store_queries.session_approval_ready.connect(self.sessions.set_session_approval)
+        self.store_queries.session_approval_source_changed.connect(
+            self.sessions.set_approval_source_available
+        )
         bridge.registration_changed.connect(self._registration_rows)
         bridge.task_changed.connect(self.sessions.set_snapshot)
         bridge.session_created.connect(self.sessions.session_created)

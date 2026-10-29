@@ -421,7 +421,7 @@ def test_model_chip_picks_the_reasoning_level_and_keeps_a_started_task_model(win
     assert view.model.isEnabled()
     assert not any(action.isEnabled() for action in view.model.model_actions.values())
     view.model.effort_actions["high"].trigger()
-    assert view.model.text() == "GPT-6.1-Sol · 추론 높음"
+    assert view.model.text() == "모델 확인 전 · 추론 높음"
     assert view.model.effort_actions["high"].isChecked()
     view.draft.setPlainText("깊게 생각해 줘")
     view.send.click()
@@ -1041,8 +1041,9 @@ def test_approval_band_shows_only_while_guard_waits_on_a_person(window, app):
     app.processEvents()
     assert not band.isHidden()
     assert any(label.text() == APPROVAL_BAND_TITLE for label in band.findChildren(QLabel))
-    # The band carries the message, so the gray notice line steps aside.
-    assert view.notice.isHidden()
+    # A191 keeps the status explanation beside the composer's status pill.
+    assert not view.notice.isHidden()
+    assert view.input_pill.text() == "승인 필요"
     assert panel.approval_section.property("attention") is True
     row = shell.sessions.list.item(0).data(_ROW_ROLE)
     assert (row.status, row.tone) == ("승인 필요 · 대기 중", "approval")

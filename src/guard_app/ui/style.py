@@ -164,6 +164,15 @@ QScrollArea#conversationTranscript, QWidget#transcriptContent {
     background: $canvas; border: none; }
 QFrame#userBubble { background: $bubble; border: 1px solid $bubble_line; border-radius: 12px; }
 QLabel#userText { font-size: 14px; color: $ink; }
+QLabel#answerHeading { font-size: 14px; font-weight: 600; color: $body; }
+QLabel#answerHeading[level="1"] { font-size: 16px; }
+QLabel#answerHeading[level="2"] { font-size: 15px; }
+QLabel#answerQuote { border-left: 3px solid $hairline_strong; padding-left: 10px; color: $body; }
+QFrame#answerRule { background: $hairline_strong; }
+QFrame#codeBlock { background: $raised; border: 1px solid $hairline_strong; border-radius: 6px; }
+QPlainTextEdit#codeText { background: $raised; border: none; font-size: 13px; }
+QPushButton#jumpLatest { background: $raised; color: $body; border: 1px solid $hairline_strong;
+    border-radius: 12px; padding: 6px 12px; }
 QLabel#answerText { font-size: 14px; color: $body; }
 QLabel#answerLabel { font-size: 12px; color: $mute; }
 QLabel#answerLabel[tone="live"] { color: $primary_text; }

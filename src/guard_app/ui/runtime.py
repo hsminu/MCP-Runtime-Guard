@@ -202,6 +202,15 @@ class RuntimePanel(QWidget):
         return frozenset(self._command_scopes.values())
 
     @property
+    def turn_scopes(self) -> frozenset[tuple[str, int]]:
+        """Only message/run commands qualify for the composer's stop action."""
+        return frozenset(
+            scope
+            for command, scope in self._command_scopes.items()
+            if self._commands.get(command) in (_RUN, "message")
+        )
+
+    @property
     def _busy(self) -> bool:
         return (
             self.current is not None

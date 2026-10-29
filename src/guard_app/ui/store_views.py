@@ -13,7 +13,9 @@ command from the list sends the row's revision and B decides.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject
+from datetime import timedelta, timezone
+
+from PySide6.QtCore import QObject, Signal
 
 from guard_app.domain.enums import Decision
 from guard_app.domain.queries import (
@@ -49,6 +51,7 @@ from .call_logs import (
     PublicCallSummary,
 )
 from .models import LoadState, Surface
+from .presentation import REASONS, public_display_text
 
 _MAX_OFFSET = 10_000
 
@@ -157,6 +160,9 @@ def call_detail(detail: CallDetail) -> PublicCallDetail:
 class StoreQueryLink(QObject):
     """Qt thread: sends the two pages' queries and applies only current answers."""
 
+    session_approval_ready = Signal(int, str, str)
+    session_approval_source_changed = Signal(bool)
+
     def __init__(
         self,
         bridge: BackendBridge,
@@ -169,10 +175,12 @@ class StoreQueryLink(QObject):
         self._approvals = approvals
         self._calls = calls
         self._available = False
+        self._session_approvals: dict[int, str] = {}
         self._detail: DetailRequest | None = None
         bridge.query_source_changed.connect(self._source_changed)
         bridge.lifecycle_changed.connect(self._lifecycle_changed)
         bridge.query_answered.connect(self._answered)
+        bridge.query_answered.connect(self._session_approval_answered)
         approvals.query_requested.connect(self._approval_query)
         calls.query_requested.connect(self._call_query)
         calls.detail_requested.connect(self._call_detail)
@@ -186,6 +194,8 @@ class StoreQueryLink(QObject):
 
     def _set_available(self, available: bool) -> None:
         self._available = available
+        self._session_approvals.clear()
+        self.session_approval_source_changed.emit(available)
         self._approvals.set_source_connected(available)
         self._calls.set_source_connected(available)
         if available:
@@ -200,6 +210,58 @@ class StoreQueryLink(QObject):
             self._approvals.set_error(query)
         else:
             self._bridge.request_query("approvals", query.token, request)
+
+    def lookup_session_approval(self, token: int, approval_id: str) -> None:
+        """Negative tokens isolate conversation summaries from the approval list."""
+        if token >= 0:
+            return
+        if not self._available or not approval_id or not valid_query_text(approval_id):
+            self.session_approval_ready.emit(token, approval_id, "")
+            return
+        self._session_approvals[token] = approval_id
+        self._bridge.request_query(
+            "approvals",
+            token,
+            ApprovalListQuery(
+                lane=ApprovalListLane.PENDING,
+                search=approval_id,
+                server_id=None,
+                sort=ListSort.NEWEST,
+                offset=0,
+                limit=5,
+            ),
+        )
+
+    def _session_approval_answered(self, reply: object) -> None:
+        if type(reply) is not QueryReply or reply.kind != "approvals" or reply.token >= 0:
+            return
+        approval_id = self._session_approvals.pop(reply.token, None)
+        if approval_id is None:
+            return
+        summary = ""
+        if self._available and not reply.failed and type(reply.page) is ApprovalListPage:
+            row = next((row for row in reply.page.rows if row.approval_id == approval_id), None)
+            if row is not None:
+                reason = (
+                    REASONS.get(row.reason_code.value, "사유 미제공")
+                    if row.reason_code
+                    else "사유 미제공"
+                )
+                expiry = row.expires_at_utc.astimezone(timezone(timedelta(hours=9))).strftime(
+                    "%H:%M"
+                )
+                destination = (
+                    public_display_text(row.destination_id)
+                    if row.destination_id
+                    else "목적지 지정 없음"
+                )
+                summary = (
+                    f"{public_display_text(row.tool_name)} · 서버 "
+                    f"{public_display_text(row.server_id)}\n"
+                    f"수신처: {destination}\n"
+                    f"{reason} · 만료 KST {expiry}"
+                )
+        self.session_approval_ready.emit(reply.token, approval_id, summary)
 
     def _call_query(self, query: object) -> None:
         if not self._available or type(query) is not CallLogQuery:
