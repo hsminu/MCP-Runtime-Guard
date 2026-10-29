@@ -37,6 +37,22 @@ from guard_app.ui.servers import ServerListPage
 from .test_product_assembly import Peer, inputs
 
 
+async def loop_barrier():
+    barrier = asyncio.Event()
+    asyncio.get_running_loop().call_soon(barrier.set)
+    await asyncio.wait_for(barrier.wait(), 3)
+
+
+async def assert_guard_closed(h):
+    result = await h.assembled.guard.submit(
+        "task",
+        ProposedCall(tool_ref="docs__read", arguments={}, model_call_id="c"),
+        expected_epoch=1,
+    )
+    assert isinstance(result, Denied)
+    assert h.peer.calls == []
+
+
 @asynccontextmanager
 async def harness(path, *, selected=True):
     folders = prepare_app_folders(path / "app")
@@ -197,10 +213,17 @@ async def test_stale_revision_and_unrecorded_never_activate(tmp_path, monkeypatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("blocking", [False, True])
-@pytest.mark.parametrize("failure", ["false", "unknown", "cancel", "external"])
-async def test_settings_failure_orders_and_no_retry(tmp_path, blocking, failure):
+@pytest.mark.parametrize("failure", ["false", "unknown", "cancel", "external", "move"])
+async def test_settings_failure_orders_and_no_retry(tmp_path, monkeypatch, blocking, failure):
     async with harness(tmp_path) as h:
         calls = []
+        if failure == "move":
+            from guard_app.security import settings_io
+
+            def refuse_move(*args):
+                return 0
+
+            monkeypatch.setattr(settings_io, "_MoveFileExW", refuse_move)
         if failure == "external":
             external = {**h.doc, "policy": {"approval_ttl_seconds": 120}}
             outside_saver = SettingsFileSaver(read_settings(h.folders))
@@ -216,7 +239,7 @@ async def test_settings_failure_orders_and_no_retry(tmp_path, blocking, failure)
                 raise SaveOutcomeUnknownError()
             if failure == "cancel":
                 raise asyncio.CancelledError()
-            if failure == "external":
+            if failure in ("external", "move"):
                 return await h.saver(change)
             return False
 
@@ -237,13 +260,7 @@ async def test_settings_failure_orders_and_no_retry(tmp_path, blocking, failure)
             assert read_settings(h.folders).document == external
         assert (await h.commands(request)).code == "REG_ACTIVATION_UNKNOWN"
         assert calls == [1]
-        result = await h.assembled.guard.submit(
-            "task",
-            ProposedCall(tool_ref="docs__read", arguments={}, model_call_id="c"),
-            expected_epoch=1,
-        )
-        assert isinstance(result, Denied)
-        assert h.peer.calls == []
+        await assert_guard_closed(h)
 
 
 @pytest.mark.asyncio
@@ -295,9 +312,7 @@ async def test_policy_edit_precedes_activation_and_overlapping_activation_is_ref
         await asyncio.wait_for(entered.wait(), 3)
         activation = asyncio.create_task(h.commands(h.request))
         # A loop barrier lets activation reach the held policy lock; no timing sleep.
-        barrier = asyncio.Event()
-        asyncio.get_running_loop().call_soon(barrier.set)
-        await asyncio.wait_for(barrier.wait(), 3)
+        await loop_barrier()
         assert len(writes) == 1
         release.set()
         await asyncio.wait_for(edit, 3)
@@ -358,10 +373,8 @@ def test_activation_ui_uses_bridge_revision_checkboxes_and_fixed_notices(monkeyp
     dialog.boxes["read"].setChecked(False)
     dialog.save_button.click()
     request = requests[-1][0]
-    assert request.action == "activate"
-    assert request.expected_row_revision == 7
-    assert request.allowed == ()
-    assert request.denied == ("read",)
+    assert (request.action, request.expected_row_revision) == ("activate", 7)
+    assert (request.allowed, request.denied) == ((), ("read",))
     page._activation_result(
         RegistrationView("REG_ACTIVATION_RESTART_REQUIRED", requests[-1][1]["command_id"])
     )
@@ -465,9 +478,7 @@ async def test_overlapping_activations_share_policy_lock_and_write_only_once(tmp
         first = asyncio.create_task(activate())
         await asyncio.wait_for(entered.wait(), 3)
         second = asyncio.create_task(activate())
-        barrier = asyncio.Event()
-        asyncio.get_running_loop().call_soon(barrier.set)
-        await asyncio.wait_for(barrier.wait(), 3)
+        await loop_barrier()
         assert writes == [1]
         release.set()
         await asyncio.wait_for(first, 3)

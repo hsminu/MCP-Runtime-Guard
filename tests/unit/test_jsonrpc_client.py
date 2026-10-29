@@ -56,8 +56,7 @@ def _client(channel: FakeChannel, **kwargs: object) -> JsonRpcClient:
 
 @pytest.mark.asyncio
 async def test_concurrent_requests_match_responses_by_id_out_of_order() -> None:
-    channel = FakeChannel()
-    client = _client(channel)
+    channel, client = rpc_pair()
     first = asyncio.create_task(client.request("one", {"a": 1}))
     second = asyncio.create_task(client.request("two"))
     sent_first = await channel.next_sent()
@@ -74,8 +73,7 @@ async def test_concurrent_requests_match_responses_by_id_out_of_order() -> None:
 @pytest.mark.asyncio
 async def test_remote_error_keeps_only_the_code(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG)
-    channel = FakeChannel()
-    client = _client(channel)
+    channel, client = rpc_pair()
     waiting = asyncio.create_task(client.request("x"))
     await channel.next_sent()
     channel.push({"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": MARKER}})
@@ -90,11 +88,9 @@ async def test_remote_error_keeps_only_the_code(caplog: pytest.LogCaptureFixture
 
 @pytest.mark.asyncio
 async def test_timeout_drops_the_request_and_ignores_a_late_response() -> None:
-    channel = FakeChannel()
-    client = _client(channel, request_timeout_s=0.05)
-    with pytest.raises(JsonRpcError) as failed:
+    channel, client = rpc_pair(request_timeout_s=0.05)
+    with raises_code(JsonRpcError, "REQUEST_TIMEOUT", attribute="reason"):
         await client.request("slow")
-    assert failed.value.reason == "REQUEST_TIMEOUT"
     channel.push({"jsonrpc": "2.0", "id": 1, "result": "late"})
     nxt = asyncio.create_task(client.request("next"))
     sent = [await channel.next_sent(), await channel.next_sent()]
@@ -146,11 +142,7 @@ async def test_server_request_is_answered_while_reading_continues() -> None:
     assert channel.sent == []
     release.set()
     reply = await channel.next_sent()
-    assert reply == {
-        "jsonrpc": "2.0",
-        "id": "srv-1",
-        "result": {"echo": "item/x", "params": [1]},
-    }
+    assert reply == {"jsonrpc": "2.0", "id": "srv-1", "result": {"echo": "item/x", "params": [1]}}
     await client.close()
 
 
@@ -187,9 +179,8 @@ async def test_duplicate_inflight_server_request_closes_without_a_second_handler
             await asyncio.wait_for(entered.wait(), timeout=1)
             # A different method still cannot reuse the outstanding request ID.
             channel.push({**request, "method": "different"})
-            with pytest.raises(JsonRpcError) as failed:
+            with raises_code(JsonRpcError, "PROTOCOL_ERROR", attribute="reason") as failed:
                 await waiting
-            assert failed.value.reason == "PROTOCOL_ERROR"
             await client.close()
             assert calls == 1
             assert cancelled.is_set()
@@ -283,8 +274,7 @@ async def test_server_request_id_can_be_reused_after_completion() -> None:
 
 @pytest.mark.asyncio
 async def test_server_request_without_handler_gets_method_not_found() -> None:
-    channel = FakeChannel()
-    client = _client(channel)
+    channel, client = rpc_pair()
     channel.push({"jsonrpc": "2.0", "id": 0, "method": "unexpected"})
     reply = await channel.next_sent()
     assert reply["id"] == 0
@@ -303,9 +293,8 @@ async def test_failing_handler_closes_the_client_and_fails_pending() -> None:
     waiting = asyncio.create_task(client.request("pending"))
     await channel.next_sent()
     channel.push({"jsonrpc": "2.0", "id": 9, "method": "boom"})
-    with pytest.raises(JsonRpcError) as failed:
+    with raises_code(JsonRpcError, "HANDLER_FAILED", attribute="reason") as failed:
         await waiting
-    assert failed.value.reason == "HANDLER_FAILED"
     assert MARKER not in str(failed.value)
     with pytest.raises(JsonRpcError):
         await client.request("after")
@@ -318,14 +307,12 @@ async def test_failing_notification_handler_is_reported_apart_from_channel_failu
     def handler(_method: str, _params: object) -> None:
         raise RuntimeError(MARKER)
 
-    channel = FakeChannel()
-    client = _client(channel, on_notification=handler)
+    channel, client = rpc_pair(on_notification=handler)
     waiting = asyncio.create_task(client.request("pending"))
     await channel.next_sent()
     channel.push({"jsonrpc": "2.0", "method": "note"})
-    with pytest.raises(JsonRpcError) as failed:
+    with raises_code(JsonRpcError, "HANDLER_FAILED", attribute="reason") as failed:
         await waiting
-    assert failed.value.reason == "HANDLER_FAILED"
     assert MARKER not in str(failed.value)
     await client.close()
 
@@ -358,31 +345,26 @@ async def test_invalid_frames_close_the_client() -> None:
         b'{"jsonrpc":"2.0","method":""}',
         b"\xff\xfe",
     ]:
-        channel = FakeChannel()
-        client = _client(channel)
+        channel, client = rpc_pair()
         waiting = asyncio.create_task(client.request("pending"))
         await channel.next_sent()
         channel.inbound.put_nowait(frame)
-        with pytest.raises(JsonRpcError) as failed:
+        with raises_code(JsonRpcError, "PROTOCOL_ERROR", attribute="reason"):
             await waiting
-        assert failed.value.reason == "PROTOCOL_ERROR"
         await client.close()
 
 
 @pytest.mark.asyncio
 async def test_frame_size_is_bounded_both_ways_and_eof_fails_pending() -> None:
-    channel = FakeChannel()
-    client = _client(channel, max_frame_bytes=64)
-    with pytest.raises(JsonRpcError) as outgoing:
+    channel, client = rpc_pair(max_frame_bytes=64)
+    with raises_code(JsonRpcError, "FRAME_TOO_LARGE", attribute="reason"):
         await client.request("big", {"text": "x" * 100})
-    assert outgoing.value.reason == "FRAME_TOO_LARGE"
     assert channel.sent == []
     waiting = asyncio.create_task(client.request("small"))
     await channel.next_sent()
     channel.inbound.put_nowait(b"{" + b" " * 80 + b"}")
-    with pytest.raises(JsonRpcError) as incoming:
+    with raises_code(JsonRpcError, "FRAME_TOO_LARGE", attribute="reason"):
         await waiting
-    assert incoming.value.reason == "FRAME_TOO_LARGE"
     await client.close()
 
     eof_channel = FakeChannel()
@@ -390,9 +372,8 @@ async def test_frame_size_is_bounded_both_ways_and_eof_fails_pending() -> None:
     waiting = asyncio.create_task(eof_client.request("x"))
     await eof_channel.next_sent()
     eof_channel.inbound.put_nowait(None)
-    with pytest.raises(JsonRpcError) as eof:
+    with raises_code(JsonRpcError, "EOF", attribute="reason"):
         await waiting
-    assert eof.value.reason == "EOF"
     await eof_client.close()
 
 
@@ -400,21 +381,18 @@ async def test_frame_size_is_bounded_both_ways_and_eof_fails_pending() -> None:
 async def test_pending_limit_and_lifecycle_rules() -> None:
     channel = FakeChannel()
     client = JsonRpcClient(channel, request_timeout_s=1.0, max_frame_bytes=4096, max_pending=1)
-    with pytest.raises(JsonRpcError) as not_started:
+    with raises_code(JsonRpcError, "NOT_STARTED", attribute="reason"):
         await client.request("x")
-    assert not_started.value.reason == "NOT_STARTED"
     client.start()
     with pytest.raises(RuntimeError):
         client.start()
     first = asyncio.create_task(client.request("one"))
     await channel.next_sent()
-    with pytest.raises(JsonRpcError) as full:
+    with raises_code(JsonRpcError, "TOO_MANY_PENDING", attribute="reason"):
         await client.request("two")
-    assert full.value.reason == "TOO_MANY_PENDING"
     await client.close()
-    with pytest.raises(JsonRpcError) as closed:
+    with raises_code(JsonRpcError, "CLOSED", attribute="reason"):
         await first
-    assert closed.value.reason == "CLOSED"
 
 
 def test_invalid_configuration_is_rejected() -> None:
@@ -447,9 +425,8 @@ async def test_codex_envelope_without_version_field() -> None:
     second = asyncio.create_task(client.request("next"))
     await channel.next_sent()
     channel.push({"jsonrpc": "2.0", "id": 2, "result": None})
-    with pytest.raises(JsonRpcError) as failed:
+    with raises_code(JsonRpcError, "PROTOCOL_ERROR", attribute="reason"):
         await second
-    assert failed.value.reason == "PROTOCOL_ERROR"
     await client.close()
     with pytest.raises(ValueError, match="version_field"):
         JsonRpcClient(
@@ -486,9 +463,8 @@ class StuckChannel(FakeChannel):
 async def test_blocked_send_is_bounded_by_the_request_deadline_and_closes() -> None:
     channel = StuckChannel()
     client = _client(channel, request_timeout_s=0.05)
-    with pytest.raises(JsonRpcError) as failed:
+    with raises_code(JsonRpcError, "SEND_TIMEOUT", attribute="reason"):
         await asyncio.wait_for(client.request("x"), timeout=1)
-    assert failed.value.reason == "SEND_TIMEOUT"
     assert client.closed_reason == "SEND_TIMEOUT"  # a partial frame may be on the wire
     await client.close()
 
@@ -500,9 +476,8 @@ async def test_close_releases_a_request_stuck_in_send() -> None:
     waiting = asyncio.create_task(client.request("x"))
     await asyncio.wait_for(channel.entered.wait(), timeout=1)
     await asyncio.wait_for(client.close(), timeout=1)
-    with pytest.raises(JsonRpcError) as failed:
+    with raises_code(JsonRpcError, "CLOSED", attribute="reason"):
         await asyncio.wait_for(waiting, timeout=1)
-    assert failed.value.reason == "CLOSED"
 
 
 class CountingStuckChannel(StuckChannel):
@@ -535,9 +510,8 @@ async def test_cancelled_caller_during_send_closes_and_its_frame_is_never_finish
     with pytest.raises(asyncio.CancelledError):
         await first
     assert client.closed_reason == "SEND_CANCELLED"
-    with pytest.raises(JsonRpcError) as refused:
+    with raises_code(JsonRpcError, "SEND_CANCELLED", attribute="reason"):
         await client.request("turn/start", {"n": 2})
-    assert refused.value.reason == "SEND_CANCELLED"
     channel.release.set()
     await asyncio.wait_for(client.close(), timeout=1)
     assert channel.written == []
@@ -607,3 +581,15 @@ def check_case(failures, case):
         yield
     except (AssertionError, pytest.fail.Exception) as error:
         failures.append((case, str(error)))
+
+
+@contextmanager
+def raises_code(error_type, code, *, attribute="code"):
+    with pytest.raises(error_type) as failed:
+        yield failed
+    assert getattr(failed.value, attribute) == code
+
+
+def rpc_pair(**options):
+    channel = FakeChannel()
+    return channel, _client(channel, **options)

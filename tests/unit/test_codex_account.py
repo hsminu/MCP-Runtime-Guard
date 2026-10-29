@@ -1,14 +1,10 @@
-"""A89: Codex login through the app-server's own account methods (A52, I9).
-
-No key or email reaches the Guard's display; the fake app-server stands in for
-an app-server launched by C (C2.12), which is not exercised here.
-"""
+"""A89/A52/I9: synthetic account methods; real C2.12 launcher is not exercised."""
 
 from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import aclosing
+from contextlib import aclosing, asynccontextmanager, contextmanager
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -28,8 +24,8 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-async def client(fake: FakeAppServer) -> CodexAccountClient:
-    account = CodexAccountClient(fake, version="0.1.0")
+async def client(fake: FakeAppServer, *, version="0.1.0", **options) -> CodexAccountClient:
+    account = CodexAccountClient(fake, version=version, **options)
     await account.start()
     return account
 
@@ -44,8 +40,7 @@ def _fields(view: AccountView) -> str:
 @pytest.mark.asyncio
 async def test_device_code_login_shows_url_and_code_then_reads_the_plan_without_email() -> None:
     fake = FakeAppServer()
-    account = await client(fake)
-    async with aclosing(account):
+    async with running_account(fake) as account:
         assert (await account.read()).state == "SIGNED_OUT"
         pending = await account.start_device_login()
         assert pending.state == "PENDING_DEVICE"
@@ -80,8 +75,7 @@ async def test_remote_control_not_disabled_ends_the_account_connection() -> None
     for status in ["connected", None]:
         # C-CODEX-07: remote attachment also invalidates the login connection.
         fake = FakeAppServer()
-        account = await client(fake)
-        async with aclosing(account):
+        async with running_account(fake) as account:
             assert (await account.start_device_login()).state == "PENDING_DEVICE"
             waiting = asyncio.ensure_future(account.wait_login("login-1"))
             await asyncio.sleep(0)
@@ -136,20 +130,9 @@ def test_bridge_routes_account_commands_and_reports_unavailable(app) -> None:
     views: list[AccountView] = []
     loops: list[asyncio.AbstractEventLoop] = []
 
-    async def bootstrap():
-        loops.append(asyncio.get_running_loop())
-        account = CodexAccountClient(fake, version="0.1.0")
-        await account.start()
-
-        async def close():
-            await account.aclose()
-
-        return BackendBindings(lambda task_id: None, FakeControl(), close=close, account=account)
-
-    bridge = BackendBridge(bootstrap)
+    bridge = _account_bridge(fake, loops, control_workers=4)
     bridge.account_changed.connect(views.append)
-    bridge.start()
-    try:
+    with running_bridge(app, bridge):
         pump_until(app, lambda: bridge.state is BridgeState.READY and bool(views))
         assert views[-1].state == "UNKNOWN"
         bridge.request_account("account_read")
@@ -161,8 +144,6 @@ def test_bridge_routes_account_commands_and_reports_unavailable(app) -> None:
         pump_until(app, lambda: views[-1].state == "CHATGPT")
         with pytest.raises(ValueError, match="Account action"):
             bridge.request_account("account_steal")
-    finally:
-        close_bridge(app, bridge)
 
     unavailable: list[AccountView] = []
 
@@ -179,19 +160,16 @@ def test_bridge_routes_account_commands_and_reports_unavailable(app) -> None:
         close_bridge(app, other)
 
 
-def _account_bridge(fake: FakeAppServer, loops: list[asyncio.AbstractEventLoop]) -> BackendBridge:
+def _account_bridge(fake, loops, *, control_workers=1):
     async def bootstrap():
         loops.append(asyncio.get_running_loop())
-        account = CodexAccountClient(fake, version="0.1.0")
-        await account.start()
-
-        async def close():
-            await account.aclose()
-
-        return BackendBindings(lambda task_id: None, FakeControl(), close=close, account=account)
+        account = await client(fake)
+        return BackendBindings(
+            lambda task_id: None, FakeControl(), close=account.aclose, account=account
+        )
 
     # One control worker: the lane approvals and login cancel share (A89 QA).
-    return BackendBridge(bootstrap, control_workers=1)
+    return BackendBridge(bootstrap, control_workers=control_workers)
 
 
 def test_device_login_wait_does_not_hold_the_only_control_worker(app) -> None:
@@ -201,28 +179,23 @@ def test_device_login_wait_does_not_hold_the_only_control_worker(app) -> None:
     bridge = _account_bridge(fake, loops)
     receiver = attach(bridge)
     bridge.account_changed.connect(views.append)
-    bridge.start()
-    try:
+    with running_bridge(app, bridge):
         pump_until(app, lambda: bridge.state is BridgeState.READY and bool(views))
         login = bridge.request_account("account_login_device")
         pump_until(app, lambda: views[-1].state == "PENDING_DEVICE")
         pump_until(
-            app,
-            lambda: any(e.stage.value == "backend_returned" for e in receiver.stages(login)),
+            app, lambda: any(e.stage.value == "backend_returned" for e in receiver.stages(login))
         )
         # The user never finishes the device login; cancel must still run.
         cancel = bridge.request_account("account_cancel_login", target_id="login-1")
         pump_until(
-            app,
-            lambda: any(e.stage.value == "backend_returned" for e in receiver.stages(cancel)),
+            app, lambda: any(e.stage.value == "backend_returned" for e in receiver.stages(cancel))
         )
         pump_until(app, lambda: views[-1].notice == "LOGIN_CANCELLED")
         states = [view.state for view in views]
         assert "SIGNED_OUT" in states[states.index("PENDING_DEVICE") :]
         assert "CHATGPT" not in states
         assert states[-1] == "SIGNED_OUT"  # cancelled waiter cannot overwrite account/read
-    finally:
-        close_bridge(app, bridge)
 
 
 def test_unfinished_device_login_times_out_as_not_completed(app, monkeypatch) -> None:
@@ -232,8 +205,7 @@ def test_unfinished_device_login_times_out_as_not_completed(app, monkeypatch) ->
     loops: list[asyncio.AbstractEventLoop] = []
     bridge = _account_bridge(fake, loops)
     bridge.account_changed.connect(views.append)
-    bridge.start()
-    try:
+    with running_bridge(app, bridge):
         pump_until(app, lambda: bridge.state is BridgeState.READY and bool(views))
         bridge.request_account("account_login_device")
         pump_until(app, lambda: views[-1].state == "LOGIN_NOT_COMPLETED")
@@ -243,8 +215,6 @@ def test_unfinished_device_login_times_out_as_not_completed(app, monkeypatch) ->
         bridge.request_account("account_read")
         pump_until(app, lambda: len(views) > len(states))
         assert views[-1].state == "SIGNED_OUT"
-    finally:
-        close_bridge(app, bridge)
 
 
 @pytest.mark.asyncio
@@ -264,20 +234,20 @@ async def test_shutdown_cancels_device_wait_before_closing_account_resources(app
     bridge = BackendBridge(bootstrap)
     boot = asyncio.create_task(bootstrap())
     bindings = await asyncio.wait_for(boot, 2)
-    assert bridge._bindings.adopt(boot)
+    assert bridge._host._bindings.adopt(boot)
     from guard_app.services.bridge_ingress import account_command
 
     try:
         await asyncio.wait_for(
-            bridge._accounts.account(
+            bridge._host._accounts.account(
                 bindings, account_command("account_login_device", "account", None)
             ),
             2,
         )
-        waiters = tuple(bridge._accounts._waits)
+        waiters = tuple(bridge._host._accounts._waits)
         assert len(waiters) == 1
         assert not waiters[0].done()
-        await asyncio.wait_for(bridge._shut_down(), 2)
+        await asyncio.wait_for(bridge._host._shut_down(), 2)
         assert checked == [True]
     finally:
         for waiter in waiters:
@@ -322,4 +292,21 @@ def test_logout_republishes_session_capability_even_on_error(app, fails):
         assert capabilities == ["LOGOUT_IN_PROGRESS", "LOGIN_REQUIRED"]
         assert views[-1].state == ("FAILED" if fails else "SIGNED_OUT")
     finally:
+        close_bridge(app, bridge)
+
+
+@asynccontextmanager
+async def running_account(fake, **options):
+    async with aclosing(await client(fake, **options)) as account:
+        yield account
+
+
+@contextmanager
+def running_bridge(app, bridge, *, window=None):
+    bridge.start()
+    try:
+        yield bridge
+    finally:
+        if window is not None:
+            window.close()
         close_bridge(app, bridge)

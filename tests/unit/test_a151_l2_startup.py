@@ -16,6 +16,7 @@ from guard_app.services.session_runtime import SessionRuntimeError, bootstrap_pr
 from guard_app.services.session_startup import startup_refusal
 from guard_app.ui.presentation import LIFECYCLE_MESSAGES, session_blocker_notice
 
+from .test_a138_product_startup import runtime_context
 from .test_bridge import app as app
 from .test_bridge import pump_until
 from .test_codex_preparation import pin as pin
@@ -68,30 +69,28 @@ async def test_receipt_and_runtime_gate(tmp_path, pin, monkeypatch, mode, code):
     callbacks = replace(
         synthetic_preparation(), prepare_startup=owner.preparation().prepare_startup
     )
-    runtime, sessions = make_runtime(tmp_path, preparation=callbacks)
-    try:
-        async with asyncio.timeout(5):
-            await runtime.prepare_startup()
-            await runtime.prepare_startup()
-            assert runtime.creation_blocker() == code
-            if code is None:
-                await runtime.create_session(SessionOptions())
-                assert len(sessions) == 1
-            else:
-                for _ in range(2):
-                    with pytest.raises(SessionRuntimeError, match=f"^{code}$"):
-                        await runtime.create_session(SessionOptions())
-                assert sessions == []
-                assert (
-                    "시작 검사" in session_blocker_notice(code) or code == "CODEX_CONFIG_MISMATCH"
-                )
-            assert len(calls) == 1
-            assert calls[0][0] is owner._launcher
-            assert calls[0][1] is owner.folders
-            assert calls[0][2]["deadline_s"] == module.L2_DEADLINE_S
-    finally:
-        await runtime.close()
-        owner.close()
+    with closing(owner):
+        async with runtime_context(tmp_path, preparation=callbacks) as (runtime, sessions):
+            async with asyncio.timeout(5):
+                await runtime.prepare_startup()
+                await runtime.prepare_startup()
+                assert runtime.creation_blocker() == code
+                if code is None:
+                    await runtime.create_session(SessionOptions())
+                    assert len(sessions) == 1
+                else:
+                    for _ in range(2):
+                        with pytest.raises(SessionRuntimeError, match=f"^{code}$"):
+                            await runtime.create_session(SessionOptions())
+                    assert sessions == []
+                    assert (
+                        "시작 검사" in session_blocker_notice(code)
+                        or code == "CODEX_CONFIG_MISMATCH"
+                    )
+                assert len(calls) == 1
+                assert calls[0][0] is owner._launcher
+                assert calls[0][1] is owner.folders
+                assert calls[0][2]["deadline_s"] == module.L2_DEADLINE_S
 
 
 @pytest.mark.asyncio
@@ -191,12 +190,12 @@ async def test_l2_uses_product_thread_start_arguments():
 def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app, cancel):
     from PySide6.QtCore import QTimer
 
-    from guard_app.services import session_runtime
+    from guard_app.services import product_startup
 
     entered, cancelling, cleaned = threading.Event(), threading.Event(), threading.Event()
     control, activated, events, ticks, threads = [], [], [], [], []
     startup_settled = []
-    original = session_runtime.SQLiteStore.activate_run
+    original = product_startup.SQLiteStore.activate_run
 
     async def activate(store):
         assert cleaned.is_set()
@@ -218,7 +217,7 @@ def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app
             cleaned.set()
 
     monkeypatch.setattr(module, "run_l2", run)
-    monkeypatch.setattr(session_runtime.SQLiteStore, "activate_run", activate)
+    monkeypatch.setattr(product_startup.SQLiteStore, "activate_run", activate)
     with closing(preparation(tmp_path, pin)) as owner:
         callbacks = owner.preparation()
 
@@ -230,8 +229,7 @@ def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app
 
         bridge = BackendBridge(
             lambda: bootstrap_product(
-                owner.folders,
-                preparation=replace(callbacks, prepare_startup=observed_startup),
+                owner.folders, preparation=replace(callbacks, prepare_startup=observed_startup)
             ),
             startup_timeout=module.PRODUCT_STARTUP_TIMEOUT_S,
             shutdown_timeout=module.PRODUCT_SHUTDOWN_TIMEOUT_S,
@@ -254,14 +252,14 @@ def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app
                 timeout=5,
             )
             assert activated == []
-            assert threads == [bridge._thread.ident]
+            assert threads == [bridge._host._thread.ident]
             assert threads[0] != threading.get_ident()
             assert "검사 중" in LIFECYCLE_MESSAGES["CODEX_L2_CHECK"]
             loop, release, cleanup_release = control[0]
             if cancel:
                 bridge.close()
                 pump_until(app, cancelling.is_set, timeout=5)
-                assert not bridge._thread_done.is_set()
+                assert not bridge._host._thread_done.is_set()
                 assert not cleaned.is_set()
                 loop.call_soon_threadsafe(cleanup_release.set)
             else:
@@ -269,20 +267,20 @@ def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app
                 pump_until(app, lambda: bridge.state is BridgeState.READY, timeout=5)
                 assert activated == [True]
                 bridge.close()
-            pump_until(app, bridge._thread_done.is_set, timeout=5)
+            pump_until(app, bridge._host._thread_done.is_set, timeout=5)
             assert cleaned.is_set()
             assert startup_settled == [True]
             assert bridge.state is BridgeState.CLOSED
-            assert bridge._state_code == "CLOSED"
+            assert bridge._host._state_code == "CLOSED"
             assert activated == ([] if cancel else [True])
         finally:
             timer.stop()
-            if control and not bridge._thread_done.is_set():
+            if control and not bridge._host._thread_done.is_set():
                 loop, release, cleanup_release = control[0]
                 loop.call_soon_threadsafe(release.set)
                 loop.call_soon_threadsafe(cleanup_release.set)
                 bridge.close()
-                pump_until(app, bridge._thread_done.is_set, timeout=5)
+                pump_until(app, bridge._host._thread_done.is_set, timeout=5)
 
 
 def test_startup_budget_covers_one_window_of_server_starts():

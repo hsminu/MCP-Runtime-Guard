@@ -23,8 +23,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from guard_app.services.bridge import PolicyServer, PolicyView
+from guard_app.services.bridge import PolicyDestination, PolicyServer, PolicyView
 
+from .destinations import DestinationDialog
+from .presentation import TIER_NAMES
 from .untrusted_text import untrusted_display_text
 from .widgets import KeyboardActionButton, plain_label
 
@@ -34,6 +36,10 @@ STOP_WARNING = "저장하면 정책 버전이 바뀌어 실행 중인 Task가 �
 CHANGE_PENDING = "규칙을 저장하고 적용하는 중임."
 # Fixed text per backend result code; never the backend's own wording.
 CHANGE_RESULTS = {
+    "POLICY_DESTINATION_INVALID": (
+        "목적지 ID·경계 종류·수신 등급 또는 사용 설정이 올바르지 않아 저장하지 않음."
+    ),
+    "POLICY_READ": "목적지 목록을 불러옴.",
     "POLICY_CHANGED": "규칙을 저장하고 적용함. 이전 정책으로 실행 중이던 Task는 정지됨.",
     "POLICY_SAVE_FAILED": "설정을 저장하지 못해 적용하지 않음.",
     "POLICY_APPLY_FAILED": (
@@ -141,6 +147,8 @@ class ToolAllowDialog(QDialog):
 
 class PolicyPage(QWidget):
     allow_change_requested = Signal(str, tuple, tuple)
+    destination_change_requested = Signal(object)
+    destination_read_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -157,6 +165,17 @@ class PolicyPage(QWidget):
         self._change_command: str | None = None
         self.rules = _page_table("접근 규칙 목록", ["MCP 서버", "도구", "규칙"])
         layout.addWidget(self.rules)
+        layout.addWidget(plain_label("보내는 곳(목적지)", name="sectionTitle"))
+        self.destinations = _page_table(
+            "목적지 목록", ["ID", "경계 종류", "최고 수신 등급", "사용 여부", "설정"]
+        )
+        layout.addWidget(self.destinations)
+        self.add_destination = KeyboardActionButton("목적지 추가")
+        self.add_destination.clicked.connect(lambda: self.open_destination_dialog())
+        layout.addWidget(self.add_destination)
+        self.read_destinations = KeyboardActionButton("목적지 목록 새로 고침")
+        self.read_destinations.clicked.connect(self.destination_read_requested.emit)
+        layout.addWidget(self.read_destinations)
         self.server_area = QVBoxLayout()
         layout.addLayout(self.server_area)
         self.excluded_title = plain_label(EXCLUDED_TITLE, name="sectionTitle")
@@ -176,6 +195,9 @@ class PolicyPage(QWidget):
     def set_view(self, view: object) -> None:
         self._view = view if type(view) is PolicyView else None
         self.rules.setRowCount(0)
+        self.destinations.setRowCount(0)
+        self.add_destination.setEnabled(bool(self._view and self._view.change_available))
+        self.read_destinations.setEnabled(self._view is not None)
         self.excluded.setRowCount(0)
         for widget in (self.excluded_title, self.excluded_note, self.excluded):
             widget.setVisible(False)
@@ -190,6 +212,30 @@ class PolicyPage(QWidget):
             f"Profile {current.profile_id} · 정책 버전 {current.policy_version[:12]} · "
             f"승인 유효 시간 {current.approval_ttl_seconds}초 · 등급 누적 {current.taint_mode}"
         )
+        for index, destination in enumerate(current.destinations):
+            self.destinations.insertRow(index)
+            self.destinations.setCellWidget(index, 0, plain_label(destination.destination_id))
+            for column, value in enumerate(
+                (
+                    TIER_NAMES.get(destination.tier, "알 수 없음"),
+                    destination.max_label,
+                    "사용" if destination.selected else "사용 안 함",
+                ),
+                1,
+            ):
+                self.destinations.setItem(index, column, QTableWidgetItem(value))
+            actions = QWidget()
+            buttons = QHBoxLayout(actions)
+            for title, deleting in (("변경", False), ("삭제", True)):
+                button = KeyboardActionButton(title)
+                button.setEnabled(current.change_available)
+                button.clicked.connect(
+                    lambda _=False, row=destination, remove=deleting: self.open_destination_dialog(
+                        row, deleting=remove
+                    )
+                )
+                buttons.addWidget(button)
+            self.destinations.setCellWidget(index, 4, actions)
         rows = [(s, t, "허용") for s, t in current.allow] + [
             (s, t, "거부") for s, t in current.deny
         ]
@@ -226,6 +272,16 @@ class PolicyPage(QWidget):
         self._change_command = None
         self.notice.setText(CHANGE_RESULTS.get(code, CHANGE_UNCONFIRMED))
         self.notice.setVisible(True)
+
+    def open_destination_dialog(
+        self, row: PolicyDestination | None = None, *, deleting: bool = False
+    ) -> DestinationDialog | None:
+        if self._view is None or not self._view.change_available:
+            return None
+        dialog = DestinationDialog(row, STOP_WARNING, deleting=deleting, parent=self)
+        dialog.accepted.connect(lambda: self.destination_change_requested.emit(dialog.selection()))
+        dialog.open()
+        return dialog
 
     def open_allow_dialog(self, server: PolicyServer) -> ToolAllowDialog | None:
         view = self._view

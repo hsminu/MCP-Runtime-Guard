@@ -8,7 +8,6 @@ import logging
 import os
 import re
 import sys
-import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
@@ -38,51 +37,7 @@ def main() -> int:
     from guard_app.security.redact import install_log_redaction
 
     install_log_redaction()
-    parser = argparse.ArgumentParser(description="MCP Runtime Guard")
-    parser.add_argument(
-        "--demo",
-        action="store_true",
-        help="소스 checkout에서 선택한 Store + 실제 MCP 합성 서버 사용",
-    )
-    # Demo-only options default to None so product mode can refuse them.
-    parser.add_argument("--scenario", choices=("ask", "allow", "deny"))
-    parser.add_argument("--mcp-transport", choices=("stdio", "http"))
-    parser.add_argument("--store", choices=("memory", "sqlite"))
-    parser.add_argument(
-        "--db-path",
-        metavar="PATH",
-        help="시연 SQLite 파일(기존 부모 디렉터리, 앱 폴더 밖). 제품은 앱 폴더의 고정 DB를 쓴다",
-    )
-    parser.add_argument(
-        "--codex-exe",
-        metavar="PATH",
-        type=Path,
-        help="고정 버전 codex.exe의 절대 경로(기본: tools/install_codex.py 설치 위치)",
-    )
-    args = parser.parse_args()
-    # A106: product mode opens only the fixed DB in the app folder (C2.17).
-    demo_only = (
-        args.scenario,
-        args.mcp_transport,
-        args.store,
-        args.db_path,
-    )
-    if not args.demo and any(value is not None for value in demo_only):
-        parser.error("시연 전용 옵션은 --demo와 함께만 쓸 수 있다")
-    if args.demo:
-        args.scenario = args.scenario or "ask"
-        args.mcp_transport = args.mcp_transport or "stdio"
-        args.store = args.store or "memory"
-        if importlib.util.find_spec("examples") is None:
-            parser.error(
-                "합성 시연(--demo)은 소스 checkout에서 python -m guard_app으로만 실행할 수 있다"
-            )
-    if args.demo and (args.store == "sqlite") != (args.db_path is not None):
-        parser.error("저장소 종류와 DB 경로 설정이 일치하지 않는다")
-    if args.demo and args.db_path is not None and not _outside_app_folder(args.db_path):
-        parser.error("시연 DB는 제품 앱 폴더 밖이라고 확인된 경로만 쓸 수 있다")
-    if args.codex_exe is not None and (args.demo or not args.codex_exe.is_absolute()):
-        parser.error("--codex-exe는 제품 실행에서 codex.exe의 절대 경로로만 쓸 수 있다")
+    args = _parse_args()
 
     codex: CodexProcessPreparation | None = None
     settings: SettingsFile | None = None
@@ -150,6 +105,56 @@ def main() -> int:
     if not confirmed:
         _end_unconfirmed()
     return code
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="MCP Runtime Guard")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="소스 checkout에서 선택한 Store + 실제 MCP 합성 서버 사용",
+    )
+    # Demo-only options default to None so product mode can refuse them.
+    parser.add_argument("--scenario", choices=("ask", "allow", "deny"))
+    parser.add_argument("--mcp-transport", choices=("stdio", "http"))
+    parser.add_argument("--store", choices=("memory", "sqlite"))
+    parser.add_argument(
+        "--db-path",
+        metavar="PATH",
+        help="시연 SQLite 파일(기존 부모 디렉터리, 앱 폴더 밖). 제품은 앱 폴더의 고정 DB를 쓴다",
+    )
+    parser.add_argument(
+        "--codex-exe",
+        metavar="PATH",
+        type=Path,
+        help="고정 버전 codex.exe의 절대 경로(기본: tools/install_codex.py 설치 위치)",
+    )
+    args = parser.parse_args()
+    # A106: product mode opens only the fixed DB in the app folder (C2.17).
+    demo_only = (
+        args.scenario,
+        args.mcp_transport,
+        args.store,
+        args.db_path,
+    )
+    if not args.demo and any(value is not None for value in demo_only):
+        parser.error("시연 전용 옵션은 --demo와 함께만 쓸 수 있다")
+    if args.demo:
+        args.scenario = args.scenario or "ask"
+        args.mcp_transport = args.mcp_transport or "stdio"
+        args.store = args.store or "memory"
+        if importlib.util.find_spec("examples") is None:
+            parser.error(
+                "합성 시연(--demo)은 소스 checkout에서 python -m guard_app으로만 실행할 수 있다"
+            )
+    if args.demo and (args.store == "sqlite") != (args.db_path is not None):
+        parser.error("저장소 종류와 DB 경로 설정이 일치하지 않는다")
+    if args.demo and args.db_path is not None and not _outside_app_folder(args.db_path):
+        parser.error("시연 DB는 제품 앱 폴더 밖이라고 확인된 경로만 쓸 수 있다")
+    if args.codex_exe is not None and (args.demo or not args.codex_exe.is_absolute()):
+        parser.error("--codex-exe는 제품 실행에서 codex.exe의 절대 경로로만 쓸 수 있다")
+
+    return args
 
 
 def _end_unconfirmed() -> NoReturn:
@@ -223,13 +228,9 @@ def _run(
 
     Returns the Qt exit code and whether the backend confirmed its cleanup.
     """
-    from PySide6.QtCore import QTimer
-    from PySide6.QtGui import QCloseEvent
     from PySide6.QtWidgets import QApplication
 
-    from guard_app.services.bridge import BackendBridge, BridgeState
-    from guard_app.ui.runtime import RuntimePanel
-    from guard_app.ui.window import GuardWindow
+    from guard_app.services.bridge import BackendBridge
 
     store_title = "SQLite Store" if not args.demo or args.store == "sqlite" else "메모리 Store"
     existing = QApplication.instance()
@@ -274,56 +275,21 @@ def _run(
 
         codex.set_progress_listener(bridge.codex_progress)
 
-    close_limit_s = bridge.shutdown_timeout + CLOSE_OBSERVATION_S
-    closing_since: list[float] = []
-    start_failed: list[bool] = []
-    bridge.lifecycle_changed.connect(
-        lambda event: start_failed.append(True) if event.state is BridgeState.FAILED else None
-    )
+    from guard_app.ui.application import run_application
 
-    class ApplicationWindow(GuardWindow):
-        def closeEvent(self, event: QCloseEvent) -> None:
-            self.clear_session_content()
-            if not closing_since:
-                closing_since.append(time.monotonic())
-            bridge.close()
-            self.hide()
-            event.ignore()
-
-    def quit_when_closed() -> None:
-        if window.isVisible():
-            return
-        overdue = bool(closing_since) and time.monotonic() - closing_since[0] > close_limit_s
-        if bridge.thread_done or overdue:
-            app.quit()
-
-    if codex is None:
-        window = ApplicationWindow()
-    else:
+    saver = None
+    if codex is not None:
         from guard_app.security.secrets import save_scanner_key
 
-        window = ApplicationWindow(
-            scanner_key_saver=save_scanner_key,
-            scanner_key_tail=_scanner_key_tail,
-        )
-    panel = RuntimePanel(bridge)
-    window.attach_runtime(panel)
-    window.set_runtime_context(
-        f"{'합성 개발 시연' if args.demo else 'Codex 연결 대기'} / {store_title}"
+        saver = save_scanner_key
+    return run_application(
+        app,
+        bridge,
+        context=f"{'합성 개발 시연' if args.demo else 'Codex 연결 대기'} / {store_title}",
+        close_observation_s=CLOSE_OBSERVATION_S,
+        scanner_key_saver=saver,
+        scanner_key_tail=None if codex is None else _scanner_key_tail,
     )
-    window.navigate("runs")
-    timer = QTimer()
-    timer.setInterval(25)
-    timer.timeout.connect(quit_when_closed)
-    timer.start()
-    app.aboutToQuit.connect(bridge.close)
-    window.show()
-    bridge.start()
-    code = app.exec()
-    # A quit from elsewhere (session end) also gets the observation window.
-    waited_s = time.monotonic() - closing_since[0] if closing_since else 0.0
-    done = bridge.wait_done(close_limit_s - waited_s)
-    return (1 if start_failed else code), done and not bridge.cleanup_unconfirmed
 
 
 def _scanner_key_tail() -> str | None:

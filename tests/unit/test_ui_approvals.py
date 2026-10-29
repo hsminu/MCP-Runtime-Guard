@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QBoxLayout, QPushButton, QScrollArea
@@ -27,13 +26,10 @@ from guard_app.ui.models import LoadState
 from guard_app.ui.runtime import RuntimePanel
 from guard_app.ui.window import GuardWindow
 
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import closing_widgets, resize_widget
+
 NOW = datetime(2026, 10, 12, 5, 0, tzinfo=UTC)
-
-
-@pytest.fixture(scope="module")
-def app() -> QApplication:
-    instance = QApplication.instance()
-    return instance if instance is not None else QApplication([])
 
 
 def summary(
@@ -55,11 +51,7 @@ def summary(
     )
 
 
-def result(
-    page: ApprovalListPage,
-    rows: tuple[ApprovalSummary, ...],
-    total: int,
-) -> ApprovalPage:
+def result(page: ApprovalListPage, rows: tuple[ApprovalSummary, ...], total: int) -> ApprovalPage:
     query = page.current_query
     assert query is not None
     return ApprovalPage(query=query, rows=rows, total_count=total, as_of=NOW)
@@ -123,9 +115,7 @@ def test_page_counts_and_boundaries(app):
             assert view.current_query.page == pages - 1
 
 
-def test_stale_response_filter_change_and_disappearing_last_page(
-    app: QApplication,
-) -> None:
+def test_stale_response_filter_change_and_disappearing_last_page(app: QApplication) -> None:
     view = ApprovalListPage()
     requests = []
     view.query_requested.connect(requests.append)
@@ -219,15 +209,10 @@ def test_incomplete_backend_page_is_error_not_empty_success(app):
         assert "대기 중인 승인 요청이 없음" not in view.state_message.message.text()
 
 
-def test_equal_time_ties_require_stable_id_order_and_no_raw_actions(
-    app: QApplication,
-) -> None:
+def test_equal_time_ties_require_stable_id_order_and_no_raw_actions(app: QApplication) -> None:
     view = ApprovalListPage()
     view.refresh()
-    rows = (
-        summary(1, created_at=NOW),
-        summary(2, created_at=NOW),
-    )
+    rows = (summary(1, created_at=NOW), summary(2, created_at=NOW))
     assert not view.set_page(result(view, tuple(reversed(rows)), 2), display_now=NOW)
     assert view.state is LoadState.ERROR
     view.refresh()
@@ -251,10 +236,7 @@ def test_filter_and_newest_sort_request_backend_wide_order(app: QApplication) ->
     newest = requests[-1]
     assert newest.server_id == "server-a"
     assert newest.sort is ApprovalSort.NEWEST
-    rows = (
-        summary(2, created_at=NOW),
-        summary(1, created_at=NOW),
-    )
+    rows = (summary(2, created_at=NOW), summary(1, created_at=NOW))
     assert view.set_page(result(view, rows, 2), display_now=NOW)
     assert view.table.item(0, 0).text() == "approval-002"
     assert view.current_query is not None
@@ -271,7 +253,7 @@ def test_table_and_controls_fit_viewport_at_multiple_widths(app):
         view = ApprovalListPage()
         view.resize(width, 580)
         view.show()
-        try:
+        with closing_widgets(view):
             view.refresh()
             rows = tuple(summary(number) for number in range(6, 0, -1))
             assert view.set_page(result(view, rows, 6), display_now=NOW)
@@ -295,15 +277,13 @@ def test_table_and_controls_fit_viewport_at_multiple_widths(app):
                 view.refresh_button,
             ):
                 assert control.geometry().right() < width
-        finally:
-            view.close()
 
 
 def test_narrow_keyboard_selection_shows_only_public_summary(app: QApplication) -> None:
     view = ApprovalListPage()
     view.resize(320, 580)
     view.show()
-    try:
+    with closing_widgets(view):
         view.refresh()
         row = summary(1)
         assert view.set_page(result(view, (row,), 1), display_now=NOW)
@@ -321,8 +301,6 @@ def test_narrow_keyboard_selection_shows_only_public_summary(app: QApplication) 
         view.table.setFocus()
         QTest.keyClick(view.table, Qt.Key.Key_Tab)
         assert not view.table.hasFocus()
-    finally:
-        view.close()
 
 
 def test_public_summary_cannot_spoof_status_line(app: QApplication) -> None:
@@ -330,11 +308,10 @@ def test_public_summary_cannot_spoof_status_line(app: QApplication) -> None:
     view = ApprovalListPage()
     view.resize(320, 580)
     view.show()
-    try:
+    with closing_widgets(view):
         view.refresh()
         row = replace(
-            summary(1, destination="대상\n상태: 승인됨\u202e"),
-            server_id="server\r\n상태: 승인됨",
+            summary(1, destination="대상\n상태: 승인됨\u202e"), server_id="server\r\n상태: 승인됨"
         )
         assert view.set_page(result(view, (row,), 1), display_now=NOW)
         view.table.selectRow(0)
@@ -345,8 +322,6 @@ def test_public_summary_cannot_spoof_status_line(app: QApplication) -> None:
         assert "\\u000A" in lines[3]
         assert "\\u202E" in lines[3]
         assert all(line != "상태: 승인됨" for line in lines)
-    finally:
-        view.close()
 
 
 def test_scroll_host_can_shrink_from_full_to_narrow_without_page_overflow(
@@ -358,18 +333,15 @@ def test_scroll_host_can_shrink_from_full_to_narrow_without_page_overflow(
     host.setWidget(view)
     host.resize(1050, 650)
     host.show()
-    try:
+    with closing_widgets(host):
         app.processEvents()
         assert view.filters.direction() == QBoxLayout.Direction.LeftToRight
-        host.resize(320, 580)
-        app.processEvents()
+        resize_widget(app, host, 320, 580)
         QTest.qWait(20)
         app.processEvents()
         assert view.filters.direction() == QBoxLayout.Direction.TopToBottom
         assert host.horizontalScrollBar().maximum() == 0
         assert view.table.horizontalScrollBar().maximum() == 0
-    finally:
-        host.close()
 
 
 def test_waiting_hint_does_not_expire_or_interpret_markup(app: QApplication) -> None:
@@ -397,7 +369,7 @@ def test_320_by_400_approval_row_shows_bounded_age_with_identity_and_status(
     host.setWidget(view)
     host.resize(320, 400)
     host.show()
-    try:
+    with closing_widgets(host):
         view.refresh()
         row = summary(1, created_at=NOW - timedelta(minutes=31))
         assert view.set_page(result(view, (row,), 1), display_now=NOW)
@@ -405,11 +377,7 @@ def test_320_by_400_approval_row_shows_bounded_age_with_identity_and_status(
         QTest.qWait(20)
         app.processEvents()
         assert host.width() == 320 and host.height() == 400
-        assert tuple(i for i in range(6) if not view.table.isColumnHidden(i)) == (
-            0,
-            1,
-            4,
-        )
+        assert tuple(i for i in range(6) if not view.table.isColumnHidden(i)) == (0, 1, 4)
         assert view.table.item(0, 0).text() == row.approval_id
         assert view.table.item(0, 1).text() == row.server_id
         status = view.table.item(0, 4)
@@ -425,24 +393,19 @@ def test_320_by_400_approval_row_shows_bounded_age_with_identity_and_status(
         )
         assert view.table.horizontalScrollBar().maximum() == 0
         assert host.horizontalScrollBar().maximum() == 0
-        host.resize(980, 700)
-        app.processEvents()
+        resize_widget(app, host, 980, 700)
         QTest.qWait(20)
         app.processEvents()
         assert "승인 유효 시간 지남" in status.text()
         assert "31분 대기" not in status.text()
         assert view.table.horizontalScrollBar().maximum() == 0
-    finally:
-        host.close()
 
 
-def test_narrow_row_does_not_invent_elapsed_time_from_future_request(
-    app: QApplication,
-) -> None:
+def test_narrow_row_does_not_invent_elapsed_time_from_future_request(app: QApplication) -> None:
     view = ApprovalListPage()
     view.resize(320, 580)
     view.show()
-    try:
+    with closing_widgets(view):
         view.refresh()
         future = summary(1, created_at=NOW + timedelta(minutes=5))
         assert view.set_page(result(view, (future,), 1), display_now=NOW)
@@ -456,15 +419,13 @@ def test_narrow_row_does_not_invent_elapsed_time_from_future_request(
         assert not view.set_page(result(view, (missing,), 1), display_now=NOW)
         assert view.state is LoadState.ERROR
         assert view.table.rowCount() == 0
-    finally:
-        view.close()
 
 
 def test_narrow_approved_row_does_not_imply_tool_execution(app: QApplication) -> None:
     view = ApprovalListPage()
     view.resize(320, 400)
     view.show()
-    try:
+    with closing_widgets(view):
         view.lane_tabs.setCurrentIndex(1)
         row = summary(1, status=ApprovalStatus.APPROVED)
         assert view.set_page(result(view, (row,), 1), display_now=NOW)
@@ -473,8 +434,6 @@ def test_narrow_approved_row_does_not_imply_tool_execution(app: QApplication) ->
         assert status.text() == "승인됨\n결과 별도 확인"
         assert "실행 결과 별도 확인" in status.toolTip()
         assert view.table.horizontalScrollBar().maximum() == 0
-    finally:
-        view.close()
 
 
 def _policy(ttl: int) -> PolicyView:
@@ -501,7 +460,7 @@ def test_window_uses_the_profile_approval_ttl_for_the_waiting_hint(app: QApplica
     shell.attach_runtime(RuntimePanel(bridge))
     shell.set_approval_query_connected(True)
     view = shell.approval_page
-    try:
+    with closing_widgets(bridge, shell):
         row = summary(1, created_at=NOW - timedelta(minutes=3))
         view.refresh()
         assert view.set_page(result(view, (row,), 1), display_now=NOW)
@@ -520,6 +479,3 @@ def test_window_uses_the_profile_approval_ttl_for_the_waiting_hint(app: QApplica
         view.refresh()
         assert view.set_page(result(view, (row,), 1), display_now=NOW)
         assert "승인 유효 시간 지남" not in view.table.item(0, 4).text()
-    finally:
-        bridge.close()
-        shell.close()

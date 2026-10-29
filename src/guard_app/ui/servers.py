@@ -45,6 +45,7 @@ from .presentation import (
     public_display_text,
 )
 from .scan_status import ScanStatusCard, ScanStatusProjection
+from .tool_settings import ToolSettingsDialog
 from .widgets import (
     KeyboardActionButton,
     SecurityLabel,
@@ -171,6 +172,7 @@ class ServerListPage(QWidget):
         self._activation_command = ""
         self._activation_action = "activate"
         self._activation_dialog: ToolAllowDialog | None = None
+        self._tools_dialog: ToolSettingsDialog | None = None
         self._visible_servers: list[ServerSummary] = []
         self._state = LoadState.UNAVAILABLE
         self._detail_dialog: ServerDetailDialog | None = None
@@ -265,6 +267,9 @@ class ServerListPage(QWidget):
         self.block_button.clicked.connect(lambda: self._preview_activation("block"))
         layout.addWidget(self.block_button)
         self.activation_notice = plain_label("", name="runtimeMessage")
+        self.tools_button = KeyboardActionButton("선택한 서버 도구 설정")
+        self.tools_button.clicked.connect(self._preview_tools)
+        layout.addWidget(self.tools_button)
         layout.addWidget(self.activation_notice)
         self._selection_changed()
         self._set_filters_enabled(False)
@@ -412,6 +417,9 @@ class ServerListPage(QWidget):
         self.block_button.setEnabled(
             ready and selected is not None and selected.registry_status in ("pending", "active")
         )
+        self.tools_button.setEnabled(
+            ready and selected is not None and selected.registry_status in ("pending", "active")
+        )
 
     def attach_activation(self, bridge: BackendBridge) -> None:
         self._activation_bridge = bridge
@@ -434,6 +442,11 @@ class ServerListPage(QWidget):
         self._activation_action = action
         self._send_activation(RegistrationRequest("activation_preview", server_id))
 
+    def _preview_tools(self) -> None:
+        server_id = self._selected_id()
+        if server_id is not None:
+            self._send_activation(RegistrationRequest("tool_settings_preview", server_id))
+
     def _activation_command_result(self, event: CommandEvent) -> None:
         if event.command_id == self._activation_command and event.stage in (
             CommandStage.REJECTED,
@@ -446,6 +459,22 @@ class ServerListPage(QWidget):
             return
         self._activation_command = ""
         self._selection_changed()
+        if view.code == "REG_TOOLS_PREVIEW":
+            tools_dialog = ToolSettingsDialog(view, self)
+            self._tools_dialog = tools_dialog
+            tools_dialog.accepted.connect(
+                lambda: self._send_activation(
+                    RegistrationRequest(
+                        "tool_settings_save",
+                        view.server_id,
+                        expected_row_revision=view.row_revision,
+                        tool_settings=tools_dialog.selection(),
+                    )
+                )
+            )
+            tools_dialog.open()
+            self.activation_notice.setText("도구 설정을 확인하세요.")
+            return
         if view.code == "REG_ACTIVATION_PREVIEW" and view.activation is not None:
             action = self._activation_action
             server = view.activation.servers[0]
@@ -484,6 +513,11 @@ class ServerListPage(QWidget):
             return
         messages = {
             **CHANGE_RESULTS,
+            "REG_TOOLS_RESTART_REQUIRED": (
+                "도구 설정 저장 완료 · Task 정지됨. 앱을 다시 시작한 뒤 서버 목록에서 활성화하세요."
+            ),
+            "REG_TOOLS_STALE": "서버 상태가 바뀌어 저장하지 않음. 목록을 다시 확인하세요.",
+            "REG_TOOLS_INVALID": "도구 설정이 올바르지 않아 저장하지 않음. 입력을 다시 확인하세요.",
             # Unlike a policy-screen save, a failed activation write closes Guard.
             "POLICY_SAVE_FAILED": "설정을 저장하지 못해 Guard를 정지함. 앱을 다시 시작하세요.",
             "REG_ACTIVATION_RESTART_REQUIRED": (

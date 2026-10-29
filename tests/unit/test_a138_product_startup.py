@@ -6,6 +6,7 @@ Real SQLite startup and A boundary counters. C process/crash acceptance is separ
 import asyncio
 import sqlite3
 import time
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import pytest
@@ -22,7 +23,7 @@ from guard_app.domain.errors import StorePrepareError
 from guard_app.domain.models import RecoveryItem, RecoveryItemPage, TaskState
 from guard_app.domain.reasons import Reason
 from guard_app.security.paths import prepare_app_folders
-from guard_app.services import session_runtime
+from guard_app.services import product_startup, session_runtime
 from guard_app.services.bridge import BackendBridge, BridgeState, SessionOptions, _ProcessStartGate
 from guard_app.services.bridge_types import BackendCleanupError
 from guard_app.services.runner import CodexSessionError
@@ -38,7 +39,64 @@ from .test_bridge import pump_until
 from .test_codex_product_flow import preparation, read_then_answer
 from .test_codex_session import FakeGuard, released, started
 from .test_product_assembly import READ_DEFINITION, Peer, Registry, document, inputs, spec
-from .test_session_runtime import Session, synthetic_preparation
+from .test_session_runtime import Session, make_runtime, synthetic_preparation
+
+
+def read_product(peer=None):
+    return inputs(
+        peer if peer is not None else Peer([READ_DEFINITION]),
+        Registry(spec(READ_DEFINITION).fingerprint),
+        document(),
+    )
+
+
+def tracked_launcher(monkeypatch, peer, confirmed=True):
+    from guard_app.adapters.mcp_transport import launcher_streams
+
+    launched, closed = [], []
+
+    class Process:
+        read_bytes, write_bytes, drain = peer.read, peer.write, peer.drain
+
+        async def close(self, **kwargs):
+            closed.append(kwargs)
+            return confirmed
+
+    async def launch(*args):
+        launched.append(args)
+        return Process()
+
+    monkeypatch.setattr(launcher_streams, "launch_mcp_server", launch)
+    return launched, closed
+
+
+@asynccontextmanager
+async def closing_store(path, *, close_timeout=5, **kwargs):
+    store = SQLiteStore(path, **kwargs)
+    try:
+        yield store
+    finally:
+        store.close()
+        assert await store.wait_closed(close_timeout)
+
+
+@asynccontextmanager
+async def running_product(folders, **kwargs):
+    bindings = await bootstrap_product(folders, **kwargs)
+    try:
+        yield bindings
+    finally:
+        await bindings.close()
+
+
+@asynccontextmanager
+async def runtime_context(tmp_path, **kwargs):
+    runtime, sessions = make_runtime(tmp_path, **kwargs)
+    async with asyncio.timeout(10):
+        try:
+            yield runtime, sessions
+        finally:
+            await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -48,8 +106,8 @@ async def test_order_shared_deadline_activation_barrier_and_callback_isolation(
     events, deadlines, stores, sessions = [], [], [], []
     entered, release = asyncio.Event(), asyncio.Event()
     peer = Peer([READ_DEFINITION])
-    original_assemble = session_runtime.assemble_guard
-    original_load = session_runtime.load_settings_profile
+    original_assemble = product_startup.assemble_guard
+    original_load = product_startup.load_settings_profile
 
     async def load(settings, store):
         events.append("settings")
@@ -92,9 +150,9 @@ async def test_order_shared_deadline_activation_barrier_and_callback_isolation(
         events.append(value.value)
         raise RuntimeError("private-callback-text")
 
-    monkeypatch.setattr(session_runtime, "SQLiteStore", Observed)
-    monkeypatch.setattr(session_runtime, "assemble_guard", assemble)
-    monkeypatch.setattr(session_runtime, "load_settings_profile", load)
+    monkeypatch.setattr(product_startup, "SQLiteStore", Observed)
+    monkeypatch.setattr(product_startup, "assemble_guard", assemble)
+    monkeypatch.setattr(product_startup, "load_settings_profile", load)
     started = time.monotonic()
     async with asyncio.timeout(10):
         boot = asyncio.create_task(
@@ -102,8 +160,8 @@ async def test_order_shared_deadline_activation_barrier_and_callback_isolation(
                 product_folders(tmp_path / "start.db"),
                 on_step=step,
                 preparation=preparation(sessions, read_then_answer),
-                product=inputs(peer, Registry(spec(READ_DEFINITION).fingerprint), document()),
-                settings=session_runtime.SettingsFile(object(), document(), None),
+                product=read_product(peer),
+                settings=product_startup.SettingsFile(object(), document(), None),
             )
         )
         await entered.wait()
@@ -164,7 +222,7 @@ async def test_cancel_start_closes_writer_and_marks_unconfirmed(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(Observed, phase, parked)
-    monkeypatch.setattr(session_runtime, "SQLiteStore", Observed)
+    monkeypatch.setattr(product_startup, "SQLiteStore", Observed)
     async with asyncio.timeout(10):
         boot = asyncio.create_task(bootstrap_product(product_folders(tmp_path / "cancel.db")))
         await entered.wait()
@@ -185,7 +243,7 @@ def test_start_failure_bridge_and_fixed_ui_message(tmp_path, monkeypatch, code):
             stores.append(self)
             raise StorePrepareError(code)
 
-    monkeypatch.setattr(session_runtime, "SQLiteStore", Refused)
+    monkeypatch.setattr(product_startup, "SQLiteStore", Refused)
     bridge = BackendBridge(
         lambda: bootstrap_product(product_folders(tmp_path / "failure.db")),
         start_gate=_ProcessStartGate(),
@@ -196,8 +254,7 @@ def test_start_failure_bridge_and_fixed_ui_message(tmp_path, monkeypatch, code):
     try:
         pump_until(app, lambda: bridge.thread_done)
         app.processEvents()
-        assert events[-1].state is BridgeState.FAILED
-        assert events[-1].code == code.value
+        assert (events[-1].state, events[-1].code) == (BridgeState.FAILED, code.value)
         assert not bridge.cleanup_unconfirmed
         assert "다시 시작하세요" in LIFECYCLE_MESSAGES[code.value]
         assert asyncio.run(stores[0].wait_closed(1))
@@ -223,9 +280,7 @@ async def test_recovery_from_previous_run_and_v2_backup(tmp_path):
         assert StorePrepareStep.STORE_BACKUP in steps
         assert StorePrepareStep.STORE_MIGRATE in steps
         assert list(folders.paths.backups.iterdir())
-        # Persist an unfinished Task without launching any model/tool.
-        store = SQLiteStore(path)
-        try:
+        async with closing_store(path) as store:
             await store.create_task(
                 TaskState(
                     task_id="previous",
@@ -236,11 +291,7 @@ async def test_recovery_from_previous_run_and_v2_backup(tmp_path):
                 ),
                 created_at_utc=datetime.now(UTC),
             )
-        finally:
-            store.close()
-            assert await store.wait_closed(5)
-        second = await bootstrap_product(folders)
-        try:
+        async with running_product(folders) as second:
             assert second.recovery_report.changed_task_count == 1
             app = QApplication.instance() or QApplication([])
             bridge = BackendBridge(lambda: None)
@@ -251,8 +302,6 @@ async def test_recovery_from_previous_run_and_v2_backup(tmp_path):
             assert not panel.next_button.isEnabled()
             panel.close()
             app.processEvents()
-        finally:
-            await second.close()
     finally:
         folders.close()
 
@@ -267,16 +316,13 @@ async def test_global_halt_blocks_turn_and_interrupts_all_sessions(tmp_path):
         return session
 
     async with asyncio.timeout(10):
-        bindings = await bootstrap_product(
+        async with running_product(
             product_folders(tmp_path / "halt.db"),
             session_factory=factory,
             preparation=synthetic_preparation(),
-            product=inputs(
-                Peer([READ_DEFINITION]), Registry(spec(READ_DEFINITION).fingerprint), document()
-            ),
-        )
-        runtime = bindings.close.__self__
-        try:
+            product=read_product(),
+        ) as bindings:
+            runtime = bindings.close.__self__
             tasks = [await bindings.create_session(SessionOptions()) for _ in range(2)]
             runner = bindings.runner_for_task(tasks[0].task_id)
             runner.add_user_message("queued")
@@ -290,60 +336,51 @@ async def test_global_halt_blocks_turn_and_interrupts_all_sessions(tmp_path):
             await runtime._work.wait(3)
             assert all(session.closed == 1 and session.interrupted == 1 for session in sessions)
             assert len(sessions) == 2
-        finally:
-            await bindings.close()
 
 
 @pytest.mark.asyncio
 async def test_revision_change_latches_even_if_enabled(tmp_path):
-    store = SQLiteStore(tmp_path / "revision.db")
-    state = store.execution_state()
-    gate = ExecutionGate(lambda: state)
-    try:
+    async with closing_store(tmp_path / "revision.db") as store:
+        state = store.execution_state()
+        gate = ExecutionGate(lambda: state)
         assert gate.allowed()
         state = state.model_copy(update={"state_revision": state.state_revision + 1})
         assert not gate.allowed()
         state = store.execution_state()
         assert not gate.allowed()
-    finally:
-        store.close()
-        assert await store.wait_closed(5)
 
 
 @pytest.mark.asyncio
 async def test_tool_response_and_turn_check_store_authority(tmp_path):
-    store = SQLiteStore(tmp_path / "response.db")
-    gate = ExecutionGate(store.execution_state)
+    async with closing_store(tmp_path / "response.db") as store:
+        gate = ExecutionGate(store.execution_state)
 
-    class HaltingGuard(FakeGuard):
-        async def submit(self, *args, **kwargs):
-            store.halt_execution(Reason.INTERNAL_ERROR)
-            return released("private-result-must-not-escape")
+        class HaltingGuard(FakeGuard):
+            async def submit(self, *args, **kwargs):
+                store.halt_execution(Reason.INTERNAL_ERROR)
+                return released("private-result-must-not-escape")
 
-    fake = FakeAppServer()
-    session = await started(fake, HaltingGuard())
-    session._execution_allowed = gate.allowed
-    try:
-        # Direct request processing holds the returned result until the final authority check.
-        reply = await session._tool_call(
-            {
-                "threadId": session._thread_id,
-                "turnId": "turn",
-                "callId": "call",
-                "namespace": "docs",
-                "tool": "read",
-                "arguments": {"path": "public/a.txt"},
-            }
-        )
-        assert reply["success"] is False
-        assert "private-result" not in repr(reply)
-        with pytest.raises(CodexSessionError, match="CODEX_STORE_HALTED"):
-            await session.send("new turn")
-        assert "turn/start" not in fake.methods()
-    finally:
-        await session.aclose()
-        store.close()
-        assert await store.wait_closed(5)
+        fake = FakeAppServer()
+        session = await started(fake, HaltingGuard())
+        session._execution_allowed = gate.allowed
+        try:
+            reply = await session._tool_call(
+                {
+                    "threadId": session._thread_id,
+                    "turnId": "turn",
+                    "callId": "call",
+                    "namespace": "docs",
+                    "tool": "read",
+                    "arguments": {"path": "public/a.txt"},
+                }
+            )
+            assert reply["success"] is False
+            assert "private-result" not in repr(reply)
+            with pytest.raises(CodexSessionError, match="CODEX_STORE_HALTED"):
+                await session.send("new turn")
+            assert "turn/start" not in fake.methods()
+        finally:
+            await session.aclose()
 
 
 @pytest.mark.asyncio
@@ -361,22 +398,17 @@ async def test_idle_revision_watch_closes_sessions(tmp_path):
         return session
 
     async with asyncio.timeout(10):
-        bindings = await bootstrap_product(
+        async with running_product(
             product_folders(tmp_path / "watch.db"),
             session_factory=factory,
             preparation=synthetic_preparation(),
-            product=inputs(
-                Peer([READ_DEFINITION]), Registry(spec(READ_DEFINITION).fingerprint), document()
-            ),
-        )
-        try:
+            product=read_product(),
+        ) as bindings:
             await bindings.create_session(SessionOptions())
             runtime = bindings.close.__self__
             runtime.store.halt_execution(Reason.INTERNAL_ERROR)
             await asyncio.wait_for(closed.wait(), 2)
             assert session.interrupted == 1
-        finally:
-            await bindings.close()
 
 
 @pytest.mark.asyncio
@@ -405,7 +437,7 @@ async def test_recovery_pages_keep_older_items_and_100_limit(tmp_path, monkeypat
                 next_after="old-request" if after is None else None,
             )
 
-    monkeypatch.setattr(session_runtime, "SQLiteStore", Paged)
+    monkeypatch.setattr(product_startup, "SQLiteStore", Paged)
     app = QApplication.instance() or QApplication([])
     bindings = await bootstrap_product(product_folders(tmp_path / "pages.db"))
     bridge = BackendBridge(lambda: None)
@@ -417,14 +449,9 @@ async def test_recovery_pages_keep_older_items_and_100_limit(tmp_path, monkeypat
         page = await bindings.recovery_next()
         panel.show_page(page)
         assert not panel.next_button.isEnabled()
-        assert "stored-server" in panel.items.toPlainText()
-        assert "stored-tool" in panel.items.toPlainText()
-        assert "stored-destination" in panel.items.toPlainText()
-        assert "미제공" in panel.items.toPlainText()
-        assert calls == [
-            (None, None, 100),
-            (None, "old-request", 100),
-        ]
+        for text in ("stored-server", "stored-tool", "stored-destination", "미제공"):
+            assert text in panel.items.toPlainText()
+        assert calls == [(None, None, 100), (None, "old-request", 100)]
         assert "stored-server" not in repr(page)
     finally:
         panel.close()
@@ -474,8 +501,7 @@ def test_product_window_returns_start_failure_exit_code(monkeypatch, code):
     try:
         result, confirmed = entry._run(argparse.Namespace(demo=False, store=None), owner)
         assert seen == [code.value]
-        assert result == 1
-        assert confirmed
+        assert (result, confirmed) == (1, True)
     finally:
         timeout.stop()
         app.setQuitOnLastWindowClosed(previous)
@@ -486,50 +512,48 @@ def test_product_window_returns_start_failure_exit_code(monkeypatch, code):
 async def test_queued_wire_frame_rechecks_execution(tmp_path, monkeypatch, operation):
     from guard_app.adapters.jsonrpc_client import JsonRpcError
 
-    store = SQLiteStore(tmp_path / "wire.db")
-    fake = FakeAppServer()
-    session = await started(fake, FakeGuard(released("withheld-at-wire")))
-    session._execution_allowed = ExecutionGate(store.execution_state).allowed
-    entered = asyncio.Event()
-    original = session._client._send
+    async with closing_store(tmp_path / "wire.db") as store:
+        fake = FakeAppServer()
+        session = await started(fake, FakeGuard(released("withheld-at-wire")))
+        session._execution_allowed = ExecutionGate(store.execution_state).allowed
+        entered = asyncio.Event()
+        original = session._client._send
 
-    async def queued(message, **kwargs):
-        entered.set()
-        await original(message, **kwargs)
+        async def queued(message, **kwargs):
+            entered.set()
+            await original(message, **kwargs)
 
-    monkeypatch.setattr(session._client, "_send", queued)
-    await session._client._send_lock.acquire()
-    async with asyncio.timeout(5):
-        work = asyncio.create_task(
-            session.send("queued")
-            if operation == "turn"
-            else session._client._answer(
-                9999,
-                "item/tool/call",
-                {
-                    "threadId": session._thread_id,
-                    "turnId": "turn",
-                    "callId": "call",
-                    "namespace": "docs",
-                    "tool": "read",
-                    "arguments": {"path": "a"},
-                },
+        monkeypatch.setattr(session._client, "_send", queued)
+        await session._client._send_lock.acquire()
+        async with asyncio.timeout(5):
+            work = asyncio.create_task(
+                session.send("queued")
+                if operation == "turn"
+                else session._client._answer(
+                    9999,
+                    "item/tool/call",
+                    {
+                        "threadId": session._thread_id,
+                        "turnId": "turn",
+                        "callId": "call",
+                        "namespace": "docs",
+                        "tool": "read",
+                        "arguments": {"path": "a"},
+                    },
+                )
             )
-        )
-        try:
-            await entered.wait()
-            store.halt_execution(Reason.INTERNAL_ERROR)
-            session._client._send_lock.release()
-            with pytest.raises((CodexSessionError, JsonRpcError)):
-                await work
-            assert "turn/start" not in fake.methods()
-            assert 9999 not in fake.replies
-        finally:
-            if session._client._send_lock.locked():
+            try:
+                await entered.wait()
+                store.halt_execution(Reason.INTERNAL_ERROR)
                 session._client._send_lock.release()
-            await session.aclose()
-            store.close()
-            assert await store.wait_closed(5)
+                with pytest.raises((CodexSessionError, JsonRpcError)):
+                    await work
+                assert "turn/start" not in fake.methods()
+                assert 9999 not in fake.replies
+            finally:
+                if session._client._send_lock.locked():
+                    session._client._send_lock.release()
+                await session.aclose()
 
 
 @pytest.mark.asyncio
@@ -554,42 +578,22 @@ async def test_settings_build_real_guard_and_own_server_exit(
     else:
         server.pop("command")
         server.update(transport="streamable_http", url="http://127.0.0.1:80/mcp")
-    store = SQLiteStore(folders.db_path(), audit_id_factory=lambda: new_id("audit"))
-    try:
+    async with closing_store(folders.db_path(), audit_id_factory=lambda: new_id("audit")) as store:
         await registered(store, doc)
-    finally:
-        store.close()
-        assert await store.wait_closed(5)
     peer = Peer([READ_DEFINITION])
-    launched, closed, endpoints = [], [], []
-
-    class Process:
-        read_bytes = peer.read
-        write_bytes = peer.write
-        drain = peer.drain
-
-        async def close(self, **kwargs):
-            closed.append(kwargs)
-            return confirmed
-
-    async def launch(*args):
-        launched.append(args)
-        return Process()
+    launched, closed = tracked_launcher(monkeypatch, peer, confirmed)
+    endpoints = []
 
     def http(endpoint, *, read_timeout_s):
         assert read_timeout_s == 60.0
         endpoints.append(endpoint)
         return validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
 
-    from guard_app.adapters.mcp_transport import launcher_streams
-
-    monkeypatch.setattr(launcher_streams, "launch_mcp_server", launch)
     monkeypatch.setattr(assembly, "http_stream_factory", http)
     try:
         bindings = await bootstrap_product(folders, settings=SettingsFile(folders, doc, None))
-        assert bindings.human_control is not None
-        assert bindings.policy_access is not None
-        assert bindings.policy is not None
+        for binding in (bindings.human_control, bindings.policy_access, bindings.policy):
+            assert binding is not None
         assert peer.calls == []  # listing only; no tool execution during startup
         if confirmed:
             await bindings.close()

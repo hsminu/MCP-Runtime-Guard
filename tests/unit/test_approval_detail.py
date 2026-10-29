@@ -27,11 +27,24 @@ from guard_app.ui.approval_detail import (
     visible_review_text,
 )
 
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import closing_widgets
 
-@pytest.fixture(scope="module")
-def app() -> QApplication:
-    instance = QApplication.instance()
-    return instance if instance is not None else QApplication([])
+
+def start_http_probe(requests):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, _format, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    thread.start()
+    return server, thread
 
 
 class UrlProbe(QObject):
@@ -100,9 +113,7 @@ def test_controls_bidi_and_confusables_have_unambiguous_visible_codes() -> None:
     assert visible_review_text("분기 보고서") == "분기 보고서"
 
 
-def test_markup_links_and_remote_images_remain_literal_plain_text(
-    app: QApplication,
-) -> None:
+def test_markup_links_and_remote_images_remain_literal_plain_text(app: QApplication) -> None:
     """T18: HTML·링크·원격 이미지 일반 텍스트와 HTTPS 외부 열기 0."""
     probe = UrlProbe()
     QDesktopServices.setUrlHandler("https", probe, "capture(QUrl)")
@@ -129,9 +140,7 @@ def test_markup_links_and_remote_images_remain_literal_plain_text(
             cursor = body.textCursor()
             cursor.setPosition(body.toPlainText().find("https://") + 8)
             QTest.mouseClick(
-                body.viewport(),
-                Qt.MouseButton.LeftButton,
-                pos=body.cursorRect(cursor).center(),
+                body.viewport(), Qt.MouseButton.LeftButton, pos=body.cursorRect(cursor).center()
             )
         app.processEvents()
         assert probe.opened == []
@@ -143,24 +152,11 @@ def test_markup_links_and_remote_images_remain_literal_plain_text(
         QDesktopServices.unsetUrlHandler("https")
 
 
-def test_markup_and_link_clicks_make_no_loopback_http_requests(
-    app: QApplication,
-) -> None:
+def test_markup_and_link_clicks_make_no_loopback_http_requests(app: QApplication) -> None:
     """T18: 상세 필드의 자동 이미지 요청·링크 클릭 loopback HTTP 0."""
     requests: list[str] = []
 
-    class RequestHandler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            requests.append(self.path)
-            self.send_response(204)
-            self.end_headers()
-
-        def log_message(self, _format: str, *args: object) -> None:
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), RequestHandler)
-    server_thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
-    server_thread.start()
+    server, server_thread = start_http_probe(requests)
     probe = UrlProbe()
     QDesktopServices.setUrlHandler("http", probe, "capture(QUrl)")
     dialog = ApprovalDetailDialog()
@@ -186,11 +182,7 @@ def test_markup_and_link_clicks_make_no_loopback_http_requests(
             cursor.setPosition(body.toPlainText().find(base_url) + 7)
             click_pos = body.cursorRect(cursor).center()
             assert body.viewport().rect().contains(click_pos)
-            QTest.mouseClick(
-                body.viewport(),
-                Qt.MouseButton.LeftButton,
-                pos=click_pos,
-            )
+            QTest.mouseClick(body.viewport(), Qt.MouseButton.LeftButton, pos=click_pos)
         QTest.keyClick(dialog.arguments_body, Qt.Key.Key_Return)
         # Give Qt's event loop time to issue any deferred resource fetch.
         QTest.qWait(250)
@@ -206,9 +198,7 @@ def test_markup_and_link_clicks_make_no_loopback_http_requests(
     assert probe.opened == []
 
 
-def test_long_fields_are_complete_and_dialog_releases_its_copies(
-    app: QApplication,
-) -> None:
+def test_long_fields_are_complete_and_dialog_releases_its_copies(app: QApplication) -> None:
     """T18: 전체 필드 표시와 닫기 후 표시 사본 해제."""
     host = QWidget()
     layout = QVBoxLayout(host)
@@ -221,7 +211,7 @@ def test_long_fields_are_complete_and_dialog_releases_its_copies(
     arguments = b'{"payload":"' + b"a" * 70_000 + b'","end":"args-end"}'
     value = ApprovalDetailValue(destination, arguments)
     dialog = ApprovalDetailDialog(host)
-    try:
+    with closing_widgets(dialog, host):
         dialog.show_value(value, return_focus=opener)
         app.processEvents()
         assert dialog.destination_body.hasFocus()
@@ -237,14 +227,11 @@ def test_long_fields_are_complete_and_dialog_releases_its_copies(
         assert host.focusWidget() is opener
         assert value.destination == destination
         assert value.arguments_bytes == arguments
-    finally:
-        dialog.close()
-        host.close()
 
 
 def test_invalid_utf8_never_leaves_stale_detail_visible(app: QApplication) -> None:
     dialog = ApprovalDetailDialog()
-    try:
+    with closing_widgets(dialog):
         dialog.show_value(ApprovalDetailValue("first", b'{"ok":true}'))
         app.processEvents()
         with pytest.raises(ValueError, match="not valid UTF-8"):
@@ -252,8 +239,6 @@ def test_invalid_utf8_never_leaves_stale_detail_visible(app: QApplication) -> No
         assert not dialog.isVisible()
         assert dialog.destination_body.toPlainText() == ""
         assert dialog.arguments_body.toPlainText() == ""
-    finally:
-        dialog.close()
 
 
 def test_short_owner_scrolls_both_complete_plain_fields(app: QApplication) -> None:
@@ -264,7 +249,7 @@ def test_short_owner_scrolls_both_complete_plain_fields(app: QApplication) -> No
     destination = "https://review.invalid/" + "d" * 512 + "/destination-end"
     arguments = ("synthetic-line:" + "a" * 160 + "\n") * 60 + "args-end"
     detail = ApprovalDetailDialog(owner)
-    try:
+    with closing_widgets(detail, owner):
         detail.show_value(ApprovalDetailValue(destination, arguments.encode("utf-8")))
         app.processEvents()
         scroll = detail.findChild(QScrollArea, "approvalDetailScroll")
@@ -291,6 +276,3 @@ def test_short_owner_scrolls_both_complete_plain_fields(app: QApplication) -> No
         detail.close()
         assert detail.destination_body.toPlainText() == ""
         assert detail.arguments_body.toPlainText() == ""
-    finally:
-        detail.close()
-        owner.close()

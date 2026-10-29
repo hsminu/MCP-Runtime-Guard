@@ -8,21 +8,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit
+from PySide6.QtWidgets import QLabel, QLineEdit
 
-from guard_app.ui.scanner_key import (
-    NOT_CONNECTED,
-    SAVE_FAILED,
-    SAVE_UNCONFIRMED,
-    ScannerKeyForm,
-)
+from guard_app.ui.scanner_key import NOT_CONNECTED, SAVE_FAILED, SAVE_UNCONFIRMED, ScannerKeyForm
+
+from .test_ui_icons_style import app as app
 
 KEY = "sk-proj-TEST_SECRET_MARKER_9z7Q"
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _visible_texts(form):

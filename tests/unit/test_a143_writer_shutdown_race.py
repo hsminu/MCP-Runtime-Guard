@@ -15,8 +15,9 @@ from guard_app.services.product_assembly import assemble_guard
 from guard_app.services.runner import CodexAuthenticationError
 from guard_app.services.session_runtime import SessionRuntime
 from guard_app.storage import SQLiteStore
-from tests.unit.test_product_assembly import READ_DEFINITION, Peer, Registry, document, inputs, spec
 from tests.unit.test_session_runtime import Session, synthetic_preparation
+
+from .test_a138_product_startup import closing_store, read_product
 
 
 @pytest.mark.asyncio
@@ -24,8 +25,7 @@ async def test_shutdown_records_session_stop_before_real_writer_closes(tmp_path,
     original_connect = sqlite3.connect
     armed, committed, release = threading.Event(), threading.Event(), threading.Event()
 
-    # B's test_b_registry_writer_integration.py CommitBarrier is function-local.
-    # Keep its post-COMMIT barrier here, without replacing Store or STOP-01.
+    # Local post-COMMIT barrier preserves the real Store and STOP-01.
     class CommitBarrier(sqlite3.Connection):
         def execute(self, statement, parameters=(), /):
             cursor = super().execute(statement, parameters)
@@ -52,12 +52,7 @@ async def test_shutdown_records_session_stop_before_real_writer_closes(tmp_path,
     runtime = assembled = hold = timer = None
     try:
         async with asyncio.timeout(8):
-            assembled = await assemble_guard(
-                store,
-                inputs(
-                    Peer([READ_DEFINITION]), Registry(spec(READ_DEFINITION).fingerprint), document()
-                ),
-            )
+            assembled = await assemble_guard(store, read_product())
             runtime = SessionRuntime(
                 store,
                 owned_store=store,
@@ -97,12 +92,10 @@ async def test_shutdown_records_session_stop_before_real_writer_closes(tmp_path,
             assert records[0].done()
             assert not records[0].cancelled()
             error = records[0].exception()
-            reopened = SQLiteStore(path, audit_id_factory=lambda: f"audit-{next(ids)}")
-            try:
+            async with closing_store(
+                path, close_timeout=3, audit_id_factory=lambda: f"audit-{next(ids)}"
+            ) as reopened:
                 saved = await reopened.load_task(created.task_id)
-            finally:
-                reopened.close()
-                assert await reopened.wait_closed(3)
             # Report both regression signals, even when BackgroundWork consumed the error.
             assert (isinstance(error, SystemControlError), saved.status) == (
                 False,

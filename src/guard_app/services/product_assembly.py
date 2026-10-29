@@ -36,7 +36,7 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any
 
@@ -54,7 +54,8 @@ from guard_app.security.digest import JcsCanonicalizationError, tool_fingerprint
 from guard_app.security.endpoints import EndpointError, normalize_endpoint
 from guard_app.security.ids import new_id
 from guard_app.security.launcher import ExecutablePin
-from guard_app.security.paths import AppFolders
+from guard_app.security.paths import AppFolders, file_resource_resolver
+from guard_app.servers.file_server import file_server_root
 from guard_app.services.catalog import (
     CatalogConfigError,
     GuardSettings,
@@ -271,6 +272,16 @@ async def _record_listings(
     return frozenset(failed)
 
 
+def _boundary_matches(registry: Registry, server: ServerSettings) -> bool:
+    # The fields B's Profile view compares before it compares the tools.
+    record = registry.registration(server.id)
+    return (
+        record is not None
+        and record.boundary.tier == server.tier
+        and record.boundary.max_label == server.max_label
+    )
+
+
 @dataclass(slots=True, repr=False)
 class AssembledGuard:
     loaded: LoadedProfile
@@ -280,6 +291,8 @@ class AssembledGuard:
     tool_views: tuple[ToolView, ...]
     operator_id: str
     call_timeout_s: float = 30.0
+
+    resource_resolver: ResourceResolver | None = None
 
     @property
     def settings(self) -> GuardSettings:
@@ -375,6 +388,23 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         raise ProductAssemblyError("PRODUCT_INPUTS_INVALID")
     registry = LiveCheckedRegistry(inputs.registry)
     try:
+        configured = load_profile_settings(inputs.profile_document, registry)
+        roots = {
+            server.id: root
+            for server in configured.servers
+            if server.transport == "stdio"
+            and (root := file_server_root(server.args or ())) is not None
+        }
+        if roots:
+            file_resolver = file_resource_resolver(roots)
+            fallback = inputs.resource_resolver
+
+            def resolve(tool: ToolSpec, path: str) -> str:
+                if tool.server_id in roots or fallback is None:
+                    return file_resolver(tool, path)
+                return fallback(tool, path)
+
+            inputs = replace(inputs, resource_resolver=resolve)
         loaded = load_profile_settings(
             inputs.profile_document, registry, resource_resolver=inputs.resource_resolver
         )
@@ -404,9 +434,8 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         # Compare first: observe rewrites the registration it compares against.
         live = live_fingerprints(inputs.registry, transport, server_ids)
         unrecorded = await _record_listings(inputs.registry, loaded.selected_servers, transport)
-        registry.seal(
-            LiveFingerprints(live.live, live.mismatched, live.blocked_servers | unrecorded)
-        )
+        blocked = live.blocked_servers | unrecorded
+        registry.seal(LiveFingerprints(live.live, live.mismatched, blocked))
         settings = loaded.guard_settings
         guard = GuardService(
             store,
@@ -427,7 +456,18 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             taint_mode=settings.taint_mode,
         )
         try:
-            tool_views = loaded.catalog.tool_views(server_ids)
+            # A blocked server offers nothing this run. One whose boundary still
+            # matches may hold an unobserved A155 kind edit (settings ahead of the
+            # Registry); leaving it out keeps it from failing every other server.
+            # A boundary that differs still stops the assembly (A129).
+            ahead = {
+                server.id
+                for server in loaded.selected_servers
+                if server.id in blocked and _boundary_matches(inputs.registry, server)
+            }
+            tool_views = loaded.catalog.tool_views(
+                tuple(server_id for server_id in server_ids if server_id not in ahead)
+            )
         except CatalogConfigError:
             # One unsupported tool schema must not surface as a raw error.
             raise ProductAssemblyError("PROFILE_TOOL_INVALID") from None
@@ -439,6 +479,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             tool_views,
             inputs.operator_id,
             inputs.call_timeout_s,
+            inputs.resource_resolver,
         )
         adopted = True
         return assembled

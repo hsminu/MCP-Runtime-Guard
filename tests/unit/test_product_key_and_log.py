@@ -117,9 +117,7 @@ def test_run_wires_real_window_without_keeping_key(monkeypatch, owner, mode, cap
 
     app = QApplication.instance() or QApplication([])
     previous = app.quitOnLastWindowClosed()
-    tails = []
-    saves = []
-    windows = []
+    tails, saves, windows = [], [], []
 
     def tail():
         tails.append(True)
@@ -137,7 +135,7 @@ def test_run_wires_real_window_without_keeping_key(monkeypatch, owner, mode, cap
     def start(bridge):
         if mode != "demo":
             assert owner.progress == bridge.codex_progress
-            assert bridge._startup_timeout >= 60 + 50 + 20
+            assert bridge._host._startup_timeout >= 60 + 50 + 20
             assert bridge.shutdown_timeout >= 20 + 5
         window = next(
             w for w in app.topLevelWidgets() if isinstance(w, GuardWindow) and w.isVisible()
@@ -159,8 +157,7 @@ def test_run_wires_real_window_without_keeping_key(monkeypatch, owner, mode, cap
         assert saves == ([] if mode == "demo" else [True, True])
         assert emitted == ([] if mode == "demo" else [()])
         assert form.status.text() == (NOT_CONNECTED if mode == "demo" else SAVE_FAILED)
-        assert form.key_input.text() == ""
-        assert form.saved_suffix == ""
+        assert (form.key_input.text(), form.saved_suffix) == ("", "")
         assert KEY not in repr(vars(form))
         assert all("TEST_SECRET_" not in label.text() for label in window.findChildren(QLabel))
         assert "TEST_SECRET_" not in caplog.text

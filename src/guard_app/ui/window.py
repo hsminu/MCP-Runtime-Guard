@@ -52,7 +52,7 @@ from .presentation import (
 from .runtime import RuntimePanel
 from .scan_status import ScanStatusProjection
 from .scanner_key import KeySaver, KeyTail, ScannerKeyForm
-from .server_add import LocalFolderRulesForm, ServerAddForm
+from .server_add import ServerAddForm
 from .servers import ServerListPage
 from .sessions import SessionWorkspace
 from .style import apply_style, current_theme, set_theme, system_theme
@@ -130,12 +130,24 @@ class GuardWindow(QMainWindow):
         self._theme_pinned = False
         self.sessions = SessionWorkspace()
 
+        root = self._assemble_shell()
+        self._assemble_sidebar(root)
+        workspace, work = self._assemble_navigation()
+        self._assemble_pages(scanner_key_saver, scanner_key_tail)
+        work.addWidget(self.stack, 1)
+        root.addWidget(workspace, 1)
+        self._connect_shell()
+
+    def _assemble_shell(self) -> QHBoxLayout:
         central = QWidget()
         root = QHBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         self.setCentralWidget(central)
 
+        return root
+
+    def _assemble_sidebar(self, root: QHBoxLayout) -> None:
         # Sessions first (Codex, Claude Code, Conductor): new session, search,
         # three views, the session list, then the management pages below it.
         self.sidebar = QFrame()
@@ -182,6 +194,7 @@ class GuardWindow(QMainWindow):
         # by the sidebar before the first resize event has reflowed the layout.
         self.sidebar.hide()
 
+    def _assemble_navigation(self) -> tuple[QWidget, QVBoxLayout]:
         workspace = QWidget()
         workspace.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         work = QVBoxLayout(workspace)
@@ -227,6 +240,11 @@ class GuardWindow(QMainWindow):
         back.addWidget(self.back_to_conversation, 0, Qt.AlignmentFlag.AlignLeft)
         work.addWidget(self._back_row)
 
+        return workspace, work
+
+    def _assemble_pages(
+        self, scanner_key_saver: KeySaver | None, scanner_key_tail: KeyTail | None
+    ) -> None:
         self.stack = QStackedWidget()
         self.overview = OverviewPage()
         self.overview.navigate_requested.connect(self.navigate)
@@ -246,9 +264,12 @@ class GuardWindow(QMainWindow):
         # The add form scrolls itself; the folder rules ride in the same scroll,
         # folded, since only the app's local file server needs them.
         self.server_add_form = ServerAddForm()
-        self.folder_rules_form = LocalFolderRulesForm()
-        self.server_add_form.add_section(self.folder_rules_form, "로컬 파일 서버 폴더 등급")
+        self.folder_rules_form = self.server_add_form.file_folders
         self._page_indices["server_add"] = self.stack.addWidget(self.server_add_form)
+        self._assemble_activity()
+        self._assemble_settings(scanner_key_saver, scanner_key_tail)
+
+    def _assemble_activity(self) -> None:
         # A session's results and activity are one block that moves between
         # two hosts: the chat header's 활동 docks it beside the conversation,
         # and the sidebar's 결과 · 실행 활동 opens it as a page of its own (the
@@ -325,6 +346,10 @@ class GuardWindow(QMainWindow):
         conversation_row.addWidget(self.activity_pane)
         self._page_indices["runs"] = self.stack.addWidget(conversation)
         self._page_indices["results"] = self.stack.addWidget(self.results_page)
+
+    def _assemble_settings(
+        self, scanner_key_saver: KeySaver | None, scanner_key_tail: KeyTail | None
+    ) -> None:
         settings = QWidget()
         settings_layout = QVBoxLayout(settings)
         settings_layout.setContentsMargins(24, 24, 24, 24)
@@ -358,8 +383,8 @@ class GuardWindow(QMainWindow):
                 self._page_indices[page] = self.stack.addWidget(
                     _scroll_page(_placeholder_page(page))
                 )
-        work.addWidget(self.stack, 1)
-        root.addWidget(workspace, 1)
+
+    def _connect_shell(self) -> None:
         self.set_theme(system_theme())
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
         self._update_shell_layout()
@@ -486,6 +511,9 @@ class GuardWindow(QMainWindow):
         self._results_footer_layout.addStretch(0)
         self._results_footer.show()
         panel.set_scope(None)
+        self._connect_runtime(panel)
+
+    def _connect_runtime(self, panel: RuntimePanel) -> None:
         panel.state_changed.connect(lambda: self.sessions.set_busy_scopes(panel.busy_scopes))
         panel.selected_snapshot_changed.connect(self._sync_selected_task)
         bridge = panel.bridge
@@ -503,6 +531,14 @@ class GuardWindow(QMainWindow):
             lambda server_id, allowed, denied: self.policy_page.set_change_pending(
                 bridge.request_policy_access(server_id, allowed, denied)
             )
+        )
+        self.policy_page.destination_change_requested.connect(
+            lambda edit: self.policy_page.set_change_pending(
+                bridge.request_policy_destinations(edit)
+            )
+        )
+        self.policy_page.destination_read_requested.connect(
+            lambda: self.policy_page.set_change_pending(bridge.request_policy_destinations())
         )
         login = self.codex_login_info
         login.read_requested.connect(lambda: bridge.request_account("account_read"))

@@ -1,53 +1,25 @@
 """신뢰하지 않는 텍스트 표시: 일반 텍스트·외부 요청 0(T18 계열), 비가시 문자, 길이 상한."""
 
 import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QObject, Qt, QUrl, Slot
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QLabel
 
-from guard_app.ui.untrusted_text import (
-    UNVERIFIED_NOTICE,
-    UntrustedTextView,
-    untrusted_display_text,
-)
+from guard_app.ui.untrusted_text import UNVERIFIED_NOTICE, UntrustedTextView, untrusted_display_text
 
-
-class UrlProbe(QObject):
-    def __init__(self):
-        super().__init__()
-        self.opened = []
-
-    @Slot(QUrl)
-    def capture(self, url):
-        self.opened.append(url.toString())
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from .test_approval_detail import start_http_probe
+from .test_ui_approval_t18 import UrlProbe
+from .test_ui_icons_style import app as app
 
 
 def test_markup_and_links_stay_literal_and_never_open_or_fetch(app, monkeypatch):
     requests = []
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            requests.append(self.path)
-            self.send_response(204)
-            self.end_headers()
-
-        def log_message(self, _format, *args):
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
-    thread.start()
+    server, thread = start_http_probe(requests)
     probe = UrlProbe()
     python_opens = []
     view = UntrustedTextView("모델 답변", show_unverified_notice=True)

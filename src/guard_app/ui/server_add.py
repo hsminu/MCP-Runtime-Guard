@@ -47,6 +47,7 @@ from guard_app.services.bridge import (
 )
 
 from .presentation import LABELS, TIER_NAMES, is_hidden_char
+from .server_add_folders import FileServerFolders
 from .untrusted_text import untrusted_display_text
 from .widgets import KeyboardActionButton, SelectionBox, plain_label
 
@@ -344,9 +345,7 @@ def _form_label(title: str) -> QLabel:
 
 
 class ServerAddForm(QWidget):
-    """Fill one server's fields from a paste or by hand and check them locally.
-
-    Nothing here calls Registry or changes status."""
+    """Prepare human input and send registration commands through the bridge."""
 
     local_draft_prepared = Signal(object)
 
@@ -420,6 +419,7 @@ class ServerAddForm(QWidget):
         self.transport.setAccessibleName("연결 방식")
         self.transport.addItem("stdio", "stdio")
         self.transport.addItem("Streamable HTTP", "streamable_http")
+        self.transport.addItem("로컬 파일 서버", "local_file")
         common.addRow(_form_label("연결 방식"), self.transport)
         outer.addLayout(common)
 
@@ -430,6 +430,8 @@ class ServerAddForm(QWidget):
         )
         self.transport_fields.addWidget(self._stdio_fields())
         self.transport_fields.addWidget(self._http_fields())
+        self.file_folders = FileServerFolders()
+        self.transport_fields.addWidget(self.file_folders)
         outer.addWidget(self.transport_fields)
 
         boundary = self._new_form()
@@ -505,6 +507,7 @@ class ServerAddForm(QWidget):
         self.prepare_button.clicked.connect(self._prepare_local_draft)
         self.fill_button.clicked.connect(self.fill_from_paste)
         self.browse_button.clicked.connect(self._browse_executable)
+        self.file_folders.changed.connect(self._input_changed)
         self._refresh()
 
     @property
@@ -676,6 +679,9 @@ class ServerAddForm(QWidget):
 
     def _transport_changed(self, *_args: object) -> None:
         self.transport_fields.setCurrentIndex(self.transport.currentIndex())
+        local = self.transport.currentData() == "local_file"
+        self.quick_input.setEnabled(not local)
+        self.fill_button.setEnabled(not local)
         self._input_changed()
 
     def _tier_changed(self, *_args: object) -> None:
@@ -736,7 +742,10 @@ class ServerAddForm(QWidget):
         args: tuple[str, ...] | None = None
         env_allow: tuple[str, ...] | None = None
         url: str | None = None
-        if transport == "stdio":
+        if transport == "local_file":
+            if not self.file_folders.ready():
+                errors["command"] = "루트 폴더와 각 등급을 선택하세요."
+        elif transport == "stdio":
             command = self.command.text().strip()
             if not command:
                 errors["command"] = "실행 파일 절대 경로를 입력하거나 찾아보기로 고르세요."
@@ -796,7 +805,12 @@ class ServerAddForm(QWidget):
             "tier": draft.tier,
             "max_label": draft.max_label,
         }
-        if draft.transport == "stdio":
+        if draft.transport == "local_file":
+            shown["root"] = "선택됨 · 값 미표시"
+            shown["root_label"] = self.file_folders.root.label.currentData()
+            shown["list_root_label"] = self.file_folders.list_root.label.currentData()
+            shown["folder_rules"] = len(self.file_folders.rows)
+        elif draft.transport == "stdio":
             shown["command"] = "입력됨 · 값 미표시"
             shown["args"] = f"{len(draft.args or ())}개 · 값 미표시"
             shown["env_allow"] = list(draft.env_allow or ())
@@ -853,7 +867,7 @@ class ServerAddForm(QWidget):
         if self._registration_bridge is not None:
             self._send_registration(
                 RegistrationRequest(
-                    "prepare",
+                    "prepare_file" if draft.transport == "local_file" else "prepare",
                     draft.server_id,
                     draft.transport,
                     draft.tier,
@@ -862,6 +876,10 @@ class ServerAddForm(QWidget):
                     draft.args or (),
                     draft.env_allow or (),
                     draft.url,
+                    file_root=self.file_folders.root.path.text(),
+                    root_label=str(self.file_folders.root.label.currentData()),
+                    list_root_label=str(self.file_folders.list_root.label.currentData()),
+                    folder_labels=self.file_folders.folder_labels(),
                 )
             )
         else:
@@ -951,6 +969,9 @@ class ServerAddForm(QWidget):
             return
         self.confirm_button.setEnabled(False)
         messages = {
+            "REG_FOLDER_INVALID": (
+                "폴더 검증 거부. 존재하는 루트와 하위 폴더를 고르고 겹친 규칙·등급을 확인하세요."
+            ),
             "REG_REGISTERED": (
                 "Registry 등록·설정 저장 완료 · PENDING. 검사·활성화 전에는 실행되지 않음."
             ),

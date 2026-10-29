@@ -16,7 +16,7 @@
 | mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
 
-**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49, #63·#64·#67 병합됨), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
+**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
 
 ## 계약·환경
 
@@ -164,7 +164,8 @@
 - [ ] A48 실제 Windows 자격 증명 관리자 저장·재시작 뒤 끝자리 조회 확인 — 사용자 실제 실행
 - [x] A49 로컬 파일 서버 루트·하위 폴더 등급 입력 폼 · [기록](archive/a/A49-local-folder-labels-form.md)
 - [x] A59 폴더 규칙 중복을 대소문자 무시로 검사 · [기록](archive/a/A59-folder-rule-case.md)
-- [ ] A49 등록·출처 규칙 연결 — A 차례: 폴더 선택 UI·`file_resource_resolver`·파일 서버 등록 값·상위 폴더 등급 안내([#63 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/63#issuecomment-6472888055), [#64 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/64#issuecomment-6472888675))
+- [x] A49 등록·출처 규칙 연결: 폴더 선택·루트/목록/하위 폴더 등급·C 파일 서버 등록 값·상위 폴더 등급 안내·등록 인자 기반 `file_resource_resolver`·READ 허용 활성화([#63 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/63#issuecomment-6472888055), [#64 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/64#issuecomment-6472888675)) · [기록](archive/a/A49-file-server-registration.md)
+- [ ] A49 실제 로컬 파일 서버·Codex 제품 종단과 독립 T33 인수 — C와 함께
 - [x] A89 Codex 로그인 화면·`account/read`·기기 코드 로그인/취소/로그아웃 · [기록](archive/a/A89-codex-login-panel.md)
 - [x] A89 API 키 로그인 입력란(2026-10-18 결정, PR #31) · [기록](archive/a/A89-api-key-field.md)
 - [x] A52 로그인 화면 전용 app-server, 로그아웃 뒤 자격증명 정리, 세션 중 로그아웃 막기([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) · [기록](archive/a/A52-account-app-server-logout.md)
@@ -180,7 +181,9 @@
 - [x] A106 제품 DB를 앱 폴더 고정 경로(`data\guard.sqlite3`, C2.17)로 옮기고 `--db-path`는 시연 전용으로, `--demo`는 앱 폴더 안을 열지 못하게 함(#35 B 리뷰 1번) · [기록](archive/a/A106-product-db-path.md)
 - [x] A106 C `AppFolders.db_path()`(DB·`-wal`·`-shm` 링크·권한 확인)로 교체, 거부되면 창을 열기 전에 시작하지 않음 · [기록](archive/a/A106-db-path-check.md)
 - [x] A81·A91 제품 서버 목록의 활성화 확인·도구별 허용·정책 저장·Task 정지·재시작 안내 · [기록](archive/a/A105-activation-lock.md)
-- [ ] A81·A91 새로 등록한 도구(OTHER)의 종류·출처·목적지 편집 — A 차례. 지금은 종류가 정해진 READ/SEND 도구만 허용 선택
+- [x] A155 새로 등록한 도구(OTHER)의 종류·도구 단위 READ 등급·SEND 목적지 인자 편집, 정책 잠금 저장·ACTIVE 재검토·재시작 뒤 대조로 활성화 연결(A81·A91 후속) · [기록](archive/a/A155-tool-kind-settings.md)
+- [x] A156 SEND 목적지 경계 등록·변경·삭제와 Profile 선택, 정책 잠금 저장·즉시 적용·실행 Task 정지(정책 화면) · [기록](archive/a/A156-send-destinations.md)
+- [ ] A155·A156 독립 인수 — B: 정책 문서·부분 저장, C: 재검토·대조 순서, 목적지 판정 계수, 실제 서버 화면 확인
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
@@ -249,6 +252,10 @@
 - [x] A115 4단계: `BackendBridge` 안쪽 분리 · [기록](archive/a/A115-backend-bridge-split.md)
 - [x] A115 bridge 분리 독립 리뷰: [#70 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474250735) 막는 문제 없음
 - [x] A137 A115에서 찾은 bridge 테스트 빈틈 11개와 멈춤 1개 메움 · [기록](archive/a/A137-bridge-test-gaps.md)
-- [ ] A116 5단계: UI 화면 조립·`__main__` 정리(C 리뷰) — A 차례(B2.11 #47 병합)
+- [x] A116 5단계: UI 화면 조립·`__main__` 정리 · [기록](archive/a/A116-ui-assembly-and-entry.md)
+- [x] A152 개요·승인 행과 화면 투영 분리 · [기록](archive/a/A152-overview-approvals-render.md)
+- [x] A153 `SessionRuntime`에서 제품 시작 조립 분리(공개 초기화·등록 경계, 기존 `bootstrap_product` 재수출) · [기록](archive/a/A153-session-runtime-boundary.md)
+- [x] A154 `BackendBridge`를 Qt 경계·생명주기 host·명령 접수 문맥·action 처리로 분리 · [기록](archive/a/A154-backend-bridge-commands.md)
+- [ ] A116·A152–A154 독립 리뷰 — C: 화면 격리·signal·로그 설치 순서, bridge 생명주기·replay·종료 순서. B: Store 활성화·종료 확인
 - [x] A139 A 모듈 ID 생성을 `security/ids.py`로 통합([#65 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/65#issuecomment-6472889394)), B6.8 복구에 `new_id("run")` 연결(A138) · [기록](archive/a/A139-ids-module.md)
-- [ ] A150 A 단위 시험 압축 — A 차례: 1차(같은 모양 시험 묶기)는 [#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)로 올림, 2차(줄 수 줄이기) 뒤 기록 하나
+- [x] A150 A 단위 시험 압축: 1차 같은 모양 시험 묶기([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)), 2차 줄 수 줄이기(목표 30% 미달) · [기록](archive/a/A150-a-test-compression.md)

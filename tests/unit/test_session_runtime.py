@@ -29,6 +29,7 @@ from guard_app.services.session_runtime import SessionRuntime, SessionRuntimeErr
 from guard_app.storage.sqlite_store import SQLiteStore
 
 from .product_folders import product_folders
+from .test_product_assembly import closing_backend
 
 
 class Session:
@@ -137,33 +138,25 @@ def make_runtime(
 
 
 @pytest.mark.asyncio
-async def test_missing_or_failed_l2_rejects_before_task_or_session(tmp_path, monkeypatch, subtests):
-    async def check(l2, code, tmp_path, monkeypatch):
-        runtime, sessions = make_runtime(tmp_path, l2=l2)
-        creates = []
-        original = runtime.store.create_task
+@pytest.mark.parametrize(
+    ("l2", "code"), [(None, "CODEX_L2_UNAVAILABLE"), (lambda: failed_l2(), "CODEX_L2_FAILED")]
+)
+async def test_missing_or_failed_l2_rejects_before_task_or_session(tmp_path, monkeypatch, l2, code):
+    runtime, sessions = make_runtime(tmp_path, l2=l2)
+    creates = []
+    original = runtime.store.create_task
 
-        async def tracked(*args, **kwargs):
-            creates.append(True)
-            return await original(*args, **kwargs)
+    async def tracked(*args, **kwargs):
+        creates.append(True)
+        return await original(*args, **kwargs)
 
-        monkeypatch.setattr(runtime.store, "create_task", tracked)
-        try:
-            with pytest.raises(SessionRuntimeError, match=code):
-                await runtime.create_session(SessionOptions())
-            assert not creates
-            assert not sessions
-            assert not runtime.pending_cleanup
-        finally:
-            await runtime.close()
-
-    for case_index, (l2, code) in enumerate(
-        [(None, "CODEX_L2_UNAVAILABLE"), (lambda: failed_l2(), "CODEX_L2_FAILED")]
-    ):
-        with subtests.test(case=case_index), monkeypatch.context() as patch:
-            case_path = tmp_path / str(case_index)
-            case_path.mkdir()
-            await check(l2, code, case_path, patch)
+    monkeypatch.setattr(runtime.store, "create_task", tracked)
+    async with closing_backend(runtime):
+        with pytest.raises(SessionRuntimeError, match=code):
+            await runtime.create_session(SessionOptions())
+        assert not creates
+        assert not sessions
+        assert not runtime.pending_cleanup
 
 
 async def failed_l2():
@@ -173,10 +166,9 @@ async def failed_l2():
 @pytest.mark.asyncio
 async def test_two_tasks_overlap_and_stop_is_task_local_with_late_response_discarded(tmp_path):
     runtime, sessions = make_runtime(tmp_path)
-    try:
+    async with closing_backend(runtime):
         first, second = await asyncio.gather(
-            runtime.create_session(SessionOptions()),
-            runtime.create_session(SessionOptions()),
+            runtime.create_session(SessionOptions()), runtime.create_session(SessionOptions())
         )
         from guard_app.domain.enums import Label
 
@@ -188,16 +180,10 @@ async def test_two_tasks_overlap_and_stop_is_task_local_with_late_response_disca
             await runtime.stop_session(first.task_id, first.epoch + 1, ControlAction.CANCEL)
         assert (await runtime.snapshot(first.task_id)).status is TaskStatus.RUNNING
         assert sessions[0].closed == 0
-        one, two = (
-            runtime.runner_for_task(first.task_id),
-            runtime.runner_for_task(second.task_id),
-        )
+        one, two = (runtime.runner_for_task(first.task_id), runtime.runner_for_task(second.task_id))
         one.add_user_message("first-private-text")
         two.add_user_message("second-private-text")
-        run_one, run_two = (
-            asyncio.create_task(one.advance()),
-            asyncio.create_task(two.advance()),
-        )
+        run_one, run_two = (asyncio.create_task(one.advance()), asyncio.create_task(two.advance()))
         await asyncio.wait_for(asyncio.gather(*(session.entered.wait() for session in sessions)), 1)
         assert not run_one.done()
         assert not run_two.done()
@@ -216,8 +202,6 @@ async def test_two_tasks_overlap_and_stop_is_task_local_with_late_response_disca
         assert sessions[1].messages == ["second-private-text"]
         assert two.can_accept_message
         assert not one.can_accept_message
-    finally:
-        await runtime.close()
     assert all(session.closed == 1 for session in sessions)
     assert b"first-private-text" not in (tmp_path / "sessions.db").read_bytes()
     # A134: Windows refuses unlink while the SQLite connection is open.
@@ -225,47 +209,32 @@ async def test_two_tasks_overlap_and_stop_is_task_local_with_late_response_disca
 
 
 @pytest.mark.asyncio
-async def test_auth_or_unclassified_failure_halts_only_own_task(tmp_path, subtests):
-    async def check(error, tmp_path):
-        runtime, sessions = make_runtime(tmp_path)
-        try:
-            first = await runtime.create_session(SessionOptions())
-            second = await runtime.create_session(SessionOptions())
-            one, two = (
-                runtime.runner_for_task(first.task_id),
-                runtime.runner_for_task(second.task_id),
-            )
-            sessions[0].error = error
-            one.add_user_message("one")
-            two.add_user_message("two")
-            operations = [asyncio.create_task(runner.advance()) for runner in (one, two)]
-            await asyncio.wait_for(
-                asyncio.gather(*(session.entered.wait() for session in sessions)), 1
-            )
-            sessions[0].release.set()
-            if isinstance(error, CodexAuthenticationError):
-                assert (await operations[0]).status == "halted"
-                assert (
-                    await runtime.snapshot(first.task_id)
-                ).connection_code == "CODEX_AUTH_FAILED"
-            else:
-                with pytest.raises(OSError, match="private-error"):
-                    await operations[0]
-            assert sessions[0].closed == 1
-            assert sessions[1].closed == 0
-            assert not operations[1].done()
-            assert (await runtime.snapshot(first.task_id)).status is TaskStatus.HALTED
-            assert (await runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
-            sessions[1].release.set()
-            assert (await operations[1]).assistant_text == "answer:two"
-        finally:
-            await runtime.close()
-
-    for case_index, error in enumerate([CodexAuthenticationError(), OSError("private-error")]):
-        with subtests.test(case=case_index):
-            case_path = tmp_path / str(case_index)
-            case_path.mkdir()
-            await check(error, case_path)
+@pytest.mark.parametrize("error", [CodexAuthenticationError(), OSError("private-error")])
+async def test_auth_or_unclassified_failure_halts_only_own_task(tmp_path, error):
+    runtime, sessions = make_runtime(tmp_path)
+    async with closing_backend(runtime):
+        first = await runtime.create_session(SessionOptions())
+        second = await runtime.create_session(SessionOptions())
+        one, two = (runtime.runner_for_task(first.task_id), runtime.runner_for_task(second.task_id))
+        sessions[0].error = error
+        one.add_user_message("one")
+        two.add_user_message("two")
+        operations = [asyncio.create_task(runner.advance()) for runner in (one, two)]
+        await asyncio.wait_for(asyncio.gather(*(session.entered.wait() for session in sessions)), 1)
+        sessions[0].release.set()
+        if isinstance(error, CodexAuthenticationError):
+            assert (await operations[0]).status == "halted"
+            assert (await runtime.snapshot(first.task_id)).connection_code == "CODEX_AUTH_FAILED"
+        else:
+            with pytest.raises(OSError, match="private-error"):
+                await operations[0]
+        assert sessions[0].closed == 1
+        assert sessions[1].closed == 0
+        assert not operations[1].done()
+        assert (await runtime.snapshot(first.task_id)).status is TaskStatus.HALTED
+        assert (await runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
+        sessions[1].release.set()
+        assert (await operations[1]).assistant_text == "answer:two"
 
 
 @pytest.mark.asyncio
@@ -278,7 +247,7 @@ async def test_l2_once_and_same_task_rejects_overlapping_input(tmp_path):
         return True
 
     runtime, sessions = make_runtime(tmp_path, l2=check)
-    try:
+    async with closing_backend(runtime):
         first, _ = await asyncio.gather(
             *(runtime.create_session(SessionOptions()) for _ in range(2))
         )
@@ -291,8 +260,6 @@ async def test_l2_once_and_same_task_rejects_overlapping_input(tmp_path):
             runner.add_user_message("overlap")
         sessions[0].release.set()
         assert (await operation).status == "complete"
-    finally:
-        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -303,15 +270,13 @@ async def test_create_failure_closes_unadopted_session(tmp_path, monkeypatch):
         raise StoreError()
 
     monkeypatch.setattr(runtime.store, "create_task", fail)
-    try:
+    async with closing_backend(runtime):
         with pytest.raises(StoreError):
             await runtime.create_session(SessionOptions())
         assert sessions[0].closed == 1
         with pytest.raises(SessionRuntimeError, match="SESSION_UNAVAILABLE"):
             runtime.runner_for_task(sessions[0].task_id)
         assert not runtime.pending_cleanup
-    finally:
-        await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -461,154 +426,137 @@ async def test_task_cleanup_uncertainty_latches_without_stopping_other_task(tmp_
 
 
 @pytest.mark.asyncio
-async def test_resource_cleanup_stages_have_their_own_bounds(tmp_path, subtests):
-    async def check(stage, exits_in_time, tmp_path):
-        """A103, C2.12, I9: exit confirmation and folder removal have independent bounds."""
+@pytest.mark.parametrize(
+    ("stage", "exits_in_time"),
+    [(stage, timely) for stage in ("confirm_exit", "cleanup_task") for timely in (True, False)],
+)
+async def test_resource_cleanup_stages_have_their_own_bounds(tmp_path, stage, exits_in_time):
+    """A103, C2.12, I9: exit confirmation and folder removal have independent bounds."""
 
-        release = asyncio.Event()
-        confirmations = []
+    release = asyncio.Event()
+    confirmations = []
 
-        async def confirm(resources):
-            confirmations.append(resources.task_id)
-            if resources.task_id == first.task_id:
-                await asyncio.sleep(0.1)  # longer than the session bound
-                if not exits_in_time:
-                    await release.wait()
-            return True if stage == "confirm_exit" else None
+    async def confirm(resources):
+        confirmations.append(resources.task_id)
+        if resources.task_id == first.task_id:
+            await asyncio.sleep(0.1)  # longer than the session bound
+            if not exits_in_time:
+                await release.wait()
+        return True if stage == "confirm_exit" else None
 
-        runtime, _ = make_runtime(
-            tmp_path,
-            preparation=replace(synthetic_preparation(), **{stage: confirm}),
-            cleanup_limits=CleanupLimits(
-                session_s=0.01,
-                **{
-                    ("confirm_exit_s" if stage == "confirm_exit" else "task_folder_s"): 1.0
-                    if exits_in_time
-                    else 0.2
-                },
-            ),
-        )
-        first = await runtime.create_session(SessionOptions())
-        stopping = runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL)
-        try:
-            if exits_in_time:
-                await asyncio.wait_for(stopping, 2)
-                assert first.task_id not in runtime.pending_cleanup
-                assert runtime.creation_blocker() is None
-                second = await runtime.create_session(SessionOptions())
-                assert second.status is TaskStatus.RUNNING
-            else:
-                with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
-                    await asyncio.wait_for(stopping, 2)
-                assert first.task_id in runtime.pending_cleanup  # never erased without proof
-                assert runtime.creation_blocker() == "CODEX_CLEANUP_UNCONFIRMED"
-        finally:
-            release.set()
-            if exits_in_time:
-                await runtime.close()
-            else:
-                with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
-                    await runtime.close()
-        assert confirmations.count(first.task_id) == 1
-
-    for case_index, (stage, exits_in_time) in enumerate(
-        [(stage, timely) for stage in ("confirm_exit", "cleanup_task") for timely in (True, False)]
-    ):
-        with subtests.test(case=case_index):
-            case_path = tmp_path / str(case_index)
-            case_path.mkdir()
-            await check(stage, exits_in_time, case_path)
-
-
-@pytest.mark.asyncio
-async def test_lost_interrupt_alone_leaves_cleanup_confirmed(tmp_path, subtests):
-    async def check(failure, tmp_path):
-        """A88 QA: interrupt is a courtesy; close + confirm_exit + cleanup prove the stop (I9)."""
-
-        runtime, sessions = make_runtime(tmp_path, cleanup_limits=CleanupLimits(session_s=0.01))
-        first = await runtime.create_session(SessionOptions())
-        second = await runtime.create_session(SessionOptions())
-        released = asyncio.Event()
-
-        async def interrupt():
-            sessions[0].interrupted += 1
-            if failure == "raises":
-                raise OSError("private-interrupt-error")
-            await released.wait()
-
-        sessions[0].interrupt = interrupt
-        try:
-            await asyncio.wait_for(
-                runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL), 1
-            )
-            assert sessions[0].interrupted == sessions[0].closed == 1
-            assert (await runtime.snapshot(first.task_id)).status is TaskStatus.HALTED
+    runtime, _ = make_runtime(
+        tmp_path,
+        preparation=replace(synthetic_preparation(), **{stage: confirm}),
+        cleanup_limits=CleanupLimits(
+            session_s=0.01,
+            **{
+                ("confirm_exit_s" if stage == "confirm_exit" else "task_folder_s"): 1.0
+                if exits_in_time
+                else 0.2
+            },
+        ),
+    )
+    first = await runtime.create_session(SessionOptions())
+    stopping = runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL)
+    try:
+        if exits_in_time:
+            await asyncio.wait_for(stopping, 2)
             assert first.task_id not in runtime.pending_cleanup
             assert runtime.creation_blocker() is None
-            assert (await runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
-            third = await runtime.create_session(SessionOptions())
-            assert third.status is TaskStatus.RUNNING
-        finally:
-            released.set()
+            second = await runtime.create_session(SessionOptions())
+            assert second.status is TaskStatus.RUNNING
+        else:
+            with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+                await asyncio.wait_for(stopping, 2)
+            assert first.task_id in runtime.pending_cleanup  # never erased without proof
+            assert runtime.creation_blocker() == "CODEX_CLEANUP_UNCONFIRMED"
+    finally:
+        release.set()
+        if exits_in_time:
             await runtime.close()
-        await runtime.close()  # a later close finds no unconfirmed cleanup either
-
-    for case_index, failure in enumerate(["blocked", "raises"]):
-        with subtests.test(case=case_index):
-            case_path = tmp_path / str(case_index)
-            case_path.mkdir()
-            await check(failure, case_path)
+        else:
+            with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+                await runtime.close()
+    assert confirmations.count(first.task_id) == 1
 
 
 @pytest.mark.asyncio
-async def test_stop_during_failure_cleanup_adopts_its_result(tmp_path, subtests):
-    async def check(cleanup_succeeds, tmp_path):
-        limits = CleanupLimits() if cleanup_succeeds else CleanupLimits(session_s=0.05)
-        runtime, sessions = make_runtime(tmp_path, cleanup_limits=limits)
-        snapshot = await runtime.create_session(SessionOptions())
-        session = sessions[0]
-        closing = asyncio.Event()
-        finish = asyncio.Event()
+@pytest.mark.parametrize("failure", ["blocked", "raises"])
+async def test_lost_interrupt_alone_leaves_cleanup_confirmed(tmp_path, failure):
+    """A88 QA: interrupt is a courtesy; close + confirm_exit + cleanup prove the stop (I9)."""
 
-        async def slow_close():
-            session.closed += 1
-            closing.set()
-            await finish.wait()
+    runtime, sessions = make_runtime(tmp_path, cleanup_limits=CleanupLimits(session_s=0.01))
+    first = await runtime.create_session(SessionOptions())
+    second = await runtime.create_session(SessionOptions())
+    released = asyncio.Event()
 
-        session.aclose = slow_close
-        runner = runtime.runner_for_task(snapshot.task_id)
-        runner.add_user_message("hi")
-        session.error = CodexAuthenticationError()
-        advancing = asyncio.create_task(runner.advance())
-        await session.entered.wait()
-        session.release.set()
-        await asyncio.wait_for(closing.wait(), 1)  # failure cleanup is now in flight
-        stopping = asyncio.create_task(
-            runtime.stop_session(snapshot.task_id, snapshot.epoch, ControlAction.CANCEL)
+    async def interrupt():
+        sessions[0].interrupted += 1
+        if failure == "raises":
+            raise OSError("private-interrupt-error")
+        await released.wait()
+
+    sessions[0].interrupt = interrupt
+    try:
+        await asyncio.wait_for(
+            runtime.stop_session(first.task_id, first.epoch, ControlAction.CANCEL), 1
         )
-        await asyncio.sleep(0)
-        assert not stopping.done()  # waits instead of reporting unconfirmed at once
-        if cleanup_succeeds:
-            finish.set()
-            await stopping
-            await advancing
-            await runtime.close()
-            await runtime.close()  # no unconfirmed cleanup latched
-        else:
-            with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
-                await stopping
-            with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
-                await advancing
-            finish.set()
-            with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
-                await runtime.close()
-        assert session.closed == 1  # one cleanup, never a second run
+        assert sessions[0].interrupted == sessions[0].closed == 1
+        assert (await runtime.snapshot(first.task_id)).status is TaskStatus.HALTED
+        assert first.task_id not in runtime.pending_cleanup
+        assert runtime.creation_blocker() is None
+        assert (await runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
+        third = await runtime.create_session(SessionOptions())
+        assert third.status is TaskStatus.RUNNING
+    finally:
+        released.set()
+        await runtime.close()
+    await runtime.close()  # a later close finds no unconfirmed cleanup either
 
-    for case_index, cleanup_succeeds in enumerate([True, False]):
-        with subtests.test(case=case_index):
-            case_path = tmp_path / str(case_index)
-            case_path.mkdir()
-            await check(cleanup_succeeds, case_path)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_succeeds", [True, False])
+async def test_stop_during_failure_cleanup_adopts_its_result(tmp_path, cleanup_succeeds):
+    limits = CleanupLimits() if cleanup_succeeds else CleanupLimits(session_s=0.05)
+    runtime, sessions = make_runtime(tmp_path, cleanup_limits=limits)
+    snapshot = await runtime.create_session(SessionOptions())
+    session = sessions[0]
+    closing = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def slow_close():
+        session.closed += 1
+        closing.set()
+        await finish.wait()
+
+    session.aclose = slow_close
+    runner = runtime.runner_for_task(snapshot.task_id)
+    runner.add_user_message("hi")
+    session.error = CodexAuthenticationError()
+    advancing = asyncio.create_task(runner.advance())
+    await session.entered.wait()
+    session.release.set()
+    await asyncio.wait_for(closing.wait(), 1)  # failure cleanup is now in flight
+    stopping = asyncio.create_task(
+        runtime.stop_session(snapshot.task_id, snapshot.epoch, ControlAction.CANCEL)
+    )
+    await asyncio.sleep(0)
+    assert not stopping.done()  # waits instead of reporting unconfirmed at once
+    if cleanup_succeeds:
+        finish.set()
+        await stopping
+        await advancing
+        await runtime.close()
+        await runtime.close()  # no unconfirmed cleanup latched
+    else:
+        with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+            await stopping
+        with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+            await advancing
+        finish.set()
+        with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
+            await runtime.close()
+    assert session.closed == 1  # one cleanup, never a second run
 
 
 @pytest.mark.asyncio
@@ -638,28 +586,24 @@ async def test_creation_blocker_reports_known_refusals_in_creation_order(tmp_pat
     await runtime.close()
 
 
-def test_product_bootstrap_without_c_components_starts_and_refuses_sessions(tmp_path):
+@pytest.mark.asyncio
+async def test_product_bootstrap_without_c_components_starts_and_refuses_sessions(tmp_path):
     from guard_app.services.session_runtime import bootstrap_product
 
-    async def run():
-        bindings = await bootstrap_product(product_folders(str(tmp_path / "product.db")))
-        try:
-            assert bindings.settings_status is None
-            assert bindings.human_control is None
-            assert bindings.create_session is not None
-            assert bindings.session_blocker is not None
-            assert bindings.session_blocker() == "CODEX_CONFIG_UNAVAILABLE"
-            with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_UNAVAILABLE"):
-                await bindings.create_session(SessionOptions())
-        finally:
-            assert bindings.close is not None
-            await bindings.close()
-
-    asyncio.run(run())
+    bindings = await bootstrap_product(product_folders(str(tmp_path / "product.db")))
+    async with closing_backend(bindings):
+        assert bindings.settings_status is None
+        assert bindings.human_control is None
+        assert bindings.create_session is not None
+        assert bindings.session_blocker is not None
+        assert bindings.session_blocker() == "CODEX_CONFIG_UNAVAILABLE"
+        with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_UNAVAILABLE"):
+            await bindings.create_session(SessionOptions())
     assert (tmp_path / "product.db").exists()
 
 
-def test_product_bootstrap_starts_and_keeps_a_startup_refusal_as_the_blocker(tmp_path):
+@pytest.mark.asyncio
+async def test_product_bootstrap_starts_and_keeps_a_startup_refusal_as_the_blocker(tmp_path):
     """A101: a refused app-wide preparation blocks sessions, not the app (10.4
     refuses Task starts). It runs once at start and is not retried."""
     from guard_app.services.session_runtime import bootstrap_product
@@ -671,57 +615,44 @@ def test_product_bootstrap_starts_and_keeps_a_startup_refusal_as_the_blocker(tmp
         startups.append(None)
         return await preparation.prepare_startup()
 
-    async def run():
-        bindings = await bootstrap_product(
-            product_folders(str(tmp_path / "failed.db")),
-            preparation=replace(preparation, prepare_startup=startup),
-        )
-        try:
-            assert bindings.session_blocker is not None
-            assert bindings.create_session is not None
-            assert bindings.session_blocker() == "CODEX_L2_UNAVAILABLE"
-            with pytest.raises(SessionRuntimeError, match="^CODEX_L2_UNAVAILABLE$"):
-                await bindings.create_session(SessionOptions())
-        finally:
-            assert bindings.close is not None
-            await bindings.close()
-
-    asyncio.run(run())
+    bindings = await bootstrap_product(
+        product_folders(str(tmp_path / "failed.db")),
+        preparation=replace(preparation, prepare_startup=startup),
+    )
+    async with closing_backend(bindings):
+        assert bindings.session_blocker is not None
+        assert bindings.create_session is not None
+        assert bindings.session_blocker() == "CODEX_L2_UNAVAILABLE"
+        with pytest.raises(SessionRuntimeError, match="^CODEX_L2_UNAVAILABLE$"):
+            await bindings.create_session(SessionOptions())
     assert len(startups) == 1
 
 
-def test_a_startup_refusal_is_reported_with_its_own_code(tmp_path, subtests):
-    def check(receipt, code, tmp_path):
-        async def run():
-            async def startup() -> StartupReceipt:
-                if receipt is None:
-                    raise RuntimeError("raw-startup-detail")
-                return receipt
+@pytest.mark.parametrize(
+    ("receipt", "code"),
+    [
+        (
+            StartupReceipt(ConfigurationReceipt("a" * 64, "b" * 64, "c" * 64), None, False),
+            "CODEX_L2_UNAVAILABLE",
+        ),
+        (None, "CODEX_PREPARATION_FAILED"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_startup_refusal_is_reported_with_its_own_code(tmp_path, receipt, code):
 
-            runtime, _ = make_runtime(
-                tmp_path, preparation=replace(synthetic_preparation(), prepare_startup=startup)
-            )
-            try:
-                await runtime.prepare_startup()
-                return runtime.creation_blocker()
-            finally:
-                await runtime.close()
+    async def startup() -> StartupReceipt:
+        if receipt is None:
+            raise RuntimeError("raw-startup-detail")
+        return receipt
 
-        assert asyncio.run(run()) == code
-
-    for case_index, (receipt, code) in enumerate(
-        [
-            (
-                StartupReceipt(ConfigurationReceipt("a" * 64, "b" * 64, "c" * 64), None, False),
-                "CODEX_L2_UNAVAILABLE",
-            ),
-            (None, "CODEX_PREPARATION_FAILED"),
-        ]
-    ):
-        with subtests.test(case=case_index):
-            case_path = tmp_path / str(case_index)
-            case_path.mkdir()
-            check(receipt, code, case_path)
+    runtime, _ = make_runtime(
+        tmp_path, preparation=replace(synthetic_preparation(), prepare_startup=startup)
+    )
+    async with closing_backend(runtime):
+        await runtime.prepare_startup()
+        scenario_result = runtime.creation_blocker()
+    assert scenario_result == code
 
 
 @pytest.mark.asyncio
@@ -734,18 +665,13 @@ async def test_missing_guard_profile_refuses_before_any_task_row(tmp_path):
         raise AssertionError("must not start")
 
     runtime = SessionRuntime(
-        store,
-        session_factory=factory,
-        preparation=synthetic_preparation(),
-        owned_store=store,
+        store, session_factory=factory, preparation=synthetic_preparation(), owned_store=store
     )
-    try:
+    async with closing_backend(runtime):
         assert runtime.creation_blocker() == "GUARD_PROFILE_UNAVAILABLE"
         with pytest.raises(SessionRuntimeError, match="GUARD_PROFILE_UNAVAILABLE"):
             await runtime.create_session(SessionOptions())
         assert sessions == []
-    finally:
-        await runtime.close()
 
 
 class StoppableSession(Session):
@@ -769,7 +695,7 @@ async def test_session_stop_outside_send_halts_only_its_task_and_republishes(tmp
         events.append(task_id)
         changed.set()
 
-    try:
+    async with closing_backend(runtime):
         runtime.bindings().task_events(listener)
         first = await runtime.create_session(SessionOptions())
         second = await runtime.create_session(SessionOptions())
@@ -786,8 +712,6 @@ async def test_session_stop_outside_send_halts_only_its_task_and_republishes(tmp
         assert runtime.creation_blocker() is None
         assert (await runtime.snapshot(second.task_id)).status is TaskStatus.RUNNING
         assert sessions[1].closed == 0
-    finally:
-        await runtime.close()
     # After shutdown a late stop report is ignored.
     sessions[1].stop_handler("CODEX_L3_VIOLATION")
     await asyncio.sleep(0)
@@ -803,15 +727,13 @@ async def test_snapshot_offers_the_waiting_approval_and_the_listener_sees_wait_s
     approvals = ApprovalOutcomes()
     runtime, _ = make_runtime(tmp_path, approvals=approvals)
     events = []
-    try:
+    async with closing_backend(runtime):
         runtime.bindings().task_events(events.append)
         first = await runtime.create_session(SessionOptions())
         second = await runtime.create_session(SessionOptions())
         assert (await runtime.snapshot(first.task_id)).approval_id is None
         pending = Pending(
-            request_id="request-1",
-            approval_id="approval-1",
-            reasons=(Reason.INTERNAL_TO_EXTERNAL,),
+            request_id="request-1", approval_id="approval-1", reasons=(Reason.INTERNAL_TO_EXTERNAL,)
         )
         result = FinalResult()
         waiting = asyncio.ensure_future(approvals.wait(pending, first.task_id, result))
@@ -824,8 +746,6 @@ async def test_snapshot_offers_the_waiting_approval_and_the_listener_sees_wait_s
         assert await asyncio.wait_for(waiting, 1) == "guard-final"
         assert events == [first.task_id, first.task_id]
         assert (await runtime.snapshot(first.task_id)).approval_id is None
-    finally:
-        await runtime.close()
 
 
 class FinalResult:
@@ -842,9 +762,7 @@ async def test_cancelled_wait_clears_the_offered_approval_but_not_guards_result(
 
     approvals = ApprovalOutcomes()
     pending = Pending(
-        request_id="request-1",
-        approval_id="approval-1",
-        reasons=(Reason.INTERNAL_TO_EXTERNAL,),
+        request_id="request-1", approval_id="approval-1", reasons=(Reason.INTERNAL_TO_EXTERNAL,)
     )
     result = FinalResult()
     waiting = asyncio.ensure_future(approvals.wait(pending, "task-1", result))
@@ -873,15 +791,13 @@ async def test_streamed_pieces_carry_their_own_task_and_epoch_until_shutdown(tmp
 
     runtime, sessions = make_runtime(tmp_path, session_type=StreamingSession)
     pieces = []
-    try:
+    async with closing_backend(runtime):
         runtime.bindings().answer_partials(lambda *piece: pieces.append(piece))
         first = await runtime.create_session(SessionOptions())
         second = await runtime.create_session(SessionOptions())
         sessions[1].partial_handler("beta")
         sessions[0].partial_handler("alpha")
         assert pieces == [(second.task_id, 1, "beta"), (first.task_id, 1, "alpha")]
-    finally:
-        await runtime.close()
     sessions[0].partial_handler("after-close")
     assert len(pieces) == 2
 
@@ -917,58 +833,51 @@ async def stop_one_task(runtime, sessions, system):
     return created.task_id
 
 
-def test_shutdown_lets_a_session_stop_reach_the_store_before_closing_it(tmp_path):
+@pytest.mark.asyncio
+async def test_shutdown_lets_a_session_stop_reach_the_store_before_closing_it(tmp_path):
     """#58 B review: Guard records the stop in the background; closing the Store
     first refused that write (SystemControlError). Shutdown now waits for it."""
 
-    async def run():
-        events = []
-        system = RecordingSystem(events)
-        runtime, sessions = make_runtime(
-            tmp_path,
-            system_control=system,
-            on_store_close=lambda: events.append(("store-closed",)),
-        )
-        system.store = runtime.store
-        task_id = await stop_one_task(runtime, sessions, system)
-        closing = asyncio.create_task(runtime.close())
-        await asyncio.sleep(0.05)
-        assert events == []  # the Store is still open for the waiting stop
-        system.release.set()
-        await asyncio.wait_for(closing, 1)
-        return events, task_id
-
-    events, task_id = asyncio.run(run())
-    assert events == [
-        ("stop-recorded", task_id, SystemStopReason.AUTH_FAILED),
-        ("store-closed",),
-    ]
+    events = []
+    system = RecordingSystem(events)
+    runtime, sessions = make_runtime(
+        tmp_path, system_control=system, on_store_close=lambda: events.append(("store-closed",))
+    )
+    system.store = runtime.store
+    task_id = await stop_one_task(runtime, sessions, system)
+    closing = asyncio.create_task(runtime.close())
+    await asyncio.sleep(0.05)
+    assert events == []  # the Store is still open for the waiting stop
+    system.release.set()
+    await asyncio.wait_for(closing, 1)
+    assert events == [("stop-recorded", task_id, SystemStopReason.AUTH_FAILED), ("store-closed",)]
 
 
-def test_a_stop_that_does_not_end_in_time_is_reported_and_the_store_still_closes(tmp_path):
-    async def run():
-        events = []
-        system = RecordingSystem(events)
-        runtime, sessions = make_runtime(
-            tmp_path,
-            system_control=system,
-            on_store_close=lambda: events.append(("store-closed",)),
-            cleanup_limits=CleanupLimits(stop_record_s=0.05, session_s=0.05),
-        )
-        system.store = runtime.store
-        await stop_one_task(runtime, sessions, system)
-        for _ in range(2):  # a repeated close reports it again
-            with pytest.raises(SessionRuntimeError, match="^SESSION_STOP_UNCONFIRMED$"):
-                await runtime.close()
-        assert events == [("store-closed",)]
-        system.release.set()  # the late write is refused by the closed Store
-        await asyncio.sleep(0.05)
-        return events
+@pytest.mark.asyncio
+async def test_a_stop_that_does_not_end_in_time_is_reported_and_the_store_still_closes(tmp_path):
 
-    assert asyncio.run(run()) == [("store-closed",)]
+    events = []
+    system = RecordingSystem(events)
+    runtime, sessions = make_runtime(
+        tmp_path,
+        system_control=system,
+        on_store_close=lambda: events.append(("store-closed",)),
+        cleanup_limits=CleanupLimits(stop_record_s=0.05, session_s=0.05),
+    )
+    system.store = runtime.store
+    await stop_one_task(runtime, sessions, system)
+    for _ in range(2):  # a repeated close reports it again
+        with pytest.raises(SessionRuntimeError, match="^SESSION_STOP_UNCONFIRMED$"):
+            await runtime.close()
+    assert events == [("store-closed",)]
+    system.release.set()  # the late write is refused by the closed Store
+    await asyncio.sleep(0.05)
+    scenario_result = events
+    assert scenario_result == [("store-closed",)]
 
 
-def test_a_store_close_not_confirmed_in_time_ends_shutdown_unconfirmed(tmp_path):
+@pytest.mark.asyncio
+async def test_a_store_close_not_confirmed_in_time_ends_shutdown_unconfirmed(tmp_path):
     class Late(UnconfirmedStore):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -978,12 +887,10 @@ def test_a_store_close_not_confirmed_in_time_ends_shutdown_unconfirmed(tmp_path)
             self.waits.append(timeout)
             return await super().wait_closed(timeout)
 
-    async def run():
-        store = Late(tmp_path / "late.db", audit_id_factory=lambda: "unit-audit")
-        runtime = SessionRuntime(store, owned_store=store)
-        for _ in range(2):  # a repeated close reports it again
-            with pytest.raises(SessionRuntimeError, match="^STORE_CLOSE_UNCONFIRMED$"):
-                await runtime.close()
-        return store.waits
-
-    assert asyncio.run(run()) == [CleanupLimits().store_close_s]  # B's 5 s, waited once
+    store = Late(tmp_path / "late.db", audit_id_factory=lambda: "unit-audit")
+    runtime = SessionRuntime(store, owned_store=store)
+    for _ in range(2):  # a repeated close reports it again
+        with pytest.raises(SessionRuntimeError, match="^STORE_CLOSE_UNCONFIRMED$"):
+            await runtime.close()
+    scenario_result = store.waits
+    assert scenario_result == [CleanupLimits().store_close_s]

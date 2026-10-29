@@ -1,11 +1,4 @@
-"""A52: the login screen's own app-server; #21: logout cleanup through C2.15.
-
-The fake app-server and process stand in for C's launcher (C2.12). Their order
-of events is what is checked: Codex accepts the logout, the process exit is
-confirmed, and only then are the credentials deleted. Logout is refused while
-a session may run, and no session starts while a logout runs. The real
-codex.exe, keyring and T43 are C's verification, not exercised here.
-"""
+"""A52/#21: synthetic logout ordering (C2.12/C2.15); real codex/keyring/T43 excluded."""
 
 from __future__ import annotations
 

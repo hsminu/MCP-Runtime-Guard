@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from contextlib import contextmanager
 
 import pytest
-from PySide6.QtWidgets import QApplication
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.services.bridge import (
@@ -19,15 +16,12 @@ from guard_app.services.bridge import (
 )
 from guard_app.ui.policy import CHANGE_PENDING, CHANGE_RESULTS, CHANGE_UNCONFIRMED, PolicyPage
 
-from .test_bridge import FakeControl, attach, close_bridge, pump_until
+from .test_bridge import FakeControl, attach, bridge_cleanup, pump_until
+from .test_bridge import app as app
 from .test_ui_policy import view
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
+@contextmanager
 def start(app, policy_access):
     async def bootstrap():
         async def snapshot(task_id):
@@ -47,7 +41,8 @@ def start(app, policy_access):
     bridge.policy_changed.connect(views.append)
     bridge.start()
     pump_until(app, lambda: bridge.state is BridgeState.READY and bool(views))
-    return bridge, receiver, views
+    with bridge_cleanup(app, bridge):
+        yield bridge, receiver, views
 
 
 def result(receiver, command):
@@ -63,42 +58,32 @@ def test_access_change_runs_once_and_republishes_the_new_policy(app):
         calls.append((server_id, allowed, denied))
         return applied
 
-    bridge, receiver, views = start(app, change)
-    try:
+    with start(app, change) as (bridge, receiver, views):
         command = bridge.request_policy_access("docs", ("read",), ("send",))
         pump_until(app, lambda: result(receiver, command) is not None)
         assert result(receiver, command) == "POLICY_CHANGED"
         assert calls == [("docs", ("read",), ("send",))]
         assert views[-1] is applied
-    finally:
-        close_bridge(app, bridge)
 
 
 def test_refused_or_unavailable_change_keeps_the_policy_view(app):
     async def refuse(server_id, allowed, denied):
         raise SessionStartError("POLICY_SAVE_FAILED")
 
-    bridge, receiver, views = start(app, refuse)
-    try:
+    with start(app, refuse) as (bridge, receiver, views):
         command = bridge.request_policy_access("docs", (), ("read",))
         pump_until(app, lambda: result(receiver, command) is not None)
         assert result(receiver, command) == "POLICY_SAVE_FAILED"
         assert len(views) == 1
-    finally:
-        close_bridge(app, bridge)
-    bridge, receiver, views = start(app, None)
-    try:
+    with start(app, None) as (bridge, receiver, views):
         command = bridge.request_policy_access("docs", (), ("read",))
         pump_until(app, lambda: result(receiver, command) is not None)
         assert result(receiver, command) == "POLICY_CHANGE_UNAVAILABLE"
-    finally:
-        close_bridge(app, bridge)
 
 
 def test_malformed_access_change_is_rejected_before_the_backend(app):
-    bridge, _receiver, _views = start(app, None)
     failures = []
-    try:
+    with start(app, None) as (bridge, _receiver, _views):
         for case in (("", (), ()), ("docs", ["read"], ()), ("docs", (), (1,)), ("docs", ("",), ())):
             try:
                 with pytest.raises(ValueError, match="Policy access change is invalid"):
@@ -106,8 +91,6 @@ def test_malformed_access_change_is_rejected_before_the_backend(app):
             except (AssertionError, pytest.fail.Exception) as error:
                 failures.append((case, str(error)))
         assert failures == []
-    finally:
-        close_bridge(app, bridge)
 
 
 def test_policy_page_shows_fixed_text_for_its_own_command_only(app):

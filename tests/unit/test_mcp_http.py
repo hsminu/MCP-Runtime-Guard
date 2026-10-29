@@ -1,7 +1,4 @@
-"""A08/A12 adapter unit probes over loopback TCP (I1/I8/I9, T14-T16/T19).
-
-The protocol stub isolates client behavior; it is not C's acceptance fixture.
-"""
+"""A08/A12 adapter unit probes over loopback TCP (I1/I8/I9, T14-T16/T19)."""
 
 import asyncio
 import http.server
@@ -22,25 +19,7 @@ from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import DispatchError
 
 from .test_guard import _call, _Harness
-from .test_mcp_transport import _request
-
-
-@contextmanager
-def _dispatch_error(code):
-    with pytest.raises(DispatchError) as caught:
-        yield caught
-    assert caught.value.exception_type == code
-
-
-def _check_cases(cases, check):
-    """Keep checking cheap table rows after an assertion/expected-error mismatch."""
-    failures = []
-    for case in cases:
-        try:
-            check(*case)
-        except (AssertionError, pytest.fail.Exception) as error:
-            failures.append((case, str(error)))
-    assert not failures, failures
+from .test_mcp_transport import _request, _dispatch_error
 
 
 class ProtocolProbe:
@@ -177,86 +156,91 @@ async def close_failed_channel(transport):
     assert all(worker._owner.done() for worker in transport._workers.values())
 
 
-def test_endpoint_envelope_rejects_unsupported_urls_without_echo():
+@asynccontextmanager
+async def _guarded_http(endpoint, dispatches, *, call_timeout=0.5, release=None, failed=False):
+    transport = transport_for(endpoint, dispatches, call_timeout=call_timeout)
+    harness = _Harness()
+    harness.guard._transport = transport
+    try:
+        await transport.start()
+        yield harness, transport
+    finally:
+        if release is not None:
+            release.set()
+        if failed:
+            await close_failed_channel(transport)
+        else:
+            await transport.close()
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "",
+        "http://external.example/mcp",
+        "http://localhost/mcp",
+        "ftp://example/mcp",
+        "https://user:RAW_SECRET@example/mcp",
+        "https://example/mcp?key=RAW_SECRET",
+        "https://example/mcp#fragment",
+        "https://example/mcp\n",
+        "https://example\\mcp",
+        "/mcp",
+        "https://[bad",
+        "https://example/" + "x" * 2048,
+        "HTTPS://example.test/mcp",
+        "https://Example.test/mcp",
+        "https://example.test",
+        "https://example.test:443/mcp",
+        "http://127.0.0.1:80/mcp",
+        "https://example.test/a/../mcp",
+        "https://example.test/%2e%2e/mcp",
+        "https://169.254.169.254/latest",
+        "https://[::ffff:127.0.0.1]/mcp",
+        "https://0x7f.1/mcp",
+        "https://2130706433/mcp",
+    ],
+)
+def test_endpoint_envelope_rejects_unsupported_urls_without_echo(endpoint):
     # C2.5 / URL-01: only the canonical endpoint form is accepted.
-    def check(endpoint):
-        with pytest.raises(ValueError) as caught:
-            http_stream_factory(endpoint)
-        assert str(caught.value) == "Invalid HTTP MCP endpoint"
-        assert "RAW_SECRET" not in str(caught.value)
-
-    _check_cases(
-        (
-            (endpoint,)
-            for endpoint in [
-                "",
-                "http://external.example/mcp",
-                "http://localhost/mcp",
-                "ftp://example/mcp",
-                "https://user:RAW_SECRET@example/mcp",
-                "https://example/mcp?key=RAW_SECRET",
-                "https://example/mcp#fragment",
-                "https://example/mcp\n",
-                "https://example\\mcp",
-                "/mcp",
-                "https://[bad",
-                "https://example/" + "x" * 2048,
-                "HTTPS://example.test/mcp",
-                "https://Example.test/mcp",
-                "https://example.test",
-                "https://example.test:443/mcp",
-                "http://127.0.0.1:80/mcp",
-                "https://example.test/a/../mcp",
-                "https://example.test/%2e%2e/mcp",
-                "https://169.254.169.254/latest",
-                "https://[::ffff:127.0.0.1]/mcp",
-                "https://0x7f.1/mcp",
-                "https://2130706433/mcp",
-            ]
-        ),
-        check,
-    )
+    with pytest.raises(ValueError) as caught:
+        http_stream_factory(endpoint)
+    assert str(caught.value) == "Invalid HTTP MCP endpoint"
+    assert "RAW_SECRET" not in str(caught.value)
 
 
-def test_endpoint_is_cs_canonical_form_and_requested_unchanged():
-    def check(endpoint):
-        """A08 second line: C's `canonical_endpoint` decides, and httpx keeps the string."""
-        assert str(streams._endpoint_url(endpoint)) == endpoint
-
-    _check_cases(
-        (
-            (endpoint,)
-            for endpoint in [
-                "https://example.test/mcp",
-                "https://xn--fa-hia.de/mcp",
-                "http://127.0.0.2:9000/mcp",
-                "http://[::1]:9000/mcp",
-                "https://example.test/",
-            ]
-        ),
-        check,
-    )
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://example.test/mcp",
+        "https://xn--fa-hia.de/mcp",
+        "http://127.0.0.2:9000/mcp",
+        "http://[::1]:9000/mcp",
+        "https://example.test/",
+    ],
+)
+def test_endpoint_is_cs_canonical_form_and_requested_unchanged(endpoint):
+    """A08 second line: C's `canonical_endpoint` decides, and httpx keeps the string."""
+    assert str(streams._endpoint_url(endpoint)) == endpoint
 
 
-def test_http_timeouts_are_bounded():
-    def check(timeout, name):
-        with pytest.raises(ValueError):
-            http_stream_factory("https://example.test/mcp", **{name: timeout})
-
-    _check_cases(
-        (
-            (timeout, name)
-            for timeout in [0, -1, True, "5", float("nan"), float("inf"), 301, 10**400]
-            for name in ["io_timeout_s", "read_timeout_s"]
-        ),
-        check,
-    )
+@pytest.mark.parametrize(
+    "timeout, name",
+    [
+        (timeout, name)
+        for timeout in [0, -1, True, "5", float("nan"), float("inf"), 301, 10**400]
+        for name in ["io_timeout_s", "read_timeout_s"]
+    ],
+)
+def test_http_timeouts_are_bounded(timeout, name):
+    with pytest.raises(ValueError):
+        http_stream_factory("https://example.test/mcp", **{name: timeout})
 
 
 def test_http_read_timeout_cannot_be_shorter_than_call_timeout():
     """Q12: a read bound below the call bound would let a healthy slow tool end the session."""
     factory = http_stream_factory("https://example.test/mcp", io_timeout_s=1, read_timeout_s=4)
-    with pytest.raises(ValueError, match="read timeout"):
+    with pytest.raises(ValueError, match=r"read timeout"):
         McpTransport({"docs": factory}, call_timeout_s=5)
     McpTransport({"docs": factory}, call_timeout_s=4)
 
@@ -352,17 +336,11 @@ async def test_real_fastmcp_json_and_sse_sessions_work_through_guard(caplog):
         caplog.set_level(logging.DEBUG)
         async with http_spike(json_response=json_response, stateless=stateless) as spike:
             dispatches = []
-            transport = transport_for(spike.endpoint, dispatches, call_timeout=2)
-            h = _Harness()
-            h.guard._transport = transport
-            try:
-                await transport.start()
+            async with _guarded_http(spike.endpoint, dispatches, call_timeout=2) as (h, transport):
                 assert isinstance(
                     await h.guard.submit("task", _call("send"), expected_epoch=1), Released
                 )
                 assert len(dispatches) == 1 and spike.counts["receiver_effect"] == 1
-            finally:
-                await transport.close()
         sdk_logs = [
             record for record in caplog.records if record.name.startswith(("mcp.", "uvicorn."))
         ]
@@ -380,11 +358,10 @@ async def test_http_failure_never_replays_send_or_releases_unknown_result(caplog
         ):
             probe.redirect_url = redirect_url
             dispatches = []
-            transport = transport_for(endpoint, dispatches)
-            h = _Harness()
-            h.guard._transport = transport
-            try:
-                await transport.start()
+            async with _guarded_http(endpoint, dispatches, release=probe.release, failed=True) as (
+                h,
+                transport,
+            ):
                 outcome = await asyncio.wait_for(
                     h.guard.submit("task", _call("send"), expected_epoch=1), 2
                 )
@@ -401,9 +378,6 @@ async def test_http_failure_never_replays_send_or_releases_unknown_result(caplog
                     b"cookie" not in headers and b"authorization" not in headers
                     for _, headers in probe.requests
                 )
-            finally:
-                probe.release.set()
-                await close_failed_channel(transport)
         assert "RAW_RESPONSE_MARKER" not in caplog.text and "RAW_COOKIE" not in caplog.text
 
 
@@ -522,28 +496,23 @@ def _status_error() -> httpx.HTTPStatusError:
     )
 
 
-def test_only_a_group_of_http_errors_counts_as_a_completed_teardown():
-    def check(error, completed):
-        assert streams.http_teardown_completed(error) is completed
-
-    _check_cases(
+@pytest.mark.parametrize(
+    "error, completed",
+    [
+        (ExceptionGroup("sdk", [_status_error()]), True),
+        (ExceptionGroup("sdk", [_status_error(), httpx.ReadError("read")]), True),
         (
-            (error, completed)
-            for (error, completed) in [
-                (ExceptionGroup("sdk", [_status_error()]), True),
-                (ExceptionGroup("sdk", [_status_error(), httpx.ReadError("read")]), True),
-                (
-                    ExceptionGroup("outer", [ExceptionGroup("inner", [httpx.ReadError("read")])]),
-                    True,
-                ),
-                (ExceptionGroup("sdk", [_status_error(), OSError("other")]), False),
-                (BaseExceptionGroup("sdk", [_status_error(), asyncio.CancelledError()]), False),
-                (_status_error(), False),
-                (OSError("other"), False),
-            ]
+            ExceptionGroup("outer", [ExceptionGroup("inner", [httpx.ReadError("read")])]),
+            True,
         ),
-        check,
-    )
+        (ExceptionGroup("sdk", [_status_error(), OSError("other")]), False),
+        (BaseExceptionGroup("sdk", [_status_error(), asyncio.CancelledError()]), False),
+        (_status_error(), False),
+        (OSError("other"), False),
+    ],
+)
+def test_only_a_group_of_http_errors_counts_as_a_completed_teardown(error, completed):
+    assert streams.http_teardown_completed(error) is completed
 
 
 @pytest.mark.asyncio
@@ -578,17 +547,8 @@ async def test_http_ignores_proxy_environment_and_does_not_reuse_server_cookies(
     monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:1")
     monkeypatch.setenv("NO_PROXY", "")
     probe = ProtocolProbe()
-    async with serve_loopback(probe) as endpoint:
-        transport = transport_for(endpoint, [])
-        h = _Harness()
-        h.guard._transport = transport
-        try:
-            await transport.start()
-            assert isinstance(
-                await h.guard.submit("task", _call("send"), expected_epoch=1), Released
-            )
-        finally:
-            await transport.close()
+    async with serve_loopback(probe) as endpoint, _guarded_http(endpoint, []) as (h, transport):
+        assert isinstance(await h.guard.submit("task", _call("send"), expected_epoch=1), Released)
     assert probe.wire_calls == probe.effects == 1
     assert all(b"cookie" not in headers for _, headers in probe.requests)
     assert any(method == "DELETE" for method, _ in probe.requests)
@@ -611,20 +571,13 @@ async def test_cancelled_waiter_cannot_turn_remote_send_into_safe_cancellation()
     probe = ProtocolProbe("timeout")
     async with serve_loopback(probe) as endpoint:
         dispatches = []
-        transport = transport_for(endpoint, dispatches)
-        h = _Harness()
-        h.guard._transport = transport
-        await transport.start()
-        task = asyncio.create_task(h.guard.submit("task", _call("send"), expected_epoch=1))
-        try:
+        async with _guarded_http(endpoint, dispatches, release=probe.release) as (h, transport):
+            task = asyncio.create_task(h.guard.submit("task", _call("send"), expected_epoch=1))
             await asyncio.wait_for(probe.effect_done.wait(), 1)
             task.cancel()
             assert isinstance(await task, OutcomeUnknown)
             assert h.store.states["task"].status is TaskStatus.UNKNOWN_OUTCOME
             assert isinstance(await h.guard.submit("task", _call("send"), expected_epoch=1), Denied)
-        finally:
-            probe.release.set()
-            await transport.close()
         assert len(dispatches) == probe.wire_calls == probe.effects == 1
 
 
@@ -632,21 +585,15 @@ async def test_cancelled_waiter_cannot_turn_remote_send_into_safe_cancellation()
 async def test_invalid_http_read_is_withheld_without_label_or_raw_release(caplog):
     probe = ProtocolProbe("lost")
     caplog.set_level(logging.DEBUG)
-    async with serve_loopback(probe) as endpoint:
-        transport = transport_for(endpoint, [])
-        h = _Harness()
-        h.guard._transport = transport
+    async with (
+        serve_loopback(probe) as endpoint,
+        _guarded_http(endpoint, [], failed=True) as (h, _),
+    ):
         before = h.store.states["task"]
-        try:
-            await transport.start()
-            outcome = await h.guard.submit("task", _call("read"), expected_epoch=1)
-            assert isinstance(outcome, Withheld)
-            after = h.store.states["task"]
-            assert (
-                after.status is TaskStatus.HALTED and after.high_watermark == before.high_watermark
-            )
-        finally:
-            await close_failed_channel(transport)
+        outcome = await h.guard.submit("task", _call("read"), expected_epoch=1)
+        assert isinstance(outcome, Withheld)
+        after = h.store.states["task"]
+        assert after.status is TaskStatus.HALTED and after.high_watermark == before.high_watermark
     assert "RAW_RESPONSE_MARKER" not in caplog.text
 
 

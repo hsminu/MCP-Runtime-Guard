@@ -60,7 +60,14 @@ from .fake_codex_app_server import FakeAppServer
 from .logging_state import preserve_logging_state  # noqa: F401
 from .product_folders import product_folders
 from .test_codex_product_flow import preparation, read_then_answer
-from .test_product_assembly import READ_DEFINITION, Peer, Registry, document, inputs
+from .test_product_assembly import (
+    READ_DEFINITION,
+    Peer,
+    Registry,
+    closing_backend,
+    document,
+    inputs,
+)
 
 pytestmark = pytest.mark.usefixtures("preserve_logging_state")
 
@@ -124,26 +131,23 @@ def test_settings_file_is_parsed_with_the_generation_it_was_read_at(folders) -> 
     assert folders.paths.settings_file.read_bytes() == broken
 
 
-def test_file_read_failures_keep_c_fixed_code(monkeypatch, subtests):
-    def check(error, code, monkeypatch):
-        def refuse(_folders, *, max_bytes):
-            assert max_bytes == SETTINGS_MAX_BYTES  # B's limit, written in one place
-            raise error
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (SettingsIOError("SETTINGS_FILE_INVALID"), "SETTINGS_FILE_INVALID"),
+        (SettingsIOError("SETTINGS_FILE_READ_FAILED"), "SETTINGS_FILE_READ_FAILED"),
+        (AppPathError("APP_FOLDERS_CLOSED"), "APP_FOLDERS_CLOSED"),
+    ],
+)
+def test_file_read_failures_keep_c_fixed_code(monkeypatch, error, code):
+    def refuse(_folders, *, max_bytes):
+        assert max_bytes == SETTINGS_MAX_BYTES  # B's limit, written in one place
+        raise error
 
-        monkeypatch.setattr(product_settings, "read_settings_file", refuse)
-        with pytest.raises(SettingsStartError) as refused:
-            read_settings(object())  # type: ignore[arg-type]
-        assert refused.value.code == code
-
-    for case_index, (error, code) in enumerate(
-        [
-            (SettingsIOError("SETTINGS_FILE_INVALID"), "SETTINGS_FILE_INVALID"),
-            (SettingsIOError("SETTINGS_FILE_READ_FAILED"), "SETTINGS_FILE_READ_FAILED"),
-            (AppPathError("APP_FOLDERS_CLOSED"), "APP_FOLDERS_CLOSED"),
-        ]
-    ):
-        with subtests.test(case=case_index), monkeypatch.context() as patch:
-            check(error, code, patch)
+    monkeypatch.setattr(product_settings, "read_settings_file", refuse)
+    with pytest.raises(SettingsStartError) as refused:
+        read_settings(object())  # type: ignore[arg-type]
+    assert refused.value.code == code
 
 
 # Saving a policy change
@@ -247,8 +251,17 @@ async def refuse_session(*_args):
     raise AssertionError("no session in this test")
 
 
-def test_product_start_reports_the_settings_and_refuses_tasks_without_a_profile(
-    tmp_path, subtests, monkeypatch
+@pytest.mark.parametrize(
+    ("doc", "status", "blocker"),
+    [
+        (None, SETTINGS_FILE_MISSING, SETTINGS_FILE_MISSING),
+        ({"profile": {"id": "unit"}}, SETTINGS_PROFILE_INVALID, SETTINGS_PROFILE_INVALID),
+        (document(), SETTINGS_LOADED, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_product_start_reports_the_settings_and_refuses_tasks_without_a_profile(
+    tmp_path, monkeypatch, doc, status, blocker
 ):
     from guard_app.services import product_assembly
 
@@ -260,37 +273,20 @@ def test_product_start_reports_the_settings_and_refuses_tasks_without_a_profile(
         ),
     )
 
-    def check(doc, status, blocker, tmp_path):
-        async def start():
-            bindings = await bootstrap_product(
-                product_folders(str(tmp_path / "start.db")),
-                session_factory=refuse_session,
-                preparation=preparation([], read_then_answer),
-                settings=SettingsFile(object(), doc, None),  # type: ignore[arg-type]
-            )
-            try:
-                assert bindings.session_blocker is not None
-                return bindings.settings_status, bindings.session_blocker()
-            finally:
-                assert bindings.close is not None
-                await bindings.close()
-
-        assert run(start()) == (status, blocker)
-
-    for case_index, (doc, status, blocker) in enumerate(
-        [
-            (None, SETTINGS_FILE_MISSING, SETTINGS_FILE_MISSING),
-            ({"profile": {"id": "unit"}}, SETTINGS_PROFILE_INVALID, SETTINGS_PROFILE_INVALID),
-            (document(), SETTINGS_LOADED, None),
-        ]
-    ):
-        with subtests.test(case=case_index):
-            case_path = tmp_path / str(case_index)
-            case_path.mkdir()
-            check(doc, status, blocker, case_path)
+    bindings = await bootstrap_product(
+        product_folders(str(tmp_path / "start.db")),
+        session_factory=refuse_session,
+        preparation=preparation([], read_then_answer),
+        settings=SettingsFile(object(), doc, None),  # type: ignore[arg-type]
+    )
+    async with closing_backend(bindings):
+        assert bindings.session_blocker is not None
+        scenario_result = bindings.settings_status, bindings.session_blocker()
+    assert scenario_result == (status, blocker)
 
 
-def test_save_with_unknown_outcome_closes_guard_until_restart(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_save_with_unknown_outcome_closes_guard_until_restart(tmp_path) -> None:
     """C2.14: the file may hold either document, so nothing runs or saves again."""
     saved: list[object] = []
 
@@ -300,77 +296,67 @@ def test_save_with_unknown_outcome_closes_guard_until_restart(tmp_path) -> None:
 
     servers: list[FakeAppServer] = []
 
-    async def scenario():
-        bindings = await bootstrap_product(
-            product_folders(str(tmp_path / "policy.db")),
-            preparation=preparation(servers, read_then_answer),
-            product=inputs(Peer([READ_DEFINITION]), registry_stub(), document()),
-            profile_saver=unknown_saver,
-        )
-        try:
-            assert bindings.policy_access is not None
-            assert bindings.create_session is not None
-            assert bindings.session_blocker is not None
-            with pytest.raises(SessionRuntimeError) as refused:
-                await bindings.policy_access("docs", (), ("read",))
-            with pytest.raises(SessionRuntimeError) as again:
-                await bindings.policy_access("docs", (), ("read",))
-            with pytest.raises(SessionRuntimeError) as created:
-                await bindings.create_session(SessionOptions())
-            return (refused.value, again.value, created.value), bindings.session_blocker()
-        finally:
-            assert bindings.close is not None
-            await bindings.close()
-
-    errors, blocker = run(scenario())
+    bindings = await bootstrap_product(
+        product_folders(str(tmp_path / "policy.db")),
+        preparation=preparation(servers, read_then_answer),
+        product=inputs(Peer([READ_DEFINITION]), registry_stub(), document()),
+        profile_saver=unknown_saver,
+    )
+    async with closing_backend(bindings):
+        assert bindings.policy_access is not None
+        assert bindings.create_session is not None
+        assert bindings.session_blocker is not None
+        with pytest.raises(SessionRuntimeError) as refused:
+            await bindings.policy_access("docs", (), ("read",))
+        with pytest.raises(SessionRuntimeError) as again:
+            await bindings.policy_access("docs", (), ("read",))
+        with pytest.raises(SessionRuntimeError) as created:
+            await bindings.create_session(SessionOptions())
+        (errors, blocker) = (refused.value, again.value, created.value), bindings.session_blocker()
     assert [error.code for error in errors] == ["POLICY_SAVE_UNKNOWN"] * 3
     assert blocker == "POLICY_SAVE_UNKNOWN"
     assert len(saved) == 1
     assert servers == []
 
 
-def test_save_cancelled_mid_write_closes_guard_until_restart(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_save_cancelled_mid_write_closes_guard_until_restart(tmp_path) -> None:
     """#52 B review 2: the cancelled write may still land, as with an unknown outcome."""
     servers: list[FakeAppServer] = []
     peer = Peer([READ_DEFINITION])
 
-    async def scenario():
-        entered, release = asyncio.Event(), asyncio.Event()
+    entered, release = asyncio.Event(), asyncio.Event()
 
-        async def hanging_saver(_change) -> bool:
-            entered.set()
-            await release.wait()
-            return True
+    async def hanging_saver(_change) -> bool:
+        entered.set()
+        await release.wait()
+        return True
 
-        bindings = await bootstrap_product(
-            product_folders(str(tmp_path / "policy.db")),
-            preparation=preparation(servers, read_then_answer),
-            product=inputs(peer, registry_stub(), document()),
-            profile_saver=hanging_saver,
-        )
-        try:
-            assert bindings.policy_access is not None
-            assert bindings.create_session is not None
-            assert bindings.session_blocker is not None
-            old = await bindings.create_session(SessionOptions())
-            change = asyncio.ensure_future(bindings.policy_access("docs", (), ("read",)))
-            await asyncio.wait_for(entered.wait(), 5)
-            change.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await change
-            blocker = bindings.session_blocker()
-            with pytest.raises(SessionRuntimeError) as again:
-                await bindings.policy_access("docs", (), ("read",))
-            with pytest.raises(SessionRuntimeError) as created:
-                await bindings.create_session(SessionOptions())
-            runner = bindings.runner_for_task(old.task_id)
-            assert not runner.can_accept_message
-            return blocker, (again.value.code, created.value.code), runner
-        finally:
-            assert bindings.close is not None
-            await bindings.close()
-
-    blocker, codes, update = run(scenario())
+    bindings = await bootstrap_product(
+        product_folders(str(tmp_path / "policy.db")),
+        preparation=preparation(servers, read_then_answer),
+        product=inputs(peer, registry_stub(), document()),
+        profile_saver=hanging_saver,
+    )
+    async with closing_backend(bindings):
+        assert bindings.policy_access is not None
+        assert bindings.create_session is not None
+        assert bindings.session_blocker is not None
+        old = await bindings.create_session(SessionOptions())
+        change = asyncio.ensure_future(bindings.policy_access("docs", (), ("read",)))
+        await asyncio.wait_for(entered.wait(), 5)
+        change.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await change
+        blocker = bindings.session_blocker()
+        with pytest.raises(SessionRuntimeError) as again:
+            await bindings.policy_access("docs", (), ("read",))
+        with pytest.raises(SessionRuntimeError) as created:
+            await bindings.create_session(SessionOptions())
+        runner = bindings.runner_for_task(old.task_id)
+        assert not runner.can_accept_message
+        codes = (again.value.code, created.value.code)
+        update = runner
     assert blocker == "POLICY_SAVE_UNKNOWN"
     assert codes == ("POLICY_SAVE_UNKNOWN", "POLICY_SAVE_UNKNOWN")
     # The old session's READ is refused by the closed Guard, never dispatched.
@@ -380,7 +366,8 @@ def test_save_cancelled_mid_write_closes_guard_until_restart(tmp_path) -> None:
     assert len(servers) == 1
 
 
-def test_file_changed_outside_the_app_refuses_saves_and_keeps_guard_running(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_file_changed_outside_the_app_refuses_saves_and_keeps_guard_running(tmp_path) -> None:
     """C2.14 table: nothing was written, so Guard keeps its rules until a restart."""
     saved: list[object] = []
     servers: list[FakeAppServer] = []
@@ -390,33 +377,26 @@ def test_file_changed_outside_the_app_refuses_saves_and_keeps_guard_running(tmp_
         saved.append(change)
         raise SettingsFileChangedError("SETTINGS_FILE_CHANGED")
 
-    async def scenario():
-        bindings = await bootstrap_product(
-            product_folders(str(tmp_path / "policy.db")),
-            preparation=preparation(servers, read_then_answer),
-            product=inputs(peer, registry_stub(), document()),
-            profile_saver=changed_saver,
-        )
-        try:
-            assert bindings.policy_access is not None
-            assert bindings.create_session is not None
-            assert bindings.session_blocker is not None
-            codes = []
-            for _ in range(2):
-                with pytest.raises(SessionRuntimeError) as refused:
-                    await bindings.policy_access("docs", (), ("read",))
-                codes.append(refused.value.code)
-            blocker = bindings.session_blocker()
-            created = await bindings.create_session(SessionOptions())
-            runner = bindings.runner_for_task(created.task_id)
-            runner.add_user_message("summarize the public document")
-            update = await asyncio.wait_for(runner.advance(), 5)
-            return codes, blocker, update
-        finally:
-            assert bindings.close is not None
-            await bindings.close()
-
-    codes, blocker, update = run(scenario())
+    bindings = await bootstrap_product(
+        product_folders(str(tmp_path / "policy.db")),
+        preparation=preparation(servers, read_then_answer),
+        product=inputs(peer, registry_stub(), document()),
+        profile_saver=changed_saver,
+    )
+    async with closing_backend(bindings):
+        assert bindings.policy_access is not None
+        assert bindings.create_session is not None
+        assert bindings.session_blocker is not None
+        codes = []
+        for _ in range(2):
+            with pytest.raises(SessionRuntimeError) as refused:
+                await bindings.policy_access("docs", (), ("read",))
+            codes.append(refused.value.code)
+        blocker = bindings.session_blocker()
+        created = await bindings.create_session(SessionOptions())
+        runner = bindings.runner_for_task(created.task_id)
+        runner.add_user_message("summarize the public document")
+        update = await asyncio.wait_for(runner.advance(), 5)
     assert codes == ["POLICY_SAVE_FILE_CHANGED"] * 2
     assert blocker is None
     assert len(saved) == 2
@@ -441,9 +421,7 @@ async def registered(store: SQLiteStore, doc, *, activate: bool = True) -> Serve
     entry = await registry.register(server, Listing(True, (FrozenJsonObject(READ_DEFINITION),)))
     if activate:
         await registry.activate(
-            "docs",
-            expected_row_revision=entry.registration.row_revision,
-            reviewed_by="operator",
+            "docs", expected_row_revision=entry.registration.row_revision, reviewed_by="operator"
         )
     return registry
 
@@ -484,7 +462,8 @@ def test_live_listings_preserve_or_invalidate_registered_server(tmp_path, subtes
                 assert tool.fingerprint == tool_fingerprint(changed)
 
 
-def test_listing_that_cannot_be_recorded_blocks_the_server_for_this_run(
+@pytest.mark.asyncio
+async def test_listing_that_cannot_be_recorded_blocks_the_server_for_this_run(
     tmp_path, monkeypatch
 ) -> None:
     """C4.10: a failed write keeps the server PENDING for this run; nothing runs.
@@ -495,19 +474,16 @@ def test_listing_that_cannot_be_recorded_blocks_the_server_for_this_run(
     async def refuse(self, server_id, tools, *, at_utc):
         raise StoreError(Reason.STATE_COMMIT_FAILED)
 
-    async def scenario():
-        db = tmp_path / "unrecorded.db"
-        with SQLiteStore(db, audit_id_factory=lambda: f"audit-{uuid4().hex}") as store:
-            registry = await registered(store, document())
-            monkeypatch.setattr(SQLiteStore, "record_fingerprint_change", refuse)
-            peer = Peer([READ_DEFINITION])
-            assembled = await assemble_guard(store, inputs(peer, registry, document()))
-            try:
-                return assembled.registry.blocked_servers, registry.status("docs")
-            finally:
-                await assembled.aclose()
-
-    blocked, status = run(scenario())
+    db = tmp_path / "unrecorded.db"
+    with SQLiteStore(db, audit_id_factory=lambda: f"audit-{uuid4().hex}") as store:
+        registry = await registered(store, document())
+        monkeypatch.setattr(SQLiteStore, "record_fingerprint_change", refuse)
+        peer = Peer([READ_DEFINITION])
+        assembled = await assemble_guard(store, inputs(peer, registry, document()))
+        try:
+            (blocked, status) = assembled.registry.blocked_servers, registry.status("docs")
+        finally:
+            await assembled.aclose()
     assert blocked == frozenset({"docs"})
     assert status is RegStatus.PENDING
 

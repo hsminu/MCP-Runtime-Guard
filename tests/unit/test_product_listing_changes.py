@@ -1,8 +1,4 @@
-"""A140 / LIST-01, I2/I7/I10, T10: notices after a received page cannot be lost.
-
-Real pinned MCP SDK over in-memory stdio bytes; tools/call receipts count the
-dispatches reaching each peer. This is A unit coverage, not C acceptance.
-"""
+"""A140 / LIST-01, I2/I7/I10, T10: notices after a received page cannot be lost."""
 
 from __future__ import annotations
 
@@ -170,5 +166,5 @@ def test_one_servers_notice_survives_waiting_for_another_servers_listing(tmp_pat
 
 
 def test_listing_received_callback_must_be_callable():
-    with pytest.raises(TypeError, match="listing received callback must be callable"):
+    with pytest.raises(TypeError, match=r"listing received callback must be callable"):
         McpTransport({}, on_listing_received="invalid")

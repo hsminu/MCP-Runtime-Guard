@@ -13,78 +13,36 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[2] / "src" / "guard_app"
 
 A_SERVICES = frozenset(
-    [
-        "account_runtime",
-        "bridge",
-        "bridge_bindings",
-        "bridge_commands",
-        "bridge_ingress",
-        "bridge_registration",
-        "bridge_lanes",
-        "bridge_streams",
-        "bridge_types",
-        "codex_account",
-        "codex_composition",
-        "codex_preparation",
-        "codex_prompt",
-        "codex_session",
-        "codex_turns",
-        "guard_relay",
-        "policy_view",
-        "product_assembly",
-        "product_settings",
-        "runner",
-        "session_admission",
-        "session_cleanup",
-        "session_execution",
-        "session_policy",
-        "session_preparation",
-        "session_runtime",
-        "session_startup",
-        "session_stops",
-        "task_tool_calls",
-    ]
+    (  # noqa: SIM905 - keep the explicit module allowlist compact.
+        "account_runtime bridge bridge_bindings bridge_commands bridge_context "
+        "bridge_host bridge_ingress bridge_registration bridge_lanes bridge_streams "
+        "bridge_types codex_account codex_composition codex_preparation codex_prompt "
+        "codex_session codex_turns guard_relay policy_view product_assembly "
+        "product_settings product_startup runner session_admission session_cleanup "
+        "session_destinations session_execution session_policy session_tool_settings "
+        "session_preparation session_runtime session_startup session_stops "
+        "task_tool_calls"
+    ).split()
 )
 A_ADAPTERS = frozenset(
-    [
-        "access_rules_checker",
-        "codex_protocol",
-        "codex_stream",
-        "jsonrpc_client",
-        "mcp_http_ingress",
-        "mcp_ingress",
-        "mcp_transport",
-    ]
+    (  # noqa: SIM905 - keep the explicit module allowlist compact.
+        "access_rules_checker codex_protocol codex_stream jsonrpc_client "
+        "mcp_http_ingress mcp_ingress mcp_transport"
+    ).split()
 )
 # B and C modules are not checked here.
 OTHER_SERVICES = frozenset(
-    [
-        "approvals",
-        "catalog",
-        "catalog_schema",
-        "catalog_sources",
-        "guard",
-        "registry",
-        "response_gate",
-        "scanner",
-        "state_checks",
-    ]
+    (  # noqa: SIM905 - keep the explicit module allowlist compact.
+        "approvals catalog catalog_schema catalog_sources guard registry response_gate "
+        "scanner state_checks"
+    ).split()
 )
 OTHER_ADAPTERS = frozenset({"cisco", "cisco_aggregation", "cisco_llm"})
 
 FORBIDDEN_IMPORTS = frozenset(
-    [
-        "ctypes",
-        "marshal",
-        "multiprocessing",
-        "pickle",
-        "shelve",
-        "shutil",
-        "socket",
-        "sqlite3",
-        "subprocess",
-        "tempfile",
-    ]
+    (  # noqa: SIM905 - keep the explicit module denylist compact.
+        "ctypes marshal multiprocessing pickle shelve shutil socket sqlite3 subprocess tempfile"
+    ).split()
 )
 FORBIDDEN_CALLS = frozenset({"eval", "exec", "compile", "__import__"})
 # Where a broad handler is allowed: (module, class, function).
@@ -218,10 +176,7 @@ def test_only_the_transport_package_imports_the_mcp_sdk() -> None:
 
 
 def test_only_the_bridge_facade_brings_qt_into_a_services() -> None:
-    """A115: outside ui and the entry point, only the bridge facade uses Qt.
-
-    A module that builds or reads bridge values imports ``services.bridge_types``.
-    """
+    """A115: only the bridge facade uses Qt outside UI and the entry point."""
     outside_ui = {
         module: _imports(_tree(path), module, is_package=path.stem == "__init__")
         for module, path in A_MODULES
@@ -378,3 +333,18 @@ def test_product_inputs_never_inject_streams_in_application_source() -> None:
                     path,
                     node.lineno,
                 )
+
+
+def test_product_startup_uses_only_public_runtime_operations() -> None:
+    """A153 / I6 / REC-01: composition cannot reach runtime collaborators."""
+    path = SRC / "services" / "product_startup.py"
+    for node in ast.walk(_tree(path)):
+        if isinstance(node, ast.Attribute):
+            assert not node.attr.startswith("_"), (path, node.lineno, node.attr)
+
+
+def test_product_bootstrap_compatibility_export() -> None:
+    """A153: existing entry-point and test imports keep the same callable."""
+    from guard_app.services import product_startup, session_runtime
+
+    assert session_runtime.bootstrap_product is product_startup.bootstrap_product

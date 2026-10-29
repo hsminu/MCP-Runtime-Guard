@@ -37,6 +37,7 @@ from guard_app.services.bridge import (
 )
 from guard_app.services.bridge_bindings import BindingsOwner
 from guard_app.services.bridge_commands import review_fields, review_header
+from guard_app.services.bridge_host import BackendHost
 from guard_app.services.bridge_ingress import (
     ACCOUNT_ACTIONS,
     BridgeCommand,
@@ -160,6 +161,13 @@ def attach(bridge: BackendBridge) -> Receiver:
     return receiver
 
 
+def launch_bridge(bootstrap, **limits):
+    bridge = BackendBridge(bootstrap, **limits)
+    receiver = attach(bridge)
+    bridge.start()
+    return bridge, receiver
+
+
 def _owned_runners(runner, task_ids):
     # Queue tests register every owned Task explicitly.
     return {runner.task_id: runner, **{task_id: FakeRunner(task_id) for task_id in task_ids}}
@@ -169,22 +177,15 @@ def _start_runner_bridge(runner, control, *, runners=None, **limits):
     async def bootstrap():
         return BackendBindings(runners.get if runners is not None else lambda _: runner, control)
 
-    bridge = BackendBridge(bootstrap, **limits)
-    receiver = attach(bridge)
-    bridge.start()
-    return bridge, receiver
+    return launch_bridge(bootstrap, **limits)
 
 
 @contextmanager
 def _running_runner_bridge(app, runner, control, *, release=(), **limits):
     bridge, receiver = _start_runner_bridge(runner, control, **limits)
-    try:
+    with bridge_cleanup(app, bridge, *release):
         pump_until(app, lambda: bridge.state is BridgeState.READY)
         yield bridge, receiver
-    finally:
-        for event in release:
-            event.set()
-        close_bridge(app, bridge)
 
 
 def close_bridge(app: QApplication, bridge: BackendBridge) -> None:
@@ -192,6 +193,23 @@ def close_bridge(app: QApplication, bridge: BackendBridge) -> None:
     pump_until(app, lambda: bridge.thread_done)
     app.processEvents()
     assert bridge.state is BridgeState.CLOSED
+
+
+@contextmanager
+def bridge_cleanup(app, bridge, *release):
+    try:
+        yield
+    finally:
+        for event in release:
+            event.set()
+        close_bridge(app, bridge)
+
+
+def isolated_cases(cases):
+    for case in cases:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
+            yield case, patch
 
 
 def test_bridge_rejects_invalid_timeouts(app):
@@ -220,10 +238,8 @@ def test_qt_remains_responsive_and_receives_frozen_backend_events(app) -> None:
         backend_threads.append(threading.get_ident())
         return BackendBindings(lambda task_id: runner, control)
 
-    bridge = BackendBridge(bootstrap)
-    receiver = attach(bridge)
-    bridge.start()
-    try:
+    bridge, receiver = launch_bridge(bootstrap)
+    with bridge_cleanup(app, bridge, gate):
         early = bridge.request_run("task-1")
         assert receiver.stages(early)[-1].code == "NOT_READY"
         pump_until(app, lambda: bridge.state is BridgeState.READY)
@@ -245,9 +261,6 @@ def test_qt_remains_responsive_and_receives_frozen_backend_events(app) -> None:
         assert backend_threads[0] != threading.get_ident()
         assert all(thread == ui_thread for thread in receiver.signal_threads)
         assert all(type(event) is CommandEvent for event in receiver.commands)
-    finally:
-        gate.set()
-        close_bridge(app, bridge)
 
 
 def test_run_queue_full_and_duplicate_command_cannot_reexecute(app) -> None:
@@ -290,9 +303,9 @@ def test_ingress_flood_is_bounded_and_emergency_enters_first(app) -> None:
     bridge, receiver = _start_runner_bridge(runner, control, run_queue_size=2, control_queue_size=1)
     release = threading.Event()
     replay_release = threading.Event()
-    try:
+    with bridge_cleanup(app, bridge, release, replay_release):
         pump_until(app, lambda: bridge.state is BridgeState.READY)
-        loop = bridge._loop
+        loop = bridge._host._loop
         assert loop is not None
         blocked = threading.Event()
 
@@ -303,7 +316,7 @@ def test_ingress_flood_is_bounded_and_emergency_enters_first(app) -> None:
         loop.call_soon_threadsafe(hold_backend)
         assert blocked.wait(timeout=2)
         run_ids = [bridge.request_run("task-1", command_id=f"flood-{index}") for index in range(24)]
-        assert bridge._ingress.waiting("run") == 2
+        assert bridge._host.commands.ingress.waiting("run") == 2
         assert all(not receiver.stages(command_id) for command_id in run_ids[:2])
         assert all(
             receiver.stages(command_id)[-1].code == "INGRESS_FULL" for command_id in run_ids[2:]
@@ -318,13 +331,13 @@ def test_ingress_flood_is_bounded_and_emergency_enters_first(app) -> None:
             )
             for index in range(3)
         ]
-        assert bridge._ingress.waiting("control") == 1
+        assert bridge._host.commands.ingress.waiting("control") == 1
         assert all(
             receiver.stages(command_id)[-1].code == "INGRESS_FULL"
             for command_id in normal_controls[1:]
         )
         urgent = bridge.request_control(ControlAction.EMERGENCY_HALT, "task-2")
-        assert bridge._ingress.waiting("urgent") == 1
+        assert bridge._host.commands.ingress.waiting("urgent") == 1
         release.set()
         pump_until(app, lambda: receiver.has_stage(urgent))
         pump_until(app, lambda: runner.calls == 2)
@@ -357,18 +370,14 @@ def test_ingress_flood_is_bounded_and_emergency_enters_first(app) -> None:
         ]
         prior_count = len(receiver.stages(run_ids[0]))
         bridge.request_run("task-1", command_id=run_ids[0])
-        assert bridge._ingress.waiting("run") == 2
-        assert bridge._ingress.waiting("replay") == 1
+        assert bridge._host.commands.ingress.waiting("run") == 2
+        assert bridge._host.commands.ingress.waiting("replay") == 1
         assert len(receiver.stages(run_ids[0])) == prior_count
         replay_release.set()
         pump_until(app, lambda: len(receiver.stages(run_ids[0])) == prior_count + 1)
         assert receiver.stages(run_ids[0])[-1].stage is CommandStage.BACKEND_RETURNED
         pump_until(app, lambda: all(receiver.has_stage(command_id) for command_id in waiting))
         assert runner.calls == 5
-    finally:
-        release.set()
-        replay_release.set()
-        close_bridge(app, bridge)
 
 
 def test_shutdown_rejects_commands_waiting_at_ingress(app) -> None:
@@ -376,9 +385,9 @@ def test_shutdown_rejects_commands_waiting_at_ingress(app) -> None:
     control = FakeControl()
     bridge, receiver = _start_runner_bridge(runner, control, run_queue_size=1, control_queue_size=1)
     release = threading.Event()
-    try:
+    with bridge_cleanup(app, bridge, release):
         pump_until(app, lambda: bridge.state is BridgeState.READY)
-        loop = bridge._loop
+        loop = bridge._host._loop
         assert loop is not None
         blocked = threading.Event()
 
@@ -393,14 +402,11 @@ def test_shutdown_rejects_commands_waiting_at_ingress(app) -> None:
         bridge.close()
         assert receiver.stages(run)[-1].code == "SHUTTING_DOWN"
         assert receiver.stages(urgent)[-1].code == "SHUTTING_DOWN"
-        assert bridge._ingress.waiting() == 0
+        assert bridge._host.commands.ingress.waiting() == 0
         release.set()
         pump_until(app, lambda: bridge.thread_done)
         assert runner.calls == 0
         assert control.calls == []
-    finally:
-        release.set()
-        close_bridge(app, bridge)
 
 
 def test_shutdown_settles_command_already_removed_from_ingress(app, monkeypatch) -> None:
@@ -408,9 +414,9 @@ def test_shutdown_settles_command_already_removed_from_ingress(app, monkeypatch)
     control = FakeControl()
     bridge, receiver = _start_runner_bridge(runner, control)
     release = threading.Event()
-    try:
+    with bridge_cleanup(app, bridge, release):
         pump_until(app, lambda: bridge.state is BridgeState.READY)
-        original_admit = bridge._admit
+        original_admit = bridge._host.commands._admit
         removed = threading.Event()
 
         def held_admit(command) -> None:
@@ -418,10 +424,10 @@ def test_shutdown_settles_command_already_removed_from_ingress(app, monkeypatch)
             release.wait(timeout=2)
             original_admit(command)
 
-        monkeypatch.setattr(bridge, "_admit", held_admit)
+        monkeypatch.setattr(bridge._host.commands, "_admit", held_admit)
         command_id = bridge.request_run("task-1")
         assert removed.wait(timeout=2)
-        assert not bridge._ingress.waiting("run")
+        assert not bridge._host.commands.ingress.waiting("run")
         bridge.close()
         release.set()
         pump_until(app, lambda: bool(receiver.stages(command_id)))
@@ -429,9 +435,6 @@ def test_shutdown_settles_command_already_removed_from_ingress(app, monkeypatch)
         assert receiver.stages(command_id)[-1].code == "CLOSING"
         pump_until(app, lambda: bridge.thread_done)
         assert runner.calls == 0
-    finally:
-        release.set()
-        close_bridge(app, bridge)
 
 
 def test_admission_error_settles_command_and_continues_drain(app, monkeypatch) -> None:
@@ -440,21 +443,21 @@ def test_admission_error_settles_command_and_continues_drain(app, monkeypatch) -
     runner = FakeRunner("task-1", gate, threading.Event())
     control = FakeControl()
     with _running_runner_bridge(app, runner, control, run_queue_size=2) as (bridge, receiver):
-        original_admit = bridge._admit
+        original_admit = bridge._host.commands._admit
 
         def fail_one(command) -> None:
             if command.command_id == "broken":
                 raise ValueError("private failure detail")
             original_admit(command)
 
-        monkeypatch.setattr(bridge, "_admit", fail_one)
+        monkeypatch.setattr(bridge._host.commands, "_admit", fail_one)
         broken = bridge.request_run("task-1", command_id="broken")
         healthy = bridge.request_run("task-1", command_id="healthy")
         pump_until(app, lambda: bool(receiver.stages(broken)) and receiver.has_stage(healthy))
         assert receiver.stages(broken)[-1].stage is CommandStage.UNCONFIRMED
         assert receiver.stages(broken)[-1].code == "ADMISSION_UNCONFIRMED"
         assert "private failure detail" not in repr(receiver.commands)
-        assert not bridge._ingress.scheduled
+        assert not bridge._host.commands.ingress.scheduled
         assert runner.calls == 1
         prior_count = len(receiver.stages(broken))
         bridge.request_run("task-1", command_id=broken)
@@ -474,7 +477,7 @@ def test_replay_error_does_not_lose_original_processing_record(app, monkeypatch)
         def fail_replay(_command, _previous) -> None:
             raise RuntimeError("private replay failure")
 
-        monkeypatch.setattr(bridge, "_replay_or_conflict", fail_replay)
+        monkeypatch.setattr(bridge._host.commands, "_replay_or_conflict", fail_replay)
         bridge.request_run("task-1", command_id=command_id)
         pump_until(
             app,
@@ -608,9 +611,7 @@ def test_startup_failure_is_fixed_code_and_shutdown_refuses_work(app):
 
         if mode == "thread":
             patch.setattr(threading.Thread, "start", fail_start)
-        bridge = BackendBridge(bootstrap)
-        receiver = attach(bridge)
-        bridge.start()
+        bridge, receiver = launch_bridge(bootstrap)
         if mode != "thread":
             try:
                 pump_until(app, lambda: bridge.state is BridgeState.FAILED)
@@ -630,10 +631,8 @@ def test_startup_failure_is_fixed_code_and_shutdown_refuses_work(app):
         late = bridge.request_control(ControlAction.CANCEL, "task-1")
         assert receiver.stages(late)[-1].code == "CLOSING"
 
-    for mode in ("thread", "startup", "binding", "human_control"):
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
-            check(mode, patch)
+    for mode, patch in isolated_cases(("thread", "startup", "binding", "human_control")):
+        check(mode, patch)
 
 
 def test_startup_timeout_reclaims_late_bindings_once(app):
@@ -655,23 +654,19 @@ def test_startup_timeout_reclaims_late_bindings_once(app):
                 returned.set()
                 return BackendBindings(lambda task_id: None, FakeControl(), close_resources)
 
-        bridge = BackendBridge(bootstrap, startup_timeout=0.01, shutdown_timeout=0.2)
-        receiver = attach(bridge)
-        bridge.start()
+        bridge, receiver = launch_bridge(bootstrap, startup_timeout=0.01, shutdown_timeout=0.2)
         pump_until(app, lambda: bridge.thread_done)
         app.processEvents()
         assert returned.is_set()
         assert receiver.states[-1] == LifecycleEvent(BridgeState.FAILED, "STARTUP_FAILED")
         assert len(cleanup_threads) == 1
         assert cleanup_threads[0] != threading.get_ident()
-        assert bridge._bindings.current is None
+        assert bridge._host._bindings.current is None
         bridge.close()
         assert len(cleanup_threads) == 1
 
-    for late_delay in (0.0, 0.03):
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
-            check(late_delay)
+    for late_delay, _patch in isolated_cases((0.0, 0.03)):
+        check(late_delay)
 
 
 def test_close_during_startup_reclaims_cancelled_bootstrap_result(app) -> None:
@@ -691,9 +686,7 @@ def test_close_during_startup_reclaims_cancelled_bootstrap_result(app) -> None:
         except asyncio.CancelledError:
             return BackendBindings(lambda task_id: None, FakeControl(), close_resources)
 
-    bridge = BackendBridge(bootstrap, shutdown_timeout=0.2)
-    receiver = attach(bridge)
-    bridge.start()
+    bridge, receiver = launch_bridge(bootstrap, shutdown_timeout=0.2)
     pump_until(app, started.is_set)
     bridge.close()
     pump_until(app, lambda: bridge.thread_done)
@@ -702,7 +695,7 @@ def test_close_during_startup_reclaims_cancelled_bootstrap_result(app) -> None:
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLOSED")
     assert BridgeState.READY not in [event.state for event in receiver.states]
-    assert bridge._bindings.current is None
+    assert bridge._host._bindings.current is None
     bridge.close()
     assert cleanup_calls == 1
 
@@ -721,15 +714,13 @@ def test_late_bootstrap_close_error_is_fixed_unconfirmed_code(app) -> None:
         except asyncio.CancelledError:
             return BackendBindings(lambda task_id: None, FakeControl(), close_resources)
 
-    bridge = BackendBridge(bootstrap, startup_timeout=0.01, shutdown_timeout=0.2)
-    receiver = attach(bridge)
-    bridge.start()
+    bridge, receiver = launch_bridge(bootstrap, startup_timeout=0.01, shutdown_timeout=0.2)
     pump_until(app, lambda: bridge.thread_done)
     app.processEvents()
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.FAILED, "STARTUP_CLEANUP_UNCONFIRMED")
     assert "secret" not in repr(receiver.states)
-    assert bridge._bindings.current is None
+    assert bridge._host._bindings.current is None
     bridge.close()
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLEANUP_UNCONFIRMED")
@@ -747,15 +738,13 @@ def test_completed_bootstrap_bindings_have_single_close_owner(app) -> None:
     async def bootstrap() -> BackendBindings:
         return BackendBindings(lambda task_id: None, FakeControl(), close_resources)
 
-    bridge = BackendBridge(bootstrap)
-    receiver = attach(bridge)
-    bridge.start()
+    bridge, receiver = launch_bridge(bootstrap)
     pump_until(app, lambda: bridge.state is BridgeState.READY)
     assert cleanup_calls == 0
     close_bridge(app, bridge)
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLOSED")
-    assert bridge._bindings.current is None
+    assert bridge._host._bindings.current is None
     # A110: main reads these after the Qt loop to decide whether to keep the lock.
     assert bridge.wait_done(0.0)
     assert not bridge.cleanup_unconfirmed
@@ -773,9 +762,9 @@ def test_startup_timeout_reports_unfinished_cleanup_without_raw_error(app) -> No
                 continue
         return BackendBindings(lambda task_id: FakeRunner(task_id), FakeControl())
 
-    bridge = BackendBridge(stubborn_bootstrap, startup_timeout=0.01, shutdown_timeout=0.05)
-    receiver = attach(bridge)
-    bridge.start()
+    bridge, receiver = launch_bridge(
+        stubborn_bootstrap, startup_timeout=0.01, shutdown_timeout=0.05
+    )
     pump_until(app, lambda: bridge.thread_done)
     app.processEvents()
     assert bridge.state is BridgeState.FAILED
@@ -833,18 +822,11 @@ class StoreTruth:
         )
 
 
-class PendingRunner(TaskRunner):
+class PendingRunner(FakeRunner):
     """Returns one pending approval, then applies or fails the resume."""
 
     def __init__(self, task_id: str, resume: Callable[[Outcome], RunUpdate]) -> None:
-        self._conversation = []
-        self.task_id = task_id
-        self.epoch = 1
-        self._last_status = "idle"
-        self._awaiting_user = True
-        self._closed = self._stopped = False
-        self._pending = None
-        self._lock = asyncio.Lock()
+        super().__init__(task_id)
         self._resume = resume
         self.resumed: list[Outcome] = []
 
@@ -902,7 +884,7 @@ def test_approval_failure_always_republishes_store_projection(app):
                 lambda task_id: runner, InternalErrorControl(), snapshot=truth.snapshot
             ),
         )
-        try:
+        with bridge_cleanup(app, bridge):
             run_id = bridge.request_run("task-1")
             pump_until(app, lambda: _settled(receiver, run_id))
             assert projections.projections[-1].status is TaskStatus.WAITING_APPROVAL
@@ -919,13 +901,9 @@ def test_approval_failure_always_republishes_store_projection(app):
                 assert final.code == "CONTROL_GUARD_ERROR_QUERY_REQUIRED"
             assert "synthetic-private-marker" not in repr(receiver.commands)
             assert len(runner.resumed) == 1
-        finally:
-            close_bridge(app, bridge)
 
-    for resume_fails in (False, True):
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
-            check(resume_fails)
+    for resume_fails, _patch in isolated_cases((False, True)):
+        check(resume_fails)
 
 
 def test_stop_discards_queued_commands_before_control_starts(app):
@@ -961,7 +939,7 @@ def test_stop_discards_queued_commands_before_control_starts(app):
                 discard_queued=discard,
             ),
         )
-        try:
+        with bridge_cleanup(app, bridge):
             command_id = bridge.request_control(action, "task-1")
             pump_until(app, lambda: _settled(receiver, command_id))
             app.processEvents()
@@ -974,8 +952,6 @@ def test_stop_discards_queued_commands_before_control_starts(app):
             else:
                 assert final.code == "CONTROL_DENIED_QUERY_REQUIRED"
             assert "synthetic-private-marker" not in repr(receiver.commands)
-        finally:
-            close_bridge(app, bridge)
 
     for action in (ControlAction.CANCEL, ControlAction.EMERGENCY_HALT):
         for discard_fails in (False, True):
@@ -1055,12 +1031,12 @@ def test_unconfirmed_final_result_permanently_blocks_restart(app, monkeypatch):
             async def broken_serve():
                 raise RuntimeError("비공개 오류 표지")
 
-            monkeypatch.setattr(first, "_serve", broken_serve)
+            monkeypatch.setattr(first._host, "_serve", broken_serve)
         first.start()
         if failure in ("cleanup", "late_loop"):
             pump_until(app, lambda: first.state is BridgeState.READY)
             if failure == "late_loop":
-                first._loop.call_soon_threadsafe(first._loop_error.set)
+                first._host._loop.call_soon_threadsafe(first._host._loop_error.set)
             first.close()
         pump_until(app, lambda: first.thread_done and not first.backend_alive)
         app.processEvents()
@@ -1083,7 +1059,7 @@ def test_unconfirmed_final_result_permanently_blocks_restart(app, monkeypatch):
             denied = attach(second)
             second.start()
             assert denied.states == [LifecycleEvent(BridgeState.FAILED, "PROCESS_RESTART_REQUIRED")]
-            assert second.thread_done and second._thread is None
+            assert second.thread_done and second._host._thread is None
             run_id = second.request_run("task")
             control_id = second.request_control(ControlAction.CANCEL, "task")
             assert denied.stages(run_id)[-1].code == "NOT_READY"
@@ -1095,10 +1071,8 @@ def test_unconfirmed_final_result_permanently_blocks_restart(app, monkeypatch):
         first.close()
         assert len(reports) == 1
 
-    for failure in ["cleanup", "startup_cleanup", "backend", "late_loop"]:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
-            check(failure, patch)
+    for failure, patch in isolated_cases(["cleanup", "startup_cleanup", "backend", "late_loop"]):
+        check(failure, patch)
 
 
 def test_confirmed_cleanup_allows_new_bridge_but_not_same_instance(app, monkeypatch):
@@ -1132,7 +1106,7 @@ def test_confirmed_cleanup_allows_new_bridge_but_not_same_instance(app, monkeypa
                 if ending == "thread":
                     patch.setattr(threading.Thread, "start", fail)
                 else:
-                    patch.setattr(bridge_module.threading, "Thread", fail)
+                    patch.setattr(threading, "Thread", fail)
             if ending == "new":
                 first.close()
             else:
@@ -1175,10 +1149,10 @@ def test_confirmed_cleanup_allows_new_bridge_but_not_same_instance(app, monkeypa
             close_bridge(app, second)
             first.close()
 
-    for ending in ["closed", "startup", "snapshot", "thread", "thread_create", "new"]:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
-            check(ending, patch)
+    for ending, patch in isolated_cases(
+        ["closed", "startup", "snapshot", "thread", "thread_create", "new"]
+    ):
+        check(ending, patch)
 
 
 def test_active_bridge_blocks_another_start_until_thread_finishes(app):
@@ -1213,7 +1187,7 @@ def test_active_bridge_blocks_another_start_until_thread_finishes(app):
             receiver = attach(second)
             second.start()
             assert receiver.states == [LifecycleEvent(BridgeState.FAILED, "BACKEND_ALREADY_ACTIVE")]
-            assert second.thread_done and second._thread is None
+            assert second.thread_done and second._host._thread is None
             second.close()
             release.set()
             pump_until(app, lambda: len(calls) == 1)
@@ -1229,10 +1203,8 @@ def test_active_bridge_blocks_another_start_until_thread_finishes(app):
         finally:
             close_bridge(app, third)
 
-    for phase in ["starting", "ready", "closing"]:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
-            check(phase)
+    for phase, _patch in isolated_cases(["starting", "ready", "closing"]):
+        check(phase)
 
 
 def test_start_gate_is_atomic_and_waits_for_reported_thread_exit():
@@ -1279,9 +1251,7 @@ def test_distinct_tasks_run_while_same_task_commands_wait_and_shutdown_settles_a
     async def bootstrap():
         return BackendBindings(runners.get, FakeControl())
 
-    bridge = BackendBridge(bootstrap, run_queue_size=8)
-    receiver = attach(bridge)
-    bridge.start()
+    bridge, receiver = launch_bridge(bootstrap, run_queue_size=8)
     try:
         pump_until(app, lambda: bridge.state is BridgeState.READY)
         first = bridge.request_run("one")
@@ -1300,8 +1270,8 @@ def test_distinct_tasks_run_while_same_task_commands_wait_and_shutdown_settles_a
                 CommandStage.UNCONFIRMED,
                 CommandStage.REJECTED,
             )
-        assert not bridge._ledger.unsettled()
-        assert not bridge._lanes.running()
+        assert not bridge._host.commands.ledger.unsettled()
+        assert not bridge._host.commands.lanes.running()
     finally:
         first_gate.set()
         second_gate.set()
@@ -1364,24 +1334,26 @@ async def test_shutdown_rejects_each_backend_lane_before_unconfirmed_fallback(ap
 
     bridge = BackendBridge(bootstrap)
     receiver = attach(bridge)
-    bridge._lanes.open()
+    bridge._host.commands.lanes.open()
     commands = [
         BridgeCommand(lane, lane, "advance", "task") for lane in ("run", "control", "urgent")
     ]
     for command in commands:
-        bridge._lanes.queue(command.lane).put_nowait(command)
-        bridge._ledger.record(command.event(CommandStage.ACCEPTED, "QUEUED"))
+        bridge._host.commands.lanes.queue(command.lane).put_nowait(command)
+        bridge._host.commands.ledger.record(command.event(CommandStage.ACCEPTED, "QUEUED"))
     try:
-        await asyncio.wait_for(bridge._shut_down(), 2)
+        await asyncio.wait_for(bridge._host._shut_down(), 2)
         for command in commands:
             assert receiver.stages(command.command_id) == [
                 command.event(CommandStage.REJECTED, "SHUTTING_DOWN")
             ]
-            await asyncio.wait_for(bridge._lanes.queue(command.lane).join(), 2)
-        assert bridge._ledger.unsettled() == ()
+            await asyncio.wait_for(bridge._host.commands.lanes.queue(command.lane).join(), 2)
+        assert bridge._host.commands.ledger.unsettled() == ()
     finally:
-        bridge._lanes.cancel_workers()
-        await asyncio.wait_for(asyncio.gather(*bridge._lanes.active(), return_exceptions=True), 2)
+        bridge._host.commands.lanes.cancel_workers()
+        await asyncio.wait_for(
+            asyncio.gather(*bridge._host.commands.lanes.active(), return_exceptions=True), 2
+        )
 
 
 @pytest.mark.asyncio
@@ -1390,7 +1362,7 @@ async def test_shutdown_rejects_each_backend_lane_before_unconfirmed_fallback(ap
 async def test_late_bootstrap_requires_confirmed_cleanup(late, confirmed):
     # A137 M18, I6: a successful bootstrap, even one finishing after discard's
     # cancel, counts as cleaned up only when its close returns in the window.
-    owner = BindingsOwner(0.05, BackendBridge._consume_task)
+    owner = BindingsOwner(0.05, BackendHost._consume_task)
     started, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
     if confirmed:
         release.set()

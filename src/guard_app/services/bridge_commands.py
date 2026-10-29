@@ -232,6 +232,21 @@ class AccountCommands:
         self._out.policy_changed(view)
         return "POLICY_CHANGED"
 
+    async def policy_destinations(self, bindings: BackendBindings, command: BridgeCommand) -> str:
+        change = bindings.policy_destinations
+        if change is None:
+            return "POLICY_CHANGE_UNAVAILABLE"
+        try:
+            view = await change(command.destination)
+        except SessionStartError as error:
+            return error.code
+        finally:
+            self._views.publish_capability()
+        if type(view) is not PolicyView:
+            return "POLICY_CHANGE_UNCONFIRMED"
+        self._out.policy_changed(view)
+        return "POLICY_CHANGED" if command.destination is not None else "POLICY_READ"
+
     async def _await_login(self, account: CodexAccountPort, login_id: str, generation: int) -> None:
         expired = False
         try:
@@ -260,6 +275,27 @@ class AccountCommands:
             self._out.account_changed(view)
 
 
+@dataclass(slots=True)
+class _ExecutionView:
+    """Per-command refresh target, armed only after the handler's prerequisites.
+
+    Approval routing may become known during the domain call, even on failure.
+    Never infer the Task from the command target when that target is an approval.
+    """
+
+    task_id: str | None = None
+    approval_id: str | None = None
+
+    async def publish(self, views: TaskViews, pending: dict[str, tuple[str, int]]) -> None:
+        task_id = self.task_id
+        if task_id is None and self.approval_id is not None:
+            routed = pending.get(self.approval_id)
+            if routed is not None:
+                task_id = routed[0]
+        if task_id is not None:
+            await views.publish_after(task_id)
+
+
 class CommandExecutor:
     """Runs one admitted command and returns its fixed result code."""
 
@@ -280,6 +316,15 @@ class CommandExecutor:
         self._pending_runs: dict[str, tuple[str, int]] = {}
 
     async def execute(self, command: BridgeCommand) -> str:
+        view = _ExecutionView()
+        try:
+            return await self._execute(command, view)
+        finally:
+            # Failed/unclassified runs and failed approvals must refresh from
+            # Store too; the handler arms this only after its old prerequisites.
+            await view.publish(self._views, self._pending_runs)
+
+    async def _execute(self, command: BridgeCommand, execution: _ExecutionView) -> str:
         bindings = self._bindings.current
         if bindings is None:
             raise RuntimeError("BRIDGE_BINDINGS_UNAVAILABLE")
@@ -296,19 +341,21 @@ class CommandExecutor:
         if command.action == "new_session":
             return await self._new_session(bindings, command)
         if command.lane == "run":
-            return await self._run(bindings, command)
+            return await self._run(bindings, command, execution)
         if command.action in ACCOUNT_ACTIONS:
             return await self._accounts.account(bindings, command)
+        if command.action == "policy_destinations":
+            return await self._accounts.policy_destinations(bindings, command)
         if command.action == "policy_access":
             return await self._accounts.policy_access(bindings, command)
         control = bindings.human_control
         if control is None:
-            return await self._stop_without_guard(bindings, command)
+            return await self._stop_without_guard(bindings, command, execution)
         if command.action == ControlAction.REVIEW:
             return await self._review(control, command)
         if command.action in _STOPS:
-            return await self._stop(bindings, control, command)
-        return await self._decide(bindings, control, command)
+            return await self._stop(bindings, control, command, execution)
+        return await self._decide(bindings, control, command, execution)
 
     async def _new_session(self, bindings: BackendBindings, command: BridgeCommand) -> str:
         if bindings.create_session is None or command.options is None:
@@ -327,20 +374,18 @@ class CommandExecutor:
         await self._views.publish_after(created_snapshot.task_id)
         return "SESSION_CREATED"
 
-    async def _run(self, bindings: BackendBindings, command: BridgeCommand) -> str:
+    async def _run(
+        self, bindings: BackendBindings, command: BridgeCommand, view: _ExecutionView
+    ) -> str:
         runner = bindings.runner_for_task(command.target_id)
         if not isinstance(runner, TaskExecution) or runner.task_id != command.target_id:
             return "RUNNER_UNAVAILABLE"
-        try:
-            if command.action == "message":
-                refused = await self._add_message(bindings, runner, command)
-                if refused is not None:
-                    return refused
-            return await self._advance(runner, command)
-        finally:
-            # Even a failed or unclassified run must not leave the UI on
-            # an older projection; Store decides what is displayed.
-            await self._views.publish_after(command.target_id)
+        view.task_id = command.target_id
+        if command.action == "message":
+            refused = await self._add_message(bindings, runner, command)
+            if refused is not None:
+                return refused
+        return await self._advance(runner, command)
 
     async def _add_message(
         self, bindings: BackendBindings, runner: TaskExecution, command: BridgeCommand
@@ -394,18 +439,16 @@ class CommandExecutor:
             )
         return f"RUN_{update.status.upper()}_QUERY_REQUIRED"
 
-    async def _stop_without_guard(self, bindings: BackendBindings, command: BridgeCommand) -> str:
+    async def _stop_without_guard(
+        self, bindings: BackendBindings, command: BridgeCommand, view: _ExecutionView
+    ) -> str:
         if command.action not in _STOPS:
             return "CONTROL_UNAVAILABLE"
         if bindings.stop_session is None or command.epoch is None:
             return "CONTROL_UNAVAILABLE"
-        try:
-            await bindings.stop_session(
-                command.target_id, command.epoch, ControlAction(command.action)
-            )
-            return "SESSION_STOP_RETURNED"
-        finally:
-            await self._views.publish_after(command.target_id)
+        view.task_id = command.target_id
+        await bindings.stop_session(command.target_id, command.epoch, ControlAction(command.action))
+        return "SESSION_STOP_RETURNED"
 
     async def _review(self, control: HumanControl, command: BridgeCommand) -> str:
         snapshot = await control.review(command.target_id)
@@ -425,15 +468,17 @@ class CommandExecutor:
         return "REVIEW_READY"
 
     async def _stop(
-        self, bindings: BackendBindings, control: HumanControl, command: BridgeCommand
+        self,
+        bindings: BackendBindings,
+        control: HumanControl,
+        command: BridgeCommand,
+        view: _ExecutionView,
     ) -> str:
         runner = bindings.runner_for_task(command.target_id)
         if not isinstance(runner, TaskExecution) or runner.task_id != command.target_id:
             return "RUNNER_UNAVAILABLE"
-        try:
-            return await self._stop_task(bindings, control, command)
-        finally:
-            await self._views.publish_after(command.target_id)
+        view.task_id = command.target_id
+        return await self._stop_task(bindings, control, command)
 
     async def _stop_task(
         self, bindings: BackendBindings, control: HumanControl, command: BridgeCommand
@@ -462,17 +507,16 @@ class CommandExecutor:
         return "CONTROL_UNCONFIRMED"
 
     async def _decide(
-        self, bindings: BackendBindings, control: HumanControl, command: BridgeCommand
+        self,
+        bindings: BackendBindings,
+        control: HumanControl,
+        command: BridgeCommand,
+        view: _ExecutionView,
     ) -> str:
         known = self._pending_runs.get(command.target_id)
-        try:
-            return await self._decide_approval(bindings, control, command)
-        finally:
-            # Approval failures can halt the Task (and Guard) while an
-            # approvable waiting projection is still on screen.
-            routed = known or self._pending_runs.get(command.target_id)
-            if routed is not None:
-                await self._views.publish_after(routed[0])
+        view.task_id = known[0] if known is not None else None
+        view.approval_id = command.target_id
+        return await self._decide_approval(bindings, control, command)
 
     async def _decide_approval(
         self, bindings: BackendBindings, control: HumanControl, command: BridgeCommand

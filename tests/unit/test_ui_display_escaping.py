@@ -8,32 +8,22 @@ from datetime import UTC, datetime, timedelta
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 from guard_app.domain.enums import ApprovalStatus
 from guard_app.ui.approvals import ApprovalListPage, ApprovalPage, ApprovalSummary
-from guard_app.ui.models import (
-    AttentionItem,
-    LoadState,
-    RecentCall,
-    ServerSummary,
-    Surface,
-)
+from guard_app.ui.models import AttentionItem, LoadState, RecentCall, ServerSummary, Surface
 from guard_app.ui.overview import AttentionRow, RecentCallRow, ServerRow
 from guard_app.ui.presentation import public_display_text
 from guard_app.ui.servers import ServerDetailDialog, ServerListPage
+
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import closing_widgets
 
 _RAW_HIDDEN = {"Cc", "Cf", "Cs", "Zl", "Zp"}
 _EVIL_ID = "docs\n신뢰-서버\u202e\u200b"
 _EVIL_NAME = "Docs\u2028Internal\u2066"
 NOW = datetime(2026, 10, 13, 5, 0, tzinfo=UTC)
-
-
-@pytest.fixture(scope="module")
-def app() -> QApplication:
-    instance = QApplication.instance()
-    return instance if instance is not None else QApplication([])
 
 
 def _raw(text: str) -> list[str]:
@@ -80,15 +70,12 @@ def test_server_list_and_detail_escape_ids_and_names(app: QApplication) -> None:
     page = ServerListPage()
     page.set_servers(Surface(LoadState.READY, (summary,)))
     dialog = ServerDetailDialog(summary)
-    try:
+    with closing_widgets(dialog, page):
         cell = page.table.item(0, 0).text()
         assert cell == f"{public_display_text(_EVIL_ID)}\n{public_display_text(_EVIL_NAME)}"
         _assert_widget_texts_escaped(dialog)
         dialog.set_server(ServerSummary(_EVIL_ID + "\t", _EVIL_NAME))
         _assert_widget_texts_escaped(dialog)
-    finally:
-        dialog.close()
-        page.close()
 
 
 def test_approval_table_cells_escape_ids_and_destination(app: QApplication) -> None:
@@ -106,7 +93,7 @@ def test_approval_table_cells_escape_ids_and_destination(app: QApplication) -> N
         status=ApprovalStatus.PENDING,
         created_at=NOW - timedelta(minutes=1),
     )
-    try:
+    with closing_widgets(page):
         assert page.set_page(ApprovalPage(requests[-1], (row,), 1), display_now=NOW)
         cells = [page.table.item(0, column).text() for column in range(4)]
         assert cells[0] == "approval[U+000A]1"
@@ -115,5 +102,3 @@ def test_approval_table_cells_escape_ids_and_destination(app: QApplication) -> N
         assert cells[3] == "https://evil[U+2028].example"
         for cell in cells:
             assert not _raw(cell.replace("\n", "")), cell
-    finally:
-        page.close()

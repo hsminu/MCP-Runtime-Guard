@@ -104,6 +104,8 @@ class BackendBindings:
     policy_access: (
         Callable[[str, tuple[str, ...], tuple[str, ...]], Awaitable[PolicyView]] | None
     ) = None
+    # None argument reads the current destination list; edits return the applied view.
+    policy_destinations: Callable[[DestinationEdit | None], Awaitable[PolicyView]] | None = None
     # Fixed code of what the start made of the CFG-01 settings file
     # (product_settings); None when this run reads no file (demo, tests).
     settings_status: str | None = None
@@ -193,6 +195,34 @@ class ApprovalReview:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class DestinationEdit:
+    action: str
+    destination_id: str
+    tier: str = ""
+    max_label: str = ""
+    selected: bool = False
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ToolSettingsEdit:
+    name: str
+    kind: str
+    label: str | None = None
+    destination_arg: str | None = None
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ToolSettingsRow:
+    name: str
+    registry_kind: str
+    kind: str
+    destination_arg: str | None
+    label: str | None
+    string_arguments: tuple[str, ...]
+    readonly: bool
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class RegistrationRequest:
     action: str
     server_id: str = ""
@@ -207,6 +237,12 @@ class RegistrationRequest:
     expected_row_revision: int = 0
     allowed: tuple[str, ...] = ()
     denied: tuple[str, ...] = ()
+    file_root: str | None = None
+    # Absolute folders selected by the human; backend derives source prefixes.
+    folder_labels: tuple[tuple[str, str], ...] = ()
+    root_label: str = ""
+    list_root_label: str = ""
+    tool_settings: tuple[ToolSettingsEdit, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,3 +268,5 @@ class RegistrationView:
     activation: PolicyView | None = None
     row_revision: int = 0
     current_policy: PolicyView | None = None
+    tool_settings: tuple[ToolSettingsRow, ...] = ()
+    server_id: str = ""

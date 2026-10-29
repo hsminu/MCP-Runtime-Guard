@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from contextlib import contextmanager
 
 import pytest
-from PySide6.QtWidgets import QApplication
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.services.bridge import (
@@ -20,12 +17,8 @@ from guard_app.services.bridge import (
 )
 from guard_app.services.runner import RunnerStateError, RunUpdate
 
-from .test_bridge import FakeControl, attach, close_bridge, pump_until
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from .test_bridge import FakeControl, attach, bridge_cleanup, pump_until
+from .test_bridge import app as app
 
 
 class StreamingRunner:
@@ -79,6 +72,7 @@ class StreamingRunner:
         pass
 
 
+@contextmanager
 def start(app, final):
     runner = StreamingRunner(final)
 
@@ -106,7 +100,8 @@ def start(app, final):
     bridge.conversation_ready.connect(lambda event: seen.append(("final", event)))
     bridge.start()
     pump_until(app, lambda: bridge.state is BridgeState.READY and runner.listener is not None)
-    return bridge, receiver, seen, runner
+    with bridge_cleanup(app, bridge):
+        yield bridge, receiver, seen, runner
 
 
 def returned(receiver, command):
@@ -115,8 +110,7 @@ def returned(receiver, command):
 
 def test_streamed_answer_is_coalesced_bound_to_the_command_and_precedes_the_final(app):
     def check(answer):
-        bridge, receiver, seen, _ = start(app, answer)
-        try:
+        with start(app, answer) as (bridge, receiver, seen, _):
             command = bridge.request_message("task-1", 1, "question")
             pump_until(app, lambda: returned(receiver, command))
             app.processEvents()
@@ -135,24 +129,19 @@ def test_streamed_answer_is_coalesced_bound_to_the_command_and_precedes_the_fina
             assert all("stale-epoch" not in e.text and "other" not in e.text for _, e in seen)
             assert all("late" not in e.text for _, e in seen)
             assert "Hello" not in repr(first)
-            assert not bridge._streams.active()
-        finally:
-            close_bridge(app, bridge)
+            assert not bridge._host._streams.active()
 
     for answer in ("Hello final", None):
         check(answer)
 
 
 def test_picked_reasoning_level_reaches_the_runner_and_unknown_levels_never_queue(app):
-    bridge, receiver, _, runner = start(app, "ok")
-    try:
+    with start(app, "ok") as (bridge, receiver, _, runner):
         with pytest.raises(ValueError, match="Reasoning effort is invalid"):
             bridge.request_message("task-1", 1, "question", effort="ultra")
         command = bridge.request_message("task-1", 1, "question", effort="high")
         pump_until(app, lambda: returned(receiver, command))
         assert runner.efforts == ["high"]
-    finally:
-        close_bridge(app, bridge)
 
 
 @pytest.mark.asyncio

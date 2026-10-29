@@ -20,6 +20,7 @@ from guard_app.services.bridge_types import (
     CommandEvent,
     CommandStage,
     ControlAction,
+    DestinationEdit,
     RegistrationRequest,
     SessionOptions,
 )
@@ -48,6 +49,7 @@ class BridgeCommand:
     access: tuple[tuple[str, ...], tuple[str, ...]] | None = None
     registration: RegistrationRequest | None = field(default=None, repr=False)
     effort: str | None = None
+    destination: DestinationEdit | None = field(default=None, repr=False)
 
     def event(self, stage: CommandStage, code: str) -> CommandEvent:
         return CommandEvent(self.command_id, self.lane, self.action, self.target_id, stage, code)
@@ -123,6 +125,18 @@ def account_command(action: str, target_id: str, secret: str | None) -> BridgeCo
         action,
         bridge_id(target_id),
         user_text=secret if action == "account_login_api_key" else None,
+    )
+
+
+def destination_command(edit: DestinationEdit | None) -> BridgeCommand:
+    if edit is not None and type(edit) is not DestinationEdit:
+        raise ValueError("Destination change is invalid")
+    return BridgeCommand(
+        bridge_id(None, generate=True),
+        "control",
+        "policy_destinations",
+        "policy",
+        destination=edit,
     )
 
 

@@ -23,11 +23,7 @@ from guard_app.services.bridge import (
 )
 from guard_app.services.bridge_commands import AccountCommands
 from guard_app.services.bridge_ingress import account_command
-from guard_app.services.codex_account import (
-    AccountError,
-    AccountRefusedError,
-    CodexAccountClient,
-)
+from guard_app.services.codex_account import AccountError, AccountRefusedError, CodexAccountClient
 from guard_app.services.codex_preparation import CodexProcessPreparation
 from guard_app.ui.model_settings import CodexLoginInfo
 from guard_app.ui.presentation import ACCOUNT_REQUEST_REFUSED, COMMAND_REFUSALS
@@ -36,7 +32,8 @@ from guard_app.ui.window import GuardWindow
 
 from .fake_codex_app_server import FakeAppServer
 from .test_account_runtime import FakeAccess, product_account
-from .test_bridge import FakeControl, attach, close_bridge, pump_until
+from .test_bridge import FakeControl, attach, pump_until
+from .test_codex_account import client, running_account, running_bridge
 
 AUTH_URL = "https://auth.openai.com/oauth/authorize?state=private-login-state"
 
@@ -75,11 +72,7 @@ class BrowserServer(FakeAppServer):
             self.account = {"type": "chatgpt", "planType": "plus", "email": "PRIVATE"}
         self.notify(
             "account/login/completed",
-            {
-                "loginId": login_id,
-                "success": success,
-                "error": None if success else AUTH_URL,
-            },
+            {"loginId": login_id, "success": success, "error": None if success else AUTH_URL},
         )
 
 
@@ -96,9 +89,7 @@ async def test_browser_login_keeps_url_backend_only_and_checks_account_after_com
         urls.append(url)
         return True
 
-    account = CodexAccountClient(fake, version="test", open_browser=open_browser)
-    await account.start()
-    async with aclosing(account):
+    async with running_account(fake, version="test", open_browser=open_browser) as account:
         assert (await account.read()).browser_available
         pending = await account.start_browser_login()
         assert pending.state == "PENDING_BROWSER"
@@ -118,9 +109,7 @@ async def test_browser_login_keeps_url_backend_only_and_checks_account_after_com
 @pytest.mark.asyncio
 async def test_browser_without_c_opener_is_unavailable_and_does_not_start_login():
     fake = BrowserServer()
-    account = CodexAccountClient(fake, version="test")
-    await account.start()
-    async with aclosing(account):
+    async with running_account(fake, version="test") as account:
         assert not (await account.read()).browser_available
         view = await account.start_browser_login()
         assert view.notice == "BROWSER_LOGIN_UNAVAILABLE"
@@ -145,9 +134,9 @@ async def test_open_timeout_cancels_callback_and_does_not_report_pending():
         finally:
             cancelled.set()
 
-    account = CodexAccountClient(fake, version="test", request_timeout_s=0.05, open_browser=stalled)
-    await account.start()
-    async with aclosing(account):
+    async with running_account(
+        fake, version="test", request_timeout_s=0.05, open_browser=stalled
+    ) as account:
         view = await asyncio.wait_for(account.start_browser_login(), 2)
         assert view.notice == "BROWSER_OPEN_FAILED"
         assert cancelled.is_set()
@@ -168,8 +157,7 @@ def test_device_rpc_failure_keeps_browser_fallback_available(app):
     fake, loops, views = DeviceRefused(), [], []
     bridge = browser_bridge(fake, loops)
     bridge.account_changed.connect(views.append)
-    bridge.start()
-    try:
+    with running_bridge(app, bridge):
         pump_until(app, lambda: bridge.state is BridgeState.READY)
         bridge.request_account("account_read")
         pump_until(app, lambda: views[-1].browser_available)
@@ -178,8 +166,6 @@ def test_device_rpc_failure_keeps_browser_fallback_available(app):
         assert views[-1].browser_available
         bridge.request_account("account_login_browser")
         pump_until(app, lambda: views[-1].state == "PENDING_BROWSER")
-    finally:
-        close_bridge(app, bridge)
 
 
 @pytest.mark.asyncio
@@ -209,9 +195,7 @@ async def test_refused_url_or_open_failure_cancels_the_callback():
             calls.append(value)
             return False
 
-        account = CodexAccountClient(fake, version="test", open_browser=refused)
-        await account.start()
-        async with aclosing(account):
+        async with running_account(fake, version="test", open_browser=refused) as account:
             view = await account.start_browser_login()
             assert (view.state, view.notice) == ("FAILED", "BROWSER_OPEN_FAILED")
             assert calls == ([url] if url else [])
@@ -229,9 +213,7 @@ async def test_cancelled_opener_preserves_cancellation_even_if_cancel_rpc_fails(
         await asyncio.Event().wait()
         return True
 
-    account = CodexAccountClient(fake, version="test", open_browser=opening)
-    await account.start()
-    async with aclosing(account):
+    async with running_account(fake, version="test", open_browser=opening) as account:
         operation = asyncio.create_task(account.start_browser_login())
         await asyncio.wait_for(entered.wait(), 2)
         operation.cancel()
@@ -247,9 +229,7 @@ async def test_browser_open_or_success_notification_alone_is_not_signed_in():
         (True, False, "SIGNED_OUT"),
     ]:
         fake = BrowserServer()
-        account = CodexAccountClient(fake, version="test", open_browser=opened)
-        await account.start()
-        async with aclosing(account):
+        async with running_account(fake, version="test", open_browser=opened) as account:
             await account.start_browser_login()
             fake.finish(success=success, signed_in=signed_in)
             view = await asyncio.wait_for(account.wait_login("browser-1"), 2)
@@ -259,8 +239,7 @@ async def test_browser_open_or_success_notification_alone_is_not_signed_in():
 def browser_bridge(fake, loops, opener=opened):
     async def bootstrap():
         loops.append(asyncio.get_running_loop())
-        account = CodexAccountClient(fake, version="test", open_browser=opener)
-        await account.start()
+        account = await client(fake, version="test", open_browser=opener)
         return BackendBindings(lambda _: None, FakeControl(), close=account.aclose, account=account)
 
     return BackendBridge(bootstrap, control_workers=2)
@@ -275,8 +254,7 @@ def test_browser_open_failure_offers_device_and_api_key_without_url(app, caplog)
     window = GuardWindow()
     window.attach_runtime(RuntimePanel(bridge))
     form = window.codex_login_info
-    bridge.start()
-    try:
+    with running_bridge(app, bridge, window=window):
         pump_until(app, lambda: bridge.state is BridgeState.READY)
         bridge.request_account("account_read")
         pump_until(app, lambda: form.browser_button.isEnabled())
@@ -298,9 +276,6 @@ def test_browser_open_failure_offers_device_and_api_key_without_url(app, caplog)
         assert AUTH_URL not in repr(receiver.commands)
         assert AUTH_URL not in repr(receiver.states)
         assert all(AUTH_URL not in label.text() for label in form.findChildren(QLabel))
-    finally:
-        window.close()
-        close_bridge(app, bridge)
 
 
 def test_bridge_serializes_duplicate_starts_and_ignores_cancelled_login_completion(app):
@@ -308,8 +283,7 @@ def test_bridge_serializes_duplicate_starts_and_ignores_cancelled_login_completi
     bridge = browser_bridge(fake, loops)
     receiver = attach(bridge)
     bridge.account_changed.connect(views.append)
-    bridge.start()
-    try:
+    with running_bridge(app, bridge):
         pump_until(app, lambda: bridge.state is BridgeState.READY)
         first = bridge.request_account("account_login_browser")
         second = bridge.request_account("account_login_browser")
@@ -334,8 +308,6 @@ def test_bridge_serializes_duplicate_starts_and_ignores_cancelled_login_completi
         )
         assert views[-1].state == "PENDING_DEVICE"
         assert "ACCOUNT_PENDING_BROWSER" in [e.code for e in receiver.stages(first)]
-    finally:
-        close_bridge(app, bridge)
 
 
 class Outlet:
@@ -494,16 +466,13 @@ def test_browser_timeout_cancels_codex_login(app, monkeypatch):
     fake, loops, views = BrowserServer(), [], []
     bridge = browser_bridge(fake, loops)
     bridge.account_changed.connect(views.append)
-    bridge.start()
-    try:
+    with running_bridge(app, bridge):
         pump_until(app, lambda: bridge.state is BridgeState.READY)
         bridge.request_account("account_login_browser")
         pump_until(app, lambda: views[-1].notice == "LOGIN_TIMEOUT")
         assert views[-1].state == "LOGIN_NOT_COMPLETED"
         assert views[-1].browser_available
         assert fake.cancelled == ["browser-1"]
-    finally:
-        close_bridge(app, bridge)
 
 
 def test_browser_panel_uses_backend_state_without_exposing_login_url(app):
@@ -544,12 +513,7 @@ def test_window_routes_browser_command_and_recovers_after_queue_rejection(app):
     assert calls == [("account_login_browser", {})]
     bridge.command_changed.emit(
         CommandEvent(
-            "c",
-            "control",
-            "account_login_browser",
-            "account",
-            CommandStage.REJECTED,
-            "QUEUE_FULL",
+            "c", "control", "account_login_browser", "account", CommandStage.REJECTED, "QUEUE_FULL"
         )
     )
     assert login.browser_button.isEnabled()

@@ -11,17 +11,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from examples import ui_demo
-from PySide6.QtWidgets import QApplication
 
 from guard_app.domain.enums import ApprovalStatus
 from guard_app.services.bridge import BackendBridge
 from guard_app.ui.approvals import PAGE_SIZE, ApprovalLane, ApprovalQuery, ApprovalSort
 from guard_app.ui.window import GuardWindow
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import show_widget
 
 
 @pytest.fixture
@@ -35,9 +32,7 @@ def demo(app, monkeypatch):
     bridge = BackendBridge(unused)
     window = GuardWindow()
     data = ui_demo.build(bridge, window)
-    window.resize(1280, 800)
-    window.show()
-    app.processEvents()
+    show_widget(app, window, 1280, 800)
     yield window, data
     window.clear_session_content()
     bridge.close()

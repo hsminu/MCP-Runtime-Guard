@@ -26,17 +26,6 @@ def _dispatch_error(code):
     assert caught.value.exception_type == code
 
 
-def _check_cases(cases, check):
-    """Keep checking cheap table rows after an assertion/expected-error mismatch."""
-    failures = []
-    for case in cases:
-        try:
-            check(*case)
-        except (AssertionError, pytest.fail.Exception) as error:
-            failures.append((case, str(error)))
-    assert not failures, failures
-
-
 def _request(
     server_id: str = "server",
     *,
@@ -61,9 +50,7 @@ def _request(
         arguments=Arguments({"value": seq}),
         resource_id=None,
         server_boundary=Boundary(
-            boundary_id="boundary",
-            tier=TrustTier.INTERNAL,
-            max_label=Label.CONFIDENTIAL,
+            boundary_id="boundary", tier=TrustTier.INTERNAL, max_label=Label.CONFIDENTIAL
         ),
         destination=None,
     )
@@ -74,14 +61,14 @@ def _result(value: str = "ok") -> CallToolResult:
 
 
 class _Session:
-    def __init__(self, actions: list[object] | None = None) -> None:
+    def __init__(self, actions: list[object] | None = None, *, blocked=False) -> None:
         self.actions = list(actions or [])
         self.events: list[tuple[str, asyncio.Task[Any] | None]] = []
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.entered = asyncio.Event()
         self.first_call = asyncio.Event()
         self.release_first = asyncio.Event()
-        self.block_first = False
+        self.block_first = blocked
         self.initialize_error: Exception | None = None
         self.initialize_release: asyncio.Event | None = None
 
@@ -142,9 +129,33 @@ def _streams(
     return open_streams
 
 
-def _transport(monkeypatch, session, **options):
+def _transport(monkeypatch, session, *, server_id="server", **options):
     monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
-    return McpTransport({"server": _streams([])}, **options)
+    return McpTransport({server_id: _streams([])}, **options)
+
+
+@asynccontextmanager
+async def _running(transport):
+    try:
+        await transport.start()
+        yield transport
+    finally:
+        await transport.close()
+
+
+def _paired_transport(monkeypatch, first, second, **options):
+    sessions = iter((first, second))
+    monkeypatch.setattr(
+        sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: next(sessions)
+    )
+    return McpTransport({"first": _streams([]), "second": _streams([])}, **options)
+
+
+def _worker(session_factory, **options):
+    settings = dict(
+        call_timeout_s=1, startup_timeout_s=1, close_timeout_s=1, max_result_copy_bytes=512 * 1024
+    )
+    return mcp_transport.ServerWorker(session_factory, **(settings | options))
 
 
 @pytest.mark.asyncio
@@ -164,12 +175,7 @@ async def test_server_session_lifetime_is_owned_by_one_task_per_server(monkeypat
     for session, streams in zip(original, stream_events, strict=True):
         tasks = {task for _, task in session.events + streams}
         assert len(tasks) == 1
-        assert [name for name, _ in session.events] == [
-            "enter",
-            "initialize",
-            "call",
-            "exit",
-        ]
+        assert [name for name, _ in session.events] == ["enter", "initialize", "call", "exit"]
         assert [name for name, _ in streams] == ["streams-enter", "streams-exit"]
     assert first.events[0][1] is not second.events[0][1]
     assert first.calls == [("tool", {"value": 1})]
@@ -184,9 +190,7 @@ async def test_startup_is_bounded_and_later_server_starts_while_first_is_pending
     readers = list(sessions)
     ordered = [sessions[reader] for reader in readers]
     monkeypatch.setattr(
-        sdk_session,
-        "_UnvalidatedClientSession",
-        lambda reader, *_args, **_kwargs: sessions[reader],
+        sdk_session, "_UnvalidatedClientSession", lambda reader, *_args, **_kwargs: sessions[reader]
     )
     transport = McpTransport(
         {str(index): _streams([], reader=reader) for index, reader in enumerate(readers)},
@@ -225,15 +229,10 @@ async def test_startup_failure_cancels_other_initializers_and_closes_every_worke
     first_reader, second_reader = object(), object()
     sessions = {first_reader: first, second_reader: second}
     monkeypatch.setattr(
-        sdk_session,
-        "_UnvalidatedClientSession",
-        lambda reader, *_args, **_kwargs: sessions[reader],
+        sdk_session, "_UnvalidatedClientSession", lambda reader, *_args, **_kwargs: sessions[reader]
     )
     transport = McpTransport(
-        {
-            "first": _streams([], reader=first_reader),
-            "second": _streams([], reader=second_reader),
-        },
+        {"first": _streams([], reader=first_reader), "second": _streams([], reader=second_reader)},
         startup_timeout_s=1,
     )
 
@@ -258,15 +257,10 @@ async def test_cancelled_start_closes_all_started_sessions(monkeypatch):
     first_reader, second_reader = object(), object()
     sessions = {first_reader: first, second_reader: second}
     monkeypatch.setattr(
-        sdk_session,
-        "_UnvalidatedClientSession",
-        lambda reader, *_args, **_kwargs: sessions[reader],
+        sdk_session, "_UnvalidatedClientSession", lambda reader, *_args, **_kwargs: sessions[reader]
     )
     transport = McpTransport(
-        {
-            "first": _streams([], reader=first_reader),
-            "second": _streams([], reader=second_reader),
-        },
+        {"first": _streams([], reader=first_reader), "second": _streams([], reader=second_reader)},
         startup_timeout_s=1,
     )
 
@@ -296,7 +290,7 @@ async def test_not_ready_duplicate_start_startup_failure_and_closed_call(monkeyp
         await transport.call(_request())
     release.set()
     await start
-    with pytest.raises(RuntimeError, match="already started"):
+    with pytest.raises(RuntimeError, match=r"already started"):
         await transport.start()
     await transport.close()
     with _dispatch_error("WorkerClosed"):
@@ -351,12 +345,7 @@ async def test_command_error_and_conversion_error_do_not_kill_worker(monkeypatch
             raise ValueError("SECRET raw result")
 
     session = _Session(
-        [
-            _result("one"),
-            ValueError("SECRET tool error"),
-            BadResult(content=[]),
-            _result("four"),
-        ]
+        [_result("one"), ValueError("SECRET tool error"), BadResult(content=[]), _result("four")]
     )
     transport = _transport(monkeypatch, session)
     await transport.start()
@@ -398,8 +387,7 @@ async def test_cancellation_resistant_sdk_call_still_settles_its_future(monkeypa
 
 @pytest.mark.asyncio
 async def test_cancelled_queue_waiter_is_skipped_but_active_call_is_not_retried(monkeypatch):
-    session = _Session()
-    session.block_first = True
+    session = _Session(blocked=True)
     transport = _transport(monkeypatch, session)
     await transport.start()
     active = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND, seq=1)))
@@ -422,13 +410,7 @@ async def test_cancelled_queue_waiter_is_skipped_but_active_call_is_not_retried(
 async def test_pending_limit_rejects_excess_without_wire_call_and_recovers_per_server(monkeypatch):
     first, second = _Session(), _Session()
     first.block_first = True
-    sessions = iter((first, second))
-    monkeypatch.setattr(
-        sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: next(sessions)
-    )
-    transport = McpTransport(
-        {"first": _streams([]), "second": _streams([])}, max_pending_commands=1
-    )
+    transport = _paired_transport(monkeypatch, first, second, max_pending_commands=1)
     await transport.start()
 
     active = asyncio.create_task(transport.call(_request("first", kind=ToolKind.SEND, seq=1)))
@@ -438,8 +420,7 @@ async def test_pending_limit_rejects_excess_without_wire_call_and_recovers_per_s
 
     with _dispatch_error("WorkerQueueFull"):
         await asyncio.wait_for(
-            transport.call(_request("first", kind=ToolKind.SEND, seq=3)),
-            timeout=1,
+            transport.call(_request("first", kind=ToolKind.SEND, seq=3)), timeout=1
         )
     assert first.calls == [("tool", {"value": 1})]
     assert (await transport.call(_request("second", seq=10))).payload is not None
@@ -450,17 +431,12 @@ async def test_pending_limit_rejects_excess_without_wire_call_and_recovers_per_s
     assert (await queued).payload is not None
     assert (await transport.call(_request("first", seq=4))).payload is not None
     await transport.close()
-    assert first.calls == [
-        ("tool", {"value": 1}),
-        ("tool", {"value": 2}),
-        ("tool", {"value": 4}),
-    ]
+    assert first.calls == [("tool", {"value": 1}), ("tool", {"value": 2}), ("tool", {"value": 4})]
 
 
 @pytest.mark.asyncio
 async def test_close_rejects_waiting_call_and_finishes_active_one(monkeypatch):
-    session = _Session()
-    session.block_first = True
+    session = _Session(blocked=True)
     transport = _transport(monkeypatch, session, max_pending_commands=1)
     await transport.start()
     active = asyncio.create_task(transport.call(_request(seq=1)))
@@ -482,11 +458,7 @@ async def test_close_rejects_waiting_call_and_finishes_active_one(monkeypatch):
 async def test_close_rejects_calls_to_other_server_while_first_drains(monkeypatch):
     first, second = _Session(), _Session()
     first.block_first = True
-    sessions = iter((first, second))
-    monkeypatch.setattr(
-        sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: next(sessions)
-    )
-    transport = McpTransport({"first": _streams([]), "second": _streams([])}, close_timeout_s=1)
+    transport = _paired_transport(monkeypatch, first, second, close_timeout_s=1)
     await transport.start()
     active = asyncio.create_task(transport.call(_request("first", seq=1)))
     await first.first_call.wait()
@@ -534,13 +506,7 @@ async def test_close_reports_teardown_failure_after_initialize_failure():
 
     session = InitExitFailureSession()
     session.initialize_error = ValueError("SECRET initialize")
-    worker = mcp_transport.ServerWorker(
-        lambda: session,
-        call_timeout_s=1,
-        startup_timeout_s=1,
-        close_timeout_s=1,
-        max_result_copy_bytes=512 * 1024,
-    )
+    worker = _worker(lambda: session)
 
     with _dispatch_error("SessionStartFailed"):
         await worker.start()
@@ -594,11 +560,7 @@ async def test_close_reports_unexpected_owner_cancellation_after_clean_exit(monk
 async def test_close_quiesces_all_workers_before_waiting_for_any_owner(monkeypatch):
     first, second = _Session(), _Session()
     first.block_first = second.block_first = True
-    sessions = iter((first, second))
-    monkeypatch.setattr(
-        sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: next(sessions)
-    )
-    transport = McpTransport({"first": _streams([]), "second": _streams([])}, close_timeout_s=1)
+    transport = _paired_transport(monkeypatch, first, second, close_timeout_s=1)
     await transport.start()
     active_first = asyncio.create_task(transport.call(_request("first", kind=ToolKind.SEND, seq=1)))
     active_second = asyncio.create_task(transport.call(_request("second", seq=2)))
@@ -623,8 +585,7 @@ async def test_close_quiesces_all_workers_before_waiting_for_any_owner(monkeypat
 
 @pytest.mark.asyncio
 async def test_cancelled_close_can_be_retried_after_owner_finishes(monkeypatch):
-    session = _Session()
-    session.block_first = True
+    session = _Session(blocked=True)
     transport = _transport(monkeypatch, session)
     await transport.start()
     active = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND, seq=1)))
@@ -665,8 +626,9 @@ async def test_close_timeout_settles_active_command_without_waiting_for_sdk(monk
 
 @pytest.mark.asyncio
 async def test_broken_connection_fails_queued_calls_without_retry(monkeypatch):
-    session = _Session([ConnectionError("SECRET connection"), _result("should not run")])
-    session.block_first = True
+    session = _Session(
+        [ConnectionError("SECRET connection"), _result("should not run")], blocked=True
+    )
     transport = _transport(monkeypatch, session)
     await transport.start()
     active = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND, seq=1)))
@@ -695,11 +657,9 @@ async def test_owner_cancelled_mid_call_settles_the_commands_still_queued(monkey
             await super().call_tool(name, arguments)
             raise asyncio.CancelledError
 
-    session = CancelledSession()
-    session.block_first = True
-    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
+    session = CancelledSession(blocked=True)
     failed: list[str] = []
-    transport = McpTransport({"server": _streams([])}, on_server_failed=failed.append)
+    transport = _transport(monkeypatch, session, on_server_failed=failed.append)
     await transport.start()
     active = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND, seq=1)))
     await session.first_call.wait()
@@ -722,11 +682,7 @@ _CLOSED_BY_SDK = McpError(ErrorData(code=CONNECTION_CLOSED, message="Connection 
 @pytest.mark.asyncio
 async def test_a_broken_session_is_reported_once_by_server_id_only(monkeypatch):
     async def check(monkeypatch, broken):
-        """#61: the owner learns which server stopped serving, once, and nothing else.
-
-        The SDK answers a request still waiting when the server's output ends with a
-        fixed CONNECTION_CLOSED error; that ends the session like a broken stream.
-        """
+        """#61: the owner learns which server stopped serving, once, and nothing else."""
         first, second = _Session([broken]), _Session()
         sessions = iter((first, second))
         monkeypatch.setattr(
@@ -760,11 +716,8 @@ async def test_a_broken_session_is_reported_once_by_server_id_only(monkeypatch):
 async def test_a_server_error_response_is_not_a_server_failure(monkeypatch):
     async def check(monkeypatch, error):
         session = _Session([error, _result("next")])
-        monkeypatch.setattr(
-            sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session
-        )
         failed: list[str] = []
-        transport = McpTransport({"server": _streams([])}, on_server_failed=failed.append)
+        transport = _transport(monkeypatch, session, on_server_failed=failed.append)
         await transport.start()
         with _dispatch_error("McpError"):
             await transport.call(_request(seq=1))
@@ -810,17 +763,10 @@ async def test_close_start_failure_and_a_contained_timeout_report_no_server_fail
 
 
 def test_server_failure_callbacks_must_be_callable():
-    with pytest.raises(TypeError, match="server failed callback must be callable"):
+    with pytest.raises(TypeError, match=r"server failed callback must be callable"):
         McpTransport({}, on_server_failed="not callable")  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="failure callback must be callable"):
-        mcp_transport.ServerWorker(
-            lambda: _Session(),
-            call_timeout_s=1,
-            startup_timeout_s=1,
-            close_timeout_s=1,
-            max_result_copy_bytes=512 * 1024,
-            on_failed="not callable",  # type: ignore[arg-type]
-        )
+    with pytest.raises(TypeError, match=r"failure callback must be callable"):
+        _worker(lambda: _Session(), on_failed="not callable")  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -995,29 +941,22 @@ async def test_resource_url_is_rejected_without_dump_and_next_call_survives(monk
     assert len(session.calls) == 2
 
 
-def test_result_copy_budget_rejects_invalid_configuration():
-    def check(invalid_budget):
-        with pytest.raises(ValueError, match="result copy budget"):
-            McpTransport({}, max_result_copy_bytes=invalid_budget)
-
-    _check_cases(
-        ((invalid_budget,) for invalid_budget in (0, -1, True, 8 * 1024 * 1024 + 1)), check
-    )
+@pytest.mark.parametrize("invalid_budget", (0, -1, True, 8 * 1024 * 1024 + 1))
+def test_result_copy_budget_rejects_invalid_configuration(invalid_budget):
+    with pytest.raises(ValueError, match=r"result copy budget"):
+        McpTransport({}, max_result_copy_bytes=invalid_budget)
 
 
-def test_pending_command_limit_rejects_invalid_configuration():
-    def check(invalid_limit):
-        with pytest.raises(ValueError, match="pending command limit"):
-            McpTransport({}, max_pending_commands=invalid_limit)
-
-    _check_cases(((invalid_limit,) for invalid_limit in (0, -1, True, 1025, 1.5)), check)
+@pytest.mark.parametrize("invalid_limit", (0, -1, True, 1025, 1.5))
+def test_pending_command_limit_rejects_invalid_configuration(invalid_limit):
+    with pytest.raises(ValueError, match=r"pending command limit"):
+        McpTransport({}, max_pending_commands=invalid_limit)
 
 
 @pytest.mark.asyncio
 async def test_discard_queued_keeps_stopped_task_send_off_wire_and_frees_slots(monkeypatch):
     """Q01 (I1/I6, T08): a SEND queued behind another Task never dispatches after stop."""
-    session = _Session()
-    session.block_first = True
+    session = _Session(blocked=True)
     monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
     dispatches: list[str] = []
     transport = McpTransport(
@@ -1067,8 +1006,7 @@ async def test_discard_queued_keeps_stopped_task_send_off_wire_and_frees_slots(m
 
 @pytest.mark.asyncio
 async def test_discard_queued_drops_abandoned_items_and_rejects_non_string(monkeypatch):
-    session = _Session()
-    session.block_first = True
+    session = _Session(blocked=True)
     transport = _transport(monkeypatch, session)
     await transport.start()
     worker = transport._workers["server"]
@@ -1110,8 +1048,7 @@ async def test_sdk_session_call_skips_server_output_schema_validation(monkeypatc
     session._tool_output_schemas["tool"] = {"$ref": "http://127.0.0.1:9/schema"}
     sent: list[object] = []
     returned = CallToolResult(
-        content=[TextContent(type="text", text="ok")],
-        structuredContent={"untrusted": "value"},
+        content=[TextContent(type="text", text="ok")], structuredContent={"untrusted": "value"}
     )
 
     async def send_request(request: object, result_type: object, **_kwargs: object) -> object:
