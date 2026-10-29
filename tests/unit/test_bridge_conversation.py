@@ -77,7 +77,7 @@ def test_user_turn_and_model_answer_are_ephemeral_not_command_metadata(app):
         assert len(model.seen) == 1
         assert projections[-1].can_accept_message
         assert "private-user-marker" not in repr(receiver.commands)
-        assert "private-user-marker" not in repr(bridge._recent)
+        assert "private-user-marker" not in repr(bridge._ledger.settled())
         assert "private-user-marker" not in repr(events[0])
         store.state = store.state.model_copy(update={"status": TaskStatus.CLOSED})
         command = bridge.request_message("task-1", 1, "never-reopen")
@@ -89,26 +89,26 @@ def test_user_turn_and_model_answer_are_ephemeral_not_command_metadata(app):
         close_bridge(app, bridge)
 
 
-@pytest.mark.parametrize(
-    ("status", "task_id", "epoch"),
-    [
+def test_user_turn_cannot_resume_approval_unknown_or_wrong_task_epoch(app):
+    def check(status, task_id, epoch):
+        bridge, receiver, events, _, model, _, _ = start_bridge(app, status)
+        try:
+            command = bridge.request_message(task_id, epoch, "must-not-call-model")
+            pump_until(app, lambda: finished(receiver, command))
+            assert not model.seen
+            assert not events
+        finally:
+            close_bridge(app, bridge)
+
+    for status, task_id, epoch in [
         (TaskStatus.WAITING_APPROVAL, "task-1", 1),
         (TaskStatus.UNKNOWN_OUTCOME, "task-1", 1),
         (TaskStatus.HALTED, "task-1", 1),
         (TaskStatus.CLOSED, "task-1", 1),
         (TaskStatus.RUNNING, "task-1", 2),
         (TaskStatus.RUNNING, "old-task", 1),
-    ],
-)
-def test_user_turn_cannot_resume_approval_unknown_or_wrong_task_epoch(app, status, task_id, epoch):
-    bridge, receiver, events, _, model, _, _ = start_bridge(app, status)
-    try:
-        command = bridge.request_message(task_id, epoch, "must-not-call-model")
-        pump_until(app, lambda: finished(receiver, command))
-        assert not model.seen
-        assert not events
-    finally:
-        close_bridge(app, bridge)
+    ]:
+        check(status, task_id, epoch)
 
 
 def test_user_turn_rejected_while_runner_has_a_model_step_to_advance(app):
@@ -139,37 +139,37 @@ def test_new_snapshot_epoch_cannot_accept_input_into_an_old_runner(app):
         close_bridge(app, bridge)
 
 
-@pytest.mark.parametrize(
-    ("blocker", "create", "expected"),
-    [
+def test_bridge_publishes_session_capability_before_ready(app):
+    def check(blocker, create, expected):
+        async def create_session(_options):
+            raise AssertionError("not requested")
+
+        async def bootstrap():
+            return BackendBindings(
+                lambda task_id: None,
+                FakeControl(),
+                create_session=create_session if create else None,
+                session_blocker=blocker,
+            )
+
+        bridge = BackendBridge(bootstrap)
+        seen: list[str] = []
+        states: list[BridgeState] = []
+        bridge.session_capability_changed.connect(lambda code: seen.append(code))
+        bridge.lifecycle_changed.connect(lambda event: states.append(event.state))
+        bridge.start()
+        try:
+            pump_until(app, lambda: bridge.state is BridgeState.READY and bool(seen))
+            assert seen == [expected]
+        finally:
+            close_bridge(app, bridge)
+
+    for blocker, create, expected in [
         (None, False, "SESSION_CREATION_UNAVAILABLE"),
         (lambda: "CODEX_CONFIG_UNAVAILABLE", True, "CODEX_CONFIG_UNAVAILABLE"),
         (lambda: None, True, ""),
-    ],
-)
-def test_bridge_publishes_session_capability_before_ready(app, blocker, create, expected):
-    async def create_session(_options):
-        raise AssertionError("not requested")
-
-    async def bootstrap():
-        return BackendBindings(
-            lambda task_id: None,
-            FakeControl(),
-            create_session=create_session if create else None,
-            session_blocker=blocker,
-        )
-
-    bridge = BackendBridge(bootstrap)
-    seen: list[str] = []
-    states: list[BridgeState] = []
-    bridge.session_capability_changed.connect(lambda code: seen.append(code))
-    bridge.lifecycle_changed.connect(lambda event: states.append(event.state))
-    bridge.start()
-    try:
-        pump_until(app, lambda: bridge.state is BridgeState.READY and bool(seen))
-        assert seen == [expected]
-    finally:
-        close_bridge(app, bridge)
+    ]:
+        check(blocker, create, expected)
 
 
 def test_backend_task_event_republishes_the_task_without_a_command(app):
@@ -269,33 +269,39 @@ def _guarded_codex_bridge(app, stops, resolved):
     return bridge, receiver, control
 
 
-@pytest.mark.parametrize("action", ["approve", "reject"])
-def test_human_approval_goes_to_guard_only_never_to_the_model_call(app, action):
-    """NOTIFY-01: the waiting model call hears Guard's final result, not this return."""
-    from guard_app.services.bridge import ControlAction
+def test_human_approval_goes_to_guard_only_never_to_the_model_call(app):
+    def check(action):
+        """NOTIFY-01: the waiting model call hears Guard's final result, not this return."""
+        from guard_app.services.bridge import ControlAction
 
-    stops, resolved = [], []
-    bridge, receiver, control = _guarded_codex_bridge(app, stops, resolved)
-    try:
-        command = bridge.request_control(ControlAction(action), "approval-7")
-        pump_until(app, lambda: finished(receiver, command))
-        assert [(call[0], call[1]) for call in control.calls] == [(action, "approval-7")]
-        assert resolved == []
-        assert stops == []
-    finally:
-        close_bridge(app, bridge)
+        stops, resolved = [], []
+        bridge, receiver, control = _guarded_codex_bridge(app, stops, resolved)
+        try:
+            command = bridge.request_control(ControlAction(action), "approval-7")
+            pump_until(app, lambda: finished(receiver, command))
+            assert [(call[0], call[1]) for call in control.calls] == [(action, "approval-7")]
+            assert resolved == []
+            assert stops == []
+        finally:
+            close_bridge(app, bridge)
+
+    for action in ["approve", "reject"]:
+        check(action)
 
 
-@pytest.mark.parametrize("action", ["cancel", "emergency_halt"])
-def test_task_stop_with_guard_also_stops_the_model_session(app, action):
-    from guard_app.services.bridge import ControlAction
+def test_task_stop_with_guard_also_stops_the_model_session(app):
+    def check(action):
+        from guard_app.services.bridge import ControlAction
 
-    stops, resolved = [], []
-    bridge, receiver, control = _guarded_codex_bridge(app, stops, resolved)
-    try:
-        command = bridge.request_control(ControlAction(action), "task-1", epoch=1)
-        pump_until(app, lambda: finished(receiver, command))
-        assert [call[0] for call in control.calls] == [action]
-        assert stops == [("task-1", 1, action)]
-    finally:
-        close_bridge(app, bridge)
+        stops, resolved = [], []
+        bridge, receiver, control = _guarded_codex_bridge(app, stops, resolved)
+        try:
+            command = bridge.request_control(ControlAction(action), "task-1", epoch=1)
+            pump_until(app, lambda: finished(receiver, command))
+            assert [call[0] for call in control.calls] == [action]
+            assert stops == [("task-1", 1, action)]
+        finally:
+            close_bridge(app, bridge)
+
+    for action in ["cancel", "emergency_halt"]:
+        check(action)

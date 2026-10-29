@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import contextmanager
 
 import pytest
 
@@ -154,47 +155,49 @@ async def test_server_request_is_answered_while_reading_continues() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("request_id", [7, "7"])
-@pytest.mark.parametrize("version_field", [True, False])
 async def test_duplicate_inflight_server_request_closes_without_a_second_handler(
-    request_id: int | str, version_field: bool, caplog: pytest.LogCaptureFixture
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # I6/I9: fail closed before a second dispatch, without logging peer data.
-    channel = FakeChannel()
-    entered = asyncio.Event()
-    cancelled = asyncio.Event()
-    calls = 0
+    for request_id in [7, "7"]:
+        for version_field in [True, False]:
+            # I6/I9: fail closed before a second dispatch, without logging peer data.
+            channel = FakeChannel()
+            entered = asyncio.Event()
+            cancelled = asyncio.Event()
+            calls = 0
 
-    async def handler(_method: str, _params: object) -> object:
-        nonlocal calls
-        calls += 1
-        entered.set()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            cancelled.set()
+            async def handler(
+                _method: str, _params: object, *, cancelled=cancelled, entered=entered
+            ) -> object:
+                nonlocal calls
+                calls += 1
+                entered.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
 
-    client = _client(channel, version_field=version_field, on_server_request=handler)
-    waiting = asyncio.create_task(client.request("pending"))
-    await channel.next_sent()
-    request: dict[str, object] = {"id": request_id, "method": "run", "params": MARKER}
-    if version_field:
-        request["jsonrpc"] = "2.0"
-    channel.push(request)
-    await asyncio.wait_for(entered.wait(), timeout=1)
-    # A different method still cannot reuse the outstanding request ID.
-    channel.push({**request, "method": "different"})
-    with pytest.raises(JsonRpcError) as failed:
-        await waiting
-    assert failed.value.reason == "PROTOCOL_ERROR"
-    await client.close()
-    assert calls == 1
-    assert cancelled.is_set()
-    assert channel.sent == []
-    assert not client._server_tasks
-    assert not client._server_request_ids
-    assert MARKER not in str(failed.value)
-    assert MARKER not in caplog.text
+            client = _client(channel, version_field=version_field, on_server_request=handler)
+            waiting = asyncio.create_task(client.request("pending"))
+            await channel.next_sent()
+            request: dict[str, object] = {"id": request_id, "method": "run", "params": MARKER}
+            if version_field:
+                request["jsonrpc"] = "2.0"
+            channel.push(request)
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            # A different method still cannot reuse the outstanding request ID.
+            channel.push({**request, "method": "different"})
+            with pytest.raises(JsonRpcError) as failed:
+                await waiting
+            assert failed.value.reason == "PROTOCOL_ERROR"
+            await client.close()
+            assert calls == 1
+            assert cancelled.is_set()
+            assert channel.sent == []
+            assert not client._server_tasks
+            assert not client._server_request_ids
+            assert MARKER not in str(failed.value)
+            assert MARKER not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -254,24 +257,28 @@ async def test_server_ids_preserve_types_and_are_separate_from_outgoing_ids() ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("request_id", [0, "reuse"])
-async def test_server_request_id_can_be_reused_after_completion(request_id: int | str) -> None:
-    channel = FakeChannel()
-    calls: list[object] = []
+async def test_server_request_id_can_be_reused_after_completion() -> None:
+    for request_id in [0, "reuse"]:
+        channel = FakeChannel()
+        calls: list[object] = []
 
-    async def handler(_method: str, params: object) -> object:
-        calls.append(params)
-        return params
+        async def handler(_method: str, params: object, *, calls=calls) -> object:
+            calls.append(params)
+            return params
 
-    client = _client(channel, max_pending=1, on_server_request=handler)
-    for value in ("first", "second"):
-        channel.push({"jsonrpc": "2.0", "id": request_id, "method": "run", "params": value})
-        assert await channel.next_sent() == {"jsonrpc": "2.0", "id": request_id, "result": value}
-        await asyncio.gather(*client._server_tasks)
-        assert not client._server_request_ids
-    assert calls == ["first", "second"]
-    assert client.closed_reason is None
-    await client.close()
+        client = _client(channel, max_pending=1, on_server_request=handler)
+        for value in ("first", "second"):
+            channel.push({"jsonrpc": "2.0", "id": request_id, "method": "run", "params": value})
+            assert await channel.next_sent() == {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": value,
+            }
+            await asyncio.gather(*client._server_tasks)
+            assert not client._server_request_ids
+        assert calls == ["first", "second"]
+        assert client.closed_reason is None
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -337,9 +344,8 @@ async def test_failing_notification_handler_is_reported_apart_from_channel_failu
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "frame",
-    [
+async def test_invalid_frames_close_the_client() -> None:
+    for frame in [
         b"not json",
         b"[]",
         b'{"jsonrpc":"2.0","id":1,"result":1,"result":2}',
@@ -351,18 +357,16 @@ async def test_failing_notification_handler_is_reported_apart_from_channel_failu
         b'{"jsonrpc":"2.0","id":true,"method":"m"}',
         b'{"jsonrpc":"2.0","method":""}',
         b"\xff\xfe",
-    ],
-)
-async def test_invalid_frames_close_the_client(frame: bytes) -> None:
-    channel = FakeChannel()
-    client = _client(channel)
-    waiting = asyncio.create_task(client.request("pending"))
-    await channel.next_sent()
-    channel.inbound.put_nowait(frame)
-    with pytest.raises(JsonRpcError) as failed:
-        await waiting
-    assert failed.value.reason == "PROTOCOL_ERROR"
-    await client.close()
+    ]:
+        channel = FakeChannel()
+        client = _client(channel)
+        waiting = asyncio.create_task(client.request("pending"))
+        await channel.next_sent()
+        channel.inbound.put_nowait(frame)
+        with pytest.raises(JsonRpcError) as failed:
+            await waiting
+        assert failed.value.reason == "PROTOCOL_ERROR"
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -413,18 +417,17 @@ async def test_pending_limit_and_lifecycle_rules() -> None:
     assert closed.value.reason == "CLOSED"
 
 
-@pytest.mark.parametrize(
-    "kwargs",
-    [
+def test_invalid_configuration_is_rejected() -> None:
+    failures = []
+    for kwargs in [
         {"request_timeout_s": 0, "max_frame_bytes": 1, "max_pending": 1},
         {"request_timeout_s": float("nan"), "max_frame_bytes": 1, "max_pending": 1},
         {"request_timeout_s": 1, "max_frame_bytes": 0, "max_pending": 1},
         {"request_timeout_s": 1, "max_frame_bytes": 1, "max_pending": True},
-    ],
-)
-def test_invalid_configuration_is_rejected(kwargs: dict[str, object]) -> None:
-    with pytest.raises(ValueError, match="required"):
-        JsonRpcClient(FakeChannel(), **kwargs)  # type: ignore[arg-type]
+    ]:
+        with check_case(failures, (kwargs)), pytest.raises(ValueError, match="required"):
+            JsonRpcClient(FakeChannel(), **kwargs)  # type: ignore[arg-type]
+    assert not failures, failures
 
 
 @pytest.mark.asyncio
@@ -472,8 +475,10 @@ class StuckChannel(FakeChannel):
     def __init__(self) -> None:
         super().__init__()
         self.release = asyncio.Event()
+        self.entered = asyncio.Event()
 
     async def send(self, frame: bytes) -> None:
+        self.entered.set()
         await self.release.wait()
 
 
@@ -493,7 +498,7 @@ async def test_close_releases_a_request_stuck_in_send() -> None:
     channel = StuckChannel()
     client = _client(channel, request_timeout_s=10.0)
     waiting = asyncio.create_task(client.request("x"))
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(channel.entered.wait(), timeout=1)
     await asyncio.wait_for(client.close(), timeout=1)
     with pytest.raises(JsonRpcError) as failed:
         await asyncio.wait_for(waiting, timeout=1)
@@ -510,6 +515,7 @@ class CountingStuckChannel(StuckChannel):
         self.written: list[bytes] = []
 
     async def send(self, frame: bytes) -> None:
+        self.entered.set()
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         try:
@@ -524,7 +530,7 @@ async def test_cancelled_caller_during_send_closes_and_its_frame_is_never_finish
     channel = CountingStuckChannel()
     client = _client(channel, request_timeout_s=10.0)
     first = asyncio.create_task(client.request("turn/start", {"n": 1}))
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(channel.entered.wait(), timeout=1)
     first.cancel()
     with pytest.raises(asyncio.CancelledError):
         await first
@@ -533,7 +539,7 @@ async def test_cancelled_caller_during_send_closes_and_its_frame_is_never_finish
         await client.request("turn/start", {"n": 2})
     assert refused.value.reason == "SEND_CANCELLED"
     channel.release.set()
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(client.close(), timeout=1)
     assert channel.written == []
     assert channel.max_active == 1
     await client.close()
@@ -593,3 +599,11 @@ async def test_overflow_and_handler_raised_invalid_message_have_their_own_reason
         await asyncio.sleep(0.01)
     assert noisy.closed_reason == "HANDLER_FAILED"
     await noisy.close()
+
+
+@contextmanager
+def check_case(failures, case):
+    try:
+        yield
+    except (AssertionError, pytest.fail.Exception) as error:
+        failures.append((case, str(error)))

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
-
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
@@ -26,6 +24,7 @@ from guard_app.services.bridge import (
     ControlAction,
     LifecycleEvent,
     TaskProjection,
+    new_command_id,
 )
 
 from .approval_detail import visible_review_text
@@ -415,7 +414,7 @@ class RuntimePanel(QWidget):
             return
         self._clear_review()
         self._show_message("실행 요청됨 · 백엔드 결과 대기")
-        command_id = uuid4().hex
+        command_id = new_command_id()
         self._commands[command_id] = _RUN
         self._command_scopes[command_id] = (self.current.task_id, self.current.epoch)
         self._messages[(self.current.task_id, self.current.epoch)] = (self.message.text(), None)
@@ -436,7 +435,7 @@ class RuntimePanel(QWidget):
             return
         self._clear_review()
         self._show_message("제어 요청됨 · 적용 여부 확인 중")
-        command_id = uuid4().hex
+        command_id = new_command_id()
         self._commands[command_id] = action
         self._command_scopes[command_id] = (self.current.task_id, self.current.epoch)
         self._messages[(self.current.task_id, self.current.epoch)] = (self.message.text(), None)

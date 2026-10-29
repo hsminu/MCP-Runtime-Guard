@@ -77,8 +77,9 @@ def test_markup_and_links_stay_literal_and_never_open_or_fetch(app, monkeypatch)
             QDesktopServices.unsetUrlHandler(scheme)
         view.close()
         server.shutdown()
-        thread.join()
+        thread.join(timeout=2)
         server.server_close()
+        assert not thread.is_alive()
     assert requests == []
     assert probe.opened == []
     assert python_opens == []
@@ -96,7 +97,6 @@ def test_length_cap_counts_original_characters_and_reports_omission(app):
     shown, omitted = untrusted_display_text(value, max_chars=300)
     assert omitted == 5
     assert shown == "\\u200B" + "가" * 299
-
     view = UntrustedTextView("위협 설명", max_chars=300, show_unverified_notice=True)
     view.set_text(value)
     assert view.body.toPlainText() == shown
@@ -106,18 +106,12 @@ def test_length_cap_counts_original_characters_and_reports_omission(app):
     assert view.body.toPlainText() == "짧음"
     assert view.omission.isHidden()
     assert view.omission.text() == ""
-
-
-def test_unverified_notice_is_opt_in(app):
     marked = UntrustedTextView("위협 설명", show_unverified_notice=True)
     plain = UntrustedTextView("서버 설명")
     assert marked.notice.text() == UNVERIFIED_NOTICE
     assert not marked.notice.isHidden()
     assert marked.body.accessibleDescription() == UNVERIFIED_NOTICE
     assert plain.notice.isHidden()
-
-
-def test_clear_drops_the_document_copy(app):
     view = UntrustedTextView("모델 답변", max_chars=3)
     view.set_text("TEST_SECRET")
     view.clear()
@@ -126,15 +120,22 @@ def test_clear_drops_the_document_copy(app):
     assert view.omission.text() == ""
 
 
-@pytest.mark.parametrize("value", [None, b"bytes", 3])
-def test_non_text_input_is_rejected(value):
-    with pytest.raises(TypeError):
-        untrusted_display_text(value)
-
-
-@pytest.mark.parametrize("limit", [0, -1, 1.5, True])
-def test_invalid_limits_are_rejected(app, limit):
-    with pytest.raises(ValueError, match="limit"):
-        untrusted_display_text("x", max_chars=limit)
-    with pytest.raises(ValueError, match="limit"):
-        UntrustedTextView("x", max_chars=limit)
+def test_invalid_limits_are_rejected(app):
+    failures = []
+    for limit in [0, -1, 1.5, True]:
+        try:
+            with pytest.raises(ValueError, match="limit"):
+                untrusted_display_text("x", max_chars=limit)
+            with pytest.raises(ValueError, match="limit"):
+                UntrustedTextView("x", max_chars=limit)
+        except AssertionError as error:
+            failures.append((limit, str(error)))
+    assert not failures, failures
+    failures = []
+    for value in [None, b"bytes", 3]:
+        try:
+            with pytest.raises(TypeError):
+                untrusted_display_text(value)
+        except AssertionError as error:
+            failures.append((value, str(error)))
+    assert not failures, failures

@@ -71,7 +71,6 @@ def test_empty_error_and_loading_are_not_reported_as_zero(app: QApplication) -> 
     view.query_requested.connect(requested.append)
     assert view.state is LoadState.UNAVAILABLE
     assert "미제공" in view.count_label.text()
-
     view.refresh()
     query = requested[-1]
     assert query.page == 1
@@ -84,7 +83,6 @@ def test_empty_error_and_loading_are_not_reported_as_zero(app: QApplication) -> 
     assert view.state is LoadState.ERROR
     assert "불러오지 못함" in view.state_message.message.text()
     assert "미제공" in view.count_label.text()
-
     view.refresh()
     assert not view.set_error(query)  # previous response must not replace new query
     assert view.set_page(result(view, (), 0), display_now=NOW)
@@ -96,33 +94,33 @@ def test_empty_error_and_loading_are_not_reported_as_zero(app: QApplication) -> 
     assert not view.next_button.isEnabled()
 
 
-@pytest.mark.parametrize("total", [1, 6, 7, 122])
-def test_page_counts_and_boundaries(app: QApplication, total: int) -> None:
-    view = ApprovalListPage()
-    view.refresh()
-    pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
-    for page_number in range(1, pages + 1):
-        query = view.current_query
-        assert query is not None and query.page == page_number
-        # Every page uses the backend's global oldest-first order.
-        start = (page_number - 1) * PAGE_SIZE
-        count = min(PAGE_SIZE, total - start)
-        rows = tuple(
-            summary(number, created_at=NOW + timedelta(seconds=number))
-            for number in range(start, start + count)
-        )
-        assert view.set_page(result(view, rows, total), display_now=NOW)
-        assert view.table.rowCount() == count
-        assert view.count_label.text() == (f"전체 {total:,}건 · 현재 페이지 {count}건")
-        assert view.page_label.text() == f"{page_number} / {pages}"
-        assert view.previous_button.isEnabled() is (page_number > 1)
-        assert view.next_button.isEnabled() is (page_number < pages)
-        view.next_page()
-    assert view.current_query is not None
-    assert view.current_query.page == pages
-    if pages > 1:
-        view.previous_page()
-        assert view.current_query.page == pages - 1
+def test_page_counts_and_boundaries(app):
+    for total in [1, 6, 7, 122]:
+        view = ApprovalListPage()
+        view.refresh()
+        pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
+        for page_number in range(1, pages + 1):
+            query = view.current_query
+            assert query is not None and query.page == page_number
+            # Every page uses the backend's global oldest-first order.
+            start = (page_number - 1) * PAGE_SIZE
+            count = min(PAGE_SIZE, total - start)
+            rows = tuple(
+                summary(number, created_at=NOW + timedelta(seconds=number))
+                for number in range(start, start + count)
+            )
+            assert view.set_page(result(view, rows, total), display_now=NOW)
+            assert view.table.rowCount() == count
+            assert view.count_label.text() == (f"전체 {total:,}건 · 현재 페이지 {count}건")
+            assert view.page_label.text() == f"{page_number} / {pages}"
+            assert view.previous_button.isEnabled() is (page_number > 1)
+            assert view.next_button.isEnabled() is (page_number < pages)
+            view.next_page()
+        assert view.current_query is not None
+        assert view.current_query.page == pages
+        if pages > 1:
+            view.previous_page()
+            assert view.current_query.page == pages - 1
 
 
 def test_stale_response_filter_change_and_disappearing_last_page(
@@ -163,14 +161,12 @@ def test_pending_and_history_are_separate_and_selection_is_not_reassigned(
     assert view.set_page(result(view, initial, 2), display_now=NOW)
     view.table.selectRow(0)
     assert view.selected_summary == initial[0]
-
     view.refresh()
     assert selected[-1] is None
     assert view.selected_summary is None
     assert view.set_page(result(view, (summary(1),), 1), display_now=NOW)
     assert view.selected_summary is None
     assert view.table.currentRow() == -1
-
     view.lane_tabs.setCurrentIndex(1)
     assert view.current_query is not None
     assert view.current_query.lane is ApprovalLane.HISTORY
@@ -180,9 +176,6 @@ def test_pending_and_history_are_separate_and_selection_is_not_reassigned(
     assert "거절됨" in view.table.item(0, 4).text()
     assert not view.set_page(result(view, (summary(5),), 1), display_now=NOW)
     assert view.state is LoadState.ERROR  # pending status in history is invalid
-
-
-def test_clearing_selection_does_not_retain_current_row(app: QApplication) -> None:
     view = ApprovalListPage()
     selected = []
     view.summary_selected.connect(selected.append)
@@ -192,7 +185,6 @@ def test_clearing_selection_does_not_retain_current_row(app: QApplication) -> No
     view.table.selectRow(0)
     assert view.selected_summary == rows[0]
     assert selected[-1] == rows[0]
-
     view.table.clearSelection()
     assert view.table.currentRow() == 0  # Qt retains a current index.
     assert view.selected_summary is None
@@ -215,18 +207,16 @@ def test_target_selection_stays_within_loaded_page(app: QApplication) -> None:
     assert view.current_query is requests[0]
 
 
-@pytest.mark.parametrize("rows", [(), (summary(1),)])
-def test_incomplete_backend_page_is_error_not_empty_success(
-    app: QApplication, rows: tuple[ApprovalSummary, ...]
-) -> None:
-    view = ApprovalListPage()
-    view.refresh()
-    assert not view.set_page(result(view, rows, 7), display_now=NOW)
-    assert view.state is LoadState.ERROR
-    assert view.table.rowCount() == 0
-    assert "미제공" in view.count_label.text()
-    assert "불러오지 못함" in view.state_message.message.text()
-    assert "대기 중인 승인 요청이 없음" not in view.state_message.message.text()
+def test_incomplete_backend_page_is_error_not_empty_success(app):
+    for rows in [(), (summary(1),)]:
+        view = ApprovalListPage()
+        view.refresh()
+        assert not view.set_page(result(view, rows, 7), display_now=NOW)
+        assert view.state is LoadState.ERROR
+        assert view.table.rowCount() == 0
+        assert "미제공" in view.count_label.text()
+        assert "불러오지 못함" in view.state_message.message.text()
+        assert "대기 중인 승인 요청이 없음" not in view.state_message.message.text()
 
 
 def test_equal_time_ties_require_stable_id_order_and_no_raw_actions(
@@ -271,50 +261,42 @@ def test_filter_and_newest_sort_request_backend_wide_order(app: QApplication) ->
     assert view.current_query.page == 1
 
 
-@pytest.mark.parametrize(
-    ("width", "visible_columns", "stacked"),
-    [
+def test_table_and_controls_fit_viewport_at_multiple_widths(app):
+    for width, visible_columns, stacked in [
         (320, (0, 1, 4), True),
         (540, (0, 1, 4), True),
         (760, (0, 1, 4, 5), False),
         (980, (0, 1, 2, 3, 4, 5), False),
-    ],
-)
-def test_table_and_controls_fit_viewport_at_multiple_widths(
-    app: QApplication,
-    width: int,
-    visible_columns: tuple[int, ...],
-    stacked: bool,
-) -> None:
-    view = ApprovalListPage()
-    view.resize(width, 580)
-    view.show()
-    try:
-        view.refresh()
-        rows = tuple(summary(number) for number in range(6, 0, -1))
-        assert view.set_page(result(view, rows, 6), display_now=NOW)
-        app.processEvents()
-        QTest.qWait(20)
-        app.processEvents()
-        assert view.width() == width
-        assert tuple(i for i in range(6) if not view.table.isColumnHidden(i)) == visible_columns
-        assert view.table.horizontalScrollBar().maximum() == 0
-        direction = (
-            QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
-        )
-        assert view.filters.direction() == direction
-        assert view.pager.direction() == direction
-        for control in (
-            view.search,
-            view.server_filter,
-            view.sort,
-            view.previous_button,
-            view.next_button,
-            view.refresh_button,
-        ):
-            assert control.geometry().right() < width
-    finally:
-        view.close()
+    ]:
+        view = ApprovalListPage()
+        view.resize(width, 580)
+        view.show()
+        try:
+            view.refresh()
+            rows = tuple(summary(number) for number in range(6, 0, -1))
+            assert view.set_page(result(view, rows, 6), display_now=NOW)
+            app.processEvents()
+            QTest.qWait(20)
+            app.processEvents()
+            assert view.width() == width
+            assert tuple(i for i in range(6) if not view.table.isColumnHidden(i)) == visible_columns
+            assert view.table.horizontalScrollBar().maximum() == 0
+            direction = (
+                QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
+            )
+            assert view.filters.direction() == direction
+            assert view.pager.direction() == direction
+            for control in (
+                view.search,
+                view.server_filter,
+                view.sort,
+                view.previous_button,
+                view.next_button,
+                view.refresh_button,
+            ):
+                assert control.geometry().right() < width
+        finally:
+            view.close()
 
 
 def test_narrow_keyboard_selection_shows_only_public_summary(app: QApplication) -> None:
@@ -422,7 +404,6 @@ def test_320_by_400_approval_row_shows_bounded_age_with_identity_and_status(
         app.processEvents()
         QTest.qWait(20)
         app.processEvents()
-
         assert host.width() == 320 and host.height() == 400
         assert tuple(i for i in range(6) if not view.table.isColumnHidden(i)) == (
             0,
@@ -444,7 +425,6 @@ def test_320_by_400_approval_row_shows_bounded_age_with_identity_and_status(
         )
         assert view.table.horizontalScrollBar().maximum() == 0
         assert host.horizontalScrollBar().maximum() == 0
-
         host.resize(980, 700)
         app.processEvents()
         QTest.qWait(20)
@@ -471,7 +451,6 @@ def test_narrow_row_does_not_invent_elapsed_time_from_future_request(
         assert status.text() == "승인 대기\n요청 시각 확인"
         assert "2026년 10월 12일 14:05:00 KST" in status.toolTip()
         assert view.table.horizontalScrollBar().maximum() == 0
-
         view.refresh()
         missing = replace(summary(1), created_at=None)
         assert not view.set_page(result(view, (missing,), 1), display_now=NOW)
@@ -527,19 +506,16 @@ def test_window_uses_the_profile_approval_ttl_for_the_waiting_hint(app: QApplica
         view.refresh()
         assert view.set_page(result(view, (row,), 1), display_now=NOW)
         assert "승인 유효 시간 지남" not in view.table.item(0, 4).text()  # 180 s < 300 s
-
         bridge.policy_changed.emit(_policy(120))
         view.refresh()
         assert view.set_page(result(view, (row,), 1), display_now=NOW)
         assert "승인 유효 시간 지남" in view.table.item(0, 4).text()  # 180 s >= 120 s
-
         # No Profile, or an invalid TTL, leaves the last valid value in place.
         bridge.policy_changed.emit(None)
         bridge.policy_changed.emit(_policy(0))
         view.refresh()
         assert view.set_page(result(view, (row,), 1), display_now=NOW)
         assert "승인 유효 시간 지남" in view.table.item(0, 4).text()
-
         bridge.policy_changed.emit(_policy(600))
         view.refresh()
         assert view.set_page(result(view, (row,), 1), display_now=NOW)

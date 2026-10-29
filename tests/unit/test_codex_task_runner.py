@@ -49,12 +49,22 @@ def _runner(session: Session) -> tuple[CodexTaskRunner, list[str]]:
     return CodexTaskRunner("task-1", 3, session, failure), failures  # type: ignore[arg-type]
 
 
-def test_one_message_completes_and_the_runner_accepts_the_next() -> None:
-    async def run() -> None:
+@pytest.mark.asyncio
+async def test_input_lifecycle_reasoning_and_response_boundary(subtests):
+    async with asyncio.timeout(30):
         session = Session("hello")
         runner, failures = _runner(session)
         assert runner.can_accept_message
         assert not runner.can_advance
+        with pytest.raises(RunnerStateError):
+            await runner.advance()
+        with pytest.raises(RunnerStateError):
+            await runner.resume_approval("task-1", 3, "approval-1", object())
+        for content in ["", "   ", 7, None]:
+            with subtests.test(content=content):
+                with pytest.raises(RunnerStateError):
+                    runner.add_user_message(content)
+                assert runner.can_accept_message
         runner.add_user_message("first")
         assert runner.can_advance
         assert not runner.can_accept_message
@@ -65,84 +75,53 @@ def test_one_message_completes_and_the_runner_accepts_the_next() -> None:
         assert runner.can_accept_message
         assert session.sent == ["first"]
         assert failures == []
-
-    asyncio.run(run())
-
-
-def test_picked_reasoning_level_goes_with_its_own_message_only() -> None:
-    async def run() -> None:
-        session = Session("ok")
-        runner, _ = _runner(session)
+        session.efforts.clear()
         runner.add_user_message("think hard", "high")
         await runner.advance()
         runner.add_user_message("plain")
         await runner.advance()
         assert session.efforts == ["high", None]
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("content", ["", "   ", 7, None])
-def test_blank_or_non_text_input_is_refused(content: object) -> None:
-    runner, _ = _runner(Session())
-    with pytest.raises(RunnerStateError):
-        runner.add_user_message(content)  # type: ignore[arg-type]
-    assert runner.can_accept_message
-
-
-def test_advance_without_input_is_refused() -> None:
-    runner, _ = _runner(Session())
-    with pytest.raises(RunnerStateError):
-        asyncio.run(runner.advance())
-
-
-@pytest.mark.parametrize(
-    "response", [None, b"bytes", 42, "x" * 65_537], ids=["none", "bytes", "int", "oversized"]
-)
-def test_non_text_or_oversized_response_halts_and_closes(response: object) -> None:
-    async def run() -> None:
-        runner, failures = _runner(Session(response))
-        runner.add_user_message("go")
-        update = await runner.advance()
-        assert update.status == "halted"
-        assert update.assistant_text is None
-        assert failures == ["CODEX_SESSION_FAILED"]
-        assert not runner.can_accept_message
-
-    asyncio.run(run())
-
-
-def test_response_at_the_size_limit_is_accepted() -> None:
-    async def run() -> None:
-        runner, failures = _runner(Session("x" * 65_536))
+        session.response = "x" * 65_536
         runner.add_user_message("go")
         assert (await runner.advance()).status == "complete"
         assert failures == []
 
-    asyncio.run(run())
+
+@pytest.mark.asyncio
+async def test_non_text_or_oversized_response_halts_and_closes(subtests):
+
+    async with asyncio.timeout(30):
+        for response in [None, b"bytes", 42, "x" * 65_537]:
+            with subtests.test(response=response):
+                runner, failures = _runner(Session(response))
+                runner.add_user_message("go")
+                update = await runner.advance()
+                assert update.status == "halted"
+                assert update.assistant_text is None
+                assert failures == ["CODEX_SESSION_FAILED"]
+                assert not runner.can_accept_message
 
 
-@pytest.mark.parametrize(
-    ("error", "code"),
-    [
-        (CodexAuthenticationError(), "CODEX_AUTH_FAILED"),
-        (CodexSessionError(), "CODEX_SESSION_FAILED"),
-    ],
-)
-def test_session_failures_halt_only_with_a_fixed_code(error: BaseException, code: str) -> None:
-    async def run() -> None:
-        runner, failures = _runner(Session(error=error))
-        runner.add_user_message("go")
-        update = await runner.advance()
-        assert update.status == "halted"
-        assert failures == [code]
-        assert not runner.can_accept_message
+@pytest.mark.asyncio
+async def test_session_failures_halt_only_with_a_fixed_code(subtests):
 
-    asyncio.run(run())
+    async with asyncio.timeout(30):
+        for error, code in [
+            (CodexAuthenticationError(), "CODEX_AUTH_FAILED"),
+            (CodexSessionError(), "CODEX_SESSION_FAILED"),
+        ]:
+            with subtests.test(error=error, code=code):
+                runner, failures = _runner(Session(error=error))
+                runner.add_user_message("go")
+                update = await runner.advance()
+                assert update.status == "halted"
+                assert failures == [code]
+                assert not runner.can_accept_message
 
 
-def test_unclassified_error_reports_one_failure_and_propagates() -> None:
-    async def run() -> None:
+@pytest.mark.asyncio
+async def test_unclassified_error_reports_one_failure_and_propagates() -> None:
+    async with asyncio.timeout(30):
         runner, failures = _runner(Session(error=OSError("PRIVATE_MARKER")))
         runner.add_user_message("go")
         with pytest.raises(OSError, match="PRIVATE_MARKER"):
@@ -150,11 +129,10 @@ def test_unclassified_error_reports_one_failure_and_propagates() -> None:
         assert failures == ["CODEX_SESSION_FAILED"]
         assert not runner.can_accept_message
 
-    asyncio.run(run())
 
-
-def test_close_during_send_discards_the_late_answer_without_failure() -> None:
-    async def run() -> None:
+@pytest.mark.asyncio
+async def test_close_during_send_discards_the_late_answer_without_failure() -> None:
+    async with asyncio.timeout(30):
         session = Session("late answer")
         session.release.clear()
         runner, failures = _runner(session)
@@ -168,11 +146,3 @@ def test_close_during_send_discards_the_late_answer_without_failure() -> None:
         assert update.status == "closed"
         assert update.assistant_text is None
         assert failures == []
-
-    asyncio.run(run())
-
-
-def test_approval_resume_is_refused_until_the_notification_contract_exists() -> None:
-    runner, _ = _runner(Session())
-    with pytest.raises(RunnerStateError):
-        asyncio.run(runner.resume_approval("task-1", 3, "approval-1", object()))

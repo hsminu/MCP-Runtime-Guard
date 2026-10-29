@@ -36,7 +36,6 @@ import asyncio
 import contextlib
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
 
 from guard_app.security.codex_home import (
     CODEX_CONFIG_DIR,
@@ -47,10 +46,11 @@ from guard_app.security.codex_home import (
     verify_codex_home,
     write_codex_home,
 )
+from guard_app.security.ids import new_id, new_token
 from guard_app.security.launcher import CodexLauncher, LaunchedProcess, LaunchError
 from guard_app.security.paths import AppFolders, AppPathError, prepare_app_folders
 from guard_app.services.account_runtime import AccountAccess, AccountUnavailableError
-from guard_app.services.codex_account import AccountError
+from guard_app.services.codex_account import AccountError, BrowserLoginOpener
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
     SessionPreparation,
@@ -149,8 +149,9 @@ class CodexProcessPreparation:
             self._cleanup_task,
         )
 
-    def account_access(self) -> AccountAccess:
-        return AccountAccess(self._launch_account, self._clear_credentials)
+    def account_access(self, *, open_browser: BrowserLoginOpener | None = None) -> AccountAccess:
+        """A109: composition supplies C's validated opener once that entry point exists."""
+        return AccountAccess(self._launch_account, self._clear_credentials, open_browser)
 
     def claim(self) -> None:
         """Take the single-instance lock and clear stale Task folders (A102).
@@ -233,7 +234,7 @@ class CodexProcessPreparation:
                 # until the next app start clears it.
                 with contextlib.suppress(AppPathError):
                     folders.remove_task_folder(folder)
-        token = uuid4().hex
+        token = new_token()
         self._tasks[token] = _TaskProcess(folder, process)
         return TaskResources(task_id, configuration, token, process)
 
@@ -258,7 +259,7 @@ class CodexProcessPreparation:
             # Startup refused Codex; trying again in this run cannot help.
             raise AccountUnavailableError() from None
         try:
-            folder = folders.create_task_folder(f"account-{uuid4().hex}")
+            folder = folders.create_task_folder(new_id("account"))
         except AppPathError:
             raise AccountError() from None
         launched = False

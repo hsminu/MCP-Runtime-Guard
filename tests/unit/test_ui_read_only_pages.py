@@ -29,7 +29,6 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
     window = GuardWindow()
     window.show()
     app.processEvents()
-
     approval_queries = []
     window.approval_query_requested.connect(approval_queries.append)
     window.set_approval_query_connected(True)
@@ -50,7 +49,6 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
     assert window.set_approval_page(ApprovalPage(query, (summary,), 1))
     window.navigate("approvals", "approval-1")
     assert window.approval_page.selected_summary == summary
-
     log_requests = []
     window.call_log_detail_requested.connect(log_requests.append)
     call = PublicCallSummary(
@@ -101,7 +99,6 @@ def test_server_scan_reply_is_bound_to_current_detail_opening(
     detail.close()
     app.processEvents()
     assert not window.set_scan_snapshot(server_id, token, snapshot)
-
     window.server_page.detail_button.click()
     _, new_token = requested[-1]
     assert new_token != token

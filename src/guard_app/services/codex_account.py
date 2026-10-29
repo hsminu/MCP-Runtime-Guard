@@ -11,7 +11,9 @@ and plan.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import contextlib
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from guard_app.adapters.codex_protocol import initialize_params
@@ -20,6 +22,12 @@ from guard_app.adapters.jsonrpc_client import JsonRpcClient, JsonRpcError, JsonR
 from guard_app.services.codex_session import REMOTE_CONTROL_STATUS, CodexPipes
 
 _PLAN_MAX = 40
+
+# C must validate the pinned Codex authorization URL and open the default
+# browser. False means validation/opening failed; no URL or exception text
+# leaves this callback. It must propagate cancellation. None disables browser
+# login before any RPC is sent; A bounds opening by the account RPC timeout.
+type BrowserLoginOpener = Callable[[str], Awaitable[bool]]
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -36,12 +44,14 @@ class AccountView:
     verification_url: str | None = None
     user_code: str | None = None
     notice: str | None = None
+    browser_available: bool = False
 
 
 class CodexAccountPort(Protocol):
     async def read(self) -> AccountView: ...
     async def login_api_key(self, key: str) -> AccountView: ...
     async def start_device_login(self) -> AccountView: ...
+    async def start_browser_login(self) -> AccountView: ...
     async def wait_login(self, login_id: str) -> AccountView: ...
     async def cancel_login(self, login_id: str) -> AccountView: ...
     async def logout(self) -> AccountView: ...
@@ -50,7 +60,14 @@ class CodexAccountPort(Protocol):
 class CodexAccountClient:
     """One app-server connection used only for account methods."""
 
-    def __init__(self, pipes: CodexPipes, *, version: str, request_timeout_s: float = 30.0) -> None:
+    def __init__(
+        self,
+        pipes: CodexPipes,
+        *,
+        version: str,
+        request_timeout_s: float = 30.0,
+        open_browser: BrowserLoginOpener | None = None,
+    ) -> None:
         self._channel = CodexStreamChannel(
             pipes.read_bytes, pipes.write_bytes, pipes.drain, max_frame_bytes=1024 * 1024
         )
@@ -66,6 +83,8 @@ class CodexAccountClient:
         self._started = False
         self._completed: dict[str, bool] = {}
         self._changed = asyncio.Event()
+        self._open_browser = open_browser
+        self._open_timeout_s = request_timeout_s
 
     @property
     def closed(self) -> bool:
@@ -84,6 +103,9 @@ class CodexAccountClient:
             raise AccountError() from None
 
     async def read(self) -> AccountView:
+        return replace(await self._read(), browser_available=self._open_browser is not None)
+
+    async def _read(self) -> AccountView:
         result = await self._call("account/read", {"refreshToken": False})
         account = result.get("account") if type(result) is dict else None
         if account is None:
@@ -107,20 +129,52 @@ class CodexAccountClient:
         return await self.read()
 
     async def start_device_login(self) -> AccountView:
+        self._completed.clear()
         result = await self._call("account/login/start", {"type": "chatgptDeviceCode"})
         if type(result) is not dict:
-            return AccountView("FAILED")
+            return AccountView("FAILED", browser_available=self._open_browser is not None)
         login_id, url, code = (
             result.get(key) for key in ("loginId", "verificationUrl", "userCode")
         )
         if not all(type(value) is str and value for value in (login_id, url, code)):
-            return AccountView("FAILED")
+            return AccountView("FAILED", browser_available=self._open_browser is not None)
         return AccountView(
             "PENDING_DEVICE",
             login_id=str(login_id),
             verification_url=str(url),
             user_code=str(code),
+            browser_available=self._open_browser is not None,
         )
+
+    async def start_browser_login(self) -> AccountView:
+        opener = self._open_browser
+        if opener is None:
+            return AccountView("FAILED", notice="BROWSER_LOGIN_UNAVAILABLE")
+        self._completed.clear()
+        result = await self._call("account/login/start", {"type": "chatgpt"})
+        if type(result) is not dict or result.get("type") != "chatgpt":
+            raise AccountError()
+        login_id, url = result.get("loginId"), result.get("authUrl")
+        if type(login_id) is not str or not 0 < len(login_id) <= 256:
+            raise AccountError()
+        opened = False
+        try:
+            if type(url) is str and url:
+                async with asyncio.timeout(self._open_timeout_s):
+                    opened = await opener(url) is True
+        except TimeoutError:
+            opened = False
+        except asyncio.CancelledError:
+            # A109: release Codex's callback, then preserve cancellation even
+            # if the connection failed. ProductAccount also ends the process.
+            with contextlib.suppress(AccountError):
+                await self.cancel_login(login_id)
+            raise
+        if not opened:
+            await self.cancel_login(login_id)
+            return AccountView("FAILED", notice="BROWSER_OPEN_FAILED", browser_available=True)
+        # The URL stays on the backend, never in a Qt event, ledger or log.
+        return AccountView("PENDING_BROWSER", login_id=login_id, browser_available=True)
 
     async def wait_login(self, login_id: str) -> AccountView:
         while login_id not in self._completed:
@@ -139,7 +193,12 @@ class CodexAccountClient:
         return await self.read()
 
     async def cancel_login(self, login_id: str) -> AccountView:
-        await self._call("account/login/cancel", {"loginId": login_id})
+        try:
+            await self._call("account/login/cancel", {"loginId": login_id})
+        except AccountRefusedError:
+            # A refused cancel may leave Codex's login callback running, so the
+            # owner must end this app-server like any unknown outcome.
+            raise AccountError() from None
         self._completed.setdefault(login_id, False)
         self._changed.set()
         return await self.read()
@@ -159,7 +218,9 @@ class CodexAccountClient:
     async def _call(self, method: str, params: object) -> object:
         try:
             return await self._client.request(method, params)
-        except (JsonRpcError, JsonRpcRemoteError):
+        except JsonRpcRemoteError:
+            raise AccountRefusedError() from None
+        except JsonRpcError:
             raise AccountError() from None
 
     def _notification(self, method: str, params: object) -> None:
@@ -183,3 +244,7 @@ class AccountError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("CODEX_ACCOUNT_FAILED")
+
+
+class AccountRefusedError(AccountError):
+    """The app-server answered with a JSON-RPC error: nothing it refused runs on."""

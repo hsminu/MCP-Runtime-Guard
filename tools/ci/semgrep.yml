@@ -1,0 +1,102 @@
+# Semgrep rules (C2.9, C6.3; technical design 13.4). CI runs them on `src/` in a Linux job:
+#   semgrep scan --config tools/ci/semgrep.yml --error --metrics=off src
+# Tests and attack fixtures use these APIs on purpose and are not scanned (attack fixtures:
+# weakness register AF-01). `paths` patterns start with `/`: anchored at the repository root.
+# Rule tests: tools/ci/semgrep.py (`semgrep --test`). The inline exceptions must equal
+# SG-01..04 and the designed broad-except boundaries exactly:
+# tools/ci/check_semgrep_exceptions.py reads a `--disable-nosem` scan.
+# An inline exception is `# nosemgrep: <rule-id>` on the first line of the finding, with the
+# reason in a comment and a row in docs/weakness_register.md (one reviewer approves it).
+rules:
+  - id: no-dynamic-exec
+    languages: [python]
+    severity: ERROR
+    message: eval/exec are not allowed
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+
+  - id: subprocess-only-in-launcher
+    languages: [python]
+    severity: ERROR
+    message: start processes only through security.launcher
+    pattern-either:
+      - pattern: subprocess.$F(...)
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+    paths:
+      exclude:
+        - /src/guard_app/security/launcher.py
+
+  - id: no-shell-true
+    languages: [python]
+    severity: ERROR
+    message: shell=True is not allowed
+    pattern: $F(..., shell=True, ...)
+
+  - id: sqlite-only-in-storage
+    languages: [python]
+    severity: ERROR
+    message: SQL runs only in the storage layer
+    pattern: sqlite3.connect(...)
+    paths:
+      exclude:
+        - /src/guard_app/storage/
+
+  - id: no-assert-for-checks
+    languages: [python]
+    severity: ERROR
+    message: do not use assert for checks (removed under -O)
+    pattern: assert $X
+
+  - id: no-swallow
+    languages: [python]
+    severity: ERROR
+    message: do not swallow exceptions; use fail_closed or handle the case
+    pattern-either:
+      - pattern: |
+          try:
+            ...
+          except $E:
+            pass
+      - pattern: |
+          try:
+            ...
+          except $E as $N:
+            pass
+
+  - id: broad-except-only-in-allowed
+    languages: [python]
+    severity: ERROR
+    message: broad exception handling only in fail_closed, after_dispatch and ServerWorker._execute
+    # The `except` clause text, not a structural pattern: in a tuple handler Semgrep binds a
+    # metavariable to the first element only, so `except (OSError, Exception)` slipped through.
+    # A finding starts on the `except` line. `ExceptionGroup` and `CustomException` do not match.
+    pattern-either:
+      - pattern-regex: '(?m)^[ \t]*except\b[^:]*\b(?:Exception|BaseException)\b[^:]*:'
+      - pattern-regex: '(?m)^[ \t]*except[ \t]*:'
+    # No file is excluded. The designed boundaries (fail_closed, after_dispatch,
+    # ServerWorker._execute) carry `# nosemgrep` on their own `except` lines, so a new broad
+    # handler elsewhere in those files is still reported.
+
+  - id: no-unsafe-deserialize
+    languages: [python]
+    severity: ERROR
+    message: pickle and yaml.load are not allowed
+    pattern-either:
+      - pattern: pickle.$F(...)
+      - pattern: yaml.load(...)
+
+  - id: no-tls-bypass
+    languages: [python]
+    severity: ERROR
+    message: do not turn off certificate checks
+    pattern: $F(..., verify=False, ...)
+
+  - id: no-weak-hash
+    languages: [python]
+    severity: ERROR
+    message: MD5 and SHA-1 are not allowed
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)

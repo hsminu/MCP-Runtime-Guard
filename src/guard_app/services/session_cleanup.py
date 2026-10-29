@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from guard_app.security.ids import token_matches
 from guard_app.services.runner import CodexSession
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 from guard_app.services.session_preparation import SessionPreparation, TaskResources
@@ -37,6 +38,10 @@ class CleanupLimits:
     # this long for it after the transport has settled reserved calls, before
     # Guard and the Store close; what remains is then reported unconfirmed.
     stop_record_s: float = 5.0
+    # SQLiteStore.close() only asks its writer to finish and close the connection
+    # (B6.13, #58). B's shutdown order waits wait_closed(5.0) for it; unconfirmed,
+    # the app ends still holding its lock (A136, REC-01).
+    store_close_s: float = 5.0
 
 
 class BackgroundWork:
@@ -108,7 +113,8 @@ class SessionCleanup:
             or len(resources.owner_token) > 256
             or resources.handle is None
             or any(
-                resources.owner_token == owned.owner_token or resources.handle is owned.handle
+                token_matches(owned.owner_token, resources.owner_token)
+                or resources.handle is owned.handle
                 for owned in self._resources.values()
             )
         ):

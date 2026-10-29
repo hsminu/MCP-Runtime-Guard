@@ -1,34 +1,27 @@
-"""A111: static rules over A-owned modules that restructuring must keep.
-
-A's own guard while it refactors its code. Project-wide static enforcement
-(import-linter, Semgrep, CI) stays C's (C6.3); these checks read only A modules.
-
-- I1/T08: the MCP transport is built only inside Guard assembly, and the `mcp`
-  SDK is imported only inside the transport package (technical design 2.2); the
-  UI reaches the backend only through the bridge.
-- 13.1: risky operations (processes, files, SQL, sockets) go through C's and B's
-  designated modules, never A's.
-- AGENTS 2026-10-18: broad exception handling only at the designated boundary.
-- I9: no raw output channel besides the entry point's fixed lines; the UI never
-  renders model or tool text as rich text.
-
-A module added by the refactoring must be classified below, or the
-classification test fails.
+"""A111 / C6.3: A-module rules; project-wide enforcement belongs to C.
+I1/T08 (design 2.2): Guard-only MCP and UI bridge access.
+Design 13.1: designated risky operations; AGENTS 2026-10-18 exception boundary.
+I9: fixed output and plain text. Newly added modules must be classified.
 """
 
 from __future__ import annotations
 
 import ast
+from functools import cache
 from pathlib import Path
-
-import pytest
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "guard_app"
 
 A_SERVICES = frozenset(
-    {
+    [
         "account_runtime",
         "bridge",
+        "bridge_bindings",
+        "bridge_commands",
+        "bridge_ingress",
+        "bridge_lanes",
+        "bridge_streams",
+        "bridge_types",
         "codex_account",
         "codex_composition",
         "codex_preparation",
@@ -48,10 +41,10 @@ A_SERVICES = frozenset(
         "session_startup",
         "session_stops",
         "task_tool_calls",
-    }
+    ]
 )
 A_ADAPTERS = frozenset(
-    {
+    [
         "access_rules_checker",
         "codex_protocol",
         "codex_stream",
@@ -59,11 +52,11 @@ A_ADAPTERS = frozenset(
         "mcp_http_ingress",
         "mcp_ingress",
         "mcp_transport",
-    }
+    ]
 )
 # B and C modules are not checked here.
 OTHER_SERVICES = frozenset(
-    {
+    [
         "approvals",
         "catalog",
         "catalog_schema",
@@ -73,12 +66,12 @@ OTHER_SERVICES = frozenset(
         "response_gate",
         "scanner",
         "state_checks",
-    }
+    ]
 )
 OTHER_ADAPTERS = frozenset({"cisco", "cisco_aggregation", "cisco_llm"})
 
 FORBIDDEN_IMPORTS = frozenset(
-    {
+    [
         "ctypes",
         "marshal",
         "multiprocessing",
@@ -89,7 +82,7 @@ FORBIDDEN_IMPORTS = frozenset(
         "sqlite3",
         "subprocess",
         "tempfile",
-    }
+    ]
 )
 FORBIDDEN_CALLS = frozenset({"eval", "exec", "compile", "__import__"})
 # Where a broad handler is allowed: (module, class, function).
@@ -154,12 +147,12 @@ def _imports(tree: ast.AST, module: str, *, is_package: bool = False) -> set[str
     return names
 
 
+@cache
 def _tree(path: Path) -> ast.AST:
     return ast.parse(path.read_text("utf-8"), filename=str(path))
 
 
 A_MODULES = a_modules()
-A_IDS = [name for name, _path in A_MODULES]
 
 
 def test_every_service_and_adapter_module_is_classified() -> None:
@@ -173,8 +166,7 @@ def test_every_service_and_adapter_module_is_classified() -> None:
         assert not ours & others
 
 
-@pytest.mark.parametrize(("module", "path"), A_MODULES, ids=A_IDS)
-def test_layer_imports(module: str, path: Path) -> None:
+def _layer_imports(module: str, path: Path) -> None:
     imports = {
         name
         for name in _imports(_tree(path), module, is_package=path.stem == "__init__")
@@ -191,6 +183,7 @@ def test_layer_imports(module: str, path: Path) -> None:
         )
 
 
+@cache
 def _source_imports() -> dict[str, set[str]]:
     return {
         _module_name(path): _imports(
@@ -222,8 +215,29 @@ def test_only_the_transport_package_imports_the_mcp_sdk() -> None:
     assert all(_in_transport(module) for module in importers), sorted(importers)
 
 
-@pytest.mark.parametrize(("module", "path"), A_MODULES, ids=A_IDS)
-def test_no_risky_operation_or_output_channel(module: str, path: Path) -> None:
+def test_only_the_bridge_facade_brings_qt_into_a_services() -> None:
+    """A115: outside ui and the entry point, only the bridge facade uses Qt.
+
+    A module that builds or reads bridge values imports ``services.bridge_types``.
+    """
+    outside_ui = {
+        module: _imports(_tree(path), module, is_package=path.stem == "__init__")
+        for module, path in A_MODULES
+        if module != "__main__" and module != "ui" and not module.startswith("ui.")
+    }
+    qt = {
+        module
+        for module, names in outside_ui.items()
+        if any(name == "PySide6" or name.startswith("PySide6.") for name in names)
+    }
+    facade = {
+        module for module, names in outside_ui.items() if "guard_app.services.bridge" in names
+    }
+    assert qt == {"services.bridge"}
+    assert not facade, sorted(facade)
+
+
+def _no_risky_operation_or_output_channel(module: str, path: Path) -> None:
     tree = _tree(path)
     roots = {
         name.split(".")[0] for name in _imports(tree, module, is_package=path.stem == "__init__")
@@ -240,8 +254,7 @@ def test_no_risky_operation_or_output_channel(module: str, path: Path) -> None:
                 assert module == "__main__", node.lineno
 
 
-@pytest.mark.parametrize(("module", "path"), A_MODULES, ids=A_IDS)
-def test_broad_exception_handling_only_at_the_designated_boundary(module: str, path: Path) -> None:
+def _broad_exception_handling_only_at_the_designated_boundary(module: str, path: Path) -> None:
     def broad(handler: ast.ExceptHandler) -> bool:
         kinds = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
         return any(
@@ -267,8 +280,7 @@ def test_broad_exception_handling_only_at_the_designated_boundary(module: str, p
     assert found <= BROAD_EXCEPT_ALLOWED, sorted(found)
 
 
-@pytest.mark.parametrize(("module", "path"), _modules("ui"), ids=[n for n, _ in _modules("ui")])
-def test_ui_never_renders_rich_text(module: str, path: Path) -> None:
+def _ui_never_renders_rich_text(module: str, path: Path) -> None:
     """Model, server and tool text is plain text only (A47, contracts 2026-10-15)."""
     for node in ast.walk(_tree(path)):
         name = (
@@ -285,3 +297,19 @@ def test_ui_never_renders_rich_text(module: str, path: Path) -> None:
             and node.func.attr == "setOpenExternalLinks"
         ):
             assert all(isinstance(arg, ast.Constant) and arg.value is False for arg in node.args)
+
+
+def test_module_security_rules() -> None:
+    failures = []
+    for check, modules in (
+        (_layer_imports, A_MODULES),
+        (_no_risky_operation_or_output_channel, A_MODULES),
+        (_broad_exception_handling_only_at_the_designated_boundary, A_MODULES),
+        (_ui_never_renders_rich_text, _modules("ui")),
+    ):
+        for module, path in modules:
+            try:
+                check(module, path)
+            except AssertionError as error:
+                failures.append((check.__name__, module, str(error)))
+    assert not failures, failures

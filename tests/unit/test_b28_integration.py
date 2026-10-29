@@ -26,23 +26,23 @@ from .test_product_assembly import READ_DEFINITION, Peer, Registry, document, in
 from .test_session_runtime import StoppableSession, make_runtime
 
 
-@pytest.mark.parametrize(
-    ("code", "reason"),
-    [
-        ("CODEX_L3_VIOLATION", SystemStopReason.L3_VIOLATION),
-        ("CODEX_WATCHDOG_TIMEOUT", SystemStopReason.WATCHDOG_EXCEEDED),
-        ("CODEX_AUTH_FAILED", SystemStopReason.AUTH_FAILED),
-        ("CODEX_USAGE_LIMIT", SystemStopReason.USAGE_LIMIT),
-        ("CODEX_TOOL_CALL_INVALID", SystemStopReason.PROTOCOL_FAILED),
-        ("CODEX_SERVER_REQUEST_REFUSED", SystemStopReason.PROTOCOL_FAILED),
-        ("CODEX_SESSION_FAILED", SystemStopReason.PROCESS_FAILED),
-        ("CODEX_TURN_FAILED", SystemStopReason.PROCESS_FAILED),
-        ("CODEX_TOOL_STOPPED", SystemStopReason.PROCESS_FAILED),
-        ("SOMETHING_NEW", SystemStopReason.PROCESS_FAILED),
-    ],
-)
-def test_session_stop_codes_map_to_the_agreed_stop_reasons(code, reason) -> None:
-    assert stop_reason(code) is reason
+def test_session_stop_codes_map_to_the_agreed_stop_reasons(subtests):
+    for case_index, (code, reason) in enumerate(
+        [
+            ("CODEX_L3_VIOLATION", SystemStopReason.L3_VIOLATION),
+            ("CODEX_WATCHDOG_TIMEOUT", SystemStopReason.WATCHDOG_EXCEEDED),
+            ("CODEX_AUTH_FAILED", SystemStopReason.AUTH_FAILED),
+            ("CODEX_USAGE_LIMIT", SystemStopReason.USAGE_LIMIT),
+            ("CODEX_TOOL_CALL_INVALID", SystemStopReason.PROTOCOL_FAILED),
+            ("CODEX_SERVER_REQUEST_REFUSED", SystemStopReason.PROTOCOL_FAILED),
+            ("CODEX_SESSION_FAILED", SystemStopReason.PROCESS_FAILED),
+            ("CODEX_TURN_FAILED", SystemStopReason.PROCESS_FAILED),
+            ("CODEX_TOOL_STOPPED", SystemStopReason.PROCESS_FAILED),
+            ("SOMETHING_NEW", SystemStopReason.PROCESS_FAILED),
+        ]
+    ):
+        with subtests.test(case=case_index):
+            assert stop_reason(code) is reason
 
 
 def audit_rows(db_path, task_id: str) -> list[tuple[str, str]]:
@@ -215,97 +215,108 @@ def test_server_access_change_saves_then_applies_and_stops_old_sessions(tmp_path
     assert servers[1].last_reply["result"]["success"] is False  # type: ignore[attr-defined]
 
 
-@pytest.mark.parametrize(
-    ("save_result", "allowed", "denied", "code"),
-    [
-        (False, (), ("read",), "POLICY_SAVE_FAILED"),
-        (True, ("read",), ("read",), "POLICY_CHANGE_INVALID"),
-        (True, ("missing",), (), "POLICY_CHANGE_INVALID"),
-    ],
-)
-def test_unsaved_or_invalid_access_change_applies_nothing(
-    tmp_path, save_result, allowed, denied, code
-) -> None:
-    servers: list[FakeAppServer] = []
-    saved: list[dict[str, object]] = []
+def test_unsaved_or_invalid_access_change_applies_nothing(tmp_path, subtests):
+    def check(save_result, allowed, denied, code, tmp_path):
+        servers: list[FakeAppServer] = []
+        saved: list[dict[str, object]] = []
 
-    async def run():
-        bindings, _peer = await policy_product(tmp_path, servers, saved, save_result=save_result)
-        try:
-            assert bindings.policy_access is not None
-            assert bindings.create_session is not None
-            assert bindings.snapshot is not None
-            created = await bindings.create_session(SessionOptions())
-            with pytest.raises(SessionRuntimeError) as refused:
-                await bindings.policy_access("docs", allowed, denied)
-            after = await bindings.snapshot(created.task_id)
-            return refused.value.code, after
-        finally:
-            assert bindings.close is not None
-            await bindings.close()
+        async def run():
+            bindings, _peer = await policy_product(
+                tmp_path, servers, saved, save_result=save_result
+            )
+            try:
+                assert bindings.policy_access is not None
+                assert bindings.create_session is not None
+                assert bindings.snapshot is not None
+                created = await bindings.create_session(SessionOptions())
+                with pytest.raises(SessionRuntimeError) as refused:
+                    await bindings.policy_access("docs", allowed, denied)
+                after = await bindings.snapshot(created.task_id)
+                return refused.value.code, after
+            finally:
+                assert bindings.close is not None
+                await bindings.close()
 
-    refused_code, after = asyncio.run(run())
-    assert refused_code == code
-    assert after.status is TaskStatus.RUNNING
-    assert after.connection_code == "READY_CODEX"
-    assert len(saved) == (1 if code == "POLICY_SAVE_FAILED" else 0)
+        refused_code, after = asyncio.run(run())
+        assert refused_code == code
+        assert after.status is TaskStatus.RUNNING
+        assert after.connection_code == "READY_CODEX"
+        assert len(saved) == (1 if code == "POLICY_SAVE_FAILED" else 0)
+
+    for case_index, (save_result, allowed, denied, code) in enumerate(
+        [
+            (False, (), ("read",), "POLICY_SAVE_FAILED"),
+            (True, ("read",), ("read",), "POLICY_CHANGE_INVALID"),
+            (True, ("missing",), (), "POLICY_CHANGE_INVALID"),
+        ]
+    ):
+        with subtests.test(case=case_index):
+            case_path = tmp_path / str(case_index)
+            case_path.mkdir()
+            check(save_result, allowed, denied, code, case_path)
 
 
-@pytest.mark.parametrize("failure", ["refused", "failed"])
-def test_saved_but_unapplied_change_closes_guard_until_restart(tmp_path, monkeypatch, failure):
-    """A104 (#33 B reply): the file holds the new rules but Guard does not.
+def test_saved_but_unapplied_change_closes_guard_until_restart(tmp_path, monkeypatch, subtests):
+    def check(failure, tmp_path, monkeypatch):
+        """A104 (#33 B reply): the file holds the new rules but Guard does not.
 
-    "refused": Guard rejects before applying and would keep its old rules.
-    "failed": applying fails and Guard halts itself. Either way no new tool call
-    runs, no session starts and nothing is saved again until a restart.
-    """
-    if failure == "refused":
+        "refused": Guard rejects before applying and would keep its old rules.
+        "failed": applying fails and Guard halts itself. Either way no new tool call
+        runs, no session starts and nothing is saved again until a restart.
+        """
+        if failure == "refused":
 
-        async def refuse(self, change, access_checker, *, task_source):
-            raise PolicyChangeError("private-refusal")
+            async def refuse(self, change, access_checker, *, task_source):
+                raise PolicyChangeError("private-refusal")
 
-        monkeypatch.setattr(GuardService, "apply_policy_change", refuse)
-    else:
+            monkeypatch.setattr(GuardService, "apply_policy_change", refuse)
+        else:
 
-        async def fail(self, change, access_checker, task_source):
-            raise StoreError(Reason.STATE_COMMIT_FAILED)
+            async def fail(self, change, access_checker, task_source):
+                raise StoreError(Reason.STATE_COMMIT_FAILED)
 
-        monkeypatch.setattr(GuardService, "_apply_policy_change", fail)
-    servers: list[FakeAppServer] = []
-    saved: list[dict[str, object]] = []
+            monkeypatch.setattr(GuardService, "_apply_policy_change", fail)
+        servers: list[FakeAppServer] = []
+        saved: list[dict[str, object]] = []
 
-    async def run():
-        bindings, peer = await policy_product(tmp_path, servers, saved)
-        try:
-            assert bindings.policy_access is not None
-            assert bindings.create_session is not None
-            assert bindings.session_blocker is not None
-            old = await bindings.create_session(SessionOptions())
-            with pytest.raises(SessionRuntimeError) as refused:
-                await bindings.policy_access("docs", (), ("read",))
-            blocker = bindings.session_blocker()
-            with pytest.raises(SessionRuntimeError) as again:
-                await bindings.policy_access("docs", (), ("read",))
-            with pytest.raises(SessionRuntimeError) as created:
-                await bindings.create_session(SessionOptions())
-            runner = bindings.runner_for_task(old.task_id)
-            runner.add_user_message("summarize the public document")
-            update = await asyncio.wait_for(runner.advance(), 5)
-            return (refused.value, again.value, created.value), blocker, update, peer
-        finally:
-            assert bindings.close is not None
-            await bindings.close()
+        async def run():
+            bindings, peer = await policy_product(tmp_path, servers, saved)
+            try:
+                assert bindings.policy_access is not None
+                assert bindings.create_session is not None
+                assert bindings.session_blocker is not None
+                old = await bindings.create_session(SessionOptions())
+                with pytest.raises(SessionRuntimeError) as refused:
+                    await bindings.policy_access("docs", (), ("read",))
+                blocker = bindings.session_blocker()
+                with pytest.raises(SessionRuntimeError) as again:
+                    await bindings.policy_access("docs", (), ("read",))
+                with pytest.raises(SessionRuntimeError) as created:
+                    await bindings.create_session(SessionOptions())
+                runner = bindings.runner_for_task(old.task_id)
+                runner.add_user_message("summarize the public document")
+                update = await asyncio.wait_for(runner.advance(), 5)
+                return (refused.value, again.value, created.value), blocker, update, peer
+            finally:
+                assert bindings.close is not None
+                await bindings.close()
 
-    errors, blocker, update, peer = asyncio.run(run())
-    assert [error.code for error in errors] == ["POLICY_APPLY_FAILED"] * 3
-    assert all("private" not in str(error) for error in errors)
-    assert blocker == "POLICY_APPLY_FAILED"
-    assert len(saved) == 1  # never saved a second time
-    # The old session's READ is refused by the closed Guard, never dispatched.
-    assert update.status == "complete"
-    assert peer.calls == []
-    assert servers[0].last_reply["result"]["success"] is False  # type: ignore[attr-defined]
-    assert len(servers) == 1  # no new session was launched
+        errors, blocker, update, peer = asyncio.run(run())
+        assert [error.code for error in errors] == ["POLICY_APPLY_FAILED"] * 3
+        assert all("private" not in str(error) for error in errors)
+        assert blocker == "POLICY_APPLY_FAILED"
+        assert len(saved) == 1  # never saved a second time
+        # The old session's READ is refused by the closed Guard, never dispatched.
+        assert update.status == "complete"
+        assert peer.calls == []
+        assert servers[0].last_reply["result"]["success"] is False  # type: ignore[attr-defined]
+        assert len(servers) == 1  # no new session was launched
+
+    for case_index, failure in enumerate(["refused", "failed"]):
+        with subtests.test(case=case_index), monkeypatch.context() as patch:
+            case_path = tmp_path / str(case_index)
+            case_path.mkdir()
+            check(failure, case_path, patch)
 
 
 class WatchedLock(asyncio.Lock):
@@ -445,92 +456,58 @@ def test_without_a_profile_saver_policy_change_is_unavailable(tmp_path) -> None:
     assert access is None
 
 
-def test_closing_the_assembly_ends_transport_then_closes_guard(tmp_path) -> None:
-    """NOTIFY-01 shutdown order: transport first, then Guard.aclose (no new approvals)."""
-    from uuid import uuid4
+def test_human_stop_with_guard_leaves_the_store_to_guard(tmp_path, subtests):
+    def check(guard_stopped_first, tmp_path):
+        """PR #29 B review 5: after the bridge's human cancel, A writes no HALTED itself.
 
-    from guard_app.services.product_assembly import assemble_guard
-    from guard_app.storage.sqlite_store import SQLiteStore
+        Nor before Guard's stop has landed (it may wait for the Task lock behind an
+        in-flight submit): the row stays Guard's to write.
+        """
+        from guard_app.services.bridge import ControlAction
 
-    order: list[str] = []
+        db_path = tmp_path / "human.db"
 
-    async def run():
-        store = SQLiteStore(tmp_path / "close.db", audit_id_factory=lambda: f"audit-{uuid4().hex}")
-        try:
-            assembled = await assemble_guard(
-                store,
-                inputs(
+        async def run():
+            bindings = await bootstrap_product(
+                str(db_path),
+                preparation=preparation([], read_then_answer),
+                product=inputs(
                     Peer([READ_DEFINITION]), Registry(tool_fingerprint(READ_DEFINITION)), document()
                 ),
             )
-            close_transport, close_guard = assembled.transport.close, assembled.guard.aclose
+            try:
+                assert bindings.create_session is not None
+                assert bindings.stop_session is not None
+                assert bindings.human_control is not None
+                assert bindings.snapshot is not None
+                runtime = bindings.stop_session.__self__  # type: ignore[attr-defined]
+                created = await bindings.create_session(SessionOptions())
+                if guard_stopped_first:
+                    # The bridge's order: Guard's human channel first, then the session.
+                    await bindings.human_control.cancel(created.task_id)
+                writes: list[str] = []
+                set_task_status = runtime.store.set_task_status
 
-            async def transport_closed():
-                order.append("transport")
-                await close_transport()
+                async def recording_status(task_id, *args, **kwargs):
+                    writes.append(task_id)
+                    return await set_task_status(task_id, *args, **kwargs)
 
-            async def guard_closed():
-                order.append("guard")
-                await close_guard()
+                runtime.store.set_task_status = recording_status
+                await bindings.stop_session(created.task_id, created.epoch, ControlAction.CANCEL)
+                after = await bindings.snapshot(created.task_id)
+                return created.task_id, after, writes
+            finally:
+                assert bindings.close is not None
+                await bindings.close()
 
-            assembled.transport.close = transport_closed  # type: ignore[method-assign]
-            assembled.guard.aclose = guard_closed  # type: ignore[method-assign]
-            await assembled.aclose()
-        finally:
-            store.close()
+        task_id, after, writes = asyncio.run(run())
+        assert writes == []
+        assert after.status is (TaskStatus.HALTED if guard_stopped_first else TaskStatus.RUNNING)
+        assert not after.can_accept_message
+        assert all(event != "SESSION_STOPPED" for event, _ in audit_rows(db_path, task_id))
 
-    asyncio.run(run())
-    assert order == ["transport", "guard"]
-
-
-@pytest.mark.parametrize(
-    "guard_stopped_first", [True, False], ids=["bridge-order", "guard-pending"]
-)
-def test_human_stop_with_guard_leaves_the_store_to_guard(tmp_path, guard_stopped_first) -> None:
-    """PR #29 B review 5: after the bridge's human cancel, A writes no HALTED itself.
-
-    Nor before Guard's stop has landed (it may wait for the Task lock behind an
-    in-flight submit): the row stays Guard's to write.
-    """
-    from guard_app.services.bridge import ControlAction
-
-    db_path = tmp_path / "human.db"
-
-    async def run():
-        bindings = await bootstrap_product(
-            str(db_path),
-            preparation=preparation([], read_then_answer),
-            product=inputs(
-                Peer([READ_DEFINITION]), Registry(tool_fingerprint(READ_DEFINITION)), document()
-            ),
-        )
-        try:
-            assert bindings.create_session is not None
-            assert bindings.stop_session is not None
-            assert bindings.human_control is not None
-            assert bindings.snapshot is not None
-            runtime = bindings.stop_session.__self__  # type: ignore[attr-defined]
-            created = await bindings.create_session(SessionOptions())
-            if guard_stopped_first:
-                # The bridge's order: Guard's human channel first, then the session.
-                await bindings.human_control.cancel(created.task_id)
-            writes: list[str] = []
-            set_task_status = runtime.store.set_task_status
-
-            async def recording_status(task_id, *args, **kwargs):
-                writes.append(task_id)
-                return await set_task_status(task_id, *args, **kwargs)
-
-            runtime.store.set_task_status = recording_status
-            await bindings.stop_session(created.task_id, created.epoch, ControlAction.CANCEL)
-            after = await bindings.snapshot(created.task_id)
-            return created.task_id, after, writes
-        finally:
-            assert bindings.close is not None
-            await bindings.close()
-
-    task_id, after, writes = asyncio.run(run())
-    assert writes == []
-    assert after.status is (TaskStatus.HALTED if guard_stopped_first else TaskStatus.RUNNING)
-    assert not after.can_accept_message
-    assert all(event != "SESSION_STOPPED" for event, _ in audit_rows(db_path, task_id))
+    for case_index, guard_stopped_first in enumerate([True, False]):
+        with subtests.test(case=case_index):
+            case_path = tmp_path / str(case_index)
+            case_path.mkdir()
+            check(guard_stopped_first, case_path)

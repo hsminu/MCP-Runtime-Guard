@@ -51,11 +51,7 @@ def test_without_a_profile_the_policy_page_says_so(app) -> None:
     assert window.policy_page.isVisibleTo(window)
     assert window.policy_page.summary.text() == NO_PROFILE
     assert window.policy_page.rules.rowCount() == 0
-    window.close()
-
-
-def test_profile_rules_are_listed_as_plain_identifiers(app) -> None:
-    page = PolicyPage()
+    page = window.policy_page
     page.set_view(view())
     assert "Profile default" in page.summary.text()
     assert "f" * 12 in page.summary.text()
@@ -69,54 +65,36 @@ def test_profile_rules_are_listed_as_plain_identifiers(app) -> None:
     assert set(page.server_buttons) == {"docs"}
     page.set_view(None)
     assert page.server_buttons == {}
-    page.close()
+    window.close()
 
 
 def test_activation_dialog_defaults_and_cannot_save_without_b310(app) -> None:
+    # B3.10 / I11: only READ/SEND choices reach the policy command.
     page = PolicyPage()
-    page.set_view(view(change=False))
-    dialog = page.open_allow_dialog(view().servers[0])
-    assert dialog is not None
-    boxes = dialog.boxes
-    assert boxes["read"].isChecked()  # existing allow rule
-    assert boxes["send"].isChecked()  # kind fixed: checked by default
-    assert not boxes["misc"].isChecked()  # OTHER: not checked by default
-    assert not dialog.save_button.isEnabled()
-    assert dialog.warning.text() == SAVE_UNAVAILABLE
-    dialog.close()
-    page.close()
-
-
-def test_activation_dialog_with_policy_command_warns_and_reports_the_choice(app) -> None:
-    page = PolicyPage()
-    page.set_view(view(change=True))
     requested = []
     page.allow_change_requested.connect(lambda *event: requested.append(event))
-    dialog = page.open_allow_dialog(view().servers[0])
-    assert dialog is not None
-    assert dialog.warning.text() == STOP_WARNING
-    dialog.boxes["send"].setChecked(False)
-    dialog.save_button.click()
-    # The OTHER tool is not a choice B3.10 takes; only READ/SEND are reported.
-    assert requested == [("docs", ("read",), ("send",))]
-    page.close()
-
-
-def test_activation_dialog_other_tool_is_shown_disabled_and_never_reported(app) -> None:
-    page = PolicyPage()
-    page.set_view(view(change=True))
-    dialog = page.open_allow_dialog(view().servers[0])
-    assert dialog is not None
-    assert set(dialog.boxes) == {"read", "send", "misc"}  # still shown
-    assert dialog.boxes["read"].isEnabled()
-    assert dialog.boxes["send"].isEnabled()
-    assert not dialog.boxes["misc"].isEnabled()
-    # Even a forced check cannot turn an OTHER tool into an allow (I11).
-    dialog.boxes["misc"].setChecked(True)
-    assert dialog.selection() == (("read", "send"), ())
-    dialog.boxes["misc"].setChecked(False)
-    assert dialog.selection() == (("read", "send"), ())
-    dialog.close()
+    for change in (False, True):
+        page.set_view(view(change=change))
+        dialog = page.open_allow_dialog(view().servers[0])
+        assert dialog is not None
+        boxes = dialog.boxes
+        assert set(boxes) == {"read", "send", "misc"}
+        assert boxes["read"].isChecked()
+        assert boxes["send"].isChecked()
+        assert not boxes["misc"].isChecked()
+        assert not boxes["misc"].isEnabled()
+        assert dialog.save_button.isEnabled() is change
+        assert dialog.warning.text() == (STOP_WARNING if change else SAVE_UNAVAILABLE)
+        if change:
+            assert boxes["read"].isEnabled()
+            assert boxes["send"].isEnabled()
+            for forced in (True, False):
+                boxes["misc"].setChecked(forced)
+                assert dialog.selection() == (("read", "send"), ())
+            boxes["send"].setChecked(False)
+            dialog.save_button.click()
+            assert requested == [("docs", ("read",), ("send",))]
+        dialog.close()
     page.close()
 
 
@@ -157,22 +135,6 @@ def _excluded_view() -> PolicyView:
     return replace(view(), codex_excluded=(("crm__export.all", "TOOL_NAME"),))
 
 
-def test_policy_tables_fill_the_page_width_and_show_every_row(app) -> None:
-    """Columns end flush with the table, and the page scrolls instead of the table."""
-    page = PolicyPage()
-    page.set_view(_excluded_view())
-    page.resize(1000, 900)
-    page.show()
-    app.processEvents()
-    for table in (page.rules, page.excluded):
-        assert table.width() > 900
-        assert table.horizontalHeader().length() == table.viewport().width()
-        assert table.verticalScrollBar().maximum() == 0
-        rows = sum(table.rowHeight(row) for row in range(table.rowCount()))
-        assert table.viewport().height() >= rows
-    page.close()
-
-
 def test_excluded_tool_name_and_reason_are_never_cut_off(app) -> None:
     """The name keeps its full width; a long reason wraps and its row grows."""
     from guard_app.ui.policy import EXCLUDED_REASONS
@@ -192,6 +154,13 @@ def test_excluded_tool_name_and_reason_are_never_cut_off(app) -> None:
         assert table.rowHeight(0) >= table.sizeHintForRow(0)
         assert table.horizontalScrollBar().maximum() == 0
         heights.append(table.rowHeight(0))
+        if width == 1000:
+            for table in (page.rules, page.excluded):
+                assert table.width() > 900
+                assert table.horizontalHeader().length() == table.viewport().width()
+                assert table.verticalScrollBar().maximum() == 0
+                rows = sum(table.rowHeight(row) for row in range(table.rowCount()))
+                assert table.viewport().height() >= rows
     assert heights[1] > heights[0]
     assert table.item(0, 0).text() == "crm__export.all"
     assert table.item(0, 1).text() == reason

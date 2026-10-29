@@ -14,17 +14,18 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
-from uuid import uuid4
 
 from guard_app.adapters.codex_protocol import build_dynamic_tools
 from guard_app.domain.contracts import TaskIdentity
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import TaskState
-from guard_app.ports import SessionAudit, Store
+from guard_app.ports import SessionAudit, Store, StoreLifecycle
+from guard_app.security.ids import new_id
 from guard_app.services.account_runtime import AccountAccess, ProductAccount
-from guard_app.services.bridge import (
+from guard_app.services.bridge_types import (
     BackendBindings,
+    BackendCleanupError,
     ControlAction,
     SessionOptions,
     TaskProjection,
@@ -109,9 +110,9 @@ class _Creations:
     Store then stays open until the last such creator returns.
     """
 
-    def __init__(self, close_store: Callable[[], None] | None) -> None:
+    def __init__(self, store: StoreLifecycle | None) -> None:
         self._creators: dict[asyncio.Task[object], str | None] = {}
-        self._close_store = close_store
+        self._store = store
         self._store_close_deferred = False
 
     def enter(self, creator: asyncio.Task[object]) -> None:
@@ -143,15 +144,21 @@ class _Creations:
         self._store_close_deferred = bool(pending)
         return not pending
 
-    def close_store(self) -> None:
-        """Close the Store now, unless a creator still running will close it."""
-        if not self._store_close_deferred or not self._creators:
-            self._close_store_once()
+    def close_store(self) -> StoreLifecycle | None:
+        """Close the Store now, unless a creator still running will close it.
 
-    def _close_store_once(self) -> None:
-        close, self._close_store = self._close_store, None
-        if close is not None:
-            close()
+        Returns the Store this call asked to close. Its close only starts the
+        writer's shutdown (#58); the caller confirms it.
+        """
+        if not self._store_close_deferred or not self._creators:
+            return self._close_store_once()
+        return None
+
+    def _close_store_once(self) -> StoreLifecycle | None:
+        store, self._store = self._store, None
+        if store is not None:
+            store.close()
+        return store
 
 
 def _system_control(store: Store, assembled: AssembledGuard | None) -> SystemControl | None:
@@ -177,7 +184,8 @@ class SessionRuntime:
     launched, StopChannel where a stop is recorded. `system_control` and
     `cleanup_limits` default to Guard's system channel and the reviewed bounds.
     `account` gives the login screen its own app-server (A52); logout waits
-    until no session may run and blocks new ones meanwhile (#21).
+    until no session may run and blocks new ones meanwhile (#21). `owned_store`
+    is the Store shutdown closes, confirmed closed before close returns (#58).
     """
 
     def __init__(
@@ -186,7 +194,7 @@ class SessionRuntime:
         *,
         session_factory: CodexSessionFactory | None = None,
         preparation: SessionPreparation | None = None,
-        close_store: Callable[[], None] | None = None,
+        owned_store: StoreLifecycle | None = None,
         guard_settings: GuardSettings | None = None,
         assembled: AssembledGuard | None = None,
         approvals: ApprovalOutcomes | None = None,
@@ -224,6 +232,7 @@ class SessionRuntime:
         # cleanup so shutdown waits for exactly them before the Store closes.
         self._records = BackgroundWork()
         self._stops_unconfirmed = False
+        self._store_unconfirmed = False
         self._cleanup = SessionCleanup(
             preparation,
             self._admission,
@@ -234,7 +243,7 @@ class SessionRuntime:
         system = _system_control(store, assembled) if system_control is None else system_control
         self._stops = StopChannel(store, system, self._admission, self._records)
         self._events = _TaskEvents(approvals, self._admission)
-        self._creations = _Creations(close_store)
+        self._creations = _Creations(owned_store)
         self._running: dict[str, _RunningTask] = {}
         # What Codex actually receives: Guard tools minus Codex name-rule exclusions.
         # Servers whose tool list changed this run drop out at snapshot (LIST-01).
@@ -315,7 +324,7 @@ class SessionRuntime:
         factory = self._session_factory
         if factory is None:
             raise SessionRuntimeError("CODEX_SESSION_UNAVAILABLE")
-        state = self._policy.task_state(f"session-{uuid4().hex}")
+        state = self._policy.task_state(new_id("session"))
         self._creations.name(creator, state.task_id)
         created = adopted = False
         try:
@@ -498,8 +507,7 @@ class SessionRuntime:
         if self._admission.closed:
             if self._admission.cleanup_unconfirmed:
                 raise SessionRuntimeError("CODEX_CLEANUP_UNCONFIRMED")
-            if self._stops_unconfirmed:
-                raise SessionRuntimeError("SESSION_STOP_UNCONFIRMED")
+            self._raise_if_closing_unconfirmed()
             return
         self._admission.close()
         # Bridge normally cancels creation first; direct callers get the same
@@ -532,9 +540,15 @@ class SessionRuntime:
             try:
                 self._stops_unconfirmed = not await self._close_guard()
             finally:
-                self._creations.close_store()
+                self._store_unconfirmed = not await self._close_store()
+        self._raise_if_closing_unconfirmed()
+
+    def _raise_if_closing_unconfirmed(self) -> None:
+        """Report, on every close, a stop record or Store close that was not confirmed."""
         if self._stops_unconfirmed:
             raise SessionRuntimeError("SESSION_STOP_UNCONFIRMED")
+        if self._store_unconfirmed:
+            raise SessionRuntimeError("STORE_CLOSE_UNCONFIRMED")
 
     async def _close_guard(self) -> bool:
         """Close Guard once the session stops it is recording have ended.
@@ -559,6 +573,15 @@ class SessionRuntime:
             await self._assembled.aclose(settle=settle)
         ended = await self._records.wait(self._limits.session_s)
         return recorded and ended
+
+    async def _close_store(self) -> bool:
+        """Close the owned Store. False when its connection did not close in time.
+
+        A creator still running closes the Store when it returns; shutdown has
+        then already reported cleanup unconfirmed, so that close is not waited for.
+        """
+        closing = self._creations.close_store()
+        return closing is None or await closing.wait_closed(self._limits.store_close_s)
 
     async def _close_account(self) -> bool:
         """End the login screen's app-server. False when its exit was not confirmed in time."""
@@ -592,6 +615,16 @@ class SessionRuntime:
         )
 
 
+async def _close_failed_start(store: SQLiteStore) -> None:
+    """A start that fails before the runtime owns its Store closes it here.
+
+    Unconfirmed, the bridge reports startup cleanup unconfirmed (#58, A134).
+    """
+    store.close()
+    if not await store.wait_closed(CleanupLimits().store_close_s):
+        raise BackendCleanupError
+
+
 async def bootstrap_product(
     db_path: str,
     *,
@@ -611,7 +644,7 @@ async def bootstrap_product(
     launch (C2.6, EXE-01); until then `product` is supplied only by tests.
     """
 
-    store = SQLiteStore(db_path, audit_id_factory=lambda: f"audit-{uuid4().hex}")
+    store = SQLiteStore(db_path, audit_id_factory=lambda: new_id("audit"))
     assembled: AssembledGuard | None = None
     approvals: ApprovalOutcomes | None = None
     guard_settings: GuardSettings | None = None
@@ -622,7 +655,7 @@ async def bootstrap_product(
             settings_status, loaded = await load_settings_profile(settings, store)
         finally:
             if settings_status is None:
-                store.close()
+                await _close_failed_start(store)
         if loaded is not None:
             guard_settings = loaded.guard_settings
             profile_document = settings.document
@@ -633,7 +666,7 @@ async def bootstrap_product(
             assembled = await assemble_guard(store, product)
         finally:
             if assembled is None:
-                store.close()
+                await _close_failed_start(store)
         approvals = ApprovalOutcomes()
         if session_factory is None:
             session_factory = codex_session_factory(assembled, approvals)
@@ -641,7 +674,7 @@ async def bootstrap_product(
         store,
         session_factory=session_factory,
         preparation=preparation,
-        close_store=store.close,
+        owned_store=store,
         guard_settings=guard_settings,
         assembled=assembled,
         approvals=approvals,

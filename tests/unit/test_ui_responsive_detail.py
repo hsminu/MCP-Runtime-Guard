@@ -129,7 +129,6 @@ def test_detail_dialogs_fit_small_owner_and_keep_complete_values(
     owner.resize(320, 360)
     owner.show()
     app.processEvents()
-
     text = "synthetic-start\n" + ("synthetic-line\n" * 80) + "synthetic-end"
     plain = PlainDetailDialog(owner)
     plain.show_detail(title="합성 상세", text=text)
@@ -139,7 +138,6 @@ def test_detail_dialogs_fit_small_owner_and_keep_complete_values(
     assert plain.body.verticalScrollBar().maximum() > 0
     assert plain.body.toPlainText().endswith("synthetic-end")
     plain.close()
-
     approval = ApprovalDetailDialog(owner)
     approval.show_value(ApprovalDetailValue("synthetic-destination", text.encode("utf-8")))
     app.processEvents()
@@ -149,7 +147,6 @@ def test_detail_dialogs_fit_small_owner_and_keep_complete_values(
     assert approval.arguments_body.toPlainText().endswith("synthetic-end")
     approval.close()
     assert not approval.arguments_body.toPlainText()
-
     server_id = "synthetic-" + "s" * 100
     server = ServerDetailDialog(ServerSummary(server_id, "d" * 100), owner)
     server.open()

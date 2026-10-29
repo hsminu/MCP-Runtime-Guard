@@ -4006,7 +4006,8 @@ class SQLiteStore:
         if failed:
             # COMMIT 뒤 이미 TX가 없으면 실제 커밋인지 ACK 유실인지 구분할 수 없다.
             outcome = CommitOutcome.UNKNOWN
-            try:
+            # ROLLBACK도 실패하면 결과 불명으로 두고 연결을 버린다(Semgrep 예외, 약점 대장).
+            try:  # nosemgrep: no-swallow
                 if connection.in_transaction:
                     connection.execute("ROLLBACK")
                     if not connection.in_transaction:

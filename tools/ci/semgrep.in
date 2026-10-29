@@ -1,0 +1,2 @@
+# Semgrep for the Linux CI job (no Windows wheel; its pins conflict with the project lock).
+semgrep==1.182.1

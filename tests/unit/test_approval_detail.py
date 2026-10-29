@@ -48,7 +48,6 @@ def test_controls_bidi_and_confusables_have_unambiguous_visible_codes() -> None:
     """T18: 제어·혼동 문자 표시의 구분과 원문 보존."""
     source = "Aа\\u200B\u200b\u202e\x00\t\n한"
     rendered = visible_review_text(source)
-
     assert "Aа\\u0430" in rendered  # Latin A followed by Cyrillic small a.
     assert "\\\\u200B\\u200B" in rendered  # Literal escape differs from zero-width.
     assert "\\u202E" in rendered
@@ -60,11 +59,8 @@ def test_controls_bidi_and_confusables_have_unambiguous_visible_codes() -> None:
     assert "\u200b" not in rendered
     assert "\u202e" not in rendered
     assert source == "Aа\\u200B\u200b\u202e\x00\t\n한"
-
-
-@pytest.mark.parametrize(
-    ("source", "expected"),
-    [
+    failures = []
+    for source, expected in [
         # Conjoining jamo compose a syllable pixel-identical to precomposed 홍.
         ('{"to":"\u1112\u1169\u11bc길동"}', '{"to":"\u1112\\u1112\u1169\\u1169\u11bc\\u11BC길동"}'),
         ("\ua960\ud7b0", "\ua960\\uA960\ud7b0\\uD7B0"),
@@ -82,32 +78,24 @@ def test_controls_bidi_and_confusables_have_unambiguous_visible_codes() -> None:
         ("https://evil\u3002com", "https://evil\u3002\\u3002com"),
         ("https://evil\uff61com", "https://evil\uff61\\uFF61com"),
         ("https://a\u2010b.test", "https://a\u2010\\u2010b.test"),
-    ],
-)
-def test_composed_and_punctuation_lookalikes_are_marked(source: str, expected: str) -> None:
-    # QA 2026-10-13 Q11: these rendered identical to ordinary text, unmarked.
-    assert visible_review_text(source) == expected
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
+    ]:
+        try:
+            # QA 2026-10-13 Q11: these rendered identical to ordinary text, unmarked.
+            assert visible_review_text(source) == expected
+        except AssertionError as error:
+            failures.append((source, expected, str(error)))
+    for source in [
         '{"file":"보고서_v2.pdf"}',
         '{"to":"홍길동@corp.example"}',
         "https://corp.example/분기/보고서",
-    ],
-)
-def test_precomposed_korean_mixed_with_ascii_is_not_tagged(source: str) -> None:
-    # QA 2026-10-13 Q11: every precomposed syllable was followed by \\uXXXX.
-    assert visible_review_text(source) == source
-
-
-def test_korean_token_still_marks_a_non_hangul_lookalike() -> None:
-    # Cyrillic \u0430 next to Hangul is still a mixed-script lookalike of Latin a.
+    ]:
+        try:
+            # QA 2026-10-13 Q11: every precomposed syllable was followed by \\uXXXX.
+            assert visible_review_text(source) == source
+        except AssertionError as error:
+            failures.append((source, str(error)))
+    assert not failures, failures
     assert visible_review_text("홍길동\u0430") == "홍길동\u0430\\u0430"
-
-
-def test_cyrillic_hostname_is_visible_but_plain_korean_remains_readable():
     assert "\\u0430" in visible_review_text("https://аррӏе.com/분기")
     assert visible_review_text("분기 보고서") == "분기 보고서"
 
@@ -128,7 +116,6 @@ def test_markup_links_and_remote_images_remain_literal_plain_text(
         value = ApprovalDetailValue(destination, arguments)
         dialog.show_value(value)
         app.processEvents()
-
         assert isinstance(dialog.destination_body, QPlainTextEdit)
         assert isinstance(dialog.arguments_body, QPlainTextEdit)
         assert dialog.destination_body.isReadOnly()
@@ -138,7 +125,6 @@ def test_markup_links_and_remote_images_remain_literal_plain_text(
         assert "<img src=" in dialog.arguments_body.toPlainText()
         assert "&lt;img" in dialog.destination_body.document().toHtml()
         assert "&lt;a" in dialog.arguments_body.document().toHtml()
-
         for body in (dialog.destination_body, dialog.arguments_body):
             cursor = body.textCursor()
             cursor.setPosition(body.toPlainText().find("https://") + 8)
@@ -191,7 +177,6 @@ def test_markup_and_link_clicks_make_no_loopback_http_requests(
         dialog.show_value(ApprovalDetailValue(destination, arguments))
         app.processEvents()
         QTest.qWait(250)
-
         for body in (dialog.destination_body, dialog.arguments_body):
             assert isinstance(body, QPlainTextEdit)
             assert base_url in body.toPlainText()
@@ -207,7 +192,6 @@ def test_markup_and_link_clicks_make_no_loopback_http_requests(
                 pos=click_pos,
             )
         QTest.keyClick(dialog.arguments_body, Qt.Key.Key_Return)
-
         # Give Qt's event loop time to issue any deferred resource fetch.
         QTest.qWait(250)
     finally:
@@ -217,7 +201,6 @@ def test_markup_and_link_clicks_make_no_loopback_http_requests(
         server.shutdown()
         server_thread.join(timeout=1)
         server.server_close()
-
     assert not server_thread.is_alive()
     assert requests == []
     assert probe.opened == []
@@ -234,7 +217,6 @@ def test_long_fields_are_complete_and_dialog_releases_its_copies(
     host.show()
     app.processEvents()
     opener.setFocus()
-
     destination = "target:" + "d" * 70_000 + ":destination-end"
     arguments = b'{"payload":"' + b"a" * 70_000 + b'","end":"args-end"}'
     value = ApprovalDetailValue(destination, arguments)
@@ -247,7 +229,6 @@ def test_long_fields_are_complete_and_dialog_releases_its_copies(
         assert dialog.arguments_body.toPlainText() == arguments.decode("utf-8")
         assert dialog.destination_body.toPlainText().endswith(":destination-end")
         assert dialog.arguments_body.toPlainText().endswith('"args-end"}')
-
         QTest.keyClick(dialog, Qt.Key.Key_Escape)
         QTest.qWait(10)
         assert not dialog.isVisible()
@@ -298,7 +279,6 @@ def test_short_owner_scrolls_both_complete_plain_fields(app: QApplication) -> No
         assert detail.arguments_body.toPlainText() == visible_review_text(arguments)
         assert detail.destination_body.horizontalScrollBar().maximum() > 0
         assert detail.arguments_body.verticalScrollBar().maximum() > 0
-
         QTest.keyClick(detail.destination_body, Qt.Key.Key_Tab)
         app.processEvents()
         assert detail.arguments_body.hasFocus()

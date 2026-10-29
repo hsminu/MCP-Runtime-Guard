@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 from contextlib import asynccontextmanager
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,11 +24,14 @@ from guard_app.services import bridge as bridge_module
 from guard_app.services.bridge import BackendBridge, BridgeState, CommandStage
 from guard_app.storage.sqlite_store import SQLiteStore
 
+from .logging_state import preserve_logging_state  # noqa: F401
 from .test_bridge import pump_until
 
+# A146: main() installs process-wide log redaction; restore it after each test.
+pytestmark = pytest.mark.usefixtures("preserve_logging_state")
 
-@pytest.fixture
-def observed(monkeypatch, tmp_path):
+
+def observe(monkeypatch):
     """실제 Store·transport 호출과 합성 수신 파일을 관찰한다."""
     seen = SimpleNamespace(
         stores=[],
@@ -81,6 +85,11 @@ def observed(monkeypatch, tmp_path):
     return seen
 
 
+@pytest.fixture
+def observed(monkeypatch):
+    return observe(monkeypatch)
+
+
 def counts(observed):
     if observed.http_counts:
         return dict(observed.http_counts[-1])
@@ -118,118 +127,136 @@ async def approve_once(bindings, observed):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scenario", ["ask", "allow", "deny"])
-@pytest.mark.parametrize("mcp_transport", ["stdio", "http"])
-async def test_sqlite_scenario_uses_real_store_and_transport(
-    tmp_path, observed, scenario, mcp_transport
-):
-    """I1/I2/I3/I4/I5, T01/T02/T03/T12의 A 부분: 판정·중복 승인·수신 계수."""
-    bindings = await synthetic_app.bootstrap(
-        scenario,
-        mcp_transport=mcp_transport,
-        store_kind="sqlite",
-        db_path=tmp_path / "app.db",
-    )
-    try:
-        task_id = bindings.initial_task_id
-        store = observed.stores[-1]
-        assert (await store.load_task(task_id)).status is TaskStatus.RUNNING
-        assert (await bindings.snapshot(task_id)).host_dispatch == 0
-        assert counts(observed) == {"receiver_calls": 0, "receiver_effect": 0}
-        assert bool(observed.http_counts) is (mcp_transport == "http")
-        if scenario == "ask":
-            approval_id = await approve_once(bindings, observed)
-            assert (await store.get_approval(approval_id)).status is ApprovalStatus.CONSUMED
-        else:
-            update = await bindings.runner_for_task(task_id).advance()
-            assert update.status == ("denied" if scenario == "deny" else "continue")
-        expected = int(scenario != "deny")
-        snapshot = await bindings.snapshot(task_id)
-        assert snapshot.host_dispatch == 1 + expected
-        assert snapshot.receiver_effect == expected
-        assert snapshot.approval_id is None
-        assert counts(observed) == {"receiver_calls": 1 + expected, "receiver_effect": expected}
-        state = await store.load_task(task_id)
-        assert state.status is TaskStatus.RUNNING and not state.unclassified
-        assert (
-            state.high_watermark
-            is {"ask": Label.INTERNAL, "allow": Label.PUBLIC, "deny": Label.CONFIDENTIAL}[scenario]
+async def test_sqlite_scenario_uses_real_store_and_transport(tmp_path, monkeypatch, subtests):
+    async def check(scenario, mcp_transport, observed, tmp_path):
+        """I1/I2/I3/I4/I5, T01/T02/T03/T12의 A 부분: 판정·중복 승인·수신 계수."""
+        bindings = await synthetic_app.bootstrap(
+            scenario,
+            mcp_transport=mcp_transport,
+            store_kind="sqlite",
+            db_path=tmp_path / "app.db",
         )
-        assert len(observed.dispatches) == 1 + expected
-    finally:
-        await bindings.close()
+        try:
+            task_id = bindings.initial_task_id
+            store = observed.stores[-1]
+            assert (await store.load_task(task_id)).status is TaskStatus.RUNNING
+            assert (await bindings.snapshot(task_id)).host_dispatch == 0
+            assert counts(observed) == {"receiver_calls": 0, "receiver_effect": 0}
+            assert bool(observed.http_counts) is (mcp_transport == "http")
+            if scenario == "ask":
+                approval_id = await approve_once(bindings, observed)
+                assert (await store.get_approval(approval_id)).status is ApprovalStatus.CONSUMED
+            else:
+                update = await bindings.runner_for_task(task_id).advance()
+                assert update.status == ("denied" if scenario == "deny" else "continue")
+            expected = int(scenario != "deny")
+            snapshot = await bindings.snapshot(task_id)
+            assert snapshot.host_dispatch == 1 + expected
+            assert snapshot.receiver_effect == expected
+            assert snapshot.approval_id is None
+            assert counts(observed) == {"receiver_calls": 1 + expected, "receiver_effect": expected}
+            state = await store.load_task(task_id)
+            assert state.status is TaskStatus.RUNNING and not state.unclassified
+            assert (
+                state.high_watermark
+                is {"ask": Label.INTERNAL, "allow": Label.PUBLIC, "deny": Label.CONFIDENTIAL}[
+                    scenario
+                ]
+            )
+            assert len(observed.dispatches) == 1 + expected
+        finally:
+            await bindings.close()
+
+    for index, (scenario, mcp_transport) in enumerate(
+        product(["ask", "allow", "deny"], ["stdio", "http"])
+    ):
+        with subtests.test(case=index), monkeypatch.context() as patch:
+            path = tmp_path / str(index)
+            path.mkdir()
+            await check(scenario, mcp_transport, observe(patch), path)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["missing_parent", "corrupt", "empty", "memory"])
-@pytest.mark.parametrize("mcp_transport", ["stdio", "http"])
 async def test_open_failure_stops_before_external_resources(
-    tmp_path, observed, failure, mcp_transport, capsys, caplog
+    tmp_path, capsys, caplog, monkeypatch, subtests
 ):
-    """A 시작 게이트(I1/I6)는 직접 대응 T/S ID 없음; T19 부분(I9): 오류 유출 0."""
-    path = tmp_path / "PRIVATE_DB_MARKER" / "app.db"
-    if failure == "corrupt":
-        path = tmp_path / "PRIVATE_DB_MARKER.db"
-        path.write_bytes(b"NOT_SQLITE_PRIVATE_CONTENT" * 100)
-    elif failure == "empty":
-        path = ""
-    elif failure == "memory":
-        path = ":memory:"
-    with pytest.raises(StoreError) as caught:
-        await synthetic_app.bootstrap(
-            mcp_transport=mcp_transport, store_kind="sqlite", db_path=path
-        )
-    assert_not_started(observed)
-    assert not observed.stores
-    assert caught.value.__cause__ is None and caught.value.__context__ is None
-    output = capsys.readouterr()
-    public = str(caught.value) + output.out + output.err + caplog.text
-    assert "PRIVATE_DB_MARKER" not in public and "NOT_SQLITE_PRIVATE_CONTENT" not in public
-    assert str(tmp_path) not in public
-    if failure == "missing_parent":
-        assert not path.parent.exists()
+    async def check(failure, mcp_transport, observed, tmp_path):
+        """A 시작 게이트(I1/I6)는 직접 대응 T/S ID 없음; T19 부분(I9): 오류 유출 0."""
+        path = tmp_path / "PRIVATE_DB_MARKER" / "app.db"
+        if failure == "corrupt":
+            path = tmp_path / "PRIVATE_DB_MARKER.db"
+            path.write_bytes(b"NOT_SQLITE_PRIVATE_CONTENT" * 100)
+        elif failure == "empty":
+            path = ""
+        elif failure == "memory":
+            path = ":memory:"
+        with pytest.raises(StoreError) as caught:
+            await synthetic_app.bootstrap(
+                mcp_transport=mcp_transport, store_kind="sqlite", db_path=path
+            )
+        assert_not_started(observed)
+        assert not observed.stores
+        assert caught.value.__cause__ is None and caught.value.__context__ is None
+        output = capsys.readouterr()
+        public = str(caught.value) + output.out + output.err + caplog.text
+        assert "PRIVATE_DB_MARKER" not in public and "NOT_SQLITE_PRIVATE_CONTENT" not in public
+        assert str(tmp_path) not in public
+        if failure == "missing_parent":
+            assert not path.parent.exists()
+
+    for index, (failure, mcp_transport) in enumerate(
+        product(["missing_parent", "corrupt", "empty", "memory"], ["stdio", "http"])
+    ):
+        with subtests.test(case=index), monkeypatch.context() as patch:
+            path = tmp_path / str(index)
+            path.mkdir()
+            await check(failure, mcp_transport, observe(patch), path)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["create", "reload", "mismatch"])
-async def test_task_gate_failure_closes_store_without_start(
-    tmp_path, observed, monkeypatch, failure
-):
-    """직접 대응 T/S ID 없음, A 시작 게이트(I1/I6): Task 저장·확인 실패면 Guard 0."""
-    closed, guards = [], []
-    original_close = SQLiteStore.close
-    original_load = SQLiteStore.load_task
+async def test_task_gate_failure_closes_store_without_start(tmp_path, monkeypatch, subtests):
+    async def check(failure, observed, tmp_path, monkeypatch):
+        """직접 대응 T/S ID 없음, A 시작 게이트(I1/I6): Task 저장·확인 실패면 Guard 0."""
+        closed, guards = [], []
+        original_close = SQLiteStore.close
+        original_load = SQLiteStore.load_task
 
-    def close(self):
-        original_close(self)
-        closed.append(self)
+        def close(self):
+            original_close(self)
+            closed.append(self)
 
-    async def fail_create(self, state, **kwargs):
-        raise StoreError()
-
-    async def bad_load(self, task_id):
-        if failure == "reload":
+        async def fail_create(self, state, **kwargs):
             raise StoreError()
-        state = await original_load(self, task_id)
-        return state.model_copy(update={"epoch": state.epoch + 1})
 
-    def guard(*args, **kwargs):
-        guards.append(1)
-        raise AssertionError("Guard가 시작 게이트 전에 생성됨")
+        async def bad_load(self, task_id):
+            if failure == "reload":
+                raise StoreError()
+            state = await original_load(self, task_id)
+            return state.model_copy(update={"epoch": state.epoch + 1})
 
-    monkeypatch.setattr(SQLiteStore, "close", close)
-    monkeypatch.setattr(synthetic_app, "GuardService", guard)
-    if failure == "create":
-        monkeypatch.setattr(SQLiteStore, "create_task", fail_create)
-    else:
-        monkeypatch.setattr(SQLiteStore, "load_task", bad_load)
-    path = tmp_path / "app.db"
-    with pytest.raises(StoreError):
-        await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
-    assert_not_started(observed)
-    assert closed == observed.stores and len(closed) == 1 and not guards
-    with SQLiteStore(path):
-        pass
+        def guard(*args, **kwargs):
+            guards.append(1)
+            raise AssertionError("Guard가 시작 게이트 전에 생성됨")
+
+        monkeypatch.setattr(SQLiteStore, "close", close)
+        monkeypatch.setattr(synthetic_app, "GuardService", guard)
+        if failure == "create":
+            monkeypatch.setattr(SQLiteStore, "create_task", fail_create)
+        else:
+            monkeypatch.setattr(SQLiteStore, "load_task", bad_load)
+        path = tmp_path / "app.db"
+        with pytest.raises(StoreError):
+            await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
+        assert_not_started(observed)
+        assert closed == observed.stores and len(closed) == 1 and not guards
+        with SQLiteStore(path):
+            pass
+
+    for index, failure in enumerate(["create", "reload", "mismatch"]):
+        with subtests.test(case=index), monkeypatch.context() as patch:
+            path = tmp_path / str(index)
+            path.mkdir()
+            await check(failure, observe(patch), path, patch)
 
 
 def test_bridge_open_failure_is_fixed_startup_failure(tmp_path, observed):
@@ -322,71 +349,84 @@ async def test_restart_ids_do_not_collide_and_file_reopens(tmp_path, observed):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "transport"])
-async def test_store_closes_last_on_owner_thread(tmp_path, monkeypatch, failure):
-    """직접 대응 T/S ID 없음, A 자원 수명(I6): 같은 스레드의 Store를 마지막 정리."""
-    events = []
-    owner = threading.get_ident()
-    original_store = synthetic_app.SQLiteStore
+async def test_store_closes_last_on_owner_thread(tmp_path, monkeypatch, subtests):
+    async def check(failure, tmp_path, monkeypatch):
+        """직접 대응 T/S ID 없음, A 자원 수명(I6): 같은 스레드의 Store를 마지막 정리."""
+        events = []
+        owner = threading.get_ident()
+        original_store = synthetic_app.SQLiteStore
 
-    def opened(*args, **kwargs):
-        store = original_store(*args, **kwargs)
-        events.append(("store_open", threading.get_ident()))
-        return store
+        def opened(*args, **kwargs):
+            store = original_store(*args, **kwargs)
+            events.append(("store_open", threading.get_ident()))
+            return store
 
-    monkeypatch.setattr(synthetic_app, "SQLiteStore", opened)
-    for cls, label in [(SQLiteStore, "store"), (synthetic_app.TaskRunner, "runner")]:
-        original = cls.close
+        monkeypatch.setattr(synthetic_app, "SQLiteStore", opened)
+        for cls, label in [(SQLiteStore, "store"), (synthetic_app.TaskRunner, "runner")]:
+            original = cls.close
 
-        def closed(self, original=original, label=label):
-            original(self)
-            events.append((label, threading.get_ident()))
+            def closed(self, original=original, label=label):
+                original(self)
+                events.append((label, threading.get_ident()))
 
-        monkeypatch.setattr(cls, "close", closed)
-    for cls, label in [(synthetic_app.McpTransport, "transport")]:
-        original_close, original_start = cls.close, cls.start
+            monkeypatch.setattr(cls, "close", closed)
+        for cls, label in [(synthetic_app.McpTransport, "transport")]:
+            original_close, original_start = cls.close, cls.start
 
-        async def closed(self, original=original_close, label=label):
-            await original(self)
-            events.append((label, threading.get_ident()))
+            async def closed(self, original=original_close, label=label):
+                await original(self)
+                events.append((label, threading.get_ident()))
 
-        async def started(self, original=original_start, label=label):
-            if label == failure:
-                raise ValueError("합성 시작 실패")
-            await original(self)
+            async def started(self, original=original_start, label=label):
+                if label == failure:
+                    raise ValueError("합성 시작 실패")
+                await original(self)
 
-        monkeypatch.setattr(cls, "close", closed)
-        monkeypatch.setattr(cls, "start", started)
-    path = tmp_path / "app.db"
-    if failure:
-        with pytest.raises(ValueError, match="합성 시작 실패"):
-            await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
-    else:
-        bindings = await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
-        await bindings.close()
-    assert events[0][0] == "store_open" and events[-1][0] == "store"
-    expected = {
-        None: ["store_open", "runner", "transport", "store"],
-        "transport": ["store_open", "transport", "store"],
-    }[failure]
-    assert [label for label, _ in events] == expected
-    assert all(thread == owner for _, thread in events)
-    with original_store(path):
-        pass
+            monkeypatch.setattr(cls, "close", closed)
+            monkeypatch.setattr(cls, "start", started)
+        path = tmp_path / "app.db"
+        if failure:
+            with pytest.raises(ValueError, match="합성 시작 실패"):
+                await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
+        else:
+            bindings = await synthetic_app.bootstrap(store_kind="sqlite", db_path=path)
+            await bindings.close()
+        assert events[0][0] == "store_open" and events[-1][0] == "store"
+        expected = {
+            None: ["store_open", "runner", "transport", "store"],
+            "transport": ["store_open", "transport", "store"],
+        }[failure]
+        assert [label for label, _ in events] == expected
+        assert all(thread == owner for _, thread in events)
+        with original_store(path):
+            pass
+
+    for case_index, failure in enumerate([None, "transport"]):
+        with subtests.test(case=case_index), monkeypatch.context() as patch:
+            case_path = tmp_path / str(case_index)
+            case_path.mkdir()
+            await check(failure, case_path, patch)
 
 
 @pytest.mark.parametrize("during_bootstrap", [False, True])
 def test_bridge_reports_store_cleanup_failure(tmp_path, monkeypatch, during_bootstrap):
-    """직접 대응 T/S ID 없음, A 종료 상태(I6): Store close 실패를 미확인으로 표시."""
+    """직접 대응 T/S ID 없음, A 종료 상태(I6): Store 연결 종료를 확인하지 못하면 미확인으로 표시.
+
+    #58 뒤 close는 예외 없이 종료만 요청하고, 실패는 wait_closed의 False로 알린다.
+    """
     app = QApplication.instance() or QApplication([])
     events, threads = [], []
     original_close = SQLiteStore.close
+    original_wait = SQLiteStore.wait_closed
     original_create = SQLiteStore.create_task
 
     def close(self):
         threads.append(("close", threading.get_ident()))
         original_close(self)
-        raise StoreError()
+
+    async def wait_closed(self, timeout):  # noqa: ASYNC109 - the Store port's signature
+        await original_wait(self, timeout)
+        return False
 
     async def create(self, state, **kwargs):
         threads.append(("create", threading.get_ident()))
@@ -395,6 +435,7 @@ def test_bridge_reports_store_cleanup_failure(tmp_path, monkeypatch, during_boot
             raise StoreError()
 
     monkeypatch.setattr(SQLiteStore, "close", close)
+    monkeypatch.setattr(SQLiteStore, "wait_closed", wait_closed)
     monkeypatch.setattr(SQLiteStore, "create_task", create)
     bridge = BackendBridge(
         lambda: synthetic_app.bootstrap(store_kind="sqlite", db_path=tmp_path / "app.db")
@@ -418,32 +459,56 @@ def test_bridge_reports_store_cleanup_failure(tmp_path, monkeypatch, during_boot
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"store_kind": "sqlite"},
-        {"store_kind": "memory", "db_path": "PRIVATE_DB_MARKER"},
-        {"store_kind": "unknown"},
-    ],
-)
-async def test_bootstrap_rejects_invalid_store_configuration(observed, kwargs):
-    """A 설정 게이트(I1/I6/I7)는 직접 대응 T/S ID 없음; T19 부분(I9): 경로 비노출."""
-    with pytest.raises(ValueError) as caught:
-        await synthetic_app.bootstrap(**kwargs)
-    assert "PRIVATE_DB_MARKER" not in str(caught.value)
-    assert_not_started(observed)
+async def test_bootstrap_rejects_invalid_store_configuration(monkeypatch, subtests):
+    async def check(kwargs, observed):
+        """A 설정 게이트(I1/I6/I7)는 직접 대응 T/S ID 없음; T19 부분(I9): 경로 비노출."""
+        with pytest.raises(ValueError) as caught:
+            await synthetic_app.bootstrap(**kwargs)
+        assert "PRIVATE_DB_MARKER" not in str(caught.value)
+        assert_not_started(observed)
+
+    for index, kwargs in enumerate(
+        [
+            {"store_kind": "sqlite"},
+            {"store_kind": "memory", "db_path": "PRIVATE_DB_MARKER"},
+            {"store_kind": "unknown"},
+        ]
+    ):
+        with subtests.test(case=index), monkeypatch.context() as patch:
+            await check(kwargs, observe(patch))
 
 
-@pytest.mark.parametrize("args", [["--db-path", "PRIVATE_DB_MARKER"], ["--store", "sqlite"]])
-def test_cli_rejects_invalid_store_configuration(monkeypatch, capsys, args):
-    """A CLI 설정(I6/I7)은 직접 대응 T/S ID 없음; T19 부분(I9): DB 경로 비노출."""
-    monkeypatch.setattr(sys, "argv", ["guard-app", "--demo", *args])
-    with pytest.raises(SystemExit) as caught:
-        main()
-    assert caught.value.code == 2
-    output = capsys.readouterr()
-    assert "저장소 종류와 DB 경로 설정이 일치하지 않는다" in output.err
-    assert "PRIVATE_DB_MARKER" not in output.err + output.out
+def test_cli_rejects_invalid_store_configuration(monkeypatch, capsys, tmp_path, subtests):
+    """A101/A106, C2.17, REC-01, I6/I7/I9, T19: CLI refusal and path non-disclosure."""
+    db, exe = tmp_path / "product.db", tmp_path / "codex.exe"
+    cases = [
+        (
+            ["--demo", "--db-path", "PRIVATE_DB_MARKER"],
+            "저장소 종류와 DB 경로 설정이 일치하지 않는다",
+        ),
+        (["--demo", "--store", "sqlite"], "저장소 종류와 DB 경로 설정이 일치하지 않는다"),
+        *[
+            (flag, "--demo와 함께만")
+            for flag in (["--scenario", "ask"], ["--store", "memory"], ["--db-path", str(db)])
+        ],
+        *[
+            ([*prefix, *flag], flag[0])
+            for prefix in ([], ["--demo"])
+            for flag in (["--agt-mode", "mock"], ["--agt-policy", "deny-send"])
+        ],
+        (["--codex-exe", "codex.exe"], "--codex-exe는 제품 실행에서"),
+        (["--demo", "--codex-exe", str(exe)], "--codex-exe는 제품 실행에서"),
+    ]
+    for args, shown in cases:
+        with subtests.test(args=args):
+            monkeypatch.setattr(sys, "argv", ["guard-app", *args])
+            with pytest.raises(SystemExit) as caught:
+                main()
+            assert caught.value.code == 2
+            output = capsys.readouterr()
+            assert shown in output.err
+            assert "PRIVATE_DB_MARKER" not in output.err + output.out
+            assert not db.exists()
 
 
 def test_old_task_commands_are_rejected_before_model_control_and_projection(
@@ -602,34 +667,42 @@ def isolate_process_start_gate(monkeypatch):
     monkeypatch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
 
 
-@pytest.mark.parametrize("mcp_transport", ["stdio", "http"])
-def test_tainted_gate_starts_no_synthetic_resources(observed, mcp_transport, monkeypatch, tmp_path):
-    """REC-01·REC-05, I1/I6: 실제 bootstrap·MCP·counts 구성 0; 대응 T/S ID 없음."""
-    app = QApplication.instance() or QApplication([])
-    gate = bridge_module._ProcessStartGate()
-    owner = object()
-    assert gate.try_start(owner) is None
-    gate.finish(owner, "CLEANUP_UNCONFIRMED", None)
-    from contextlib import nullcontext
+def test_tainted_gate_starts_no_synthetic_resources(monkeypatch, tmp_path, subtests):
+    def check(mcp_transport, observed, tmp_path, monkeypatch):
+        """REC-01·REC-05, I1/I6: 실제 bootstrap·MCP·counts 구성 0; 대응 T/S ID 없음."""
+        app = QApplication.instance() or QApplication([])
+        gate = bridge_module._ProcessStartGate()
+        owner = object()
+        assert gate.try_start(owner) is None
+        gate.finish(owner, "CLEANUP_UNCONFIRMED", None)
+        from contextlib import nullcontext
 
-    # 만약 bootstrap이 잘못 호출되면 이 알려진 디렉터리에 counts.json을 만들게 한다.
-    monkeypatch.setattr(synthetic_app, "TemporaryDirectory", lambda **_: nullcontext(str(tmp_path)))
-    calls, events = [], []
+        # 만약 bootstrap이 잘못 호출되면 이 알려진 디렉터리에 counts.json을 만들게 한다.
+        monkeypatch.setattr(
+            synthetic_app, "TemporaryDirectory", lambda **_: nullcontext(str(tmp_path))
+        )
+        calls, events = [], []
 
-    async def boot():
-        calls.append(1)
-        return await synthetic_app.bootstrap(mcp_transport=mcp_transport)
+        async def boot():
+            calls.append(1)
+            return await synthetic_app.bootstrap(mcp_transport=mcp_transport)
 
-    bridge = BackendBridge(boot, start_gate=gate)
-    bridge.lifecycle_changed.connect(events.append)
-    bridge.start()
-    app.processEvents()
-    assert bridge.state is BridgeState.FAILED
-    assert events[-1].code == "PROCESS_RESTART_REQUIRED"
-    assert calls == [] and bridge.thread_done and not bridge.backend_alive
-    assert not (tmp_path / "counts.json").exists()
-    assert_not_started(observed)
-    bridge.close()
+        bridge = BackendBridge(boot, start_gate=gate)
+        bridge.lifecycle_changed.connect(events.append)
+        bridge.start()
+        app.processEvents()
+        assert bridge.state is BridgeState.FAILED
+        assert events[-1].code == "PROCESS_RESTART_REQUIRED"
+        assert calls == [] and bridge.thread_done and not bridge.backend_alive
+        assert not (tmp_path / "counts.json").exists()
+        assert_not_started(observed)
+        bridge.close()
+
+    for index, mcp_transport in enumerate(["stdio", "http"]):
+        with subtests.test(case=index), monkeypatch.context() as patch:
+            path = tmp_path / str(index)
+            path.mkdir()
+            check(mcp_transport, observe(patch), path, patch)
 
 
 def test_clean_bridge_restart_runs_real_synthetic_send(observed):
@@ -689,8 +762,7 @@ def test_clean_bridge_restart_runs_real_synthetic_send(observed):
     assert len(observed.dispatches) == 4
 
 
-@pytest.mark.parametrize("action_name", ["REVIEW", "APPROVE", "REJECT"])
-def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeypatch, action_name):
+def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeypatch, subtests):
     """REC-03, I3, T11 재시작 부분: 옛 승인 제어의 실행 계수와 저장 행을 비교한다."""
     import asyncio
 
@@ -738,27 +810,32 @@ def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeyp
         bridge.start()
         pump_until(app, lambda: bridge.state is BridgeState.READY and bool(projections), timeout=8)
         assert projections[-1].task_id != old_task_id
-        command_id = bridge.request_control(ControlAction[action_name], old_approval_id)
-        pump_until(
-            app,
-            lambda: any(
-                e.command_id == command_id
-                and e.stage in (CommandStage.BACKEND_RETURNED, CommandStage.UNCONFIRMED)
-                for e in commands
-            ),
-            timeout=8,
-        )
-        app.processEvents()
-        final = next(e for e in reversed(commands) if e.command_id == command_id)
-        assert final.stage is CommandStage.BACKEND_RETURNED
-        assert final.code == (
-            "REVIEW_UNAVAILABLE" if action_name == "REVIEW" else "CONTROL_DENIED_QUERY_REQUIRED"
-        )
-        assert model_calls == []
-        assert len(observed.dispatches) - dispatch_start == 0
-        assert counts(observed) == {"receiver_calls": 0, "receiver_effect": 0}
-        assert sum(p.task_id == old_task_id for p in projections) == 0
-        assert (projections[-1].host_dispatch, projections[-1].receiver_effect) == (0, 0)
+        for action_name in ("REVIEW", "APPROVE", "REJECT"):
+            with subtests.test(action=action_name):
+                command_id = bridge.request_control(ControlAction[action_name], old_approval_id)
+                pump_until(
+                    app,
+                    lambda command_id=command_id: any(
+                        e.command_id == command_id
+                        and e.stage in (CommandStage.BACKEND_RETURNED, CommandStage.UNCONFIRMED)
+                        for e in commands
+                    ),
+                    timeout=8,
+                )
+                app.processEvents()
+                final = next(e for e in reversed(commands) if e.command_id == command_id)
+                assert final.stage is CommandStage.BACKEND_RETURNED
+                assert final.code == (
+                    "REVIEW_UNAVAILABLE"
+                    if action_name == "REVIEW"
+                    else "CONTROL_DENIED_QUERY_REQUIRED"
+                )
+                assert model_calls == []
+                assert len(observed.dispatches) - dispatch_start == 0
+                assert counts(observed) == {"receiver_calls": 0, "receiver_effect": 0}
+                assert sum(p.task_id == old_task_id for p in projections) == 0
+                assert (projections[-1].host_dispatch, projections[-1].receiver_effect) == (0, 0)
+                assert asyncio.run(load_old()) == (old_approval, old_task)
     finally:
         bridge.close()
         pump_until(app, lambda: bridge.thread_done and not bridge.backend_alive, timeout=8)
@@ -780,83 +857,35 @@ def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeyp
     assert after_task == old_task
 
 
-@pytest.mark.parametrize(
-    "flag",
-    [["--scenario", "ask"], ["--store", "memory"], ["--db-path", "{db}"]],
-)
-def test_cli_product_mode_refuses_demo_only_options(monkeypatch, capsys, tmp_path, flag):
-    """제품 실행에서 시연 전용 옵션을 조용히 무시하지 않는다.
+def test_cli_product_does_not_start_without_the_app_lock(monkeypatch, capsys, subtests):
+    def check(code, shown, monkeypatch):
+        """A102: a refused claim ends with exit 1 before the DB, the backend and the window."""
+        from guard_app.security.paths import AppPathError
+        from guard_app.services.codex_preparation import CodexProcessPreparation
 
-    A106: 제품 DB는 앱 폴더의 고정 경로라 `--db-path`도 시연 전용이다(C2.17, REC-01).
-    """
-    db = tmp_path / "product.db"
-    argv = [arg.format(db=db) for arg in flag]
-    monkeypatch.setattr(sys, "argv", ["guard-app", *argv])
-    with pytest.raises(SystemExit) as caught:
-        main()
-    assert caught.value.code == 2
-    assert "--demo와 함께만" in capsys.readouterr().err
-    assert not db.exists()
+        def refuse(self):
+            raise AppPathError(code)
 
+        def no_bridge(*args, **kwargs):
+            raise AssertionError("the backend must not start")
 
-@pytest.mark.parametrize("prefix", [[], ["--demo"]], ids=["product", "demo"])
-@pytest.mark.parametrize("flag", [["--agt-mode", "mock"], ["--agt-policy", "deny-send"]])
-def test_cli_rejects_removed_access_options(monkeypatch, capsys, prefix, flag):
-    """기존 AGT CLI 옵션은 제품과 시연 양쪽에서 더 이상 허용하지 않는다."""
-    monkeypatch.setattr(sys, "argv", ["guard-app", *prefix, *flag])
-    with pytest.raises(SystemExit) as caught:
-        main()
-    assert caught.value.code == 2
-    assert flag[0] in capsys.readouterr().err
+        monkeypatch.setattr(CodexProcessPreparation, "claim", refuse)
+        monkeypatch.setattr(bridge_module, "BackendBridge", no_bridge)
+        monkeypatch.setattr(sys, "argv", ["guard-app"])
+        assert main() == 1
+        error = capsys.readouterr().err
+        assert shown in error
+        assert "someone" not in error
 
-
-@pytest.mark.parametrize(
-    "args",
-    [
-        ["--codex-exe", "codex.exe"],
-        ["--demo", "--codex-exe", "{exe}"],
-    ],
-    ids=["relative", "demo"],
-)
-def test_cli_codex_exe_is_an_absolute_product_path(monkeypatch, capsys, tmp_path, args):
-    """A101: each developer may point at a local codex.exe, only in product mode."""
-    exe = tmp_path / "codex.exe"
-    argv = [arg.format(exe=exe) for arg in args]
-    monkeypatch.setattr(sys, "argv", ["guard-app", *argv])
-    with pytest.raises(SystemExit) as caught:
-        main()
-    assert caught.value.code == 2
-    assert "--codex-exe는 제품 실행에서" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    ("code", "shown"),
-    [
-        ("APP_ALREADY_RUNNING", "이미 실행 중이라 시작하지 않는다"),
-        ("APP_FOLDER_PERMISSION_FAILED", "(APP_FOLDER_PERMISSION_FAILED)"),
-        ("C:\\Users\\someone\\secret", "앱 폴더를 준비하지 못해 시작하지 않는다\n"),
-    ],
-    ids=["running", "folder-code", "not-a-code"],
-)
-def test_cli_product_does_not_start_without_the_app_lock(monkeypatch, capsys, code, shown):
-    """A102: a refused claim ends with exit 1 before the DB, the backend and the window."""
-    import guard_app.__main__ as entry
-    from guard_app.security.paths import AppPathError
-    from guard_app.services.codex_preparation import CodexProcessPreparation
-
-    def refuse(self):
-        raise AppPathError(code)
-
-    def no_bridge(*args, **kwargs):
-        raise AssertionError("the backend must not start")
-
-    monkeypatch.setattr(CodexProcessPreparation, "claim", refuse)
-    monkeypatch.setattr(entry, "BackendBridge", no_bridge)
-    monkeypatch.setattr(sys, "argv", ["guard-app"])
-    assert main() == 1
-    error = capsys.readouterr().err
-    assert shown in error
-    assert "someone" not in error
+    for case_index, (code, shown) in enumerate(
+        [
+            ("APP_ALREADY_RUNNING", "이미 실행 중이라 시작하지 않는다"),
+            ("APP_FOLDER_PERMISSION_FAILED", "(APP_FOLDER_PERMISSION_FAILED)"),
+            ("C:\\Users\\someone\\secret", "앱 폴더를 준비하지 못해 시작하지 않는다\n"),
+        ]
+    ):
+        with subtests.test(case=case_index), monkeypatch.context() as patch:
+            check(code, shown, patch)
 
 
 def test_cli_demo_without_examples_package_fails_without_traceback(monkeypatch, capsys):
