@@ -67,6 +67,18 @@ from guard_app.domain.models import (
     TaskState,
     ToolSpec,
 )
+from guard_app.domain.queries import (
+    ApprovalListLane,
+    ApprovalListPage,
+    ApprovalListQuery,
+    ApprovalRow,
+    CallDetail,
+    CallListPage,
+    CallListQuery,
+    CallRow,
+    CallStage,
+    ListSort,
+)
 from guard_app.domain.reasons import Reason
 from guard_app.ports import BackupDestination
 from guard_app.security.digest import jcs_canonicalize, json_digest
@@ -109,6 +121,9 @@ _METHOD_WRITES = {
     "reserve_dispatch": True,
     "create_approval": True,
     "get_approval": False,
+    "list_approvals": False,
+    "list_calls": False,
+    "get_call": False,
     "transition_approval": True,
     "consume_and_reserve": True,
     "commit_observation": True,
@@ -2950,6 +2965,263 @@ class SQLiteStore:
         """검증된 승인 메타데이터 조회. 재개방 조회는 실행 결속/원문을 복원하지 않는다."""
         return await self._submit(lambda: self._get_approval(approval_id), method="get_approval")
 
+    async def list_approvals(self, query: ApprovalListQuery) -> ApprovalListPage:
+        """단일 읽기 트랜잭션의 승인 목록과 전체 개수(B6-05 제안)."""
+
+        def read() -> ApprovalListPage:
+            valid = ApprovalListQuery.model_validate(query)
+            parameters = {
+                "pending": int(valid.lane is ApprovalListLane.PENDING),
+                "server_id": valid.server_id,
+                "search": valid.search,
+                "search_length": len(valid.search),
+                "newest": int(valid.sort is ListSort.NEWEST),
+                "limit": valid.limit,
+                "offset": valid.offset,
+            }
+            with self._transaction(write=False) as connection:
+                total = connection.execute(
+                    """SELECT count(*) FROM approvals AS a
+                    LEFT JOIN requests AS r ON r.request_id=a.request_id
+                    WHERE ((:pending=1 AND a.status='PENDING') OR
+                           (:pending=0 AND a.status<>'PENDING'))
+                      AND (:server_id IS NULL OR r.server_id=:server_id)
+                      AND (:search='' OR substr(a.approval_id,1,:search_length)=:search
+                           OR substr(r.task_id,1,:search_length)=:search
+                           OR substr(a.request_id,1,:search_length)=:search)""",
+                    parameters,
+                ).fetchone()[0]
+                rows = connection.execute(
+                    """SELECT a.approval_id,r.task_id,r.server_id,r.tool_name,r.destination_id,
+                        e.event_id AS reason_event_id,e.task_id AS reason_task_id,
+                        e.at_utc AS reason_at_utc,e.reason_code AS approval_reason
+                    FROM approvals AS a
+                    LEFT JOIN requests AS r ON r.request_id=a.request_id
+                    LEFT JOIN audit_events AS e ON e.event_id=(
+                        SELECT event_id FROM audit_events
+                        WHERE request_id=a.request_id AND event_type='APPROVAL_'||a.status
+                        ORDER BY at_utc DESC,event_id DESC LIMIT 1)
+                    WHERE ((:pending=1 AND a.status='PENDING') OR
+                           (:pending=0 AND a.status<>'PENDING'))
+                      AND (:server_id IS NULL OR r.server_id=:server_id)
+                      AND (:search='' OR substr(a.approval_id,1,:search_length)=:search
+                           OR substr(r.task_id,1,:search_length)=:search
+                           OR substr(a.request_id,1,:search_length)=:search)
+                    ORDER BY CASE WHEN :newest=1 THEN a.created_at_utc END DESC,
+                        CASE WHEN :newest=1 THEN a.approval_id END DESC,
+                        CASE WHEN :newest=0 THEN a.created_at_utc END ASC,
+                        CASE WHEN :newest=0 THEN a.approval_id END ASC
+                    LIMIT :limit OFFSET :offset""",
+                    parameters,
+                ).fetchall()
+                projected: list[ApprovalRow] = []
+                for row in rows:
+                    record = self._query_approval_locked(
+                        connection, _identifier(row["approval_id"])
+                    )
+                    if record is None:
+                        raise StoreError()
+                    task_id = _identifier(row["task_id"])
+                    reason = None
+                    if (
+                        record.status is not ApprovalStatus.PENDING
+                        and row["reason_event_id"] is not None
+                    ):
+                        _identifier(row["reason_event_id"])
+                        if _identifier(row["reason_task_id"]) != task_id:
+                            raise StoreError()
+                        _utc_value(row["reason_at_utc"])
+                        reason = _stored_reason(row["approval_reason"])
+                    projected.append(
+                        ApprovalRow(
+                            approval_id=record.approval_id,
+                            task_id=task_id,
+                            request_id=record.request_id,
+                            server_id=_identifier(row["server_id"]),
+                            tool_name=_identifier(row["tool_name"]),
+                            destination_id=None
+                            if row["destination_id"] is None
+                            else _identifier(row["destination_id"]),
+                            status=record.status,
+                            created_at_utc=record.created_at_utc,
+                            expires_at_utc=record.expires_at_utc,
+                            decided_at_utc=record.decided_at_utc,
+                            reason_code=reason,
+                            row_revision=record.row_revision,
+                        )
+                    )
+                return ApprovalListPage(
+                    rows=tuple(projected), total_count=_integer(total), as_of_utc=self._fresh_utc()
+                )
+
+        return await self._submit(read, method="list_approvals")
+
+    async def list_calls(self, query: CallListQuery) -> CallListPage:
+        """단일 읽기 트랜잭션의 호출 목록과 전체 개수(B6-05 제안)."""
+
+        def read() -> CallListPage:
+            valid = CallListQuery.model_validate(query)
+            parameters = {
+                "task_id": valid.task_id,
+                "server_id": valid.server_id,
+                "newest": int(valid.sort is ListSort.NEWEST),
+                "limit": valid.limit,
+                "offset": valid.offset,
+            }
+            with self._transaction(write=False) as connection:
+                total = connection.execute(
+                    """SELECT count(*) FROM requests AS r
+                    WHERE (:task_id IS NULL OR r.task_id=:task_id)
+                      AND (:server_id IS NULL OR r.server_id=:server_id)""",
+                    parameters,
+                ).fetchone()[0]
+                rows = connection.execute(
+                    """SELECT r.*,a.approval_id AS query_approval_id,
+                        a.status AS query_approval_status,d.event_id AS query_decided_event_id,
+                        d.task_id AS query_decided_task_id,d.at_utc AS query_decided_at
+                    FROM requests AS r
+                    LEFT JOIN approvals AS a ON a.request_id=r.request_id
+                    LEFT JOIN audit_events AS d ON d.event_id=(
+                        SELECT event_id FROM audit_events
+                        WHERE request_id=r.request_id AND event_type='DECIDED'
+                        ORDER BY at_utc,event_id LIMIT 1)
+                    WHERE (:task_id IS NULL OR r.task_id=:task_id)
+                      AND (:server_id IS NULL OR r.server_id=:server_id)
+                    ORDER BY CASE WHEN :task_id IS NOT NULL AND :newest=1
+                                  THEN r.call_seq END DESC,
+                        CASE WHEN :task_id IS NOT NULL AND :newest=0
+                                  THEN r.call_seq END ASC,
+                        CASE WHEN :task_id IS NULL THEN d.at_utc IS NULL ELSE 0 END ASC,
+                        CASE WHEN :task_id IS NULL AND :newest=1 THEN d.at_utc END DESC,
+                        CASE WHEN :task_id IS NULL AND :newest=1 THEN r.request_id END DESC,
+                        CASE WHEN :task_id IS NULL AND :newest=0 THEN d.at_utc END ASC,
+                        CASE WHEN :task_id IS NULL AND :newest=0 THEN r.request_id END ASC
+                    LIMIT :limit OFFSET :offset""",
+                    parameters,
+                ).fetchall()
+                return CallListPage(
+                    rows=tuple(self._query_call_row_locked(connection, row) for row in rows),
+                    total_count=_integer(total),
+                    as_of_utc=self._fresh_utc(),
+                )
+
+        return await self._submit(read, method="list_calls")
+
+    async def get_call(self, request_id: str) -> CallDetail | None:
+        """저장된 요청과 원문 없는 감사 단계의 단일 트랜잭션 사본."""
+
+        def read() -> CallDetail | None:
+            _identifier(request_id)
+            with self._transaction(write=False) as connection:
+                row = connection.execute(
+                    """SELECT r.*,a.approval_id AS query_approval_id,
+                        a.status AS query_approval_status,d.event_id AS query_decided_event_id,
+                        d.task_id AS query_decided_task_id,d.at_utc AS query_decided_at
+                    FROM requests AS r
+                    LEFT JOIN approvals AS a ON a.request_id=r.request_id
+                    LEFT JOIN audit_events AS d ON d.event_id=(
+                        SELECT event_id FROM audit_events
+                        WHERE request_id=r.request_id AND event_type='DECIDED'
+                        ORDER BY at_utc,event_id LIMIT 1)
+                    WHERE r.request_id=?""",
+                    (request_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                projected = self._query_call_row_locked(connection, row)
+                stages: list[CallStage] = []
+                seen: set[str] = set()
+                observed_label: Label | None = None
+                events = connection.execute(
+                    """SELECT event_id,task_id,event_type,at_utc,label FROM audit_events
+                    WHERE request_id=? ORDER BY at_utc,event_id""",
+                    (request_id,),
+                )
+                for event in events:
+                    _identifier(event["event_id"])
+                    if _identifier(event["task_id"]) != projected.task_id:
+                        raise StoreError()
+                    event_type = _text(event["event_type"])
+                    timestamp = _utc_value(event["at_utc"])
+                    stage = _call_stage(event_type)
+                    if stage is None or stage in seen:
+                        continue
+                    if stage == "OBSERVED" and event["label"] is not None:
+                        observed_label = Label(_integer(event["label"]))
+                    stages.append(CallStage(stage_code=stage, at_utc=timestamp))
+                    seen.add(stage)
+                return CallDetail(
+                    row=projected, observed_label=observed_label, stages=tuple(stages)
+                )
+
+        return await self._submit(read, method="get_call")
+
+    def _query_call_row_locked(self, connection: sqlite3.Connection, row: sqlite3.Row) -> CallRow:
+        stored = _decode_stored_request(row)
+        legacy = row["legacy_source"]
+        if (legacy is None and (stored.stored_epoch is None or stored.stored_kind is None)) or (
+            legacy is not None
+            and (
+                legacy not in ("v1", "v2")
+                or stored.stored_epoch is not None
+                or stored.stored_kind is not None
+            )
+        ):
+            raise StoreError()
+        if stored.call_seq > MAX_SAFE_SEQUENCE or (
+            stored.stored_epoch is not None and stored.stored_epoch > MAX_SAFE_SEQUENCE
+        ):
+            raise StoreError()
+        if (
+            connection.execute("SELECT 1 FROM tasks WHERE task_id=?", (stored.task_id,)).fetchone()
+            is None
+        ):
+            raise StoreError()
+        decided_at = None
+        if row["query_decided_event_id"] is not None:
+            _identifier(row["query_decided_event_id"])
+            if _identifier(row["query_decided_task_id"]) != stored.task_id:
+                raise StoreError()
+            decided_at = _utc_value(row["query_decided_at"])
+        approval_id = row["query_approval_id"]
+        approval = (
+            None
+            if approval_id is None
+            else self._query_approval_locked(connection, _identifier(approval_id))
+        )
+        if approval_id is not None and (
+            approval is None or approval.request_id != stored.request_id
+        ):
+            raise StoreError()
+        return CallRow(
+            request_id=stored.request_id,
+            task_id=stored.task_id,
+            epoch=stored.stored_epoch,
+            call_seq=stored.call_seq,
+            server_id=_identifier(row["server_id"]),
+            tool_name=_identifier(row["tool_name"]),
+            kind=stored.stored_kind,
+            destination_id=None
+            if row["destination_id"] is None
+            else _identifier(row["destination_id"]),
+            decision=stored.decision,
+            reason_codes=_stored_reasons(row["reasons"]),
+            approval_id=None if approval is None else approval.approval_id,
+            approval_status=None if approval is None else approval.status,
+            status=stored.status,
+            decided_at_utc=decided_at,
+            row_revision=stored.stored_row_revision,
+        )
+
+    def _query_approval_locked(
+        self, connection: sqlite3.Connection, approval_id: str
+    ) -> ApprovalRecord | None:
+        """조회 projection의 손상된 관계는 원문 없는 고정 실패로 정규화한다."""
+        try:
+            return self._approval_locked(connection, approval_id)
+        except StoreError:
+            raise StoreError() from None
+
     def _get_approval(self, approval_id: str) -> ApprovalRecord | None:
         _identifier(approval_id)
         with self._transaction(write=False) as connection:
@@ -4193,6 +4465,41 @@ def _stored_reason(value: object) -> Reason:
         raise StoreError() from None
 
 
+def _stored_reasons(value: object) -> tuple[Reason, ...]:
+    """저장된 사유 배열만 고정 enum으로 읽는다. 원문은 반환하지 않는다."""
+    if value is None:
+        return ()
+    try:
+        reasons = json.loads(_text(value))
+    except RecursionError:
+        raise StoreError() from None
+    if type(reasons) is not list or not reasons:
+        raise StoreError()
+    return tuple(_stored_reason(reason) for reason in reasons)
+
+
+def _call_stage(
+    event_type: str,
+) -> (
+    Literal["DECIDED", "WAITING_APPROVAL", "DISPATCHING", "OBSERVED", "COMMITTED", "WITHHELD"]
+    | None
+):
+    """저장된 감사 중 공개 가능한 고정 단계만 변환한다."""
+    if event_type == "DECIDED":
+        return "DECIDED"
+    if event_type == "APPROVAL_PENDING":
+        return "WAITING_APPROVAL"
+    if event_type in ("DISPATCH_RESERVED", "CONSUMED"):
+        return "DISPATCHING"
+    if event_type == "OBSERVED":
+        return "OBSERVED"
+    if event_type == "REQUEST_WITHHELD":
+        return "WITHHELD"
+    if event_type == "SEND_COMPLETED" or event_type.startswith("REQUEST_"):
+        return "COMMITTED"
+    return None
+
+
 def _check_task(state: TaskState) -> None:
     for number in (state.epoch, state.security_version, state.row_revision):
         _integer(number)
@@ -4222,15 +4529,8 @@ def _decode_stored_request(row: sqlite3.Row, *, inspect_reasons: bool = True) ->
         _identifier(row["destination_id"])
     _sha256(row["arguments_digest"])
     decision = None if row["decision"] is None else Decision(_integer(row["decision"]))
-    if inspect_reasons and row["reasons"] is not None:
-        try:
-            reasons = json.loads(_text(row["reasons"]))
-        except RecursionError:
-            raise StoreError() from None
-        if type(reasons) is not list or not reasons:
-            raise StoreError()
-        for reason in reasons:
-            _stored_reason(reason)
+    if inspect_reasons:
+        _stored_reasons(row["reasons"])
     return _StoredRequest(
         request_id=_identifier(row["request_id"]),
         task_id=_identifier(row["task_id"]),
