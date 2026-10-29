@@ -22,7 +22,7 @@ from guard_app.domain.errors import StorePrepareError
 from guard_app.domain.models import RecoveryItem, RecoveryItemPage, TaskState
 from guard_app.domain.reasons import Reason
 from guard_app.security.paths import prepare_app_folders
-from guard_app.services import session_runtime
+from guard_app.services import product_startup, session_runtime
 from guard_app.services.bridge import BackendBridge, BridgeState, SessionOptions, _ProcessStartGate
 from guard_app.services.bridge_types import BackendCleanupError
 from guard_app.services.runner import CodexSessionError
@@ -48,8 +48,8 @@ async def test_order_shared_deadline_activation_barrier_and_callback_isolation(
     events, deadlines, stores, sessions = [], [], [], []
     entered, release = asyncio.Event(), asyncio.Event()
     peer = Peer([READ_DEFINITION])
-    original_assemble = session_runtime.assemble_guard
-    original_load = session_runtime.load_settings_profile
+    original_assemble = product_startup.assemble_guard
+    original_load = product_startup.load_settings_profile
 
     async def load(settings, store):
         events.append("settings")
@@ -92,9 +92,9 @@ async def test_order_shared_deadline_activation_barrier_and_callback_isolation(
         events.append(value.value)
         raise RuntimeError("private-callback-text")
 
-    monkeypatch.setattr(session_runtime, "SQLiteStore", Observed)
-    monkeypatch.setattr(session_runtime, "assemble_guard", assemble)
-    monkeypatch.setattr(session_runtime, "load_settings_profile", load)
+    monkeypatch.setattr(product_startup, "SQLiteStore", Observed)
+    monkeypatch.setattr(product_startup, "assemble_guard", assemble)
+    monkeypatch.setattr(product_startup, "load_settings_profile", load)
     started = time.monotonic()
     async with asyncio.timeout(10):
         boot = asyncio.create_task(
@@ -103,7 +103,7 @@ async def test_order_shared_deadline_activation_barrier_and_callback_isolation(
                 on_step=step,
                 preparation=preparation(sessions, read_then_answer),
                 product=inputs(peer, Registry(spec(READ_DEFINITION).fingerprint), document()),
-                settings=session_runtime.SettingsFile(object(), document(), None),
+                settings=product_startup.SettingsFile(object(), document(), None),
             )
         )
         await entered.wait()
@@ -164,7 +164,7 @@ async def test_cancel_start_closes_writer_and_marks_unconfirmed(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(Observed, phase, parked)
-    monkeypatch.setattr(session_runtime, "SQLiteStore", Observed)
+    monkeypatch.setattr(product_startup, "SQLiteStore", Observed)
     async with asyncio.timeout(10):
         boot = asyncio.create_task(bootstrap_product(product_folders(tmp_path / "cancel.db")))
         await entered.wait()
@@ -185,7 +185,7 @@ def test_start_failure_bridge_and_fixed_ui_message(tmp_path, monkeypatch, code):
             stores.append(self)
             raise StorePrepareError(code)
 
-    monkeypatch.setattr(session_runtime, "SQLiteStore", Refused)
+    monkeypatch.setattr(product_startup, "SQLiteStore", Refused)
     bridge = BackendBridge(
         lambda: bootstrap_product(product_folders(tmp_path / "failure.db")),
         start_gate=_ProcessStartGate(),
@@ -405,7 +405,7 @@ async def test_recovery_pages_keep_older_items_and_100_limit(tmp_path, monkeypat
                 next_after="old-request" if after is None else None,
             )
 
-    monkeypatch.setattr(session_runtime, "SQLiteStore", Paged)
+    monkeypatch.setattr(product_startup, "SQLiteStore", Paged)
     app = QApplication.instance() or QApplication([])
     bindings = await bootstrap_product(product_folders(tmp_path / "pages.db"))
     bridge = BackendBridge(lambda: None)

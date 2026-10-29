@@ -191,12 +191,12 @@ async def test_l2_uses_product_thread_start_arguments():
 def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app, cancel):
     from PySide6.QtCore import QTimer
 
-    from guard_app.services import session_runtime
+    from guard_app.services import product_startup
 
     entered, cancelling, cleaned = threading.Event(), threading.Event(), threading.Event()
     control, activated, events, ticks, threads = [], [], [], [], []
     startup_settled = []
-    original = session_runtime.SQLiteStore.activate_run
+    original = product_startup.SQLiteStore.activate_run
 
     async def activate(store):
         assert cleaned.is_set()
@@ -218,7 +218,7 @@ def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app
             cleaned.set()
 
     monkeypatch.setattr(module, "run_l2", run)
-    monkeypatch.setattr(session_runtime.SQLiteStore, "activate_run", activate)
+    monkeypatch.setattr(product_startup.SQLiteStore, "activate_run", activate)
     with closing(preparation(tmp_path, pin)) as owner:
         callbacks = owner.preparation()
 

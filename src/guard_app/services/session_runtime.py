@@ -1,29 +1,25 @@
-"""A-local injectable Codex composition pending B/C agreement.
+"""Task lifecycle: create, run, stop and confirm cleanup of Codex sessions.
 
-C supplies startup L2 evidence and secure process/path/cleanup capabilities;
-A composes those with its JSON-RPC and Guard relay into the session factory.
-Missing capabilities reject before Store Task creation. No launcher, login
-persistence, model API, Guard protocol or replacement B port is implemented here.
+Product startup lives in product_startup; bootstrap_product remains re-exported
+for existing entry-point and test callers. Runtime collaborators stay private.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
 from guard_app.adapters.codex_protocol import build_dynamic_tools
 from guard_app.domain.contracts import TaskIdentity
-from guard_app.domain.enums import StorePrepareStep, TaskStatus
+from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import DispatchError, StoreError
-from guard_app.domain.models import RecoveryItemPage, TaskState
-from guard_app.ports import SessionAudit, Store, StoreLifecycle
+from guard_app.domain.models import TaskState
+from guard_app.ports import RegistryStore, SessionAudit, Store, StoreLifecycle
 from guard_app.security.ids import new_id
-from guard_app.security.paths import AppFolders
 from guard_app.services.account_runtime import AccountAccess, ProductAccount
 from guard_app.services.bridge_registration import RegistrationCommands
 from guard_app.services.bridge_types import (
@@ -33,24 +29,19 @@ from guard_app.services.bridge_types import (
     SessionOptions,
     TaskProjection,
 )
-from guard_app.services.catalog import GuardSettings
-from guard_app.services.codex_composition import app_version, codex_session_factory
-from guard_app.services.guard import PolicyTaskSource, SystemControl, durable_failure_audit
+from guard_app.services.catalog import GuardSettings, ServerSettings
+from guard_app.services.codex_composition import app_version
+from guard_app.services.guard import PolicyTaskSource, SystemControl
 from guard_app.services.guard_relay import ApprovalOutcomes
 from guard_app.services.policy_view import PolicyView, policy_view
 from guard_app.services.product_assembly import (
     AssembledGuard,
-    ProductInputs,
-    assemble_guard,
-    collect_registration_listing,
 )
 from guard_app.services.product_settings import (
     SETTINGS_LOADED,
-    SettingsFile,
-    SettingsFileSaver,
-    load_settings_profile,
 )
-from guard_app.services.registry import ServerRegistry
+from guard_app.services.product_startup import bootstrap_product as bootstrap_product
+from guard_app.services.registry import ServerRegistry, ToolListingView
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 from guard_app.services.session_cleanup import BackgroundWork, CleanupLimits, SessionCleanup
@@ -67,7 +58,6 @@ from guard_app.services.session_startup import (
     require_configuration,
 )
 from guard_app.services.session_stops import StopChannel
-from guard_app.storage.sqlite_store import SQLiteStore
 
 # A-local proposal only: A's factory must use C's executable/config/model hash
 # verification and separate app-server, then perform account/read and relay setup.
@@ -220,6 +210,7 @@ class SessionRuntime:
         self._execution_gate = execution_gate
         self._execution_timer: asyncio.TimerHandle | None = None
         self._execution_stopped = False
+        self._execution_watch_started = False
         self._assembled = assembled
         self._settings_status = settings_status
         self._approvals = approvals
@@ -272,7 +263,42 @@ class SessionRuntime:
             else ProductAccount(account, version=app_version(), sessions_alive=self._sessions_alive)
         )
         if execution_gate is not None:
+            self.start_execution_watch()
+
+    def connect_execution_gate(self, gate: ExecutionGate) -> None:
+        """Connect Store authority after activate_run ACK, before publishing bindings."""
+        self._execution_gate = gate
+        self.check_execution()
+
+    def connect_session_factory(self, factory: CodexSessionFactory) -> None:
+        """Finish Codex composition before any Task is admitted."""
+        self._session_factory = factory
+
+    def start_execution_watch(self) -> None:
+        """Start the runtime-owned revision watch once; close cancels its timer."""
+        if not self._execution_watch_started:
+            self._execution_watch_started = True
             self._watch_execution()
+
+    def registration_commands(
+        self,
+        registry: ServerRegistry,
+        store: RegistryStore,
+        collect: Callable[[ServerSettings], Awaitable[ToolListingView]],
+        *,
+        saver: ProfileSaver | None = None,
+    ) -> RegistrationCommands:
+        """Bind registration to the same policy lock without exposing TaskPolicy."""
+        if saver is not None:
+            self._policy.connect_registration_saver(saver)
+        return RegistrationCommands(
+            registry,
+            store,
+            self._policy,
+            collect,
+            self.close_policy_stopped,
+            self.check_execution,
+        )
 
     def execution_allowed(self) -> bool:
         allowed = self._execution_gate is None or self._execution_gate.allowed()
@@ -292,7 +318,7 @@ class SessionRuntime:
                 0.1, self._watch_execution
             )
 
-    def _check_execution(self) -> None:
+    def check_execution(self) -> None:
         if not self.execution_allowed():
             raise SessionRuntimeError(self._admission.refusal() or "CODEX_STORE_HALTED")
 
@@ -340,7 +366,7 @@ class SessionRuntime:
             await self._startup.check()
 
     async def create_session(self, options: SessionOptions) -> TaskProjection:
-        self._check_execution()
+        self.check_execution()
         if self._admission.closed or type(options) is not SessionOptions:
             raise SessionRuntimeError("SESSION_UNAVAILABLE")
         creator = asyncio.current_task()
@@ -373,7 +399,7 @@ class SessionRuntime:
             # The session only knows task_id and epoch, which stay the same.
             async with self._policy.lock:
                 self._admission.check()
-                self._check_execution()
+                self.check_execution()
                 state = self._policy.task_state(state.task_id)
                 await self.store.create_task(state, created_at_utc=datetime.now(UTC))
                 created = True
@@ -381,7 +407,7 @@ class SessionRuntime:
             if confirmed != state:
                 raise StoreError()
             self._admission.check()
-            self._check_execution()
+            self.check_execution()
             self._adopt(state, session, options)
             snapshot = await self.snapshot(state.task_id)
             self._admission.check()
@@ -399,7 +425,7 @@ class SessionRuntime:
         factory: CodexSessionFactory,
     ) -> CodexSession:
         """C's Task resources, then the Codex session. No Store row exists yet."""
-        self._check_execution()
+        self.check_execution()
         resources = self._cleanup.claim_resources(
             state.task_id, await self._startup.prepare_task(state.task_id, expected)
         )
@@ -407,7 +433,7 @@ class SessionRuntime:
         require_configuration(resources.configuration, expected)
         # Recheck after resource setup, immediately before session creation.
         await self._startup.verify(expected)
-        self._check_execution()
+        self.check_execution()
         # No Store RUNNING row exists while C's secure launch is unconfirmed.
         session = await call_preparation(lambda: factory(state, options, resources))
         self._cleanup.claim_session(state.task_id, session)
@@ -512,10 +538,10 @@ class SessionRuntime:
     ) -> PolicyView:
         """B3.10 server access change (TaskPolicy); then the stopped sessions are closed."""
         return await self._policy.change_server_access(
-            server_id, allowed, denied, self._close_policy_stopped
+            server_id, allowed, denied, self.close_policy_stopped
         )
 
-    async def _close_policy_stopped(self, task_ids: tuple[str, ...]) -> None:
+    async def close_policy_stopped(self, task_ids: tuple[str, ...]) -> None:
         """Close the sessions of Tasks Guard stopped for a change, under the policy lock."""
         for task_id in task_ids:
             running = self._running.get(task_id)
@@ -667,171 +693,3 @@ class SessionRuntime:
             settings_status=self._settings_status,
             account=self._account,
         )
-
-
-async def _close_failed_start(store: SQLiteStore) -> None:
-    """A start that fails before the runtime owns its Store closes it here.
-
-    Unconfirmed, the bridge reports startup cleanup unconfirmed (#58, A134).
-    """
-    store.close()
-    if not await store.wait_closed(CleanupLimits().store_close_s):
-        raise BackendCleanupError
-
-
-async def bootstrap_product(
-    folders: AppFolders,
-    *,
-    session_factory: CodexSessionFactory | None = None,
-    preparation: SessionPreparation | None = None,
-    product: ProductInputs | None = None,
-    profile_saver: ProfileSaver | None = None,
-    settings: SettingsFile | None = None,
-    account: AccountAccess | None = None,
-    on_step: Callable[[StorePrepareStep], None] | None = None,
-) -> BackendBindings:
-    """REC-01: no bindings or session before the activation commit ACK.
-
-    ``product`` is an explicit test/demo composition override. Its injected
-    streams require absent ProductInputs.folders. Normal product startup builds
-    ProductInputs from settings with the claimed folders and C launcher.
-    """
-    deadline = time.monotonic() + 60.0
-    run_id = new_id("run")
-    store = SQLiteStore(
-        folders.db_path(), startup="explicit", audit_id_factory=lambda: new_id("audit")
-    )
-    assembled: AssembledGuard | None = None
-    runtime: SessionRuntime | None = None
-    adopted = False
-    progress = BackgroundWork()
-
-    def step(value: StorePrepareStep) -> None:
-        # Callback exceptions are consumed from Task.exception(), never thrown into B.
-        # Do not log exception text or type. No awaitable callback is part of this API.
-        if on_step is not None:
-
-            async def publish() -> None:
-                on_step(value)
-
-            progress.start(publish())
-
-    try:
-        await store.prepare_schema(
-            deadline=deadline, begin_backup=folders.begin_backup, on_step=step
-        )
-        await store.recover(deadline=deadline, run_id=run_id, on_step=step)
-        report = await store.load_recovery_report(run_id)
-        if report is None:
-            raise StoreError()
-        # Reports describe this recovery; quarantine remains inspectable on
-        # later runs even when no new item was added by this recovery.
-        first_page = await store.list_recovery_items(limit=100)
-        guard_settings: GuardSettings | None = None
-        profile_document: Mapping[str, object] | None = None
-        settings_status: str | None = None
-        if settings is not None:
-            settings_status, loaded = await load_settings_profile(settings, store)
-            if loaded is not None:
-                guard_settings = loaded.guard_settings
-                profile_document = settings.document
-                if profile_saver is None:
-                    profile_saver = SettingsFileSaver(settings)
-                if product is None and profile_document is not None:
-                    registry = ServerRegistry(store)
-                    await registry.load()
-                    product = ProductInputs(
-                        profile_document,
-                        registry,
-                        store.allocate_call_seq,
-                        durable_failure_audit(store),
-                        operator_id="local-user",
-                        folders=folders,
-                    )
-        approvals: ApprovalOutcomes | None = None
-        if product is not None:
-            product = replace(
-                product,
-                next_call_seq=store.allocate_call_seq,
-                failure_audit=durable_failure_audit(store),
-            )
-            assembled = await assemble_guard(store, product)
-            approvals = ApprovalOutcomes()
-        # L2 may prepare app-wide resources, but no Task session is created here.
-        runtime = SessionRuntime(
-            store,
-            session_factory=session_factory,
-            preparation=preparation,
-            owned_store=store,
-            guard_settings=guard_settings,
-            assembled=assembled,
-            approvals=approvals,
-            profile_document=profile_document if product is None else product.profile_document,
-            profile_saver=profile_saver,
-            settings_status=settings_status,
-            account=account,
-        )
-        if preparation is not None:
-            await runtime.prepare_startup()
-        await store.activate_run()
-        runtime._execution_gate = ExecutionGate(store.execution_state)
-        runtime._check_execution()
-        runtime._watch_execution()
-        if session_factory is None and assembled is not None and approvals is not None:
-            runtime._session_factory = codex_session_factory(
-                assembled, approvals, execution_allowed=runtime.execution_allowed
-            )
-        after = first_page.next_after
-
-        async def next_page() -> RecoveryItemPage:
-            nonlocal after
-            if after is None:
-                return RecoveryItemPage(items=(), next_after=None)
-            page = await store.list_recovery_items(after=after, limit=100)
-            after = page.next_after
-            return page
-
-        registration_registry = (
-            product.registry
-            if product is not None and isinstance(product.registry, ServerRegistry)
-            else ServerRegistry(store)
-        )
-        if product is None or registration_registry is not product.registry:
-            await registration_registry.load()
-        if settings is not None and (
-            settings.document is None or settings_status == SETTINGS_LOADED
-        ):
-            runtime._policy.connect_registration_saver(SettingsFileSaver(settings))
-        registrations = RegistrationCommands(
-            registration_registry,
-            store,
-            runtime._policy,
-            lambda server: collect_registration_listing(server, folders),
-            runtime._close_policy_stopped,
-            runtime._check_execution,
-        )
-        bindings = replace(
-            runtime.bindings(),
-            registration=registrations,
-            recovery_report=report,
-            recovery_page=first_page,
-            recovery_next=next_page,
-        )
-        adopted = True
-        return bindings
-    finally:
-        if not adopted:
-            if runtime is not None:
-                cleanup = asyncio.create_task(runtime.close())
-                cleanup.add_done_callback(
-                    lambda task: None if task.cancelled() else task.exception()
-                )
-                done, _ = await asyncio.wait({cleanup}, timeout=CleanupLimits().store_close_s)
-                if not done or cleanup.cancelled() or cleanup.exception() is not None:
-                    raise BackendCleanupError
-            else:
-                try:
-                    if assembled is not None:
-                        await assembled.aclose()
-                finally:
-                    await _close_failed_start(store)

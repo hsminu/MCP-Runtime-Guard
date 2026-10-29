@@ -13,6 +13,7 @@ from guard_app.services import (
     bridge,
     bridge_ingress,
     codex_preparation,
+    product_startup,
     session_cleanup,
     session_runtime,
 )
@@ -74,13 +75,13 @@ async def test_session_ids_are_distinct_persisted_task_keys(tmp_path):
 @pytest.mark.asyncio
 async def test_product_store_receives_distinct_audit_factory(tmp_path, monkeypatch):
     factories = []
-    original = session_runtime.SQLiteStore
+    original = product_startup.SQLiteStore
 
     def record(*args, **kwargs):
         factories.append(kwargs["audit_id_factory"])
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(session_runtime, "SQLiteStore", record)
+    monkeypatch.setattr(product_startup, "SQLiteStore", record)
     async with asyncio.timeout(10):
         bindings = await session_runtime.bootstrap_product(
             product_folders(str(tmp_path / "product.db"))

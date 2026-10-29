@@ -33,6 +33,7 @@ A_SERVICES = frozenset(
         "policy_view",
         "product_assembly",
         "product_settings",
+        "product_startup",
         "runner",
         "session_admission",
         "session_cleanup",
@@ -378,3 +379,18 @@ def test_product_inputs_never_inject_streams_in_application_source() -> None:
                     path,
                     node.lineno,
                 )
+
+
+def test_product_startup_uses_only_public_runtime_operations() -> None:
+    """A153 / I6 / REC-01: composition cannot reach runtime collaborators."""
+    path = SRC / "services" / "product_startup.py"
+    for node in ast.walk(_tree(path)):
+        if isinstance(node, ast.Attribute):
+            assert not node.attr.startswith("_"), (path, node.lineno, node.attr)
+
+
+def test_product_bootstrap_compatibility_export() -> None:
+    """A153: existing entry-point and test imports keep the same callable."""
+    from guard_app.services import product_startup, session_runtime
+
+    assert session_runtime.bootstrap_product is product_startup.bootstrap_product

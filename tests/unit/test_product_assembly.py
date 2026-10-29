@@ -799,7 +799,7 @@ def test_product_bootstrap_with_invalid_profile_closes_the_store(tmp_path):
 
 def test_a_failed_start_whose_store_close_is_unconfirmed_reports_cleanup(tmp_path, monkeypatch):
     """#58: the Store's close only starts it. Unconfirmed, the bridge sees a cleanup failure."""
-    from guard_app.services import session_runtime
+    from guard_app.services import product_startup, session_runtime
     from guard_app.services.bridge_types import BackendCleanupError
 
     class Late(SQLiteStore):
@@ -807,7 +807,7 @@ def test_a_failed_start_whose_store_close_is_unconfirmed_reports_cleanup(tmp_pat
             await super().wait_closed(timeout)
             return False
 
-    monkeypatch.setattr(session_runtime, "SQLiteStore", Late)
+    monkeypatch.setattr(product_startup, "SQLiteStore", Late)
     peer = Peer([READ_DEFINITION])
 
     async def run() -> None:

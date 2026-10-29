@@ -291,7 +291,7 @@ def test_form_confirmation_ignores_stale_reply_and_clears_on_edit():
 
 
 def test_product_bridge_registration_updates_window_and_survives_restart(tmp_path, monkeypatch):
-    from guard_app.services import session_runtime
+    from guard_app.services import product_startup, session_runtime
     from guard_app.services.bridge import BridgeState
     from guard_app.ui.runtime import RuntimePanel
     from guard_app.ui.window import GuardWindow
@@ -307,7 +307,7 @@ def test_product_bridge_registration_updates_window_and_survives_restart(tmp_pat
         calls.append(server)
         return SimpleNamespace(complete=True, tools=())
 
-    monkeypatch.setattr(session_runtime, "collect_registration_listing", collect)
+    monkeypatch.setattr(product_startup, "collect_registration_listing", collect)
 
     async def boot():
         return await session_runtime.bootstrap_product(folders, settings=read_settings(folders))
