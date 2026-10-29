@@ -6,6 +6,8 @@ Each case is preceded by a Semgrep test annotation naming the rules that must (o
 match the next line. Do not write the annotation keywords anywhere else in this file.
 """
 
+import asyncio
+import builtins
 import hashlib
 import os
 import pickle
@@ -48,6 +50,12 @@ def cases(path, data, url, client):
     except OSError:
         data = None
 
+    # ruleid: no-swallow
+    try:
+        os.remove(path)
+    except OSError as error:
+        pass
+
     # ok: no-swallow, broad-except-only-in-allowed
     try:
         os.remove(path)
@@ -76,6 +84,38 @@ def cases(path, data, url, client):
     try:
         os.remove(path)
     except:
+        data = None
+
+    # ruleid: broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except (Exception, asyncio.CancelledError) as error:
+        data = error
+
+    # ruleid: broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except (OSError, BaseException):
+        data = None
+
+    # ruleid: broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        data = None
+    except (OSError, builtins.Exception):
+        data = None
+
+    # ok: broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except (OSError, ExceptionGroup, BaseExceptionGroup) as error:
+        data = error
+
+    # ok: broad-except-only-in-allowed
+    try:
+        os.remove(path)
+    except CustomException:
         data = None
 
     # ruleid: no-unsafe-deserialize

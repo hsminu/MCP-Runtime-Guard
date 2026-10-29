@@ -459,7 +459,7 @@ class ServerWorker:
             self._call_timeout_s + 0.05, self._force_settle_timeout, cmd
         )
         try:
-            try:
+            try:  # nosemgrep: broad-except-only-in-allowed
                 async with asyncio.timeout(self._call_timeout_s):
                     if self._on_dispatch is not None:
                         self._on_dispatch(cmd.req.request_id)
