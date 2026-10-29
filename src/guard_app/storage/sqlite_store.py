@@ -3857,6 +3857,10 @@ class SQLiteStore:
                 if (
                     row["status"] != RequestStatus.WAITING_APPROVAL.value
                     or row["dispatch_reserved_at_utc"] is not None
+                    or row["epoch"] != context.request.state.epoch
+                    or row["kind"] != context.request.kind.value
+                    or row["row_revision"] != 0
+                    or row["legacy_source"] is not None
                     or current != context.waiting
                     or current.unclassified
                     or current.security_version != expected_security_version
