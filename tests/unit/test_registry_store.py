@@ -419,7 +419,11 @@ def test_selected_scan_must_exist_belong_to_server_and_match_current_set(
             activate(store, entry, reviewed_scan_id=scan_id)
         assert error.value.reason is reason
         assert_sanitized(error.value)
-    entry = run(store.record_scan_report("old", report(fingerprint_set=(NEW_FP,)), at_utc=NOW))
+    run(store.record_scan_report("old", report(), at_utc=NOW))
+    # The report was valid at insertion and becomes stale only after a new listing arrives.
+    entry = run(
+        store.record_fingerprint_change("server-1", (tool(fingerprint=NEW_FP),), at_utc=NOW)
+    ).entry
     before = rows(store)
     with pytest.raises(StoreError) as error:
         activate(store, entry, reviewed_scan_id="old")

@@ -282,7 +282,10 @@ class RegistryStore(Protocol):
     async def record_scan_report(
         self, scan_id: str, report: ScanReport, *, at_utc: datetime
     ) -> RegistryEntry:
-        """검사는 상태를 바꾸지 않는다. SDK 원문 Finding.description은 받지 않는다."""
+        """현재 등록의 도구 지문 집합과 일치하는 검사만 저장한다(#59).
+
+        검사는 상태를 바꾸지 않는다. SDK 원문 Finding.description은 받지 않는다.
+        """
         ...
 
     async def activate_server(

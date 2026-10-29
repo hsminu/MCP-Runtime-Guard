@@ -1697,6 +1697,10 @@ class SQLiteStore:
                     is not None
                 ):
                     raise StoreError(Reason.APPROVAL_RACE)
+                if set(valid.fingerprint_set) != {
+                    tool.fingerprint for tool in current.registration.tools
+                }:
+                    raise StoreError(Reason.TOOL_FINGERPRINT_CHANGED)
                 connection.execute(
                     """INSERT INTO scan_reports
                     (scan_id,server_id,report_json,scanned_at_utc,stored_at_utc)
