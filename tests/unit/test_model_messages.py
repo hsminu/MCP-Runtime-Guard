@@ -43,22 +43,26 @@ def test_every_reason_has_an_explicit_message_and_visibility_is_an_allowlist() -
     assert set(model_messages._PUBLIC_REASON_PRIORITY) == MODEL_VISIBLE_REASONS
 
 
-@pytest.mark.parametrize("reason", list(Reason))
-def test_each_reason_has_a_fixed_denial_message(reason: Reason) -> None:
-    success, text = fixed_model_message(ModelMessageKind.DENIED, reason)
-    assert success is False
-    assert text == MODEL_REASON_MESSAGES[reason]
-    if reason in _VISIBLE_REASONS:
-        assert text == f"{_DENIED_TEXT}: {reason.value}"
-    else:
-        assert text == (_STOPPED_TEXT if reason is Reason.GUARD_CLOSED else _DENIED_TEXT)
-        assert reason.value not in text
+def test_each_reason_has_a_fixed_denial_message(subtests) -> None:
+    for case_0, reason in enumerate(list(Reason)):
+        with subtests.test(case_0=case_0):
+            success, text = fixed_model_message(ModelMessageKind.DENIED, reason)
+            assert success is False
+            assert text == MODEL_REASON_MESSAGES[reason]
+            if reason in _VISIBLE_REASONS:
+                assert text == f"{_DENIED_TEXT}: {reason.value}"
+            else:
+                assert text == (_STOPPED_TEXT if reason is Reason.GUARD_CLOSED else _DENIED_TEXT)
+                assert reason.value not in text
 
 
-@pytest.mark.parametrize("reason", list(Reason))
-def test_denied_outcomes_cover_every_reason_without_metadata(reason: Reason) -> None:
-    outcome = Denied(request_id="PRIVATE_REQUEST", reasons=(reason,))
-    assert outcome_model_message(outcome) == fixed_model_message(ModelMessageKind.DENIED, reason)
+def test_denied_outcomes_cover_every_reason_without_metadata(subtests) -> None:
+    for case_0, reason in enumerate(list(Reason)):
+        with subtests.test(case_0=case_0):
+            outcome = Denied(request_id="PRIVATE_REQUEST", reasons=(reason,))
+            assert outcome_model_message(outcome) == fixed_model_message(
+                ModelMessageKind.DENIED, reason
+            )
 
 
 @pytest.mark.parametrize(
@@ -108,12 +112,13 @@ def test_kind_table_covers_all_final_kinds_and_only_released_is_successful() -> 
     assert fixed_model_message(ModelMessageKind.DENIED, Reason.OK)[0] is False
 
 
-@pytest.mark.parametrize("reason", list(Reason))
-@pytest.mark.parametrize(
-    "kind", [ModelMessageKind.WITHHELD, ModelMessageKind.OUTCOME_UNKNOWN, ModelMessageKind.STOPPED]
-)
-def test_all_stop_results_hide_all_reasons(kind: ModelMessageKind, reason: Reason) -> None:
-    assert fixed_model_message(kind, reason) == (False, _STOPPED_TEXT)
+def test_all_stop_results_hide_all_reasons(subtests) -> None:
+    for case_0, reason in enumerate(list(Reason)):
+        for case_1, kind in enumerate(
+            [ModelMessageKind.WITHHELD, ModelMessageKind.OUTCOME_UNKNOWN, ModelMessageKind.STOPPED]
+        ):
+            with subtests.test(case_0=case_0, case_1=case_1):
+                assert fixed_model_message(kind, reason) == (False, _STOPPED_TEXT)
 
 
 def test_expiry_rejection_cancellation_and_stop_are_distinct_extension_points() -> None:
@@ -156,10 +161,10 @@ def test_released_body_is_not_read_or_serialized() -> None:
     assert outcome_model_message(outcome) == (True, "")
 
 
-@pytest.mark.parametrize("reason", list(Reason))
-def test_released_does_not_accept_contradictory_reason_metadata(reason: Reason) -> None:
-    with pytest.raises(ModelMessageError):
-        fixed_model_message(ModelMessageKind.RELEASED, reason)
+def test_released_does_not_accept_contradictory_reason_metadata(subtests) -> None:
+    for case_0, reason in enumerate(list(Reason)):
+        with subtests.test(case_0=case_0), pytest.raises(ModelMessageError):
+            fixed_model_message(ModelMessageKind.RELEASED, reason)
 
 
 def test_multiple_public_reasons_have_stable_priority_independent_of_order_and_duplicates() -> None:
@@ -169,14 +174,20 @@ def test_multiple_public_reasons_have_stable_priority_independent_of_order_and_d
         assert outcome_model_message(outcome) == expected
 
 
-@pytest.mark.parametrize("private_reason", sorted(set(Reason) - _VISIBLE_REASONS))
-def test_private_reason_masks_other_reasons(private_reason: Reason) -> None:
-    reasons = tuple(_VISIBLE_REASONS) + (private_reason,)
-    assert outcome_model_message(Denied(request_id=None, reasons=reasons)) == (False, _DENIED_TEXT)
-    assert outcome_model_message(Denied(request_id=None, reasons=tuple(reversed(reasons)))) == (
-        False,
-        _DENIED_TEXT,
-    )
+def test_private_reason_masks_other_reasons(subtests) -> None:
+    for case_0, private_reason in enumerate(sorted(set(Reason) - _VISIBLE_REASONS)):
+        with subtests.test(case_0=case_0):
+            reasons = tuple(_VISIBLE_REASONS) + (private_reason,)
+            assert outcome_model_message(Denied(request_id=None, reasons=reasons)) == (
+                False,
+                _DENIED_TEXT,
+            )
+            assert outcome_model_message(
+                Denied(request_id=None, reasons=tuple(reversed(reasons)))
+            ) == (
+                False,
+                _DENIED_TEXT,
+            )
 
 
 def test_reason_table_is_immutable() -> None:
