@@ -1,8 +1,10 @@
 """Read-only call log presentation from a bridge-approved public projection.
 
-The pending C audit query contract must supply these values. This module never
+B's Store queries (B6-05) supply these values through the bridge; without a
+query source the page shows whatever ``set_calls`` supplied. This module never
 reads audit storage, accepts a tool body, or infers a security decision from a
 missing row. CSV is deliberately limited to the visible public summary fields.
+The boundary tier at decision time is not stored, so no tier is shown (#86).
 """
 
 from __future__ import annotations
@@ -30,13 +32,13 @@ from PySide6.QtWidgets import (
 
 from guard_app.domain.enums import ToolKind
 
+from .approval_presentation import QUERY_TEXT_INVALID, QUERY_UNKNOWN, valid_query_text
 from .models import LoadState, Surface
 from .presentation import (
     DECISIONS,
     MISSING,
     REASONS,
     REQUEST_STATUSES,
-    TIERS,
     fixed,
     format_kst,
 )
@@ -55,20 +57,24 @@ _APPROVAL = {
     "NOT_REQUIRED": "승인 불필요",
     "PENDING": "승인 대기",
     "APPROVED": "승인됨 · 실행 결과와 별개",
+    "CONSUMED": "승인 소비됨 · 실행 결과와 별개",
     "REJECTED": "거절됨",
     "EXPIRED": "만료됨",
+    "CANCELLED": "취소됨",
     "INVALIDATED": "무효화됨",
 }
+# B6-05 stages from the audit events. The Store cannot tell whether a reserved
+# call reached the server, and success or release shows in the current status.
 _STAGES = {
     "DECIDED": "최초 판정",
     "WAITING_APPROVAL": "승인 대기",
     "DISPATCHING": "전송 예약",
-    "DISPATCHED": "호스트 전송",
     "OBSERVED": "결과 수신",
-    "COMMITTED": "상태·감사 확정",
-    "RELEASED": "결과 공개",
+    "COMMITTED": "결과 기록 · 성공 여부는 현재 실행 상태로 확인",
     "WITHHELD": "결과 미공개",
 }
+CALL_PAGE_SIZE = 50
+SOURCE_NOT_CONNECTED = "호출 로그 조회가 아직 연결되지 않음."
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -81,12 +87,13 @@ class PublicCallSummary:
     server_id: str | None = None
     tool_name: str | None = None
     kind: str | None = None
-    boundary_tier: str | None = None
     initial_decision: str | None = None
     reason_code: str | None = None
     approval_status: str | None = None
     current_status: str | None = None
     occurred_at: datetime | None = None
+    # Every recorded reason; reason_code is the first for the table and CSV.
+    reason_codes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -112,6 +119,26 @@ class DetailRequest:
 
     call_id: str
     token: int
+
+
+@dataclass(frozen=True, slots=True)
+class CallLogQuery:
+    """One list query intent; the token drops replies to older search/page intents."""
+
+    token: int
+    search: str
+    page: int
+    page_size: int = CALL_PAGE_SIZE
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class CallLogResult:
+    """One backend page and its Store-counted total, not a local row cache."""
+
+    query: CallLogQuery
+    rows: tuple[PublicCallSummary, ...]
+    total_count: int
+    as_of: datetime | None = None
 
 
 def _iso_kst(value: datetime | None) -> str:
@@ -182,7 +209,6 @@ def public_calls_csv(rows: Sequence[PublicCallSummary]) -> str:
             "서버 ID",
             "도구 이름",
             "종류",
-            "신뢰 경계",
             "최초 판정",
             "판정 사유",
             "승인 상태",
@@ -203,7 +229,6 @@ def public_calls_csv(rows: Sequence[PublicCallSummary]) -> str:
                     row.server_id or MISSING,
                     row.tool_name or MISSING,
                     fixed(_KINDS, row.kind),
-                    fixed(TIERS, row.boundary_tier),
                     fixed(DECISIONS, row.initial_decision),
                     fixed(REASONS, row.reason_code),
                     fixed(_APPROVAL, row.approval_status),
@@ -223,10 +248,10 @@ def _detail_text(detail: PublicCallDetail) -> str:
         f"서버 ID: {_public_display_text(row.server_id)}",
         f"도구 이름: {_public_display_text(row.tool_name)}",
         f"종류: {fixed(_KINDS, row.kind)}",
-        f"신뢰 경계: {fixed(TIERS, row.boundary_tier)}",
         f"발생 시각: {format_kst(row.occurred_at)}",
         f"최초 판정: {fixed(DECISIONS, row.initial_decision)}",
-        f"판정 사유: {fixed(REASONS, row.reason_code)}",
+        "판정 사유: "
+        + ", ".join(fixed(REASONS, code) for code in (row.reason_codes or (row.reason_code,))),
         f"승인 상태: {fixed(_APPROVAL, row.approval_status)}",
         f"현재 실행 상태: {fixed(REQUEST_STATUSES, row.current_status)}",
         "",
@@ -258,9 +283,16 @@ def _detail_text(detail: PublicCallDetail) -> str:
 
 
 class CallLogPage(QWidget):
-    """Full-width log list and large plain-text dialog, without backend access."""
+    """Full-width log list and large plain-text dialog, without backend access.
+
+    With a query source (``set_source_connected``) the search and pages are
+    Store queries sent as ``query_requested``; replies are accepted only
+    through ``set_page`` with the exact query. Without one, ``set_calls``
+    supplies the rows and the search filters them locally.
+    """
 
     detail_requested = Signal(object)
+    query_requested = Signal(object)
     _COMPACT_VIEWPORT_WIDTH = 760
     _NARROW_VIEWPORT_WIDTH = 460
     _STACK_ACTIONS_WIDTH = 580
@@ -275,6 +307,10 @@ class CallLogPage(QWidget):
         self._detail_request: DetailRequest | None = None
         self._detail_token = 0
         self._column_mode: str | None = None
+        self._source_connected = False
+        self._sequence = 0
+        self._query: CallLogQuery | None = None
+        self._total_count = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 40)
@@ -291,7 +327,8 @@ class CallLogPage(QWidget):
         self.search = QLineEdit()
         self.search.setAccessibleName("현재 조회 결과에서 호출 검색")
         self.search.setPlaceholderText("호출·요청·Task·서버 ID 또는 도구 이름 검색")
-        self.search.textChanged.connect(self._apply_filter)
+        self.search.textChanged.connect(self._search_edited)
+        self.search.editingFinished.connect(self._search_finished)
         layout.addWidget(self.search)
 
         self.table = QTableWidget(0, 7)
@@ -320,6 +357,28 @@ class CallLogPage(QWidget):
         self.table.itemActivated.connect(self._open_selected)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         layout.addWidget(self.table, 1)
+
+        # Store pages; shown only with a query source.
+        self.pager = QWidget()
+        pager = QBoxLayout(QBoxLayout.Direction.LeftToRight, self.pager)
+        pager.setContentsMargins(0, 0, 0, 0)
+        self.count_label = plain_label("총건수 미제공 · 현재 페이지 0건", name="secondary")
+        pager.addWidget(self.count_label)
+        pager.addStretch(1)
+        self.previous_button = KeyboardActionButton("이전")
+        self.previous_button.clicked.connect(self.previous_page)
+        pager.addWidget(self.previous_button)
+        self.page_label = plain_label("— / —", name="secondary", wrap=False)
+        pager.addWidget(self.page_label)
+        self.next_button = KeyboardActionButton("다음")
+        self.next_button.clicked.connect(self.next_page)
+        pager.addWidget(self.next_button)
+        self.refresh_button = KeyboardActionButton("새로고침")
+        self.refresh_button.set_visual(icon="refresh")
+        self.refresh_button.clicked.connect(self.refresh)
+        pager.addWidget(self.refresh_button)
+        self.pager.hide()
+        layout.addWidget(self.pager)
 
         self._actions_layout = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.detail_button = KeyboardActionButton("선택한 호출 상세 보기")
@@ -453,6 +512,150 @@ class CallLogPage(QWidget):
         ):
             self._detail_dialog.close()
 
+    @property
+    def current_query(self) -> CallLogQuery | None:
+        return self._query
+
+    @property
+    def source_connected(self) -> bool:
+        return self._source_connected
+
+    def set_source_connected(self, connected: bool) -> None:
+        """Switch between Store pages and supplied rows; never wait without a source."""
+
+        self._source_connected = connected is True
+        self._sequence += 1
+        self._query = None
+        self._total_count = 0
+        self.pager.setVisible(self._source_connected)
+        if self._source_connected:
+            self.search.setAccessibleName("호출 로그 검색")
+            self.search.setPlaceholderText(
+                "요청·Task·서버 ID 또는 도구 이름의 앞부분 검색 · 대소문자 구분"
+            )
+        else:
+            self.search.setAccessibleName("현재 조회 결과에서 호출 검색")
+            self.search.setPlaceholderText("호출·요청·Task·서버 ID 또는 도구 이름 검색")
+        if not self._source_connected:
+            self.set_calls(Surface(LoadState.UNAVAILABLE))
+            self.state_message.set_message(SOURCE_NOT_CONNECTED)
+        self._set_controls_enabled(False)
+        self.search.setEnabled(self._source_connected)
+        self._update_pager()
+
+    def refresh(self) -> None:
+        """Read again from the Store."""
+
+        self._request_page(self._query.page if self._query is not None else 1)
+
+    def next_page(self) -> None:
+        if (
+            self._state is LoadState.READY
+            and self._query is not None
+            and self._query.page < self._page_count()
+        ):
+            self._request_page(self._query.page + 1)
+
+    def previous_page(self) -> None:
+        if self._state is LoadState.READY and self._query is not None and self._query.page > 1:
+            self._request_page(self._query.page - 1)
+
+    def _search_edited(self, *_args: object) -> None:
+        if not self._source_connected:
+            self._apply_filter()
+
+    def _search_finished(self) -> None:
+        # editingFinished also fires on focus loss; an unchanged search is no new query.
+        if self._source_connected and (
+            self._query is None or self._query.search != self.search.text().strip()
+        ):
+            self._request_page(1)
+
+    def _request_page(self, page: int) -> None:
+        if not self._source_connected:
+            return
+        self._sequence += 1
+        search = self.search.text().strip()
+        self._rows = ()
+        self._total_count = 0
+        if not valid_query_text(search):
+            # Not sent: B accepts only this pattern, and the text stays as typed.
+            self._query = None
+            self._show_query_state(LoadState.ERROR, QUERY_TEXT_INVALID)
+            return
+        self._query = CallLogQuery(self._sequence, search, page)
+        self._show_query_state(LoadState.LOADING, None)
+        self.query_requested.emit(self._query)
+
+    def set_page(self, result: CallLogResult) -> bool:
+        """Apply only a current, structurally valid backend page."""
+
+        if type(result) is not CallLogResult or result.query != self._query:
+            return False
+        query = result.query
+        if (
+            type(result.total_count) is not int
+            or result.total_count < 0
+            or type(result.rows) is not tuple
+            or len(result.rows) > query.page_size
+            or not all(type(row) is PublicCallSummary for row in result.rows)
+        ):
+            self.set_error(query)
+            return False
+        last_page = max(1, (result.total_count + query.page_size - 1) // query.page_size)
+        if query.page > last_page:
+            self._request_page(last_page)
+            return False
+        selected = self._selected_call_id()
+        self._rows = result.rows
+        self._total_count = result.total_count
+        self._state = LoadState.READY
+        self.state_message.set_state(self._state, as_of=result.as_of)
+        self._set_controls_enabled(True)
+        self._apply_filter()
+        if selected:
+            self.select_call(selected)
+        self._update_pager()
+        return True
+
+    def set_error(self, query: CallLogQuery) -> bool:
+        """A failed current query cannot reuse old rows or imply zero results."""
+
+        if query != self._query:
+            return False
+        self._rows = ()
+        self._total_count = 0
+        self._show_query_state(LoadState.ERROR, QUERY_UNKNOWN)
+        return True
+
+    def _show_query_state(self, state: LoadState, message: str | None) -> None:
+        self._state = state
+        self.state_message.set_state(state)
+        if message is not None:
+            self.state_message.set_message(message)
+        self._set_controls_enabled(False)
+        self._apply_filter()
+        self._update_pager()
+
+    def _page_count(self) -> int:
+        size = self._query.page_size if self._query is not None else CALL_PAGE_SIZE
+        return max(1, (self._total_count + size - 1) // size)
+
+    def _update_pager(self) -> None:
+        ready = self._state is LoadState.READY and self._query is not None
+        if ready and self._query is not None:
+            self.count_label.setText(
+                f"전체 {self._total_count:,}건 · 현재 페이지 {len(self._rows)}건"
+            )
+            self.page_label.setText(f"{self._query.page} / {self._page_count()}")
+        else:
+            self.count_label.setText("총건수 미제공 · 현재 페이지 0건")
+            self.page_label.setText("— / —")
+        page = self._query.page if self._query is not None else 1
+        self.previous_button.setEnabled(ready and page > 1)
+        self.next_button.setEnabled(ready and page < self._page_count())
+        self.refresh_button.setEnabled(self._source_connected)
+
     def select_call(self, call_id: str) -> None:
         """Select a backend-supplied target if it exists in this query result."""
 
@@ -483,7 +686,9 @@ class CallLogPage(QWidget):
         dialog.body.setPlainText(text)
 
     def _set_controls_enabled(self, enabled: bool) -> None:
-        self.search.setEnabled(enabled)
+        # With a query source the search stays usable, so a refused or failed
+        # query can be corrected and sent again.
+        self.search.setEnabled(enabled or self._source_connected)
         self.table.setEnabled(enabled)
         self.csv_button.setEnabled(
             enabled and self._state == LoadState.READY and bool(self._visible_rows)
@@ -492,7 +697,8 @@ class CallLogPage(QWidget):
 
     def _apply_filter(self, *_args: object) -> None:
         selected = self._selected_call_id()
-        term = self.search.text().strip().casefold()
+        # Store pages are already searched by B (prefix, case kept).
+        term = "" if self._source_connected else self.search.text().strip().casefold()
         self._visible_rows = [
             row
             for row in self._rows
@@ -518,7 +724,9 @@ class CallLogPage(QWidget):
             if row.call_id == selected:
                 self.table.selectRow(index)
         if self._state == LoadState.READY:
-            if not self._rows:
+            if not self._rows and self._query is not None and self._query.search:
+                self.state_message.set_message("검색 결과가 없음")
+            elif not self._rows:
                 self.state_message.set_message("조회된 호출이 없음")
             elif not self._visible_rows:
                 self.state_message.set_message("현재 조회 결과와 일치하는 호출이 없음")

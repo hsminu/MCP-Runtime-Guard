@@ -29,6 +29,7 @@ from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
 from guard_app.domain.enums import StorePrepareStep
 from guard_app.domain.models import RecoveryItemPage as RecoveryItemPage
 from guard_app.domain.models import RecoveryReport as RecoveryReport
+from guard_app.domain.queries import ApprovalListQuery, CallListQuery
 from guard_app.services import catalog_sources
 from guard_app.services.bridge_commands import (
     BridgeOutlet,
@@ -65,6 +66,8 @@ from guard_app.services.bridge_types import ControlAction as ControlAction
 from guard_app.services.bridge_types import ConversationEvent as ConversationEvent
 from guard_app.services.bridge_types import DestinationEdit as DestinationEdit
 from guard_app.services.bridge_types import LifecycleEvent as LifecycleEvent
+from guard_app.services.bridge_types import QueryReply as QueryReply
+from guard_app.services.bridge_types import QueryRequest
 from guard_app.services.bridge_types import RegistrationRequest as RegistrationRequest
 from guard_app.services.bridge_types import RegistrationView as RegistrationView
 from guard_app.services.bridge_types import SessionCreated as SessionCreated
@@ -137,6 +140,9 @@ class BackendBridge(QObject):
     registration_changed = Signal(object)
     recovery_changed = Signal(object)
     recovery_page_changed = Signal(object)
+    # B6-05: whether this run answers approval/call queries, then QueryReply values.
+    query_source_changed = Signal(bool)
+    query_answered = Signal(object)
 
     def __init__(
         self,
@@ -178,6 +184,8 @@ class BackendBridge(QObject):
             self.recovery_changed.emit,
             self.recovery_page_changed.emit,
             self.policy_changed.emit,
+            self.query_source_changed.emit,
+            self.query_answered.emit,
         )
         self._host = BackendHost(
             bootstrap,
@@ -302,6 +310,22 @@ class BackendBridge(QObject):
                 registration=request,
             )
         )
+
+    def request_query(self, kind: str, token: int, request: QueryRequest) -> None:
+        """Read the approval list ("approvals"), call log ("calls") or one call ("call").
+
+        The answer arrives as ``query_answered`` with the same kind and token.
+        Requests are B's validated query values; a call is read by request ID.
+        """
+        self._require_qt_thread()
+        valid = (
+            (kind == "approvals" and type(request) is ApprovalListQuery)
+            or (kind == "calls" and type(request) is CallListQuery)
+            or (kind == "call" and type(request) is str and bool(request))
+        )
+        if not valid or type(token) is not int:
+            raise ValueError("QUERY_REQUEST_INVALID")
+        self._host.query(kind, token, request)
 
     def request_new_session(
         self, draft_key: str, options: SessionOptions, *, command_id: str | None = None

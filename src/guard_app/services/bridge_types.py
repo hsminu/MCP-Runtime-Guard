@@ -14,6 +14,14 @@ from guard_app.adapters.codex_protocol import REASONING_EFFORTS
 from guard_app.domain.enums import Label, TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import RecoveryItemPage, RecoveryReport
+from guard_app.domain.queries import (
+    ApprovalListPage,
+    ApprovalListQuery,
+    CallDetail,
+    CallListPage,
+    CallListQuery,
+)
+from guard_app.ports import StoreQueries
 from guard_app.services.approvals import HumanControl
 from guard_app.services.codex_account import CodexAccountPort
 from guard_app.services.policy_view import PolicyView
@@ -113,6 +121,29 @@ class BackendBindings:
     recovery_report: RecoveryReport | None = None
     recovery_page: RecoveryItemPage | None = None
     recovery_next: Callable[[], Awaitable[RecoveryItemPage]] | None = None
+    # B6-05 read-only Store queries for the approval list and call log; None
+    # leaves both screens unconnected.
+    queries: StoreQueries | None = None
+
+
+# A read-only Store query (B6-05) and its answer. `token` is the screen's own
+# request number, echoed so a reply to an older intent is dropped.
+QUERY_KINDS = frozenset({"approvals", "calls", "call"})
+QueryRequest = ApprovalListQuery | CallListQuery | str
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class QueryReply:
+    """`failed` means unknown (Store error, timeout, shutdown), never empty.
+
+    For "call", ``page`` None without ``failed`` is a request ID the Store has
+    no row for. Pages carry no raw arguments, results or exception text.
+    """
+
+    kind: str
+    token: int
+    page: ApprovalListPage | CallListPage | CallDetail | None
+    failed: bool = False
 
 
 # The only model pinned by C's config/codex/codex.lock.json (allowed_models).
