@@ -36,6 +36,7 @@ from guard_app.servers.file_server import (
     file_server_root,
     main,
     serve,
+    trusted_file_server_root,
 )
 from guard_app.services.catalog import Catalog, ServerSettings
 from guard_app.services.catalog_sources import SourceRule
@@ -311,6 +312,26 @@ def test_settings_helpers_round_trip(root, tmp_path):
     assert file_server_root(file_server_args(entry)) == root.resolve()
     for bad in (["-m", "other"], ("-I", "-m", "x", "--root", "C:/r"), [*args[:4], "relative"], "x"):
         assert file_server_root(bad) is None
+
+
+def test_trusted_root_needs_stdio_and_the_apps_own_python(root):
+    """#94 3번: 앱 Python으로 띄우는 stdio 레코드만 파일 서버로 인정한다(자원형 출처 규칙)."""
+    args = file_server_args(root)
+    app = sys.executable
+    for command in (app, app.upper(), app.replace("\\", "/")):  # 대소문자·구분자만 다름
+        assert trusted_file_server_root("stdio", command, args) == root.resolve()
+    other = str(Path(app).with_name("pythonw.exe"))
+    for transport, command in (
+        ("stdio", other),
+        ("stdio", app + "x"),
+        ("stdio", None),
+        ("stdio", ""),
+        ("stdio", 1),
+        ("http", app),
+        (None, app),
+    ):
+        assert trusted_file_server_root(transport, command, args) is None
+    assert trusted_file_server_root("stdio", app, ["-m", "other"]) is None
 
 
 def test_roots_off_local_fixed_drives_are_refused(root, capsys):
