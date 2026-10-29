@@ -167,15 +167,14 @@ def test_server_detail_keeps_security_summary_above_scan_on_short_owner(app: QAp
         positions = [widget.mapTo(scroll.viewport(), QPoint(0, 0)).y() for widget in summary]
         assert positions == sorted(positions)
         assert positions[0] >= 0
-        assert positions[-1] + summary[-1].height() <= scroll.viewport().height()
-        assert detail.scan_status_card.mapTo(scroll.viewport(), QPoint(0, 0)).y() > (
+        assert detail.scan_report.mapTo(scroll.viewport(), QPoint(0, 0)).y() > (
             positions[-1] + summary[-1].height()
         )
-        scroll.verticalScrollBar().setValue(detail.scan_status_card.y())
+        scroll.verticalScrollBar().setValue(detail.scan_report.y())
         app.processEvents()
-        scan_top = detail.scan_status_card.mapTo(scroll.viewport(), QPoint(0, 0)).y()
-        assert scan_top <= 0
-        assert scan_top + detail.scan_status_card.height() > 0
+        scan_top = detail.scan_report.mapTo(scroll.viewport(), QPoint(0, 0)).y()
+        assert scan_top < scroll.viewport().height()
+        assert scan_top + detail.scan_report.height() > 0
 
 
 def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None:

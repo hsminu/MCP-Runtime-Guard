@@ -26,6 +26,8 @@ class SessionDisplay:
     text: str
     note: str
     waiting: bool
+    pill: str
+    tone: str
 
 
 def session_display(
@@ -37,6 +39,7 @@ def session_display(
     command_notice: str,
     session_blocker: str,
     startup_notice: str,
+    command_code: str = "",
 ) -> SessionDisplay:
     failure_notice = "" if snapshot is None else codex_failure_notice(snapshot.connection_code)
     active = snapshot is not None
@@ -50,6 +53,12 @@ def session_display(
         and snapshot.can_accept_message
         and not failure_notice
         and pending_command is None
+    )
+    connection_error = bool(
+        failure_notice
+        or (snapshot is not None and snapshot.connection_code == "CODEX_AUTH_FAILED")
+        or codex_failure_notice(command_code, creating=snapshot is None)
+        or command_code == "CODEX_AUTH_FAILED"
     )
     if snapshot is None:
         text = "아직 연결된 Task가 없음"
@@ -96,7 +105,32 @@ def session_display(
         if not snapshot.tools_available:
             note = "도구 없는 대화 · " + note
     waiting = snapshot is not None and snapshot.status is TaskStatus.WAITING_APPROVAL
-    return SessionDisplay(active, writable, failure_notice, text, note, waiting)
+    if connection_error:
+        pill, tone = "연결 오류", "deny"
+    elif snapshot is None:
+        pill, tone = ("시작 확인 중", "live") if pending_command else ("시작 전", "neutral")
+    elif waiting:
+        pill, tone = "승인 필요", "attn"
+    elif snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+        pill, tone = (
+            status_title(snapshot.status),
+            "neutral" if snapshot.status is TaskStatus.CLOSED else "deny",
+        )
+    elif snapshot.runner_state in ("model_error", "guard_error", "stopped"):
+        pill, tone = "멈춤", "deny"
+    elif not snapshot.model_ready:
+        pill, tone = "연결 필요", "attn"
+    elif busy or pending_command:
+        pill, tone = "응답 기다리는 중", "live"
+    elif not ready:
+        pill, tone = "준비 중", "neutral"
+    elif snapshot.can_advance:
+        pill, tone = "진행 대기", "attn"
+    elif writable:
+        pill, tone = "입력 가능", "neutral"
+    else:
+        pill, tone = "준비 중", "neutral"
+    return SessionDisplay(active, writable, failure_notice, text, note, waiting, pill, tone)
 
 
 def session_row_status(snapshot: TaskProjection | None) -> tuple[str, str]:

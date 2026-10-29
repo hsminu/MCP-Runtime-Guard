@@ -33,11 +33,13 @@ unknown outcome. A call already reserved when it failed keeps its outcome.
 
 from __future__ import annotations
 
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
@@ -377,6 +379,17 @@ class _RefusedStream(AbstractAsyncContextManager[tuple[Any, ...]]):
         return None
 
 
+def _file_server_root(server: ServerSettings) -> Path | None:
+    # #94: match registration's Python; EXE-01 checks its fingerprint on every launch.
+    if (
+        server.transport != "stdio"
+        or server.command is None
+        or Path(server.command) != Path(sys.executable)
+    ):
+        return None
+    return file_server_root(server.args or ())
+
+
 async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     """Load the Profile, start only its servers, compare fingerprints, build Guard."""
 
@@ -388,8 +401,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         roots = {
             server.id: root
             for server in configured.servers
-            if server.transport == "stdio"
-            and (root := file_server_root(server.args or ())) is not None
+            if (root := _file_server_root(server)) is not None
         }
         if roots:
             file_resolver = file_resource_resolver(roots)

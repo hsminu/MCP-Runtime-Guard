@@ -352,31 +352,25 @@ def test_call_log_keyboard_row_detail_and_filter_focus(app: QApplication) -> Non
     with closing_widgets(page):
         page.set_calls(Surface(LoadState.READY, rows))
         page.search.setFocus()
-        assert_key_focus(page, page.search, Qt.Key.Key_Tab, page.table)
+        assert_key_focus(page, page.search, Qt.Key.Key_Tab, page.server_filter)
+        page.table.setFocus()
         page.table.setCurrentCell(0, 0)
         QTest.keyClick(page.table, Qt.Key.Key_Down)
         QTest.keyClick(page.table, Qt.Key.Key_Return)
+        QTest.qWait(250)
         assert requests[-1].call_id == "call-b"
-        detail = page._detail_dialog
-        app.processEvents()
-        assert detail is not None and detail.body.hasFocus()
-        QTest.keyClick(detail.body, Qt.Key.Key_Escape)
-        QTest.qWait(10)
-        assert page._detail_dialog is None
         assert page.focusWidget() is page.table
-        page.detail_button.setFocus()
-        QTest.keyClick(page.detail_button, Qt.Key.Key_Space)
-        assert requests[-1].call_id == "call-b"
-        detail = page._detail_dialog
-        assert detail is not None
-        QTest.keyClick(detail.body, Qt.Key.Key_Escape)
-        QTest.qWait(10)
-        assert page.focusWidget() is page.detail_button
+        assert "불러오는 중" in page.detail_panel.message.text()
+        previous = requests[-1]
+        QTest.keyClick(page.table, Qt.Key.Key_Up)
+        QTest.qWait(250)
+        assert requests[-1].call_id == "call-a"
+        assert requests[-1].token != previous.token
         page.search.setFocus()
-        QTest.keyClicks(page.search, "alpha")
+        QTest.keyClicks(page.search, "beta")
         assert page.table.rowCount() == 1
-        assert not page.detail_button.isEnabled()
-        assert page._detail_dialog is None
+        assert page._detail_request is None
+        assert page.detail_panel.message.text() == "선택한 호출이 현재 결과에 없음"
 
 
 def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(app: QApplication) -> None:

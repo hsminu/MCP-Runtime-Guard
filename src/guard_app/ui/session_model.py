@@ -25,7 +25,8 @@ from .presentation import (
     EFFORT_NAMES,
     MODEL_NAMES,
 )
-from .widgets import KeyboardActionButton
+from .untrusted_text import untrusted_display_text
+from .widgets import KeyboardActionButton, plain_tooltip
 
 
 class ModelPicker(KeyboardActionButton):
@@ -46,6 +47,8 @@ class ModelPicker(KeyboardActionButton):
         self.model = CODEX_MODEL_ID
         self.effort = CODEX_DEFAULT_EFFORT
         self._fixed: str | None = None
+        self._applied: str | None = None
+        self._locked = False
         menu = QMenu(self)
         menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         self.model_actions = self._group(
@@ -86,9 +89,11 @@ class ModelPicker(KeyboardActionButton):
         """The level to send with a message; None when the model has no levels."""
         return None if self._fixed is not None else self.effort
 
-    def set_model_locked(self, locked: bool) -> None:
+    def set_model_locked(self, locked: bool, model_id: str | None = None) -> None:
         """A started Codex Task keeps its model; only the reasoning level changes."""
         self._fixed = None
+        self._locked = locked
+        self._applied = model_id
         for action in self.model_actions.values():
             action.setEnabled(not locked)
         self.setEnabled(True)
@@ -106,8 +111,18 @@ class ModelPicker(KeyboardActionButton):
             self.setAccessibleName(f"세션 {self._fixed}")
             self.setToolTip("")
             return
-        model = MODEL_NAMES.get(self.model, self.model)
+        value = self._applied if self._locked else self.model
+        model = untrusted_display_text(MODEL_NAMES.get(value, value) if value else "모델 확인 전")[
+            0
+        ]
         effort = EFFORT_NAMES[self.effort]
         self.setText(f"{model} · 추론 {effort}")
         self.setAccessibleName(f"세션 모델 {model} · 추론 수준 {effort} · 눌러서 바꾸기")
-        self.setToolTip(f"Codex {self.model} · effort {self.effort}")
+        # The raw request stays visible for support; the first line says what it means.
+        tooltip = f"세션을 시작할 때 이 모델을 요청함\nCodex {self.model} · effort {self.effort}"
+        if self._locked:
+            tooltip = "추론 수준은 다음 메시지부터 적용됨"
+            if self.model != self._applied:
+                applied = untrusted_display_text(self._applied or "모델 확인 전")[0]
+                tooltip += f"\n요청: {self.model}, 적용: {applied}"
+        self.setToolTip(plain_tooltip(tooltip))

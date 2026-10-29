@@ -322,7 +322,7 @@ async def test_global_halt_blocks_turn_and_interrupts_all_sessions(tmp_path):
             preparation=synthetic_preparation(),
             product=read_product(),
         ) as bindings:
-            runtime = bindings.close.__self__
+            runtime = bindings.create_session.__self__
             tasks = [await bindings.create_session(SessionOptions()) for _ in range(2)]
             runner = bindings.runner_for_task(tasks[0].task_id)
             runner.add_user_message("queued")
@@ -405,7 +405,7 @@ async def test_idle_revision_watch_closes_sessions(tmp_path):
             product=read_product(),
         ) as bindings:
             await bindings.create_session(SessionOptions())
-            runtime = bindings.close.__self__
+            runtime = bindings.create_session.__self__
             runtime.store.halt_execution(Reason.INTERNAL_ERROR)
             await asyncio.wait_for(closed.wait(), 2)
             assert session.interrupted == 1

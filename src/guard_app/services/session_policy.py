@@ -24,6 +24,7 @@ from guard_app.services.product_assembly import AssembledGuard
 from guard_app.services.product_settings import (
     SaveOutcomeUnknownError,
     SettingsFileChangedError,
+    default_settings_document,
 )
 from guard_app.services.registry import RegistryError, ServerRegistry
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
@@ -100,7 +101,7 @@ class TaskPolicy:
         )
 
     def blocker(self) -> str | None:
-        """Why no Profile is in force: no settings file, an invalid one, or none connected."""
+        """Why no Profile is in force: invalid settings, unavailable Registry or no connection."""
         return None if type(self._settings) is GuardSettings else self._missing_code
 
     def task_state(self, task_id: str) -> TaskState:
@@ -244,9 +245,11 @@ class TaskPolicy:
         *,
         active: bool,
         operator_id: str,
+        reviewed_scan_id: str | None = None,
     ) -> None:
         """A105: serialize with policy edits and Task creation, including both writes.
 
+        The scan ID was shown at activation; Scanner warnings never prevent activation.
         Activation saves/applies permissions while still PENDING, then activates.
         Blocking reverses the order: revoke Registry authority before saving.
         Any incomplete write sequence closes Guard; never retry it in this run.
@@ -347,7 +350,7 @@ class TaskPolicy:
                         server_id,
                         expected_row_revision=expected_row_revision,
                         reviewed_by=operator_id,
-                        reviewed_scan_id=None,
+                        reviewed_scan_id=reviewed_scan_id,
                     )
                 completed = True
             finally:
@@ -445,14 +448,7 @@ class TaskPolicy:
         if isinstance(self._document, FrozenJsonObject):
             return self._document.to_dict()
         # First registration selects no servers and grants no access.
-        return (
-            self._document
-            if self._document is not None
-            else {
-                "profile": {"id": "local", "servers": []},
-                "servers": [],
-            }
-        )
+        return self._document if self._document is not None else default_settings_document()
 
     def connect_registration_saver(self, saver: ProfileSaver) -> None:
         if self._saver is None:

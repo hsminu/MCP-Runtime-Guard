@@ -115,7 +115,7 @@ def product(monkeypatch, tmp_path, app):
     async def bootstrap(folders, **kwargs):
         boots.append(True)
         bindings = await original_bootstrap(folders, **kwargs)
-        stores.append(bindings.close.__self__.store)
+        stores.append(bindings.create_session.__self__.store)
         if not state.blocked:
             return bindings
 

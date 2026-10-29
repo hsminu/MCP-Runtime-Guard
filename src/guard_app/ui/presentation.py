@@ -93,6 +93,7 @@ REASONS = {
     "APPROVAL_STALE": "승인 요청 상태 변경",
     "APPROVAL_RACE": "승인 요청 중복 처리",
     "GUARD_CLOSED": "Guard 정상 종료로 실행하지 않음",
+    "TURN_INTERRUPTED": "턴 중단으로 승인 요청이 취소됨",
 }
 DECISIONS = {"ALLOW": "허용", "ASK": "승인 필요", "DENY": "차단"}
 
@@ -281,7 +282,6 @@ _CODEX_FAILURE_DETAILS = {
     "GUARD_PROFILE_UNAVAILABLE": "Guard 정책(Profile) 설정이 아직 연결되지 않음.",
     "POLICY_APPLY_FAILED": "저장한 정책을 적용하지 못해 Guard를 정지함.",
     "POLICY_SAVE_UNKNOWN": "정책 저장 결과를 확인하지 못해 Guard를 정지함.",
-    "SETTINGS_FILE_MISSING": "설정 파일이 없어 Guard 정책(Profile)이 없음.",
     "SETTINGS_PROFILE_INVALID": "설정 파일의 Guard 정책(Profile) 내용이 올바르지 않음.",
     "REGISTRY_UNAVAILABLE": "서버 등록 기록을 불러오지 못함.",
 }
@@ -296,9 +296,9 @@ SETTINGS_FILE_STATUS = {
         "서버 등록 설정을 저장함. 첫 설정·실행 파일 변경 후에는 앱을 다시 시작하세요."
     ),
     "SETTINGS_LOADED": "설정 파일을 읽고 Guard 정책(Profile)을 확인함.",
-    "SETTINGS_FILE_MISSING": (
-        "설정 파일이 없음(첫 실행). Guard 정책이 없어 새 세션을 시작할 수 없음. "
-        "앱을 닫은 상태에서 설정 파일을 만들고 다시 시작하세요."
+    "SETTINGS_FILE_DEFAULT": (
+        "설정 파일이 없어 기본 정책(서버·도구 없음)으로 실행 중. "
+        "서버를 등록하거나 정책을 저장하면 설정 파일이 만들어짐."
     ),
     "SETTINGS_PROFILE_INVALID": (
         "설정 파일의 Guard 정책(Profile) 내용이 올바르지 않아 새 세션을 시작할 수 없음. "

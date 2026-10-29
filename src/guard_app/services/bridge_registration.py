@@ -14,11 +14,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from guard_app.domain.contracts import RegistryEntry
 from guard_app.domain.enums import RegStatus, ToolKind
 from guard_app.domain.errors import DispatchError, StoreError
+from guard_app.domain.reasons import Reason
+from guard_app.domain.text import ReviewedDescription
 from guard_app.ports import RegistryStore
 from guard_app.security.endpoints import ENDPOINT_REJECT_CODES, EndpointError, normalize_endpoint
 from guard_app.security.ids import new_id
@@ -32,9 +34,15 @@ from guard_app.servers.file_server import (
     file_server_args,
     file_server_root,
 )
-from guard_app.services.bridge_types import RegistrationRequest, RegistrationRow, RegistrationView
+from guard_app.services.bridge_types import (
+    DescriptionRow,
+    RegistrationRequest,
+    RegistrationRow,
+    RegistrationView,
+)
 from guard_app.services.catalog import CatalogConfigError, ServerSettings, load_profile_settings
 from guard_app.services.policy_view import PolicyServer, PolicyTool, PolicyView
+from guard_app.services.registration_scans import RegistrationScans
 from guard_app.services.registry import (
     RegistryError,
     ServerRegistry,
@@ -49,6 +57,20 @@ from guard_app.services.session_tool_settings import tool_settings_rows
 # A teardown that could not be confirmed raises another DispatchError and stays
 # unconfirmed.
 _SERVER_START_FAILURES = frozenset({"SessionStartFailed", "SessionStartTimeout"})
+
+
+_REVIEWED_DESCRIPTION = TypeAdapter(ReviewedDescription)
+
+
+def reviewed_description_issue(value: str) -> str | None:
+    """DESC-01 validation without rewriting text or exposing validation errors."""
+    if not isinstance(value, str):
+        return "REG_DESCRIPTION_CHARACTERS"
+    try:
+        _REVIEWED_DESCRIPTION.validate_python(value, strict=True)
+    except ValidationError:
+        return "REG_DESCRIPTION_TOO_LONG" if len(value) > 2000 else "REG_DESCRIPTION_CHARACTERS"
+    return None
 
 
 def endpoint_input(value: str) -> tuple[str | None, str | None]:
@@ -126,7 +148,9 @@ class RegistrationCommands:
         execution_check: Callable[[], None] = lambda: None,
         *,
         operator_id: str = "local-user",
+        scans: RegistrationScans | None = None,
     ) -> None:
+        self.scans = scans
         self.registry = registry
         self.store = store
         self.policy = policy
@@ -203,10 +227,57 @@ class RegistrationCommands:
     async def _request(self, request: RegistrationRequest) -> RegistrationView:
         if request.action == "list":
             return RegistrationView("REG_LIST", rows=await self._rows())
+        if request.action == "scan_status":
+            return RegistrationView(
+                "SCAN_STATUS" if self.scans is not None else "SCAN_UNAVAILABLE",
+                server_id=request.server_id,
+                scan=self.scans.state(request.server_id) if self.scans is not None else None,
+            )
         self.execution_check()
         self.policy.check_registration()
         if self._unknown:
             return RegistrationView("REG_STORE_UNKNOWN")
+        # Registration commands serialize on self._lock; Store CAS guards activation races.
+        if request.action == "descriptions_preview":
+            entry = self.registry.entry(request.server_id)
+            if entry is None or entry.registration.status is not RegStatus.PENDING:
+                return RegistrationView("REG_DESCRIPTIONS_UNAVAILABLE", server_id=request.server_id)
+            descriptions = self.scans.server_descriptions(request.server_id) if self.scans else None
+            description_rows = tuple(
+                DescriptionRow(
+                    t.tool_name,
+                    None if descriptions is None else descriptions.get(t.tool_name, ""),
+                    t.reviewed_description,
+                )
+                for t in entry.registration.tools
+            )
+            return RegistrationView(
+                "REG_DESCRIPTIONS_PREVIEW",
+                server_id=request.server_id,
+                row_revision=entry.registration.row_revision,
+                descriptions=description_rows,
+            )
+        if request.action == "descriptions_save":
+            return await self._save_descriptions(request)
+        if request.action == "scan":
+            if self.scans is None:
+                return RegistrationView("SCAN_UNAVAILABLE", server_id=request.server_id)
+            entry = self.registry.entry(request.server_id)
+            if entry is None or entry.registration.status is not RegStatus.PENDING:
+                return RegistrationView("SCAN_TARGET_INVALID", server_id=request.server_id)
+            loaded = load_profile_settings(self.policy.registration_document(), self.registry)
+            server = next((s for s in loaded.servers if s.id == request.server_id), None)
+            if server is None:
+                return RegistrationView("SCAN_TARGET_INVALID", server_id=request.server_id)
+            if self.scans.running(request.server_id):
+                return RegistrationView(
+                    "SCAN_ALREADY_RUNNING",
+                    server_id=request.server_id,
+                    scan=self.scans.state(request.server_id),
+                )
+            return RegistrationView(
+                "SCAN_STARTED", server_id=request.server_id, scan=self.scans.start(server)
+            )
         if request.action == "tool_settings_preview":
             async with self.policy.lock:
                 self.policy.check_registration()
@@ -255,6 +326,7 @@ class RegistrationCommands:
                 settings = loaded.guard_settings
                 return RegistrationView(
                     "REG_ACTIVATION_PREVIEW",
+                    scan=self.scans.state(request.server_id) if self.scans is not None else None,
                     row_revision=entry.registration.row_revision,
                     activation=PolicyView(
                         settings.profile_id,
@@ -269,11 +341,22 @@ class RegistrationCommands:
                 )
         if request.action in ("activate", "block"):
             if (
-                type(request.allowed) is not tuple
+                (request.reviewed_scan_id is not None and type(request.reviewed_scan_id) is not str)
+                or (request.action == "block" and request.reviewed_scan_id is not None)
+                or type(request.allowed) is not tuple
                 or type(request.denied) is not tuple
                 or any(type(name) is not str for name in (*request.allowed, *request.denied))
             ):
                 return RegistrationView("POLICY_CHANGE_INVALID")
+            if (
+                request.action == "activate"
+                and request.reviewed_scan_id is not None
+                and (
+                    self.scans is None
+                    or self.scans.state(request.server_id).scan_id != request.reviewed_scan_id
+                )
+            ):
+                return RegistrationView("REG_ACTIVATION_STALE")
             await self.policy.set_server_active(
                 request.server_id,
                 request.expected_row_revision,
@@ -283,6 +366,7 @@ class RegistrationCommands:
                 self.stop_sessions,
                 active=request.action == "activate",
                 operator_id=self._operator_id,
+                reviewed_scan_id=request.reviewed_scan_id,
             )
             return RegistrationView(
                 "REG_ACTIVATION_RESTART_REQUIRED",
@@ -401,6 +485,7 @@ class RegistrationCommands:
             finally:
                 if not written:
                     self._unknown = True
+        listing: ToolListingView | None = None
         if not updating:
             restored = await self.registry.refresh(server.id) if mode == "restore" else None
             if mode == "restore":
@@ -433,7 +518,57 @@ class RegistrationCommands:
             server, self.registry, self.stop_sessions, updating=updating, sources=sources
         )
         codes = {"recheck": "REG_PIN_SAVED", "restore": "REG_SETTINGS_RESTORED"}
-        return RegistrationView(codes.get(mode, "REG_REGISTERED"), rows=await self._rows())
+        scan = (
+            self.scans.start(server, listing) if self.scans is not None and not updating else None
+        )
+        return RegistrationView(
+            codes.get(mode, "REG_REGISTERED"), rows=await self._rows(), scan=scan
+        )
+
+    async def _save_descriptions(self, request: RegistrationRequest) -> RegistrationView:
+        pairs = request.descriptions
+        if type(pairs) is not tuple or any(
+            type(pair) is not tuple
+            or len(pair) != 2
+            or any(type(value) is not str for value in pair)
+            for pair in pairs
+        ):
+            return RegistrationView("REG_DESCRIPTIONS_INVALID")
+        names = tuple(name for name, _ in pairs)
+        entry = self.registry.entry(request.server_id)
+        if len(set(names)) != len(names) or (
+            entry is not None
+            and not set(names).issubset(t.tool_name for t in entry.registration.tools)
+        ):
+            return RegistrationView("REG_DESCRIPTIONS_INVALID")
+        if any(reviewed_description_issue(value) for _, value in pairs):
+            return RegistrationView("REG_DESCRIPTION_INVALID")
+        if (
+            entry is None
+            or entry.registration.status is not RegStatus.PENDING
+            or entry.registration.row_revision != request.expected_row_revision
+        ):
+            return RegistrationView("REG_DESCRIPTIONS_STALE")
+        written = False
+        try:
+            await self.registry.save_reviewed_descriptions(
+                request.server_id, dict(pairs), expected_row_revision=request.expected_row_revision
+            )
+            written = True
+        except StoreError as error:
+            if error.reason not in (Reason.APPROVAL_RACE, Reason.REG_NOT_ACTIVE):
+                raise
+            written = True  # Known refusal: no uncertain write to retry.
+            return RegistrationView("REG_DESCRIPTIONS_STALE")
+        except RegistryError:
+            written = True
+            return RegistrationView("REG_DESCRIPTIONS_STALE")
+        finally:
+            if not written:
+                self._unknown = True
+        return RegistrationView(
+            "REG_DESCRIPTIONS_SAVED", server_id=request.server_id, rows=await self._rows()
+        )
 
     def _restore_refusal(self, server: ServerSettings, entry: RegistryEntry | None) -> str | None:
         """Why `server`'s settings record cannot be written back now; None when it can.

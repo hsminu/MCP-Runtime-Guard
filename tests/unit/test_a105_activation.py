@@ -363,7 +363,7 @@ def test_activation_ui_uses_bridge_revision_checkboxes_and_fixed_notices(monkeyp
     assert page._activation_dialog is None
     page._activation_result(response)
     dialog = page._activation_dialog
-    assert "검사 결과 표시는 아직 연결되지 않음" in dialog.warning.text()
+    assert "검사 기능이 연결되지 않음" in dialog.warning.text()
     assert "Task가 모두 정지됨" in dialog.warning.text()
     # Re-activating identical settings can keep the content-hash version.
     assert "정책 버전" not in dialog.warning.text()

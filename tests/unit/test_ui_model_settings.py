@@ -33,11 +33,11 @@ def test_api_key_precedes_chatgpt_controls_and_is_the_default_guidance():
         key_bottom = form.api_key_input.mapTo(form, QPoint(0, form.api_key_input.height())).y()
         for button in (form.login_button, form.browser_button):
             assert key_bottom <= button.mapTo(form, QPoint(0, 0)).y()
-            assert "ChatGPT" in button.text()
+            assert "로그인" in button.text()
         text = " ".join(label.text() for label in form.findChildren(QLabel))
-        assert "Codex 로그인" in text
+        assert "LLM · Codex 인증" in text
         assert "기본 로그인은 API 키임. 아래에 API 키를 입력하세요." in text
-        assert "보조 방법 · ChatGPT 로그인" in text
+        assert "ChatGPT로 로그인" in text
         assert "Codex가 처리함" in text
 
 
@@ -95,7 +95,9 @@ def test_new_session_has_fixed_codex_model_and_settings_keep_only_scanner_key():
     window = GuardWindow()
     view = window.sessions.current
     assert view.model.text() == "GPT-6.1-Sol · 추론 낮음"
-    assert view.model.toolTip() == "Codex gpt-6.1-sol · effort low"
+    assert view.model.toolTip() == (
+        "세션을 시작할 때 이 모델을 요청함\nCodex gpt-6.1-sol · effort low"
+    )
     assert not view.widget.findChildren(QComboBox)
     assert not view.widget.findChildren(QLineEdit)
     assert window.codex_login_info.findChildren(QLineEdit) == [
