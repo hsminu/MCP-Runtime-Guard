@@ -935,8 +935,8 @@ def test_task_label_comes_from_the_projection_in_header_and_results(app):
     with _window(app) as window:
         for label, unclassified, expected in [
             (None, False, "Task 등급: 미제공"),
-            (Label.INTERNAL, False, "Task 등급: 내부"),
-            (Label.CONFIDENTIAL, True, "Task 등급: 기밀 · 미분류 자료 표시됨"),
+            (Label.INTERNAL, False, "Task 등급: 개인"),
+            (Label.CONFIDENTIAL, True, "Task 등급: 민감 · 미분류 자료 표시됨"),
         ]:
             shell, panel, bridge = window
             bridge.task_changed.emit(snapshot(label=label, unclassified=unclassified))

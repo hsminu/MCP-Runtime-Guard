@@ -17,8 +17,8 @@ CODEX_INSTALL_COMMAND = r".venv\Scripts\python.exe tools\install_codex.py"
 
 LABELS = {
     "PUBLIC": ("공개", "PUBLIC", "public"),
-    "INTERNAL": ("내부", "INTERNAL", "internal"),
-    "CONFIDENTIAL": ("기밀", "CONFIDENTIAL", "confidential"),
+    "INTERNAL": ("개인", "INTERNAL", "internal"),
+    "CONFIDENTIAL": ("민감", "CONFIDENTIAL", "confidential"),
 }
 TIERS = {
     "internal": "내부 · internal",
@@ -70,8 +70,8 @@ ATTENTION_KINDS = {
     "registration": "서버 등록 확인",
 }
 REASONS = {
-    "INTERNAL_TO_EXTERNAL": "내부 자료의 외부 전송에 승인 필요",
-    "CONFIDENTIAL_TO_EXTERNAL": "기밀 자료의 외부 전송 차단",
+    "INTERNAL_TO_EXTERNAL": "개인 자료의 외부 전송에 승인 필요",
+    "CONFIDENTIAL_TO_EXTERNAL": "민감 자료의 외부 전송 차단",
     "LABEL_EXCEEDS_BOUNDARY": "서버 또는 목적지의 최대 수신 등급 초과",
     "UNKNOWN_DESTINATION": "목적지 경계 미확인",
     "UNKNOWN_SERVER": "서버 등록 미확인",
