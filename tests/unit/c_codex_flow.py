@@ -164,13 +164,20 @@ class Flow:
         """앱 폴더 전체에서 표지(UTF-8·UTF-16LE)를 담은 파일. 경로는 앱 폴더 기준이다.
 
         단일 실행 잠금 `app.lock`은 잠긴 채 열려 있어 읽지 않는다(내용 없는 잠금 파일).
+        실행 중인 codex.exe가 잠금 구간을 쥔 SQLite `-shm`(행 내용이 없는 WAL 인덱스)은 읽을 수
+        없으면 건너뛴다. 그 밖의 파일을 못 읽으면 그대로 실패한다.
         """
         root = self.run.folders.paths.root
         needles = (marker.encode("utf-8"), marker.encode("utf-16-le"))
         found = []
         for path in sorted(root.rglob("*")):
             if path.is_file() and path != root / "app.lock":
-                data = path.read_bytes()
+                try:
+                    data = path.read_bytes()
+                except PermissionError:
+                    if path.name.endswith("-shm"):
+                        continue
+                    raise
                 if any(needle in data for needle in needles):
                     found.append(path.relative_to(root).as_posix())
         return found
