@@ -883,6 +883,35 @@ def test_failure_rejects_free_form_exception_input(
     assert full_snapshot(store) == before
 
 
+def test_failure_records_exception_type_at_64_character_limit(
+    runtime: tuple[SQLiteStore, Clock],
+) -> None:
+    store, _ = runtime
+    req = dispatched(store)
+    exception_type = "E" * 64
+    failure(store, req, exception_type=exception_type)
+    detail = (
+        writer_connection(store)
+        .execute("SELECT detail FROM audit_events WHERE event_type='REQUEST_WITHHELD'")
+        .fetchone()[0]
+    )
+    assert detail == '{"exception_type":"' + exception_type + '"}'
+
+
+def test_failure_rejects_exception_type_over_64_without_changes(
+    runtime: tuple[SQLiteStore, Clock],
+) -> None:
+    store, _ = runtime
+    req = dispatched(store)
+    before = full_snapshot(store)
+    exception_type = "E" * 65
+    with pytest.raises(StoreError) as error:
+        failure(store, req, exception_type=exception_type)
+    assert_sanitized(error.value)
+    assert exception_type not in repr(error.value)
+    assert full_snapshot(store) == before
+
+
 def test_failure_audit_error_rolls_back_task_and_request(
     runtime: tuple[SQLiteStore, Clock],
 ) -> None:

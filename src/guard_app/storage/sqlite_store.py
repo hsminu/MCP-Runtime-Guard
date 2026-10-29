@@ -3372,7 +3372,7 @@ class SQLiteStore:
             type(exception_type) is not str
             or not exception_type.isidentifier()
             or not exception_type.isascii()
-            or len(exception_type) > 128
+            or len(exception_type) > 64
         ):
             raise StoreError()
         allowed_pairs = {
