@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-29 · main `ce18a88` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-30 · main `e0f08b3` · 완료 81/95, 남음 14 · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -8,7 +8,6 @@
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| AGT-04 표시 문구 리뷰 | A | B2.10 |
 | AGT-02 감사 범위 합의 | A·B·C | B6.15 |
 | A66 세션 관리자 계약 합의(legacy 시연이 ModelClient 사용) | A·B·C | B1.7 |
 | 자원 ID 판정기의 제품 조립 연결 | A | B3.3 |
@@ -29,7 +28,7 @@
 - [ ] B1.5 명령·이벤트 payload, 원시 결과 격리·공개 결과 구분, 계수 연결 확정 — 막힘: A·C 합의
 - [x] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 대조 · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [ ] B1.7 ModelClient 제거·세션 관리자 DTO(TaskIdentity 등, #20 5번) — 막힘: A66 세션 관리자 계약 합의(legacy 시연이 ModelClient 사용)
-- [x] B1.8 SCAN-01 DTO 확장·표시 검사 오탐/명시적 무해화 보완·합의 전 제안 · [기록](archive/b/B1.8-scan-report.md)
+- [x] B1.8 SCAN-01 DTO 확장·표시 검사 오탐/명시적 무해화 보완·합의 전 제안 · [기록](archive/b/B1.8-scan-report.md) · Hypothesis 반복 수 1,000 → 200(#100 `17df1ce`, 나머지 두 시험은 300 → 200), C가 4개 시험을 5,000회로 1회 확인해 반례 없음([#100 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/100#issuecomment-6503859925))
 - [ ] B1.9 SCAN-01 필드·고정 코드/무해화 합의·C Scanner 번역·A 경고 표시 — 막힘: 3인 합의·A/C 연결
 
 ## B2 · 순수 정책과 등급 누적
@@ -43,7 +42,7 @@
 - [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증 · 순수 함수 속성 검사의 시간 제한 해제 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 - [x] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계) · [기록](archive/b/B2.8-access-rules.md)
 - [x] B2.9 AccessChecker 동기 포트·Guard 대기 장치 제거(ACCESS-01 결정 이행) · #47 병합 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
-- [ ] B2.10 AGT-04 접근 사유 코드 교체·과거 저장값 판독 B 구현·C contract 확인 완료(#81·#84), A 문구 확인만 남음 · [기록](archive/b/B2.10-agt04-access-reasons.md)
+- [x] B2.10 AGT-04 접근 사유 코드 교체·과거 저장값 판독 · C contract 확인(#81·#84), [A 표시 문구 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/81#issuecomment-6489991832) · [기록](archive/b/B2.10-agt04-access-reasons.md)
 - [x] B2.11 기존 AGT 코드 제거 · #47 병합 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
 
 ## B3 · Catalog와 요청 해석
@@ -104,16 +103,16 @@
 - [x] B6.5 UTC 만료·쓰기 중 만료·ACK 유실, 원문·인자·비밀값 비기록과 고정 오류 코드 · [기록](archive/b6-sqlite-lifecycle.md)
 - [x] B6.6 영속 순번·시작 복구 설계와 검증 시나리오 50개 · [설계](archive/b6-sequence-recovery-design.md) · [시나리오](archive/b6-sequence-recovery-validation.md)
 - [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
-- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — 1단계·2a·2b B 단위 구현 완료, #69 `b796ff0` 병합 · A 제품 연결·C 독립 인수 대기 · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
+- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — B 단위 구현 및 #69 `b796ff0` 병합, A 제품 시작 연결 [#83](https://github.com/hsminu/MCP-Runtime-Guard/pull/83) · C 독립 인수 대기([미실행 범위](archive/c/C6.25-2-verification-summary.md#미실행검증-불가)) · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
   - #65(C2.7) 후속으로 명시 모드 기본 감사 ID 출처를 `security.ids`로 옮기고 B 모듈의 직접 생성 금지 정적 검사를 추가했다.
 - [x] B6.9 승인 생성·종결 원자화 · #89 병합, A·C 동의(C 독립 결함 주입 인수는 B7.6·B7.8) · [기록](archive/b/B6.9-atomic-approvals.md)
 - [x] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙 구현·시험 완료, 시간 수치는 C 측정 뒤 확정 · [기록](archive/b/B6.10-B6.12-unblocked.md)
-- [ ] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — B 단위 구현·C 독립 검증 및 측정 완료, A 연결·#55와 C 기록 PR 대기 · [기록](archive/b/B6.13-sqlite-writer.md) · [늦은 결과 전달](archive/b/B6.13-2-late-publish.md) · [C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468999539)
+- [x] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — B 단위 구현·C 독립 검증 및 측정 완료, [A 연결](https://github.com/hsminu/MCP-Runtime-Guard/pull/83) · [#55 종료](https://github.com/hsminu/MCP-Runtime-Guard/issues/55) · C 기록 #79·[#93](https://github.com/hsminu/MCP-Runtime-Guard/pull/93) 병합 · 늦은 결과 전달 [#97](https://github.com/hsminu/MCP-Runtime-Guard/pull/97) 병합 · [기록](archive/b/B6.13-sqlite-writer.md) · [늦은 결과 전달](archive/b/B6.13-2-late-publish.md) · [C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468999539)
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.15 규칙 버전 감사(AGT-02) — 막힘: 판정·감사 버전 추적 범위와 직접 저장·간접 조회 합의 · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
-- [ ] B6.16 화면용 권위 조회 · #76 A·C 합의(10-29), #86 병합 · A 화면 연결 대기 · [기록](archive/b/B6.16-store-queries.md)
+- [x] B6.16 화면용 권위 조회 · #76 A·C 합의(10-29), #86 병합 · A 승인 목록·호출 기록 연결 [#92](https://github.com/hsminu/MCP-Runtime-Guard/pull/92) · [C 계수 대조](https://github.com/hsminu/MCP-Runtime-Guard/pull/86#issuecomment-6494025432) · [기록](archive/b/B6.16-store-queries.md)
 - [x] B6.17 SEQ·REC B 결정안·A·C 동의(#37), 사용자 contracts 반영 완료 · 구현 B6.8·B6.13 대기 · [기록](archive/b/B6.17-seq-rec-decisions.md)
 - [x] B6.18 RegistryStore 계약·C4.10(#46) 사본 교체/승인 무효화와 C4.19(#53) 연결 완료 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) 원자 조건·독립 검증 — 막힘: 3인 합의·A/C 연결
@@ -124,12 +123,12 @@
 ## B7 · 검증과 인수
 
 - [x] B7.1 A의 B 서비스 병합과 32경로 검증 보고 대조
-- [ ] B7.2 A의 Guard·Catalog 리뷰, C의 정책·승인·응답·예외·해시 리뷰 받기 — 막힘: A·C
+- [ ] B7.2 A의 [Guard](https://github.com/hsminu/MCP-Runtime-Guard/pull/47#pullrequestreview-5669225500)·[Catalog](https://github.com/hsminu/MCP-Runtime-Guard/pull/36#pullrequestreview-5653883833), C의 [승인·예외](https://github.com/hsminu/MCP-Runtime-Guard/pull/32#pullrequestreview-5649334182)·[해시](https://github.com/hsminu/MCP-Runtime-Guard/pull/89#issuecomment-6497627122) 리뷰 확인 · C `core/policy.py`·`services/response_gate.py` 직접 리뷰 근거 미확인
 - [x] B7.3 10-15 AGT 제거 결정으로 대체 · [기록](archive/b/B7.3-agt-decision-superseded.md)
 - [x] B7.4 AGT-03 폐기 · [기록](archive/b/B7.4-agt-worker-retired.md)
-- [ ] B7.5 정규식 전체 스키마 검증(SCHEMA-01) · 2단계 B 구현, A 조립 연결·C launcher 대기 · [기록](archive/b/B7.5-2-schema-boundary.md) · [1단계 기록](archive/b/B7.5-1-schema-jobs.md) · [연결안](archive/b-schema-validation-proposal.md)
+- [ ] B7.5 정규식 전체 스키마 검증(SCHEMA-01) · 2단계 B 구현(#B14 예정), A 조립 연결·C worker launcher 대기 · [기록](archive/b/B7.5-2-schema-boundary.md) · [1단계 기록](archive/b/B7.5-1-schema-jobs.md) · [연결안](archive/b-schema-validation-proposal.md)
 - [ ] B7.6 B6 저장소의 C 리뷰·독립 검증 받기 — 막힘: C
-- [ ] B7.7 C 보안 모듈·Registry·Scanner·CI·테스트 리뷰(PR #6·#8의 `adapters/cisco*.py`, `security/secrets.py`·`redact.py` 포함)
+- [x] B7.7 C 보안 모듈·Registry·Scanner·CI·테스트 B 리뷰 완료 · [#102](https://github.com/hsminu/MCP-Runtime-Guard/issues/102), C 결함 2건 후속 및 B 재확인 대기
 - [ ] B7.8 C 독립 통합 인수 결과와 대상 커밋 기록 — 막힘: C
 - [x] B7.9 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 A·C에 전달 · [기록](archive/b/B7.9-contract-handoff.md)
 - [x] B7.10 공통 문서 미결 상태 갱신 제안 · [PR #18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) · [기록](archive/b/B7.10-contract-status-proposal.md)
