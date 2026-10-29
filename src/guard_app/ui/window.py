@@ -44,7 +44,7 @@ from .presentation import (
 )
 from .runtime import RuntimePanel
 from .scan_status import ScanStatusProjection
-from .scanner_key import ScannerKeyForm
+from .scanner_key import KeySaver, KeyTail, ScannerKeyForm
 from .server_add import LocalFolderRulesForm, ServerAddForm
 from .servers import ServerListPage
 from .sessions import SessionWorkspace
@@ -92,7 +92,13 @@ class GuardWindow(QMainWindow):
     _COMPACT_NAV_WIDTH = 900
     _COMPACT_NAV_HEIGHT = 700
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        scanner_key_saver: KeySaver | None = None,
+        scanner_key_tail: KeyTail | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("MCP Runtime Guard")
         self.setMinimumSize(320, 360)
@@ -322,7 +328,7 @@ class GuardWindow(QMainWindow):
         settings_layout.addWidget(self.settings_file_status)
         settings_layout.addWidget(plain_label(SETTINGS_FILE_LOCATION, name="secondary"))
         settings_layout.addSpacing(12)
-        self.scanner_key_form = ScannerKeyForm()
+        self.scanner_key_form = ScannerKeyForm(saver=scanner_key_saver, tail=scanner_key_tail)
         self.codex_login_info = CodexLoginInfo()
         settings_layout.addWidget(self.codex_login_info)
         settings_layout.addWidget(self.scanner_key_form)

@@ -247,7 +247,9 @@ def _no_risky_operation_or_output_channel(module: str, path: Path) -> None:
     if module != "__main__":
         assert "os" not in roots  # the entry point's os._exit only (A110)
     if "logging" in roots:
-        assert module == f"{TRANSPORT}.sdk_logging"  # installs the redacting record factory
+        # A147: the entry point owns the rotating file handler after C redaction.
+        # The transport installs its scoped redacting record factory.
+        assert module in {"__main__", f"{TRANSPORT}.sdk_logging"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             assert node.func.id not in FORBIDDEN_CALLS, node.func.id

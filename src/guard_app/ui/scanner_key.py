@@ -1,8 +1,8 @@
 """Scanner LLM API key entry (contracts 2026-10-15).
 
 The user prepares their own key. The product stores it only in Windows
-Credential Manager through C's ``security/secrets.py`` (C2.10, not yet
-available), so this form takes the save step as an injected callback and
+Credential Manager through C's ``security/secrets.py`` (C2.10),
+so this form takes the save step as an injected callback and
 never stores, logs or emits the key itself. After any save attempt the input
 is cleared; only the last four characters of a saved key stay on screen.
 Nothing here sends the key anywhere.
@@ -21,6 +21,7 @@ from .widgets import KeyboardActionButton, plain_label
 # Returns True only when the key was stored. The caller translates C's errors
 # to False; the form never sees an error message or a stored value.
 type KeySaver = Callable[[str], bool]
+type KeyTail = Callable[[], str | None]
 
 GUIDANCE = (
     "Scanner가 쓸 OpenAI API 키는 직접 준비하세요. 이 앱 전용 프로젝트 키를 새로 만들고 "
@@ -30,6 +31,7 @@ GUIDANCE = (
 NOT_CONNECTED = "아직 저장 기능이 연결되지 않아 키를 저장할 수 없음."
 SAVE_FAILED = "키를 저장하지 못함. 다시 입력하세요."
 SAVE_UNCONFIRMED = "저장 결과를 확인하지 못함. 저장된 키를 확인할 수 없음."
+NO_SAVED_KEY = "저장된 키 없음"
 
 
 def _suffix(key: str) -> str:
@@ -42,7 +44,13 @@ class ScannerKeyForm(QWidget):
 
     key_saved = Signal()
 
-    def __init__(self, saver: KeySaver | None = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        saver: KeySaver | None = None,
+        parent: QWidget | None = None,
+        *,
+        tail: KeyTail | None = None,
+    ) -> None:
         super().__init__(parent)
         self._saver = saver
         self._saved_suffix = ""
@@ -71,6 +79,18 @@ class ScannerKeyForm(QWidget):
         self.status = plain_label("", name="scannerKeyStatus")
         layout.addWidget(self.status)
         self._refresh()
+        if tail is not None:
+            suffix = tail()
+            # Reject an invalid callback result instead of displaying a full key.
+            if (
+                type(suffix) is str
+                and len(suffix) == 4
+                and all(char.isascii() and (char.isalnum() or char in "_-") for char in suffix)
+            ):
+                self._saved_suffix = suffix
+                self.status.setText(f"저장된 키 · 끝 4자리 {suffix}")
+            else:
+                self.status.setText(NO_SAVED_KEY)
 
     @property
     def saved_suffix(self) -> str:
