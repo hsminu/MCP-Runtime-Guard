@@ -616,14 +616,14 @@ def _codes_in_module() -> set[str]:
 def test_l2_failure_codes_are_exactly_the_codes_the_module_uses():
     """#83 C 리뷰 참고 4: A가 사본 대신 쓸 상수. 코드를 더하거나 빼면 상수도 함께 바뀐다."""
     assert _codes_in_module() == codex_l2.L2_FAILURE_CODES
-    assert len(codex_l2.L2_FAILURE_CODES) == 28
+    assert len(codex_l2.L2_FAILURE_CODES) == 29
 
 
-def test_a_l2_failure_codes_match_until_a_uses_the_constant():
-    """A151 사본(`session_preparation.L2_FAILURE_CODES`)이 C 상수와 같은지. A가 바꾸면 자명하다."""
+def test_a_l2_failure_codes_are_the_c_constant():
+    """A151 이름(`session_preparation.L2_FAILURE_CODES`)이 사본이 아니라 C 상수인지(C6.14-2)."""
     from guard_app.services.session_preparation import L2_FAILURE_CODES
 
-    assert L2_FAILURE_CODES == codex_l2.L2_FAILURE_CODES
+    assert L2_FAILURE_CODES is codex_l2.L2_FAILURE_CODES
 
 
 @pytest.mark.asyncio

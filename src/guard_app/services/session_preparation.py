@@ -18,6 +18,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+# C6.14 fixed diagnostics (C owns the set); unknown codes fail closed without echo.
+from guard_app.security.codex_l2 import L2_FAILURE_CODES as L2_FAILURE_CODES
+
 
 @dataclass(frozen=True, slots=True)
 class ConfigurationReceipt:
@@ -58,38 +61,3 @@ def valid_configuration(receipt: object) -> bool:
         and all(character in "0123456789abcdef" for character in value)
         for value in (receipt.config_digest, receipt.executable_digest, receipt.model_digest)
     )
-
-
-# C6.14 fixed diagnostics; unknown codes fail closed without echo.
-L2_FAILURE_CODES = frozenset(
-    {
-        "L2_CODEX_EXITED",
-        "L2_CONFIG_LAYERS_UNEXPECTED",
-        "L2_CONFIG_MISMATCH",
-        "L2_CONFIG_UNREADABLE",
-        "L2_DEADLINE_EXCEEDED",
-        "L2_DEADLINE_INVALID",
-        "L2_EXIT_UNCONFIRMED",
-        "L2_FEATURE_ENABLED",
-        "L2_FOLDER_NOT_REMOVED",
-        "L2_FORBIDDEN_NOT_REFUSED",
-        "L2_ITEM_UNEXPECTED",
-        "L2_MODEL_REQUEST_MISSING",
-        "L2_MODEL_TRAFFIC_UNEXPECTED",
-        "L2_PROBE_CALLS_UNEXPECTED",
-        "L2_PROMPT_UNEXPECTED",
-        "L2_PROTOCOL_INVALID",
-        "L2_READER_STUCK",
-        "L2_REMOTE_CONTROL_ENABLED",
-        "L2_REQUEST_REJECTED",
-        "L2_REQUEST_TIMEOUT",
-        "L2_REQUIREMENTS_PRESENT",
-        "L2_SERVER_REQUEST_UNEXPECTED",
-        "L2_SESSION_FLAGS_UNEXPECTED",
-        "L2_THREAD_PARAMS_UNSAFE",
-        "L2_THREAD_START_INVALID",
-        "L2_TOOLS_UNEXPECTED",
-        "L2_TURN_NOT_COMPLETED",
-        "L2_TURN_TIMEOUT",
-    }
-)
