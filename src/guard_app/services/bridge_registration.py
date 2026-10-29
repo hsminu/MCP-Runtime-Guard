@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 
 from pydantic import ValidationError
 
-from guard_app.domain.enums import RegStatus
+from guard_app.domain.enums import RegStatus, ToolKind
 from guard_app.domain.errors import StoreError
 from guard_app.ports import RegistryStore
 from guard_app.security.endpoints import ENDPOINT_REJECT_CODES, EndpointError, normalize_endpoint
@@ -21,6 +21,7 @@ from guard_app.security.ids import new_id
 from guard_app.security.launcher import LaunchError, check_stdio_values, pin_executable
 from guard_app.services.bridge_types import RegistrationRequest, RegistrationRow, RegistrationView
 from guard_app.services.catalog import CatalogConfigError, ServerSettings, load_profile_settings
+from guard_app.services.policy_view import PolicyServer, PolicyTool, PolicyView
 from guard_app.services.registry import RegistryError, ServerRegistry, ToolListingView
 from guard_app.services.session_admission import SessionRuntimeError
 from guard_app.services.session_policy import TaskPolicy
@@ -44,6 +45,8 @@ class RegistrationCommands:
         collect: Callable[[ServerSettings], Awaitable[ToolListingView]],
         stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
         execution_check: Callable[[], None] = lambda: None,
+        *,
+        operator_id: str = "local-user",
     ) -> None:
         self.registry = registry
         self.store = store
@@ -51,6 +54,7 @@ class RegistrationCommands:
         self.collect = collect
         self.stop_sessions = stop_sessions
         self.execution_check = execution_check
+        self._operator_id = operator_id
         self._lock = asyncio.Lock()
         self._pending: tuple[str, ServerSettings, bool] | None = None
         # Unknown Registry writes are not retried in this run.
@@ -70,8 +74,8 @@ class RegistrationCommands:
             return RegistrationView("REG_EXECUTABLE_INVALID")
         except RegistryError as error:
             return RegistrationView(
-                "REG_SERVER_EXISTS"
-                if error.args == ("REG_SERVER_EXISTS",)
+                error.args[0]
+                if error.args in (("REG_SERVER_EXISTS",), ("REG_SERVER_UNRECORDED",))
                 else "REG_LISTING_INVALID"
             )
         except SessionRuntimeError as error:
@@ -118,6 +122,62 @@ class RegistrationCommands:
         self.policy.check_registration()
         if self._unknown:
             return RegistrationView("REG_STORE_UNKNOWN")
+        if request.action == "activation_preview":
+            async with self.policy.lock:
+                self.policy.check_registration()
+                entry = self.registry.entry(request.server_id)
+                loaded = load_profile_settings(self.policy.registration_document(), self.registry)
+                server = next((s for s in loaded.servers if s.id == request.server_id), None)
+                if entry is None or server is None:
+                    return RegistrationView("REG_ACTIVATION_STALE")
+                configured = {t.name: t for t in server.tools}
+                tools = tuple(
+                    PolicyTool(
+                        t.tool_name,
+                        t.kind.value,
+                        t.kind in (ToolKind.READ, ToolKind.SEND)
+                        and t.tool_name in configured
+                        and configured[t.tool_name].kind == t.kind,
+                    )
+                    for t in entry.registration.tools
+                )
+                settings = loaded.guard_settings
+                return RegistrationView(
+                    "REG_ACTIVATION_PREVIEW",
+                    row_revision=entry.registration.row_revision,
+                    activation=PolicyView(
+                        settings.profile_id,
+                        settings.policy_version,
+                        settings.approval_ttl_seconds,
+                        settings.taint_mode,
+                        (),
+                        (),
+                        (PolicyServer(server.id, tools),),
+                        change_available=True,
+                    ),
+                )
+        if request.action in ("activate", "block"):
+            if (
+                type(request.allowed) is not tuple
+                or type(request.denied) is not tuple
+                or any(type(name) is not str for name in (*request.allowed, *request.denied))
+            ):
+                return RegistrationView("POLICY_CHANGE_INVALID")
+            await self.policy.set_server_active(
+                request.server_id,
+                request.expected_row_revision,
+                request.allowed,
+                request.denied,
+                self.registry,
+                self.stop_sessions,
+                active=request.action == "activate",
+                operator_id=self._operator_id,
+            )
+            return RegistrationView(
+                "REG_ACTIVATION_RESTART_REQUIRED",
+                rows=await self._rows(),
+                current_policy=self.policy.registration_policy_view(),
+            )
         if request.action in ("prepare", "recheck"):
             self._pending = None
             updating = request.action == "recheck"

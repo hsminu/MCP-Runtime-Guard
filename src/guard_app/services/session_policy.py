@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
-from guard_app.domain.enums import TaskStatus
+from guard_app.domain.enums import RegStatus, TaskStatus
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import TaskState
 from guard_app.services.catalog import (
@@ -173,6 +173,131 @@ class TaskPolicy:
         self._admission.check()
         if self._saver is None:
             raise SessionRuntimeError("REG_SETTINGS_UNAVAILABLE")
+
+    def registration_policy_view(self) -> PolicyView | None:
+        if self._assembled is None:
+            return None
+        return policy_view(self._assembled, change_available=self._admission.refusal() is None)
+
+    async def set_server_active(
+        self,
+        server_id: str,
+        expected_row_revision: int,
+        allowed: tuple[str, ...],
+        denied: tuple[str, ...],
+        registry: ServerRegistry,
+        stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
+        *,
+        active: bool,
+        operator_id: str,
+    ) -> None:
+        """A105: serialize with policy edits and Task creation, including both writes.
+
+        Activation saves/applies permissions while still PENDING, then activates.
+        Blocking reverses the order: revoke Registry authority before saving.
+        Any incomplete write sequence closes Guard; never retry it in this run.
+        Transport membership is fixed at assembly, so success also needs restart.
+        """
+        async with self.lock:
+            self.check_registration()
+            entry = registry.entry(server_id)
+            if (
+                entry is None
+                or type(expected_row_revision) is not int
+                or entry.registration.row_revision != expected_row_revision
+                or entry.registration.status
+                not in ((RegStatus.PENDING,) if active else (RegStatus.PENDING, RegStatus.ACTIVE))
+            ):
+                raise SessionRuntimeError("REG_ACTIVATION_STALE")
+            if set(allowed) & set(denied):
+                raise SessionRuntimeError("POLICY_CHANGE_INVALID")
+            current = self.registration_document()
+            try:
+                access = (
+                    prepare_server_access_change(
+                        current,
+                        registry,
+                        server_id=server_id,
+                        tool_permissions={
+                            **{name: True for name in allowed},
+                            **{name: False for name in denied},
+                        },
+                    )
+                    if active
+                    else prepare_policy_change(current, current, registry)
+                )
+                document = access.document.to_dict()
+                profile = document.get("profile")
+                if not isinstance(profile, dict) or not isinstance(profile.get("servers"), list):
+                    raise SessionRuntimeError("POLICY_CHANGE_INVALID")
+                selected = profile["servers"]
+                if active and server_id not in selected:
+                    selected.append(server_id)
+                if not active:
+                    selected[:] = [s for s in selected if s != server_id]
+                    profile["sources"] = [
+                        source
+                        for source in profile.get("sources", [])
+                        if source["server"] != server_id
+                    ]
+                    rules = document.get("access_rules", {})
+                    if isinstance(rules, dict):
+                        document["access_rules"] = {
+                            key: [pair for pair in rules.get(key, []) if pair[0] != server_id]
+                            for key in ("allow", "deny")
+                        }
+                # Keep the assembled live-fingerprint gate in Guard's new Catalog.
+                change = prepare_policy_change(
+                    current,
+                    document,
+                    self._assembled.registry if self._assembled is not None else registry,
+                )
+            except CatalogConfigError:
+                raise SessionRuntimeError("POLICY_CHANGE_INVALID") from None
+            completed = False
+            try:
+                if not active:
+                    await registry.block(server_id, expected_row_revision=expected_row_revision)
+                if self._saver is None:
+                    raise SessionRuntimeError("REG_SETTINGS_UNAVAILABLE")
+                try:
+                    saved = await self._saver(change)
+                except SettingsFileChangedError:
+                    raise SessionRuntimeError("POLICY_SAVE_FILE_CHANGED") from None
+                except SaveOutcomeUnknownError:
+                    raise SessionRuntimeError("POLICY_SAVE_UNKNOWN") from None
+                if saved is not True:
+                    raise SessionRuntimeError("POLICY_SAVE_FAILED")
+                self._document = change.document
+                if self._assembled is not None and self._task_source is not None:
+                    await stop_sessions(
+                        await self._apply(self._assembled, change, self._task_source)
+                    )
+                    if not change.changed:
+                        # policy_version is a content hash: a re-activation may
+                        # keep it. Still stop sessions before requiring restart.
+                        control = self._assembled.guard.human_control(self._assembled.operator_id)
+                        running = tuple(
+                            state.task_id
+                            for state in await self._task_source()
+                            if state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+                        )
+                        for task_id in running:
+                            await control.emergency_halt(task_id)
+                        await stop_sessions(running)
+                if active:
+                    await registry.activate(
+                        server_id,
+                        expected_row_revision=expected_row_revision,
+                        reviewed_by=operator_id,
+                        reviewed_scan_id=None,
+                    )
+                completed = True
+            finally:
+                code = "REG_ACTIVATION_RESTART_REQUIRED" if completed else "REG_ACTIVATION_UNKNOWN"
+                self._admission.require_restart(code)
+                if self._assembled is not None:
+                    await self._assembled.guard.aclose()
 
     def registration_document(self) -> Mapping[str, object]:
         if isinstance(self._document, FrozenJsonObject):

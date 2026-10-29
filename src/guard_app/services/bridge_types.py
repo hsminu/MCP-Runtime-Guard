@@ -204,6 +204,9 @@ class RegistrationRequest:
     env_allow: tuple[str, ...] = ()
     url: str | None = None
     token: str = ""
+    expected_row_revision: int = 0
+    allowed: tuple[str, ...] = ()
+    denied: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,3 +229,6 @@ class RegistrationView:
     sha256: str | None = None
     url: str | None = None
     rows: tuple[RegistrationRow, ...] | None = None
+    activation: PolicyView | None = None
+    row_revision: int = 0
+    current_policy: PolicyView | None = None

@@ -289,6 +289,8 @@ class CommandExecutor:
             else:
                 view = await bindings.registration(command.registration)
             self._out.registration_changed(replace(view, command_id=command.command_id))
+            if view.current_policy is not None:
+                self._out.policy_changed(view.current_policy)
             self._views.publish_capability()
             return view.code
         if command.action == "new_session":

@@ -353,6 +353,12 @@ _CODEX_STOP_NOTICES = {
     ),
     "CODEX_SESSION_FAILED": "Codex 세션이 실패해 이 Task를 정지함. 새 세션에서 다시 시작하세요.",
     "REG_PIN_RESTART_REQUIRED": "실행 파일 지문을 저장함. 다시 연결하려면 앱을 재시작하세요.",
+    "REG_ACTIVATION_RESTART_REQUIRED": (
+        "서버 설정 저장 완료 · 다시 시작하면 연결됨. 앱을 다시 시작하세요."
+    ),
+    "REG_ACTIVATION_UNKNOWN": (
+        "서버 설정 결과를 확인하지 못해 Guard를 정지함. 앱을 다시 시작하세요."
+    ),
     "CODEX_STORE_HALTED": "저장소 실행 권한이 닫혀 모든 세션을 정지함. 앱을 다시 시작하세요.",
 }
 

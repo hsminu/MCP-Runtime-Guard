@@ -490,6 +490,7 @@ class GuardWindow(QMainWindow):
         panel.selected_snapshot_changed.connect(self._sync_selected_task)
         bridge = panel.bridge
         self.server_add_form.attach_registration(bridge)
+        self.server_page.attach_activation(bridge)
         bridge.registration_changed.connect(self._registration_rows)
         bridge.task_changed.connect(self.sessions.set_snapshot)
         bridge.session_created.connect(self.sessions.session_created)

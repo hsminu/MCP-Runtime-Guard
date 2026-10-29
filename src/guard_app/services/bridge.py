@@ -354,6 +354,9 @@ class BackendBridge(QObject):
             "confirm",
             "recheck",
             "list",
+            "activation_preview",
+            "activate",
+            "block",
         ):
             raise ValueError("REG_REQUEST_INVALID")
         return self._submit(
