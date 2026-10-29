@@ -188,6 +188,28 @@ def test_call_list_detail_and_payload_redaction(seeded):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("status", [RequestStatus.UNKNOWN_OUTCOME, RequestStatus.FAILED])
+def test_committed_stage_records_unsuccessful_result(seeded, status):
+    def record(connection):
+        connection.execute(
+            "UPDATE requests SET status=? WHERE request_id=?", (status.value, "a_req")
+        )
+        connection.execute(
+            "INSERT INTO audit_events VALUES (?,?,?,?,?,?,?,?)",
+            ("result", "a_req", "task-1", f"REQUEST_{status.name}", "OK", None, None, LATER),
+        )
+
+    seeded._run_on_writer(record)
+
+    async def scenario():
+        detail = await seeded.get_call("a_req")
+        assert detail is not None
+        assert detail.row.status is status
+        assert "COMMITTED" in {stage.stage_code for stage in detail.stages}
+
+    asyncio.run(scenario())
+
+
 def test_invalid_stored_reason_fails_closed_without_original(seeded):
     seeded._run_on_writer(
         lambda connection: (

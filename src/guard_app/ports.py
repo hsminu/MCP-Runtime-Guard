@@ -70,7 +70,12 @@ class StoreQueries(Protocol):
 
     async def list_calls(self, query: CallListQuery) -> CallListPage: ...
 
-    async def get_call(self, request_id: str) -> CallDetail | None: ...
+    async def get_call(self, request_id: str) -> CallDetail | None:
+        """COMMITTED는 성공·실패·결과 불명인 결과를 기록했다는 뜻이다.
+
+        성공 여부는 CallRow.status로만 판단한다.
+        """
+        ...
 
 
 class PendingResult(Protocol):

@@ -93,6 +93,11 @@ class CallRow(_QueryModel):
 
 
 class CallStage(_QueryModel):
+    """COMMITTED는 성공·실패·결과 불명인 결과를 기록했다는 뜻이다.
+
+    성공 여부는 CallRow.status로만 판단한다.
+    """
+
     stage_code: Literal[
         "DECIDED", "WAITING_APPROVAL", "DISPATCHING", "OBSERVED", "COMMITTED", "WITHHELD"
     ]
@@ -100,6 +105,11 @@ class CallStage(_QueryModel):
 
 
 class CallDetail(_QueryModel):
+    """COMMITTED는 성공·실패·결과 불명인 결과를 기록했다는 뜻이다.
+
+    성공 여부는 CallRow.status로만 판단한다.
+    """
+
     row: CallRow
     observed_label: Label | None
     stages: tuple[CallStage, ...]
