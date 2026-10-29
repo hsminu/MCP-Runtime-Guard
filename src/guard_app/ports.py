@@ -12,16 +12,13 @@ from typing import Literal, Protocol
 from guard_app.domain.contracts import (
     ApprovalCommit,
     ApprovalRecord,
-    Conversation,
     FingerprintChange,
-    ModelTurn,
     PendingFinal,
     RawResult,
     RegisteredServer,
     RegistryEntry,
     ScanReport,
     TaskIdentity,
-    ToolView,
     TrustedContext,
 )
 from guard_app.domain.enums import (
@@ -264,16 +261,6 @@ class Scanner(Protocol):
     async def scan_tool_definitions(
         self, server_id: str, tools: tuple[FrozenJsonObject, ...]
     ) -> ScanReport: ...
-
-
-class ModelClient(Protocol):
-    """A 구현. 새 Task의 대화·캐시·클라이언트 상태를 다른 Task와 분리한다(10.4절).
-
-    tools는 ACTIVE 등록 ToolView만 받는다. 모델 제안은 ProposedCall로만 반환한다.
-    conversation에는 ReleasedResult 또는 안전한 고정 상태 문구만 도구 결과로 둔다.
-    """
-
-    async def step(self, conversation: Conversation, tools: tuple[ToolView, ...]) -> ModelTurn: ...
 
 
 class Registry(Protocol):
