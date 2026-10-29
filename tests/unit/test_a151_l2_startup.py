@@ -254,14 +254,14 @@ def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app
                 timeout=5,
             )
             assert activated == []
-            assert threads == [bridge._thread.ident]
+            assert threads == [bridge._host._thread.ident]
             assert threads[0] != threading.get_ident()
             assert "검사 중" in LIFECYCLE_MESSAGES["CODEX_L2_CHECK"]
             loop, release, cleanup_release = control[0]
             if cancel:
                 bridge.close()
                 pump_until(app, cancelling.is_set, timeout=5)
-                assert not bridge._thread_done.is_set()
+                assert not bridge._host._thread_done.is_set()
                 assert not cleaned.is_set()
                 loop.call_soon_threadsafe(cleanup_release.set)
             else:
@@ -269,17 +269,17 @@ def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app
                 pump_until(app, lambda: bridge.state is BridgeState.READY, timeout=5)
                 assert activated == [True]
                 bridge.close()
-            pump_until(app, bridge._thread_done.is_set, timeout=5)
+            pump_until(app, bridge._host._thread_done.is_set, timeout=5)
             assert cleaned.is_set()
             assert startup_settled == [True]
             assert bridge.state is BridgeState.CLOSED
-            assert bridge._state_code == "CLOSED"
+            assert bridge._host._state_code == "CLOSED"
             assert activated == ([] if cancel else [True])
         finally:
             timer.stop()
-            if control and not bridge._thread_done.is_set():
+            if control and not bridge._host._thread_done.is_set():
                 loop, release, cleanup_release = control[0]
                 loop.call_soon_threadsafe(release.set)
                 loop.call_soon_threadsafe(cleanup_release.set)
                 bridge.close()
-                pump_until(app, bridge._thread_done.is_set, timeout=5)
+                pump_until(app, bridge._host._thread_done.is_set, timeout=5)

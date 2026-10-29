@@ -77,7 +77,7 @@ def test_user_turn_and_model_answer_are_ephemeral_not_command_metadata(app):
         assert len(model.seen) == 1
         assert projections[-1].can_accept_message
         assert "private-user-marker" not in repr(receiver.commands)
-        assert "private-user-marker" not in repr(bridge._ledger.settled())
+        assert "private-user-marker" not in repr(bridge._host.commands.ledger.settled())
         assert "private-user-marker" not in repr(events[0])
         store.state = store.state.model_copy(update={"status": TaskStatus.CLOSED})
         command = bridge.request_message("task-1", 1, "never-reopen")

@@ -137,7 +137,7 @@ def test_run_wires_real_window_without_keeping_key(monkeypatch, owner, mode, cap
     def start(bridge):
         if mode != "demo":
             assert owner.progress == bridge.codex_progress
-            assert bridge._startup_timeout >= 60 + 50 + 20
+            assert bridge._host._startup_timeout >= 60 + 50 + 20
             assert bridge.shutdown_timeout >= 20 + 5
         window = next(
             w for w in app.topLevelWidgets() if isinstance(w, GuardWindow) and w.isVisible()

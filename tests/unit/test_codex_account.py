@@ -264,20 +264,20 @@ async def test_shutdown_cancels_device_wait_before_closing_account_resources(app
     bridge = BackendBridge(bootstrap)
     boot = asyncio.create_task(bootstrap())
     bindings = await asyncio.wait_for(boot, 2)
-    assert bridge._bindings.adopt(boot)
+    assert bridge._host._bindings.adopt(boot)
     from guard_app.services.bridge_ingress import account_command
 
     try:
         await asyncio.wait_for(
-            bridge._accounts.account(
+            bridge._host._accounts.account(
                 bindings, account_command("account_login_device", "account", None)
             ),
             2,
         )
-        waiters = tuple(bridge._accounts._waits)
+        waiters = tuple(bridge._host._accounts._waits)
         assert len(waiters) == 1
         assert not waiters[0].done()
-        await asyncio.wait_for(bridge._shut_down(), 2)
+        await asyncio.wait_for(bridge._host._shut_down(), 2)
         assert checked == [True]
     finally:
         for waiter in waiters:
