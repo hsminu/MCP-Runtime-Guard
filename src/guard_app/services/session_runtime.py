@@ -14,7 +14,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
-from uuid import uuid4
 
 from guard_app.adapters.codex_protocol import build_dynamic_tools
 from guard_app.domain.contracts import TaskIdentity
@@ -22,6 +21,7 @@ from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import TaskState
 from guard_app.ports import SessionAudit, Store, StoreLifecycle
+from guard_app.security.ids import new_id
 from guard_app.services.account_runtime import AccountAccess, ProductAccount
 from guard_app.services.bridge_types import (
     BackendBindings,
@@ -324,7 +324,7 @@ class SessionRuntime:
         factory = self._session_factory
         if factory is None:
             raise SessionRuntimeError("CODEX_SESSION_UNAVAILABLE")
-        state = self._policy.task_state(f"session-{uuid4().hex}")
+        state = self._policy.task_state(new_id("session"))
         self._creations.name(creator, state.task_id)
         created = adopted = False
         try:
@@ -644,7 +644,7 @@ async def bootstrap_product(
     launch (C2.6, EXE-01); until then `product` is supplied only by tests.
     """
 
-    store = SQLiteStore(db_path, audit_id_factory=lambda: f"audit-{uuid4().hex}")
+    store = SQLiteStore(db_path, audit_id_factory=lambda: new_id("audit"))
     assembled: AssembledGuard | None = None
     approvals: ApprovalOutcomes | None = None
     guard_settings: GuardSettings | None = None

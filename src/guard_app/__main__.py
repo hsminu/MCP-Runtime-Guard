@@ -11,14 +11,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication
-
-from guard_app.services.bridge import BackendBridge
-from guard_app.ui.runtime import RuntimePanel
-from guard_app.ui.window import GuardWindow
-
 if TYPE_CHECKING:
     from guard_app.services.codex_preparation import CodexProcessPreparation
     from guard_app.services.product_settings import SettingsFile
@@ -41,6 +33,9 @@ EXIT_CLEANUP_UNCONFIRMED = 3
 
 
 def main() -> int:
+    from guard_app.security.redact import install_log_redaction
+
+    install_log_redaction()
     parser = argparse.ArgumentParser(description="MCP Runtime Guard")
     parser.add_argument(
         "--demo",
@@ -202,6 +197,14 @@ def _run(
 
     Returns the Qt exit code and whether the backend confirmed its cleanup.
     """
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QApplication
+
+    from guard_app.services.bridge import BackendBridge
+    from guard_app.ui.runtime import RuntimePanel
+    from guard_app.ui.window import GuardWindow
+
     store_title = "SQLite Store" if not args.demo or args.store == "sqlite" else "메모리 Store"
     existing = QApplication.instance()
     app = existing if isinstance(existing, QApplication) else QApplication(sys.argv[:1])
@@ -218,6 +221,7 @@ def _run(
             )
         )
     else:
+        from guard_app.security.login_browser import open_login_browser
         from guard_app.services.session_runtime import bootstrap_product
 
         # A101: C's app folders and launcher behind each Task's Codex session.
@@ -225,7 +229,7 @@ def _run(
         # checked again by C's `db_path()` right before the backend opens it.
         # A52: the login screen's app-server and logout cleanup go through it too.
         preparation = codex.preparation()
-        account = codex.account_access()
+        account = codex.account_access(open_browser=open_login_browser)
         db_file = str(codex.db_file)
         bridge = BackendBridge(
             lambda: bootstrap_product(

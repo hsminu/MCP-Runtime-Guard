@@ -41,11 +41,9 @@ def test_missing_counts_and_failed_query_never_look_like_zero(app) -> None:
     window.navigate("overview")
     assert window.overview.metric_rows[0].value.text() == "미제공"
     assert "조회 기능 미연결" in window.overview.metrics_state.text()
-
     window.set_overview_snapshot(OverviewSnapshot(totals=Surface(state=LoadState.ERROR)))
     assert window.overview.metric_rows[0].value.text() == "미제공"
     assert "불러오지 못함" in window.overview.metrics_state.text()
-
     window.set_overview_snapshot(
         OverviewSnapshot(totals=Surface(state=LoadState.READY, value=OverviewTotals(0, 0, 0)))
     )
@@ -98,7 +96,6 @@ def test_overview_puts_attention_first_and_previews_five_servers_at_any_width(ap
             assert page.server_preview_note.isVisibleTo(page)
             assert page.all_servers_button.isVisibleTo(page)
             assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
-
         window.resize(320, 400)
         app.processEvents()
         page.all_servers_button.click()
@@ -211,7 +208,6 @@ def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(
         assert "12개 중 11–12개" in page.attention_page_note.text()
         page.calls_next.click()
         assert "11개 중 6–10개" in page.calls_page_note.text()
-
         page.attention_previous.click()
         page.attention_previous.click()
         assert "12개 중 1–5개" in page.attention_page_note.text()
@@ -273,7 +269,6 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
         app.processEvents()
         assert "13개 중 1–5개" in page.attention_page_note.text()
         assert page.attention_layout.itemAt(0).widget().link.isEnabled() is False
-
         page.attention_next.click()
         page.attention_next.click()
         assert "13개 중 11–13개" in page.attention_page_note.text()
@@ -296,23 +291,12 @@ def test_runtime_mode_is_unconfigured_until_trusted_bootstrap_sets_it(app) -> No
     assert window.runtime_identity.text() == "모델: mock"
     window.set_runtime_identity(RuntimeIdentity(model_mode=RuntimeMode.CODEX))
     assert window.runtime_identity.text() == "모델: Codex"
-
-
-def test_runs_page_only_displays_backend_status_without_controls(app) -> None:
-    window = GuardWindow()
-    window.navigate("overview")
     window.navigate("runs")
     assert "상태 미확인" in window.task_status_card.status_label.text()
-
     window.set_task_status(TaskStatus.UNKNOWN_OUTCOME)
     assert "결과 불명" in window.task_status_card.status_label.text()
     assert "수신측" in window.task_status_card.detail_label.text()
     assert window.task_status_card.findChildren(QPushButton) == []
-
-
-def test_server_add_navigation_says_registration_is_not_connected(app) -> None:
-    window = GuardWindow()
-    window.navigate("overview")
     window.navigate("server_add")
     assert window.breadcrumb.text() == "MCP 서버 추가"
     assert "Registry 등록은 아직 연결되지 않아" in window.server_add_form.status.text()
@@ -440,7 +424,6 @@ def test_registry_list_uses_its_own_public_snapshot_and_filters(app) -> None:
     )
     assert window.server_page.table.rowCount() == 0
     assert "조회 기능 미연결" in window.server_page.state_message.message.text()
-
     window.set_server_snapshot(Surface(LoadState.READY, (public, pending)))
     assert window.server_page.table.rowCount() == 2
     assert window.server_page.table.item(0, 3).text() == "공개"
@@ -449,7 +432,6 @@ def test_registry_list_uses_its_own_public_snapshot_and_filters(app) -> None:
     assert window.server_page.table.item(1, 4).toolTip() == "PENDING"
     assert window.server_page.table.item(1, 5).text() == "연결 안 됨"
     assert window.server_page.table.item(0, 0).toolTip() == ""
-
     window.server_page.search.setText("pending-send")
     assert window.server_page.table.rowCount() == 1
     window.server_page.transport_filter.setCurrentIndex(1)

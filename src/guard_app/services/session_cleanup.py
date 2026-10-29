@@ -12,6 +12,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from guard_app.security.ids import token_matches
 from guard_app.services.runner import CodexSession
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 from guard_app.services.session_preparation import SessionPreparation, TaskResources
@@ -112,7 +113,8 @@ class SessionCleanup:
             or len(resources.owner_token) > 256
             or resources.handle is None
             or any(
-                resources.owner_token == owned.owner_token or resources.handle is owned.handle
+                token_matches(owned.owner_token, resources.owner_token)
+                or resources.handle is owned.handle
                 for owned in self._resources.values()
             )
         ):

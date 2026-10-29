@@ -94,27 +94,35 @@ REASONS = {
 DECISIONS = {"ALLOW": "허용", "ASK": "승인 필요", "DENY": "차단"}
 
 CODEX_LOGIN_TEXT = {
-    "browser_button": "브라우저로 로그인",
-    "device_button": "기기 코드로 로그인",
+    # What this card signs into, not the app's own account (A148).
+    "title": "Codex 로그인",
+    "browser_button": "ChatGPT 브라우저로 로그인",
+    "device_button": "ChatGPT 기기 코드로 로그인",
     "purpose": (
-        "Guard에서 사용할 Codex 계정으로 로그인하세요. 브라우저 로그인, ChatGPT 기기 코드와 "
-        "API 키는 모두 Codex 안에서 로그인하는 방식임. "
-        "자격증명은 Codex가 Windows 자격증명 관리자에 직접 저장함."
+        "MCP Runtime Guard의 기본 로그인은 API 키임. 아래에 API 키를 입력하세요. "
+        "API 키와 ChatGPT 로그인은 Codex가 처리함. "
+        "자격증명은 Codex가 저장·관리함."
     ),
+    "api_key_saved": "API 키를 저장함. 첫 요청에서 키를 확인함.",
+    "api_key_saved_suffix": "API 키를 저장함 · 끝 4자리 {suffix}. 첫 요청에서 키를 확인함.",
+    "chatgpt_alternative": "보조 방법 · ChatGPT 로그인",
     "device_help": (
-        "계정이나 워크스페이스에서 기기 코드 로그인을 허용하지 않으면 브라우저 로그인을 "
-        "사용하세요. 코드 입력을 기다리는 중이면 먼저 로그인 취소를 누르세요."
+        "계정이나 워크스페이스에서 기기 코드 로그인을 허용하지 않으면 API 키 또는 "
+        "브라우저로 로그인하세요. 코드 입력을 기다리는 중이면 먼저 로그인 취소를 누르세요."
     ),
     "browser_unavailable": "브라우저 로그인 연결 준비 중임.",
     "starting": "로그인 시작을 요청함. 결과를 기다리는 중임.",
     "browser_pending": (
-        "브라우저 열기를 요청함. 열린 로그인 탭에서 로그인을 마친 뒤 Guard로 돌아오세요. "
+        "브라우저 열기를 요청함. 열린 로그인 탭에서 로그인을 마친 뒤 "
+        "MCP Runtime Guard로 돌아오세요. "
         "Codex가 완료를 확인하면 상태가 바뀜."
     ),
 }
 CODEX_LOGIN_NOTICES = {
     "BROWSER_LOGIN_UNAVAILABLE": "브라우저 로그인 연결 준비 중임.",
-    "BROWSER_OPEN_FAILED": "로그인 페이지를 열지 못해 요청을 취소함. 다시 시도하세요.",
+    "BROWSER_OPEN_FAILED": (
+        "로그인 페이지를 열지 못해 요청을 취소함. API 키 또는 기기 코드로 로그인하세요."
+    ),
     "LOGIN_CANCELLED": "로그인 요청을 취소함.",
     "LOGIN_TIMEOUT": "로그인 대기 시간이 지나 요청을 취소함. 다시 시도하세요.",
     "LOGIN_REQUEST_UNCONFIRMED": "로그인 요청 처리를 확인하지 못함. 상태를 다시 확인하세요.",
@@ -122,6 +130,11 @@ CODEX_LOGIN_NOTICES = {
     "LOGOUT_REQUEST_UNCONFIRMED": "로그아웃 처리를 확인하지 못함. 상태를 다시 확인하세요.",
     "ACCOUNT_READ_UNCONFIRMED": "상태 확인 결과를 받지 못함.",
 }
+CODEX_AUTH_FAILED_NOTICE = (
+    "API 키가 틀렸거나 Codex 인증이 만료되거나 갱신되지 않아 이 Task를 정지함. "
+    "실행 중인 세션을 모두 끝내고 설정에서 로그아웃한 뒤, "
+    "API 키 입력란에 올바른 키를 입력해 다시 로그인하세요. 새 세션에서 다시 시작하세요."
+)
 # An account command refused before any backend work, with a code not listed
 # in COMMAND_REFUSALS.
 ACCOUNT_REQUEST_REFUSED = "요청을 접수하지 않음. 잠시 뒤 다시 보내세요."

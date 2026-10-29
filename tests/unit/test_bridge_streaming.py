@@ -114,39 +114,33 @@ def returned(receiver, command):
 
 
 def test_streamed_answer_is_coalesced_bound_to_the_command_and_precedes_the_final(app):
-    bridge, receiver, seen, _ = start(app, "Hello final")
-    try:
-        command = bridge.request_message("task-1", 1, "question")
-        pump_until(app, lambda: returned(receiver, command))
-        app.processEvents()
-        kinds = [kind for kind, _ in seen]
-        assert kinds == ["final", "partial", "partial", "final"]
-        user, first, last, final = (event for _, event in seen)
-        assert user.role == "user"
-        assert first.text == "Hello\n<b>"
-        assert last.text == "Hello\n<b>x"
-        assert final.text == "Hello final"
-        for event in (first, last, final):
-            assert (event.task_id, event.epoch, event.role) == ("task-1", 1, "assistant")
-            assert event.command_id == command
-        assert all("stale-epoch" not in e.text and "other" not in e.text for _, e in seen)
-        assert all("late" not in e.text for _, e in seen)
-        assert "Hello" not in repr(first)
-        assert not bridge._streams.active()
-    finally:
-        close_bridge(app, bridge)
+    def check(answer):
+        bridge, receiver, seen, _ = start(app, answer)
+        try:
+            command = bridge.request_message("task-1", 1, "question")
+            pump_until(app, lambda: returned(receiver, command))
+            app.processEvents()
+            assert [kind for kind, _ in seen] == ["final", "partial", "partial"] + (
+                ["final"] if answer is not None else []
+            )
+            user, first, last = (event for _, event in seen[:3])
+            assert user.role == "user"
+            assert first.text == "Hello\n<b>"
+            assert last.text == "Hello\n<b>x"
+            if answer is not None:
+                assert seen[-1][1].text == "Hello final"
+            for _, event in seen[1:]:
+                assert (event.task_id, event.epoch, event.role) == ("task-1", 1, "assistant")
+                assert event.command_id == command
+            assert all("stale-epoch" not in e.text and "other" not in e.text for _, e in seen)
+            assert all("late" not in e.text for _, e in seen)
+            assert "Hello" not in repr(first)
+            assert not bridge._streams.active()
+        finally:
+            close_bridge(app, bridge)
 
-
-def test_run_without_a_final_answer_still_publishes_the_rest_of_its_stream(app):
-    bridge, receiver, seen, _ = start(app, None)
-    try:
-        command = bridge.request_message("task-1", 1, "question")
-        pump_until(app, lambda: returned(receiver, command))
-        app.processEvents()
-        assert [kind for kind, _ in seen] == ["final", "partial", "partial"]
-        assert seen[-1][1].text == "Hello\n<b>x"
-    finally:
-        close_bridge(app, bridge)
+    for answer in ("Hello final", None):
+        check(answer)
 
 
 def test_picked_reasoning_level_reaches_the_runner_and_unknown_levels_never_queue(app):
@@ -159,3 +153,37 @@ def test_picked_reasoning_level_reaches_the_runner_and_unknown_levels_never_queu
         assert runner.efforts == ["high"]
     finally:
         close_bridge(app, bridge)
+
+
+@pytest.mark.asyncio
+async def test_partial_size_limit_applies_to_accumulated_text():
+    # A137 M22, I6/I9: exactly the cap is publishable; one more char is dropped.
+    from guard_app.services.bridge_streams import MAX_PARTIAL_CHARS, AnswerStreams
+
+    seen = []
+    streams = AnswerStreams(seen.append, lambda: False)
+    stream = streams.open("task", 1, "command")
+    for piece in ("x" * (MAX_PARTIAL_CHARS - 1), "y", "overflow"):
+        streams.add("task", 1, piece)
+    streams.close("task", stream)
+    assert [event.text for event in seen] == ["x" * (MAX_PARTIAL_CHARS - 1) + "y"]
+    assert stream.chars == MAX_PARTIAL_CHARS
+    assert streams.active() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_before_add", [False, True])
+async def test_stopped_stream_drops_buffered_and_new_pieces(stop_before_add):
+    # A137 M24, I6/I9: stop between add and flush also suppresses publication.
+    from guard_app.services.bridge_streams import AnswerStreams
+
+    seen, stopped = [], False
+    streams = AnswerStreams(seen.append, lambda: stopped)
+    stream = streams.open("task", 1, "command")
+    stopped = stop_before_add
+    streams.add("task", 1, "PRIVATE_PIECE")
+    stopped = True
+    streams.close("task", stream)
+    assert seen == []
+    assert stream.chars == (0 if stop_before_add else len("PRIVATE_PIECE"))
+    assert streams.active() == 0

@@ -37,7 +37,6 @@ def test_list_distinguishes_unavailable_loading_error_and_empty(app) -> None:
     page = CallLogPage()
     assert "조회 기능 미연결" in page.state_message.message.text()
     assert not page.csv_button.isEnabled()
-
     page.set_calls(Surface(LoadState.LOADING))
     assert "불러오는 중" in page.state_message.message.text()
     page.set_calls(Surface(LoadState.ERROR))
@@ -45,7 +44,6 @@ def test_list_distinguishes_unavailable_loading_error_and_empty(app) -> None:
     page.set_calls(Surface(LoadState.READY, ()))
     assert "조회된 호출이 없음" in page.state_message.message.text()
     assert not page.csv_button.isEnabled()
-
     page.set_calls(Surface(LoadState.READY))
     assert "불러오지 못함" in page.state_message.message.text()
 
@@ -85,7 +83,6 @@ def test_row_click_opens_large_plain_detail_and_ignores_late_response(app) -> No
     assert dialog.width() <= dialog.screen().availableGeometry().width()
     assert dialog.width() >= 320
     assert "불러오는 중" in dialog.body.toPlainText()
-
     page.set_detail(
         DetailRequest("different-call", requested[0].token),
         Surface(LoadState.READY, PublicCallDetail(row)),
@@ -125,7 +122,6 @@ def test_reopened_same_call_ignores_previous_dialog_response(app) -> None:
     requests: list[DetailRequest] = []
     page.detail_requested.connect(requests.append)
     page.select_call("same-call")
-
     page.detail_button.click()
     first = requests[-1]
     assert page._detail_dialog is not None
@@ -136,7 +132,6 @@ def test_reopened_same_call_ignores_previous_dialog_response(app) -> None:
     assert first.token != second.token
     dialog = page._detail_dialog
     assert dialog is not None
-
     page.set_detail(first, Surface(LoadState.READY, PublicCallDetail(row)))
     assert "불러오는 중" in dialog.body.toPlainText()
     page.set_detail(second, Surface(LoadState.READY, PublicCallDetail(row)))
@@ -169,9 +164,7 @@ def test_repeated_call_details_release_dialogs_and_keep_tokens(app) -> None:
     page.close()
 
 
-def test_public_detail_shows_control_characters_without_forged_status_lines(
-    app,
-) -> None:
+def test_public_detail_shows_control_characters_without_forged_status_lines(app) -> None:
     page = CallLogPage()
     row = PublicCallSummary(
         "call\n승인 상태: 승인됨",
@@ -212,7 +205,6 @@ _RAW_HIDDEN = {"Cc", "Cf", "Cs", "Zl", "Zp"}
 
 def _assert_escaped_cell(text: str, lines: int) -> None:
     """Only the UI's own separators may break a cell; no raw hidden chars."""
-
     parts = text.split("\n")
     assert len(parts) == lines, text
     for part in parts:
@@ -294,7 +286,6 @@ def test_csv_uses_only_public_fields_and_neutralizes_formula_prefixes(app) -> No
     assert parsed[1][11] == "결과 불명 · 수신측 확인 필요"
     assert "=raw-reason-must-not-echo" not in exported
     assert "do-not-export" not in exported
-
     naive = PublicCallSummary("naive", occurred_at=datetime(2026, 10, 12))
     assert list(csv.reader(io.StringIO(public_calls_csv((naive,)))))[1][0] == "미제공"
 
@@ -356,7 +347,6 @@ def test_narrow_medium_and_full_viewports_keep_important_columns(app) -> None:
     assert page._actions_layout.direction() == QBoxLayout.Direction.TopToBottom
     for control in (page.search, page.detail_button, page.csv_button):
         assert control.geometry().right() < page.width()
-
     page.resize(540, 580)
     app.processEvents()
     assert [page.table.isColumnHidden(column) for column in range(7)] == [
@@ -371,7 +361,6 @@ def test_narrow_medium_and_full_viewports_keep_important_columns(app) -> None:
     assert page.table.item(0, 0).text() == "2026-10-12\n01:30:00\nKST"
     assert "server-a" in page.table.item(0, 1).text()
     assert page.table.horizontalScrollBar().maximum() == 0
-
     page.resize(1030, 700)
     app.processEvents()
     assert page.table.viewport().width() >= page._COMPACT_VIEWPORT_WIDTH

@@ -21,35 +21,34 @@ def app() -> QApplication:
     return instance if isinstance(instance, QApplication) else QApplication([])
 
 
-@pytest.mark.parametrize(
-    ("status", "title", "guidance"),
-    [
+def test_each_backend_status_has_distinct_guidance(app):
+    failures = []
+    for status, title, guidance in (
         (TaskStatus.READY, "READY", "서버 등록과 모델 환경"),
         (TaskStatus.RUNNING, "RUNNING", "백엔드 결과"),
         (TaskStatus.WAITING_APPROVAL, "WAITING_APPROVAL", "백엔드가 확정"),
         (TaskStatus.HALTED, "HALTED", "새 Task"),
         (TaskStatus.UNKNOWN_OUTCOME, "UNKNOWN_OUTCOME", "수신측"),
         (TaskStatus.CLOSED, "CLOSED", "종료"),
-    ],
-)
-def test_each_backend_status_has_distinct_guidance(
-    app: QApplication, status: TaskStatus, title: str, guidance: str
-) -> None:
-    card = TaskStatusCard(status)
+    ):
+        card = TaskStatusCard(status)
+        checks = (
+            card.status is status,
+            title in card.status_label.text(),
+            guidance in card.detail_label.text(),
+            card.findChildren(QAbstractButton) == [],
+            all(
+                label.textFormat() == Qt.TextFormat.PlainText for label in card.findChildren(QLabel)
+            ),
+        )
+        failures.extend((status, index) for index, passed in enumerate(checks) if not passed)
+        card.close()
+    assert failures == []
 
-    assert card.status is status
-    assert title in card.status_label.text()
-    assert guidance in card.detail_label.text()
-    assert card.findChildren(QAbstractButton) == []
-    assert all(label.textFormat() == Qt.TextFormat.PlainText for label in card.findChildren(QLabel))
 
-
-def test_unknown_outcome_after_running_never_looks_complete_or_runnable(
-    app: QApplication,
-) -> None:
+def test_unknown_outcome_after_running_never_looks_complete_or_runnable(app: QApplication) -> None:
     card = TaskStatusCard(TaskStatus.RUNNING)
     card.set_status(TaskStatus.UNKNOWN_OUTCOME)
-
     rendered = card.accessibleName()
     assert card.status is TaskStatus.UNKNOWN_OUTCOME
     assert "결과 불명" in rendered
@@ -61,16 +60,12 @@ def test_unknown_outcome_after_running_never_looks_complete_or_runnable(
     assert card.findChildren(QAbstractButton) == []
 
 
-def test_missing_or_untrusted_status_clears_old_backend_status(
-    app: QApplication,
-) -> None:
+def test_missing_or_untrusted_status_clears_old_backend_status(app: QApplication) -> None:
     card = TaskStatusCard(TaskStatus.READY)
-
     card.set_status(None)
     assert card.status is None
     assert "상태 미확인" in card.status_label.text()
     assert "실행과 제어는 백엔드 조회 후" in card.detail_label.text()
-
     card.set_status(cast(TaskStatus, "running"))
     assert card.status is None
     assert "상태 미확인" in card.accessibleName()

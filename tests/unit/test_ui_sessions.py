@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from dataclasses import replace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -43,8 +44,8 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-@pytest.fixture
-def window(app):
+@contextmanager
+def _window(app):
     async def unused():
         raise AssertionError("must not bootstrap")
 
@@ -56,14 +57,43 @@ def window(app):
     shell.show()
     bridge.lifecycle_changed.emit(LifecycleEvent(BridgeState.READY, "READY"))
     app.processEvents()
-    yield shell, panel, bridge
-    shell.clear_session_content()
-    bridge.close()
-    shell.close()
+    try:
+        yield shell, panel, bridge
+    finally:
+        shell.clear_session_content()
+        bridge.close()
+        shell.close()
+
+
+@pytest.fixture
+def window(app):
+    with _window(app) as value:
+        yield value
 
 
 def snapshot(**kwargs):
     return TaskProjection("task-one", 1, TaskStatus.RUNNING, **kwargs)
+
+
+def test_auth_failure_explains_invalid_key_and_settings_relogin(window):
+    """A149, I6/I8, T19: fixed stop guidance, no retry of the halted Task."""
+    shell, _, bridge = window
+    bridge.task_changed.emit(snapshot(can_accept_message=True, model_mode="codex"))
+    bridge.task_changed.emit(
+        replace(
+            snapshot(model_mode="codex"),
+            status=TaskStatus.HALTED,
+            connection_code="CODEX_AUTH_FAILED",
+            runner_state="stopped",
+        )
+    )
+    view = shell.sessions.current
+    assert view.notice.text() == (
+        "API 키가 틀렸거나 Codex 인증이 만료되거나 갱신되지 않아 이 Task를 정지함. "
+        "실행 중인 세션을 모두 끝내고 설정에서 로그아웃한 뒤, "
+        "API 키 입력란에 올바른 키를 입력해 다시 로그인하세요. 새 세션에서 다시 시작하세요."
+    )
+    assert not view.send.isEnabled()
 
 
 def test_session_details_keep_draft_selection_and_both_scroll_positions(window, app):
@@ -141,31 +171,28 @@ def test_scope_change_discards_review_and_late_review_cannot_replace_it(window):
     assert panel.review_button.isEnabled()
 
 
-@pytest.mark.parametrize(
-    "status", [TaskStatus.HALTED, TaskStatus.CLOSED, TaskStatus.UNKNOWN_OUTCOME]
-)
-def test_terminal_session_erases_text_and_rejects_late_conversation_and_running_state(
-    window, status
-):
-    shell, panel, bridge = window
-    state = snapshot(can_accept_message=True)
-    bridge.task_changed.emit(state)
-    view = shell.sessions.current
-    view.draft.setPlainText("private-draft")
-    bridge.conversation_ready.emit(
-        ConversationEvent("task-one", 1, "assistant", "private-answer", "c")
-    )
-    assert "private-answer" in view.transcript.toPlainText()
-    bridge.task_changed.emit(replace(state, status=status))
-    bridge.conversation_ready.emit(
-        ConversationEvent("task-one", 1, "assistant", "late-private", "late")
-    )
-    shell.sessions.set_snapshot(state)  # A stale projection cannot reopen this epoch.
-    assert not view.transcript.toPlainText()
-    assert not view.draft.toPlainText()
-    assert view.draft.isReadOnly()
-    assert view.snapshot.status is status
-    assert not any(button.isEnabled() for button in panel.buttons)
+def test_terminal_session_erases_text_and_rejects_late_conversation_and_running_state(app):
+    for status in [TaskStatus.HALTED, TaskStatus.CLOSED, TaskStatus.UNKNOWN_OUTCOME]:
+        with _window(app) as window:
+            shell, panel, bridge = window
+            state = snapshot(can_accept_message=True)
+            bridge.task_changed.emit(state)
+            view = shell.sessions.current
+            view.draft.setPlainText("private-draft")
+            bridge.conversation_ready.emit(
+                ConversationEvent("task-one", 1, "assistant", "private-answer", "c")
+            )
+            assert "private-answer" in view.transcript.toPlainText()
+            bridge.task_changed.emit(replace(state, status=status))
+            bridge.conversation_ready.emit(
+                ConversationEvent("task-one", 1, "assistant", "late-private", "late")
+            )
+            shell.sessions.set_snapshot(state)  # A stale projection cannot reopen this epoch.
+            assert not view.transcript.toPlainText()
+            assert not view.draft.toPlainText()
+            assert view.draft.isReadOnly()
+            assert view.snapshot.status is status
+            assert not any(button.isEnabled() for button in panel.buttons)
 
 
 def test_close_erases_all_drafts_and_late_text_is_not_rendered(window):
@@ -275,25 +302,26 @@ def test_theme_toggle_repaints_the_shell_and_returns(window, app):
         QGuiApplication.styleHints().setColorScheme(Qt.ColorScheme.Unknown)
 
 
-@pytest.mark.parametrize(
-    ("status", "tone"),
-    [
+def test_header_pill_states_the_confirmed_status_in_words(app):
+    for status, tone in [
         (TaskStatus.RUNNING, "live"),
         (TaskStatus.WAITING_APPROVAL, "attn"),
         (TaskStatus.HALTED, "deny"),
-    ],
-)
-def test_header_pill_states_the_confirmed_status_in_words(window, status, tone):
-    shell, _, bridge = window
-    draft = shell.sessions.current
-    assert (draft.pill.text(), draft.pill.property("tone")) == ("초안 · 미연결", "neutral")
-    bridge.task_changed.emit(replace(snapshot(), status=status))
-    view = shell.sessions.current
-    # Words carry the status; color only repeats it (technical design 12.4).
-    assert view.pill.text() == status_title(status)
-    assert view.pill.property("tone") == tone
-    assert status_title(status) not in view.status.text()
-    assert "task-one" in view.status.text()
+    ]:
+        with _window(app) as window:
+            shell, _, bridge = window
+            draft = shell.sessions.current
+            assert (draft.pill.text(), draft.pill.property("tone")) == (
+                "초안 · 미연결",
+                "neutral",
+            )
+            bridge.task_changed.emit(replace(snapshot(), status=status))
+            view = shell.sessions.current
+            # Words carry the status; color only repeats it (technical design 12.4).
+            assert view.pill.text() == status_title(status)
+            assert view.pill.property("tone") == tone
+            assert status_title(status) not in view.status.text()
+            assert "task-one" in view.status.text()
 
 
 def test_sidebar_results_open_a_full_page_with_the_selected_session_in_scope(window, app):
@@ -347,7 +375,6 @@ def test_activity_button_docks_results_beside_the_conversation(window, app):
     assert not shell.results_scope.isVisible()
     assert not shell._results_scroll.isAncestorOf(panel.cancel_button)
     assert panel.cancel_button.isVisible()
-
     shell._nav_buttons["results"].click()
     app.processEvents()
     assert shell.results_page.isAncestorOf(panel)
@@ -356,7 +383,6 @@ def test_activity_button_docks_results_beside_the_conversation(window, app):
     app.processEvents()
     assert shell.activity_pane.isAncestorOf(panel)
     assert shell.activity_pane.isVisible()
-
     view.results.click()
     app.processEvents()
     assert not shell.activity_pane.isVisible()
@@ -398,7 +424,6 @@ def test_model_chip_picks_the_reasoning_level_and_keeps_a_started_task_model(win
         "최대",
     ]
     assert all(action.isEnabled() for action in picker.model_actions.values())
-
     bridge.task_changed.emit(snapshot(can_accept_message=True, model_mode="codex"))
     view = shell.sessions.current
     assert view.model.isEnabled()
@@ -445,31 +470,32 @@ def test_stop_controls_stay_pinned_below_the_scrolling_results_page(window, app)
         assert bottom < page.height()
 
 
-@pytest.mark.parametrize(
-    "status", [TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME, TaskStatus.CLOSED]
-)
-def test_ended_codex_task_shows_its_status_not_a_connection_hint(window, status):
-    shell, panel, bridge = window
-    # Mirrors SessionRuntime.snapshot: model_ready only for READY_CODEX and RUNNING.
-    running = snapshot(model_mode="codex", connection_code="READY_CODEX", can_accept_message=True)
-    bridge.task_changed.emit(running)
-    bridge.task_changed.emit(replace(running, status=status, model_ready=False))
-    row = shell.sessions.list.item(0).text()
-    assert row.endswith(status_title(status))
-    assert "연결 필요" not in row
-    assert "모델 연결 미완료" not in panel.summary.text()
-    assert status_detail(status) in panel.summary.text()
-
-
-def test_running_task_without_model_still_asks_for_connection(window):
-    shell, panel, bridge = window
-    bridge.task_changed.emit(snapshot(model_ready=False))
-    assert shell.sessions.list.item(0).text().endswith("연결 필요")
-    assert "모델 연결 미완료" in panel.summary.text()
+def test_ended_codex_task_shows_its_status_not_a_connection_hint(app):
+    with _window(app) as window:
+        shell, panel, bridge = window
+        bridge.task_changed.emit(snapshot(model_ready=False))
+        assert shell.sessions.list.item(0).text().endswith("연결 필요")
+        assert "모델 연결 미완료" in panel.summary.text()
+    for status in [TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME, TaskStatus.CLOSED]:
+        with _window(app) as window:
+            shell, panel, bridge = window
+            # Mirrors SessionRuntime.snapshot: model_ready only for READY_CODEX and RUNNING.
+            running = snapshot(
+                model_mode="codex", connection_code="READY_CODEX", can_accept_message=True
+            )
+            bridge.task_changed.emit(running)
+            bridge.task_changed.emit(replace(running, status=status, model_ready=False))
+            row = shell.sessions.list.item(0).text()
+            assert row.endswith(status_title(status))
+            assert "연결 필요" not in row
+            assert "모델 연결 미완료" not in panel.summary.text()
+            assert status_detail(status) in panel.summary.text()
 
 
 def test_existing_feature_pages_and_preparation_forms_remain_reachable(window):
     shell, _, _ = window
+    assert "모델 새 세션" not in shell.windowTitle()
+    assert shell.windowTitle().startswith("MCP Runtime Guard")
     assert shell._page == "runs"
     assert set(shell._page_indices) == set(PAGES) == set(shell._nav_buttons)
     for page in PAGES:
@@ -575,7 +601,6 @@ def test_busy_task_does_not_block_other_task_or_new_session_and_results_stay_sco
     alpha_command = alpha_view.pending_command
     assert alpha_command
     assert not alpha_view.send.isEnabled()
-
     bridge.task_changed.emit(beta)
     shell.sessions.select("task:task-beta:1")
     beta_view = shell.sessions.current
@@ -588,7 +613,6 @@ def test_busy_task_does_not_block_other_task_or_new_session_and_results_stay_sco
     assert beta_command
     assert [task for task, _, _ in sent] == ["task-one", "task-beta"]
     assert panel._busy
-
     bridge.command_changed.emit(
         CommandEvent(
             alpha_command,
@@ -604,7 +628,6 @@ def test_busy_task_does_not_block_other_task_or_new_session_and_results_stay_sco
     assert "NOT_READY" not in panel.internal_code.text()
     assert alpha_view.pending_command is None
     assert beta_view.pending_command == beta_command
-
     shell.sessions.select(alpha_view.key)
     assert not panel._busy
     assert alpha_view.send.isEnabled()
@@ -657,149 +680,145 @@ def test_approval_and_stop_are_bound_to_selected_task_and_keep_other_task_text(w
     assert "승인 대기" not in beta_view.notice.text()
 
 
-@pytest.mark.parametrize("code", ["CODEX_L2_UNAVAILABLE", "CODEX_SESSION_UNAVAILABLE"])
-def test_missing_codex_dependency_keeps_draft_and_shows_persistent_rejection(
-    window, monkeypatch, code
-):
-    shell, panel, bridge = window
-    requests = []
-    monkeypatch.setattr(
-        bridge,
-        "request_new_session",
-        lambda key, options, *, command_id: requests.append((key, options, command_id)),
-    )
-    view = shell.sessions.current
-    view.draft.setPlainText("retained first instruction")
-    view.start.click()
-    key, options, command = requests[0]
-    assert options.mode == "codex"
-    assert options.model == "gpt-6.1-sol"
-    bridge.command_changed.emit(
-        CommandEvent(
-            command,
-            "execution",
-            "new_session",
-            key,
-            CommandStage.BACKEND_RETURNED,
-            code,
-        )
-    )
-    assert view.snapshot is None
-    assert view.pending_command is None
-    assert view.start.isEnabled()
-    assert "시작하지 않았음" in view.notice.text()
-    message = view.notice.text()
-    panel.state_changed.emit()
-    shell.sessions.set_ready(True)
-    assert view.notice.text() == message
-    assert view.draft.toPlainText() == "retained first instruction"
-    assert not any(item.snapshot for item in shell.sessions.sessions.values())
+def test_missing_codex_dependency_keeps_draft_and_shows_persistent_rejection(app, monkeypatch):
+    for code in ["CODEX_L2_UNAVAILABLE", "CODEX_SESSION_UNAVAILABLE"]:
+        with _window(app) as window:
+            shell, panel, bridge = window
+            requests = []
+            monkeypatch.setattr(
+                bridge,
+                "request_new_session",
+                lambda key, options, *, command_id, requests=requests: requests.append(
+                    (key, options, command_id)
+                ),
+            )
+            view = shell.sessions.current
+            view.draft.setPlainText("retained first instruction")
+            view.start.click()
+            key, options, command = requests[0]
+            assert options.mode == "codex"
+            assert options.model == "gpt-6.1-sol"
+            bridge.command_changed.emit(
+                CommandEvent(
+                    command,
+                    "execution",
+                    "new_session",
+                    key,
+                    CommandStage.BACKEND_RETURNED,
+                    code,
+                )
+            )
+            assert view.snapshot is None
+            assert view.pending_command is None
+            assert view.start.isEnabled()
+            assert "시작하지 않았음" in view.notice.text()
+            message = view.notice.text()
+            panel.state_changed.emit()
+            shell.sessions.set_ready(True)
+            assert view.notice.text() == message
+            assert view.draft.toPlainText() == "retained first instruction"
+            assert not any(item.snapshot for item in shell.sessions.sessions.values())
 
 
-@pytest.mark.parametrize(
-    ("code", "detail"),
-    [
+def test_preparation_rejection_replaces_pending_notice_only_for_its_draft(app, monkeypatch):
+    for code, detail in [
         ("CODEX_CONFIG_UNAVAILABLE", "설정 검증이 준비되지 않음"),
         ("CODEX_CONFIG_MISMATCH", "시작 검사에서 확인한 설정과 다름"),
         ("CODEX_PREPARATION_FAILED", "세션 준비를 완료하지 못함"),
         ("CODEX_CLEANUP_UNCONFIRMED", "정리 완료를 확인하지 못함"),
-    ],
-)
-def test_preparation_rejection_replaces_pending_notice_only_for_its_draft(
-    window, monkeypatch, code, detail
-):
-    shell, panel, bridge = window
-    requests = []
-    monkeypatch.setattr(
-        bridge,
-        "request_new_session",
-        lambda key, options, *, command_id: requests.append((key, command_id)),
-    )
-    rejected = shell.sessions.current
-    rejected.draft.setPlainText("retained instruction")
-    rejected.start.click()
-    draft_key, command = requests[0]
-    assert "확인 중" in rejected.notice.text()
-    shell.new_session_button.click()
-    selected = shell.sessions.current
-    selected.draft.setPlainText("other draft")
-    other_notice = selected.notice.text()
-    bridge.command_changed.emit(
-        CommandEvent(command, "execution", "new_session", draft_key, CommandStage.REJECTED, code)
-    )
-    assert rejected.pending_command is None
-    assert detail in rejected.notice.text()
-    assert "확인 중" not in rejected.notice.text()
-    assert rejected.draft.toPlainText() == "retained instruction"
-    assert rejected.snapshot is None
-    assert shell.sessions.current is selected
-    assert selected.notice.text() == other_notice
-    assert selected.draft.toPlainText() == "other draft"
-    if code == "CODEX_CLEANUP_UNCONFIRMED":
-        assert "시작하지 않았음" not in rejected.notice.text()
-        assert "자동으로 다시 실행하지 않음" in rejected.notice.text()
-        assert "정리 상태를 확인하세요" in rejected.notice.text()
-    elif code == "CODEX_CONFIG_UNAVAILABLE":
-        # A component missing from this build is not fixed by settings or restart.
-        assert "시작하지 않았음" in rejected.notice.text()
-        assert "이 앱 구성에서는 아직" in rejected.notice.text()
-        assert "다시 시작하세요" not in rejected.notice.text()
-    else:
-        assert "시작하지 않았음" in rejected.notice.text()
-        assert "앱 설정을 확인" in rejected.notice.text()
-    notice = rejected.notice.text()
-    panel.state_changed.emit()
-    shell.sessions.set_ready(True)
-    assert rejected.notice.text() == notice
-    bridge.session_created.emit(SessionCreated(command, draft_key, snapshot()))
-    shell.sessions.settle_command(command, "CODEX_CONFIG_MISMATCH")
-    assert rejected.snapshot is None  # Late completion cannot adopt a refused draft.
-    assert rejected.notice.text() == notice
+    ]:
+        with _window(app) as window:
+            shell, panel, bridge = window
+            requests = []
+            monkeypatch.setattr(
+                bridge,
+                "request_new_session",
+                lambda key, options, *, command_id, requests=requests: requests.append(
+                    (key, command_id)
+                ),
+            )
+            rejected = shell.sessions.current
+            rejected.draft.setPlainText("retained instruction")
+            rejected.start.click()
+            draft_key, command = requests[0]
+            assert "확인 중" in rejected.notice.text()
+            shell.new_session_button.click()
+            selected = shell.sessions.current
+            selected.draft.setPlainText("other draft")
+            other_notice = selected.notice.text()
+            bridge.command_changed.emit(
+                CommandEvent(
+                    command, "execution", "new_session", draft_key, CommandStage.REJECTED, code
+                )
+            )
+            assert rejected.pending_command is None
+            assert detail in rejected.notice.text()
+            assert "확인 중" not in rejected.notice.text()
+            assert rejected.draft.toPlainText() == "retained instruction"
+            assert rejected.snapshot is None
+            assert shell.sessions.current is selected
+            assert selected.notice.text() == other_notice
+            assert selected.draft.toPlainText() == "other draft"
+            if code == "CODEX_CLEANUP_UNCONFIRMED":
+                assert "시작하지 않았음" not in rejected.notice.text()
+                assert "자동으로 다시 실행하지 않음" in rejected.notice.text()
+                assert "정리 상태를 확인하세요" in rejected.notice.text()
+            elif code == "CODEX_CONFIG_UNAVAILABLE":
+                # A component missing from this build is not fixed by settings or restart.
+                assert "시작하지 않았음" in rejected.notice.text()
+                assert "이 앱 구성에서는 아직" in rejected.notice.text()
+                assert "다시 시작하세요" not in rejected.notice.text()
+            else:
+                assert "시작하지 않았음" in rejected.notice.text()
+                assert "앱 설정을 확인" in rejected.notice.text()
+            notice = rejected.notice.text()
+            panel.state_changed.emit()
+            shell.sessions.set_ready(True)
+            assert rejected.notice.text() == notice
+            bridge.session_created.emit(SessionCreated(command, draft_key, snapshot()))
+            shell.sessions.settle_command(command, "CODEX_CONFIG_MISMATCH")
+            assert rejected.snapshot is None  # Late completion cannot adopt a refused draft.
+            assert rejected.notice.text() == notice
 
 
-@pytest.mark.parametrize(
-    "status", [TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL, TaskStatus.HALTED]
-)
-@pytest.mark.parametrize(
-    ("code", "detail"),
-    [
-        ("CODEX_CONFIG_UNAVAILABLE", "설정 검증이 준비되지 않음"),
-        ("CODEX_CONFIG_MISMATCH", "시작 검사에서 확인한 설정과 다름"),
-        ("CODEX_PREPARATION_FAILED", "세션 준비를 완료하지 못함"),
-        ("CODEX_CLEANUP_UNCONFIRMED", "정리 완료를 확인하지 못함"),
-    ],
-)
-def test_existing_task_preparation_notice_preserves_scope_and_disables_send(
-    window, status, code, detail
-):
-    shell, _, bridge = window
-    alpha = snapshot(can_accept_message=True, model_mode="codex")
-    bridge.task_changed.emit(alpha)
-    failed = shell.sessions.current
-    beta = replace(alpha, task_id="task-beta")
-    bridge.task_changed.emit(beta)
-    shell.sessions.select("task:task-beta:1")
-    selected = shell.sessions.current
-    selected.draft.setPlainText("other Task draft")
-    other_notice = selected.notice.text()
-    bridge.task_changed.emit(
-        replace(alpha, status=status, connection_code=code, runner_state="stopped")
-    )
-    assert detail in failed.notice.text()
-    assert "시작하지 않았음" not in failed.notice.text()
-    assert not failed.send.isEnabled()
-    if code == "CODEX_CLEANUP_UNCONFIRMED":
-        row = next(
-            shell.sessions.list.item(index)
-            for index in range(shell.sessions.list.count())
-            if shell.sessions.list.item(index).data(Qt.ItemDataRole.UserRole) == failed.key
-        )
-        assert "정리 완료 미확인" in row.text()
-        assert "연결 필요" not in row.text()
-    assert shell.sessions.current is selected
-    assert selected.notice.text() == other_notice
-    assert selected.draft.toPlainText() == "other Task draft"
-    assert selected.send.isEnabled()
+def test_existing_task_preparation_notice_preserves_scope_and_disables_send(app):
+    for status in [TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL, TaskStatus.HALTED]:
+        for code, detail in [
+            ("CODEX_CONFIG_UNAVAILABLE", "설정 검증이 준비되지 않음"),
+            ("CODEX_CONFIG_MISMATCH", "시작 검사에서 확인한 설정과 다름"),
+            ("CODEX_PREPARATION_FAILED", "세션 준비를 완료하지 못함"),
+            ("CODEX_CLEANUP_UNCONFIRMED", "정리 완료를 확인하지 못함"),
+        ]:
+            with _window(app) as window:
+                shell, _, bridge = window
+                alpha = snapshot(can_accept_message=True, model_mode="codex")
+                bridge.task_changed.emit(alpha)
+                failed = shell.sessions.current
+                beta = replace(alpha, task_id="task-beta")
+                bridge.task_changed.emit(beta)
+                shell.sessions.select("task:task-beta:1")
+                selected = shell.sessions.current
+                selected.draft.setPlainText("other Task draft")
+                other_notice = selected.notice.text()
+                bridge.task_changed.emit(
+                    replace(alpha, status=status, connection_code=code, runner_state="stopped")
+                )
+                assert detail in failed.notice.text()
+                assert "시작하지 않았음" not in failed.notice.text()
+                assert not failed.send.isEnabled()
+                if code == "CODEX_CLEANUP_UNCONFIRMED":
+                    row = next(
+                        shell.sessions.list.item(index)
+                        for index in range(shell.sessions.list.count())
+                        if shell.sessions.list.item(index).data(Qt.ItemDataRole.UserRole)
+                        == failed.key
+                    )
+                    assert "정리 완료 미확인" in row.text()
+                    assert "연결 필요" not in row.text()
+                assert shell.sessions.current is selected
+                assert selected.notice.text() == other_notice
+                assert selected.draft.toPlainText() == "other Task draft"
+                assert selected.send.isEnabled()
 
 
 def test_unknown_creation_failure_clears_pending_notice_without_echoing_raw_text(
@@ -819,50 +838,44 @@ def test_unknown_creation_failure_clears_pending_notice_without_echoing_raw_text
     assert "secret exception" not in view.notice.text()
 
 
-@pytest.mark.parametrize(
-    ("code", "detail"),
-    [
+def test_bridge_refusals_say_not_accepted_for_drafts_and_tasks(app, monkeypatch):
+    for code, detail in [
         ("NOT_READY", "준비되지 않음"),
         ("CLOSING", "종료 중"),
         ("INGRESS_FULL", "가득 참"),
         ("QUEUE_FULL", "가득 참"),
         ("COMMAND_ID_CONFLICT", "이미 처리 중"),
-    ],
-)
-@pytest.mark.parametrize("existing", [False, True])
-def test_bridge_refusals_say_not_accepted_for_drafts_and_tasks(
-    window, monkeypatch, code, detail, existing
-):
-    shell, _, bridge = window
-    monkeypatch.setattr(bridge, "request_new_session", lambda *args, **kwargs: None)
-    if existing:
-        bridge.task_changed.emit(snapshot(can_accept_message=True))
-        view = shell.sessions.current
-        view.pending_command = "command-one"
-    else:
-        view = shell.sessions.current
-        view.start.click()
-    assert view.pending_command is not None
-    shell.sessions.settle_command(view.pending_command, code)
-    assert "접수하지 않음" in view.notice.text()
-    assert detail in view.notice.text()
-    assert "확인하지 못함" not in view.notice.text()
+    ]:
+        for existing in [False, True]:
+            with _window(app) as window:
+                shell, _, bridge = window
+                monkeypatch.setattr(bridge, "request_new_session", lambda *args, **kwargs: None)
+                if existing:
+                    bridge.task_changed.emit(snapshot(can_accept_message=True))
+                    view = shell.sessions.current
+                    view.pending_command = "command-one"
+                else:
+                    view = shell.sessions.current
+                    view.start.click()
+                assert view.pending_command is not None
+                shell.sessions.settle_command(view.pending_command, code)
+                assert "접수하지 않음" in view.notice.text()
+                assert detail in view.notice.text()
+                assert "확인하지 못함" not in view.notice.text()
 
 
-@pytest.mark.parametrize(
-    ("code", "detail"),
-    [
-        ("RUNNER_UNAVAILABLE", "실행·제어하지 않음"),
-        ("RUNNER_UNCONFIRMED", "실행 결과를 확인하지 못함"),
-    ],
-)
-def test_runner_failures_reach_the_task_conversation(window, code, detail):
-    shell, _, bridge = window
-    bridge.task_changed.emit(snapshot(can_accept_message=True))
-    view = shell.sessions.current
-    view.pending_command = "command-one"
-    shell.sessions.settle_command("command-one", code)
-    assert detail in view.notice.text()
+def test_runner_failures_reach_the_task_conversation(app):
+    with _window(app) as window:
+        for code, detail in [
+            ("RUNNER_UNAVAILABLE", "실행·제어하지 않음"),
+            ("RUNNER_UNCONFIRMED", "실행 결과를 확인하지 못함"),
+        ]:
+            shell, _, bridge = window
+            bridge.task_changed.emit(snapshot(can_accept_message=True))
+            view = shell.sessions.current
+            view.pending_command = "command-one"
+            shell.sessions.settle_command("command-one", code)
+            assert detail in view.notice.text()
 
 
 def test_results_summary_never_prints_none_counters(window):
@@ -880,135 +893,118 @@ def test_withheld_control_result_does_not_claim_a_single_cause():
     assert "분류" not in text
 
 
-@pytest.mark.parametrize(
-    ("code", "detail"),
-    [
+def test_creation_unavailable_and_unconfirmed_have_distinct_notices(app, monkeypatch):
+    for code, detail in [
         ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않음"),
         ("SESSION_CREATION_UNCONFIRMED", "새 Task 생성 결과를 확인하지 못함"),
-    ],
-)
-def test_creation_unavailable_and_unconfirmed_have_distinct_notices(
-    window, monkeypatch, code, detail
-):
-    shell, _, bridge = window
-    monkeypatch.setattr(bridge, "request_new_session", lambda *args, **kwargs: None)
-    view = shell.sessions.current
-    view.start.click()
-    assert view.pending_command is not None
-    shell.sessions.settle_command(view.pending_command, code)
-    assert detail in view.notice.text()
-    assert "확인 중" not in view.notice.text()
-    if code == "SESSION_CREATION_UNCONFIRMED":
-        assert "기능이 연결되지" not in view.notice.text()
+    ]:
+        with _window(app) as window:
+            shell, _, bridge = window
+            monkeypatch.setattr(bridge, "request_new_session", lambda *args, **kwargs: None)
+            view = shell.sessions.current
+            view.start.click()
+            assert view.pending_command is not None
+            shell.sessions.settle_command(view.pending_command, code)
+            assert detail in view.notice.text()
+            assert "확인 중" not in view.notice.text()
+            if code == "SESSION_CREATION_UNCONFIRMED":
+                assert "기능이 연결되지" not in view.notice.text()
 
 
-@pytest.mark.parametrize(
-    ("code", "detail"),
-    [
-        ("CODEX_CONFIG_UNAVAILABLE", "아직 새 세션을 시작할 수 없음"),
-        ("CODEX_CLEANUP_UNCONFIRMED", "정리 상태를 확인하세요"),
-        ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않음"),
-        ("POLICY_APPLY_FAILED", "Guard를 정지함"),
-        ("SOMETHING_NEW", "지금은 새 세션을 시작할 수 없음"),
-    ],
-)
-def test_known_session_blocker_disables_start_before_any_click(window, code, detail):
-    shell, _, bridge = window
-    view = shell.sessions.current
-    assert view.start.isEnabled()
-    bridge.session_capability_changed.emit(code)
-    assert not view.start.isEnabled()
-    assert detail in view.notice.text()
-    assert "시작하지 않았음" not in view.notice.text()
-    bridge.session_capability_changed.emit("")
-    assert view.start.isEnabled()
+def test_known_session_blocker_disables_start_before_any_click(app):
+    with _window(app) as window:
+        for code, detail in [
+            ("CODEX_CONFIG_UNAVAILABLE", "아직 새 세션을 시작할 수 없음"),
+            ("CODEX_CLEANUP_UNCONFIRMED", "정리 상태를 확인하세요"),
+            ("SESSION_CREATION_UNAVAILABLE", "생성 기능이 연결되지 않음"),
+            ("POLICY_APPLY_FAILED", "Guard를 정지함"),
+            ("SOMETHING_NEW", "지금은 새 세션을 시작할 수 없음"),
+        ]:
+            shell, _, bridge = window
+            view = shell.sessions.current
+            assert view.start.isEnabled()
+            bridge.session_capability_changed.emit(code)
+            assert not view.start.isEnabled()
+            assert detail in view.notice.text()
+            assert "시작하지 않았음" not in view.notice.text()
+            bridge.session_capability_changed.emit("")
+            assert view.start.isEnabled()
 
 
-def test_window_title_names_no_model_for_a_new_draft(window):
-    shell, _, _ = window
-    assert "모델 새 세션" not in shell.windowTitle()
-    assert shell.windowTitle().startswith("MCP Runtime Guard")
+def test_task_label_comes_from_the_projection_in_header_and_results(app):
+    with _window(app) as window:
+        for label, unclassified, expected in [
+            (None, False, "Task 등급: 미제공"),
+            (Label.INTERNAL, False, "Task 등급: 내부"),
+            (Label.CONFIDENTIAL, True, "Task 등급: 기밀 · 미분류 자료 표시됨"),
+        ]:
+            shell, panel, bridge = window
+            bridge.task_changed.emit(snapshot(label=label, unclassified=unclassified))
+            assert expected in shell.sessions.current.grade.text()
+            assert expected in panel.summary.text()
+            if not unclassified:
+                assert "미분류" not in panel.summary.text()
 
 
-@pytest.mark.parametrize(
-    ("label", "unclassified", "expected"),
-    [
-        (None, False, "Task 등급: 미제공"),
-        (Label.INTERNAL, False, "Task 등급: 내부"),
-        (Label.CONFIDENTIAL, True, "Task 등급: 기밀 · 미분류 자료 표시됨"),
-    ],
-)
-def test_task_label_comes_from_the_projection_in_header_and_results(
-    window, label, unclassified, expected
-):
-    shell, panel, bridge = window
-    bridge.task_changed.emit(snapshot(label=label, unclassified=unclassified))
-    assert expected in shell.sessions.current.grade.text()
-    assert expected in panel.summary.text()
-    if not unclassified:
-        assert "미분류" not in panel.summary.text()
-
-
-@pytest.mark.parametrize("command", ["message", "run"])
-def test_model_turn_waiting_for_approval_does_not_lock_its_approval_buttons(
-    window, monkeypatch, command
-):
-    """The turn in flight is the one waiting for this approval; only a human
-    control in flight for the same Task disables review/approve/reject (I3)."""
-    shell, panel, bridge = window
-    controls = []
-    monkeypatch.setattr(bridge, "request_message", lambda *args, **kwargs: None)
-    monkeypatch.setattr(bridge, "request_run", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        bridge,
-        "request_control",
-        lambda action, target, *, command_id, epoch: controls.append((action, target, command_id)),
-    )
-    running = snapshot(can_accept_message=True, can_advance=True, model_mode="codex")
-    bridge.task_changed.emit(running)
-    view = shell.sessions.current
-    if command == "message":
-        view.draft.setPlainText("turn that will wait")
-        view.send.click()
-        assert view.pending_command
-    else:
-        panel.run_button.click()
-    assert panel._busy
-    bridge.task_changed.emit(
-        replace(running, status=TaskStatus.WAITING_APPROVAL, approval_id="approval-one")
-    )
-    assert panel._busy  # the model turn is still in flight
-    assert panel.review_button.isEnabled()
-    assert panel.reject_button.isEnabled()
-    assert not panel.approve_button.isEnabled()  # review first
-    assert not panel.run_button.isEnabled()
-
-    panel.review_button.click()
-    assert controls[-1][1] == "approval-one"
-    assert not panel.review_button.isEnabled()
-    assert not panel.reject_button.isEnabled()
-    assert not panel.approve_button.isEnabled()
-    assert panel.cancel_button.isEnabled()
-    assert panel.halt_button.isEnabled()
-
-    review_command = controls[-1][2]
-    bridge.review_ready.emit(
-        ApprovalReview(review_command, "approval-one", "task-one", 1, "fixed", b"{}")
-    )
-    bridge.command_changed.emit(
-        CommandEvent(
-            review_command,
-            "control",
-            "review",
-            "approval-one",
-            CommandStage.BACKEND_RETURNED,
-            "REVIEW_READY",
-        )
-    )
-    assert panel._busy  # the waiting turn is still in flight
-    assert panel.review_button.isEnabled()
-    assert panel.reject_button.isEnabled()
-    assert panel.approve_button.isEnabled()
+def test_model_turn_waiting_for_approval_does_not_lock_its_approval_buttons(app, monkeypatch):
+    for command in ["message", "run"]:
+        with _window(app) as window:
+            """The turn in flight is the one waiting for this approval; only a human
+            control in flight for the same Task disables review/approve/reject (I3)."""
+            shell, panel, bridge = window
+            controls = []
+            monkeypatch.setattr(bridge, "request_message", lambda *args, **kwargs: None)
+            monkeypatch.setattr(bridge, "request_run", lambda *args, **kwargs: None)
+            monkeypatch.setattr(
+                bridge,
+                "request_control",
+                lambda action, target, *, command_id, epoch, controls=controls: controls.append(
+                    (action, target, command_id)
+                ),
+            )
+            running = snapshot(can_accept_message=True, can_advance=True, model_mode="codex")
+            bridge.task_changed.emit(running)
+            view = shell.sessions.current
+            if command == "message":
+                view.draft.setPlainText("turn that will wait")
+                view.send.click()
+                assert view.pending_command
+            else:
+                panel.run_button.click()
+            assert panel._busy
+            bridge.task_changed.emit(
+                replace(running, status=TaskStatus.WAITING_APPROVAL, approval_id="approval-one")
+            )
+            assert panel._busy  # the model turn is still in flight
+            assert panel.review_button.isEnabled()
+            assert panel.reject_button.isEnabled()
+            assert not panel.approve_button.isEnabled()  # review first
+            assert not panel.run_button.isEnabled()
+            panel.review_button.click()
+            assert controls[-1][1] == "approval-one"
+            assert not panel.review_button.isEnabled()
+            assert not panel.reject_button.isEnabled()
+            assert not panel.approve_button.isEnabled()
+            assert panel.cancel_button.isEnabled()
+            assert panel.halt_button.isEnabled()
+            review_command = controls[-1][2]
+            bridge.review_ready.emit(
+                ApprovalReview(review_command, "approval-one", "task-one", 1, "fixed", b"{}")
+            )
+            bridge.command_changed.emit(
+                CommandEvent(
+                    review_command,
+                    "control",
+                    "review",
+                    "approval-one",
+                    CommandStage.BACKEND_RETURNED,
+                    "REVIEW_READY",
+                )
+            )
+            assert panel._busy  # the waiting turn is still in flight
+            assert panel.review_button.isEnabled()
+            assert panel.reject_button.isEnabled()
+            assert panel.approve_button.isEnabled()
 
 
 def test_streamed_answer_replaces_its_block_and_the_final_answer_replaces_it(window):

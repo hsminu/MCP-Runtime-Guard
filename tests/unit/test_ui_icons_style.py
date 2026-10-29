@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 from pathlib import Path
@@ -28,31 +29,60 @@ def app() -> QApplication:
     return instance if isinstance(instance, QApplication) else QApplication([])
 
 
-@pytest.mark.parametrize("name", sorted(icons._SHAPES))
-def test_every_fixed_icon_renders_normal_and_disabled_pixmaps(app: QApplication, name: str) -> None:
-    icon = line_icon(name)
-    assert not icon.isNull()
-    for mode in (QIcon.Mode.Normal, QIcon.Mode.Disabled):
-        image = icon.pixmap(QSize(40, 40), mode).toImage()
-        painted = sum(
-            1
-            for x in range(image.width())
-            for y in range(image.height())
-            if image.pixelColor(x, y).alpha() > 0
-        )
-        assert painted > 0, (name, mode)
+def test_every_fixed_icon_renders_normal_and_disabled_pixmaps(app):
+    failures = []
+    for name in sorted(icons._SHAPES):
+        try:
+            shape = icons._SHAPES[name]
+            assert "href" not in shape
+            assert "url(" not in shape
+            assert "<script" not in shape
+            icon = line_icon(name)
+            assert not icon.isNull()
+            for mode in (QIcon.Mode.Normal, QIcon.Mode.Disabled):
+                image = icon.pixmap(QSize(40, 40), mode).toImage()
+                painted = sum(
+                    1
+                    for x in range(image.width())
+                    for y in range(image.height())
+                    if image.pixelColor(x, y).alpha() > 0
+                )
+                assert painted > 0, (name, mode)
+        except AssertionError as error:
+            failures.append((name, str(error)))
+    assert not failures, failures
 
 
-def test_unknown_icon_name_is_refused_not_drawn_blank() -> None:
-    with pytest.raises(KeyError):
-        line_icon("not-an-icon")
-
-
-def test_icon_artwork_carries_no_external_reference() -> None:
-    for shape in icons._SHAPES.values():
-        assert "href" not in shape
-        assert "url(" not in shape
-        assert "<script" not in shape
+def test_ui_sources_do_not_imply_openai_affiliation():
+    """A148 branding decision; I9/T19 UI support, not a trademark/legal audit."""
+    banned = (
+        "공식",
+        "OpenAI와",
+        "OpenAI 제공",
+        "OpenAI 제휴",
+        "OpenAI 파트너",
+        "OpenAI 로고",
+        "official",
+        "powered by OpenAI",
+        "OpenAI partner",
+        "OpenAI logo",
+        "openai_logo",
+        "openaiLogo",
+    )
+    failures = []
+    for path in sorted(Path(style.__file__).parent.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        # Include adjacent literal concatenation and names in icons/styles/titles.
+        strings = [source] + [
+            node.value
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        normalized = [re.sub(r"\s+", "", text).casefold() for text in strings]
+        for phrase in banned:
+            if any(re.sub(r"\s+", "", phrase).casefold() in text for text in normalized):
+                failures.append((path.name, phrase))
+    assert not failures, failures
 
 
 def test_style_applies_font_and_sheet_without_remote_resources(app: QApplication) -> None:
@@ -75,6 +105,10 @@ def _stroke(icon: QIcon) -> str:
 
 
 def test_light_and_dark_palettes_define_the_same_roles() -> None:
+    with pytest.raises(KeyError):
+        line_icon("not-an-icon")
+    with pytest.raises(KeyError):
+        line_icon("shield", "#ffffff")
     assert PALETTES["light"].keys() == PALETTES["dark"].keys()
     for theme in PALETTES:
         sheet = style_sheet(theme)
@@ -83,6 +117,15 @@ def test_light_and_dark_palettes_define_the_same_roles() -> None:
         assert "http" not in sheet
     with pytest.raises(KeyError):
         style_sheet("sepia")
+    sheet = style_sheet("light")
+    for banned in ("text-transform", "letter-spacing", "font-variant"):
+        assert banned not in sheet
+    boxed = set()
+    for selector, body in _rules():
+        if "border: 1px solid" in body and "border-radius: 10px" in body:
+            boxed.update(re.findall(r"QFrame#(\w+)", selector))
+    # Lists are one box of hairline rows; nothing inside a list is boxed again.
+    assert boxed == {"placeholderCard", "metricList", "rowList"}
 
 
 def test_icons_follow_a_theme_switch_without_being_recreated(app: QApplication) -> None:
@@ -94,11 +137,6 @@ def test_icons_follow_a_theme_switch_without_being_recreated(app: QApplication) 
             assert _stroke(icon) == PALETTES[theme]["ink"]
     finally:
         set_theme("light")
-
-
-def test_icon_colors_are_palette_roles_not_literals() -> None:
-    with pytest.raises(KeyError):
-        line_icon("shield", "#ffffff")
 
 
 # Style audit: deterministic checks that keep generated-looking defaults out
@@ -113,52 +151,33 @@ def _rules() -> list[tuple[str, str]]:
     ]
 
 
-def test_colors_live_only_in_the_palette() -> None:
-    for path in _UI_SOURCES:
-        text = path.read_text(encoding="utf-8")
-        literals = re.findall(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\(|QColor\(\"", text)
-        assert not literals, (path.name, literals)
-
-
-def test_ember_accent_is_reserved_for_the_brand_and_running_work() -> None:
+def test_ui_sources_use_palette_colors_brand_accent_and_grid_spacing() -> None:
+    failures, painted = [], {}
+    call = re.compile(r"\.(?:setContentsMargins|setSpacing|addSpacing)\(([^()]*)\)")
     allowed = {
         "QLabel#brandMark",
         'QLabel#statusPill[tone="live"]',
         'QLabel#answerLabel[tone="live"]',
     }
     for selector, body in _rules():
-        if re.search(r"\$accent(?:_soft|_line)?\b", body):
-            assert selector in allowed, selector
-    painted = {}
+        if re.search(r"\$accent(?:_soft|_line)?\b", body) and selector not in allowed:
+            failures.append((selector, "accent"))
     for path in _UI_SOURCES:
-        uses = re.findall(r'"(?:on_)?accent(?:_soft|_line)?"', path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        literals = re.findall(r'#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\(|QColor\("', text)
+        if literals:
+            failures.append((path.name, literals))
+        if "eyebrow" in text.casefold():
+            failures.append((path.name, "eyebrow"))
+        uses = re.findall(r'"(?:on_)?accent(?:_soft|_line)?"', text)
         if uses:
             painted[path.name] = len(uses)
-    # The running session mark and the brand mark's glyph.
-    assert painted == {"sessions.py": 1, "window.py": 1}
-    assert PALETTES["light"]["selection"] != PALETTES["light"]["accent"]
-
-
-def test_boxed_cards_stay_few_and_never_nest_in_the_activity_panel() -> None:
-    boxed = set()
-    for selector, body in _rules():
-        if "border: 1px solid" in body and "border-radius: 10px" in body:
-            boxed.update(re.findall(r"QFrame#(\w+)", selector))
-    # Lists are one box of hairline rows; nothing inside a list is boxed again.
-    assert boxed == {"placeholderCard", "metricList", "rowList"}
-
-
-def test_no_eyebrow_labels_or_letter_spacing() -> None:
-    sheet = style_sheet("light")
-    for banned in ("text-transform", "letter-spacing", "font-variant"):
-        assert banned not in sheet
-    for path in _UI_SOURCES:
-        assert "eyebrow" not in path.read_text(encoding="utf-8").casefold(), path.name
-
-
-def test_layout_spacing_sits_on_a_4px_grid() -> None:
-    call = re.compile(r"\.(?:setContentsMargins|setSpacing|addSpacing)\(([^()]*)\)")
-    for path in _UI_SOURCES:
-        for args in call.findall(path.read_text(encoding="utf-8")):
+        for args in call.findall(text):
             for number in map(int, re.findall(r"\b\d+\b", args)):
-                assert number in (0, 2) or number % 4 == 0, (path.name, args)
+                if number not in (0, 2) and number % 4 != 0:
+                    failures.append((path.name, args))
+    if painted != {"sessions.py": 1, "window.py": 1}:
+        failures.append(("accent counts", painted))
+    if PALETTES["light"]["selection"] == PALETTES["light"]["accent"]:
+        failures.append(("palette", "selection equals accent"))
+    assert not failures, failures
