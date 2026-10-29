@@ -1,0 +1,24 @@
+{
+  "record": "A168",
+  "date": "2026-10-29",
+  "what": "CodexProcessPreparation startup (pinned codex.exe 0.162.1, C run_l2 with its local fake model) on a probe app root %LOCALAPPDATA%\\MCPRuntimeGuard-a151-probe, given once as the logical path and once resolved. Only fixed codes, bools and seconds.",
+  "runs": [
+    {
+      "host": "shell started by the Claude desktop app (MSIX)",
+      "has_package_identity": false,
+      "probe_resolves_into_packages": true,
+      "logical": {"l2_passed": false, "l2_failures": ["L2_CONFIG_LAYERS_UNEXPECTED", "L2_CONFIG_MISMATCH"], "seconds": 1.266},
+      "resolved": {"l2_passed": true, "l2_failures": [], "seconds": 1.193},
+      "probe_removed": true
+    },
+    {
+      "host": "process created through WMI Win32_Process.Create (outside any app package)",
+      "has_package_identity": false,
+      "localappdata_guard_resolves_into_packages": false,
+      "probe_resolves_into_packages": false,
+      "logical": {"l2_passed": true, "l2_failures": [], "seconds": 1.175},
+      "resolved": {"l2_passed": true, "l2_failures": [], "seconds": 1.191},
+      "probe_removed": true
+    }
+  ]
+}
