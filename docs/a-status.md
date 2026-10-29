@@ -7,16 +7,15 @@
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
 | fixture·로그 정책·독립 인수 | C | A07–A12, A14–A16, A23, A36–A40 |
-| 시작 복구·영속 call_seq·조회/감사 API (B-SQL-01–06) | B | A13, A24–A27, A33–A35 |
+| 과거 승인·감사 조회 API(B-SQL). 시작 복구·영속 call_seq는 #69로 병합됨 | B | A33–A35 |
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
 | `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22, A50 |
 | 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
 | T43/T46·수신 상한 독립 인수(C5.8) ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A52 |
-| 제품 Guard 조립용 영속 `next_call_seq`·실패 감사(B6.8). 설정 파일 읽기·저장과 Registry 로드는 A129로 연결됨 | B | A24–A27, A81, A129 |
-| CI 2단계(C6.3)·C 환경 재측정 | C | A41, A46 |
-| bridge 및 목록 알림 변경 리뷰 | C·B | A115, A140 |
-| 실제 writer의 종료·정지 경합 재현 조건 ([#58 회신](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6473123051)) | B | A134 |
+| CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
 | Codex 로그인 URL 검증·기본 브라우저 열기 입구와 독립 검증 | C | A109 제품 브라우저 로그인 |
+| A109·A142 독립 리뷰(A109는 C 리뷰 없이 #70으로 병합됨) | C | A109, A142 |
+| mcp 고정 버전 변경 PR | C | A144 |
 
 **A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49, #63·#64·#67 병합됨), C2.10 키 입력 화면 연결(#60, A 브랜치에 병합됨), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드는 #58로 병합됨), EXE-01 지문 확인 화면(A128), C6.20 설치판 리소스 위치(패키징).
 
@@ -46,7 +45,7 @@
 - [x] A77 HTTP JSON·SSE 압축 해제 후 바이트 제한·종료 확인과 실패 격리 · [기록](archive/a/A77-http-listing-byte-ingress.md)
 - [ ] A09·A10 C launcher 파이프 실제 연결·수신 상한 독립 인수 — A 차례(EXE-01 B 필드 #58·C2.6 #54 병합됨). 독립 인수는 C5.8([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6247463861))
 - [x] A13 미종결 거부·정리 미확인 재시작 차단, SQLite 같은 스레드 종료 순서(W1)
-- [ ] A13 이전 Task 종결·시작 복구 — 막힘: B-SQL-02·C 인수
+- [ ] A13 이전 Task 종결·시작 복구 — A 차례: B6.8 시작 복구 병합(#69), 연결은 A138. C 인수 남음
 - [x] A14 errlog 필수·SDK·합성 HTTP 서버 로그 격리
 - [ ] A14 공개 handler 인수 — 막힘: C 로그 정책(A39와 함께)
 - [x] A15·A16 등록 요구·단위 구현
@@ -55,7 +54,9 @@
 - [x] A97 MCP 도구 오류(`is_error`)를 Codex에 실패로 전달 · [기록](archive/a/A97-released-tool-error.md)
 - [x] A100 대조 뒤 `tools/list_changed`를 받으면 그 서버를 이번 실행 동안 PENDING 취급, 새 세션 도구 목록에서 제외(LIST-01, PR #34 결정) · [기록](archive/a/A100-tools-list-changed.md)
 - [x] A140 A100 후속: 서버별 첫 목록 응답 뒤 알림은 대조 전에도 이번 실행 차단 · [기록](archive/a/A140-list-change-before-seal.md)
-- [ ] A140 수신 순서·서버 격리 리뷰 — 막힘: [#70](https://github.com/hsminu/MCP-Runtime-Guard/pull/70) B·C 리뷰, 실제 알림 시점 관찰은 C5.9
+- [x] A140 수신 순서·서버 격리 리뷰: [B](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6473893617)·[C](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474250735) 모두 막는 문제 없음, 콜백 설명 제안은 반영
+- [ ] A140 실제 알림 시점 관찰 — 막힘: C5.9
+- [ ] A144 mcp 고정 버전을 올릴 때 SDK 내부에 기대는 세 곳(요청 ID 배정 순서, `_handle_response`, `_DeliveryCheckedStream`) 재검증 — 막힘: C 의존성 PR
 - [x] A132 HTTP 세션이 요청 오류(`httpx.HTTPError`)만으로 끝나면 종료를 완료로 봄(#61 A 후속 2) · [기록](archive/a/A132-http-teardown-completed.md)
 - [x] A141 A132의 HTTP 종료 기대값 C 수정(#68)을 A 브랜치에 통합·전체 재검사 · [기록](archive/a/A141-c68-integration-check.md)
 - [x] A133 세션이 끊긴 서버를 이번 실행 동안 PENDING으로 보고 다음 호출을 예약 전 `REG_NOT_ACTIVE`로 거부(#61 A 후속 3) · [기록](archive/a/A133-failed-server-pending.md)
@@ -79,13 +80,15 @@
 - [x] A103 Task 폴더 삭제를 작업 스레드로 옮기고 삭제 상한을 따로 둠(PR #35 B 리뷰) · [기록](archive/a/A103-task-folder-removal-thread.md)
 - [x] A110 앱을 닫을 때 정리가 확인되지 않으면 단일 실행 잠금을 쥔 채 프로세스 종료(B6.17 8.1, #37) · [기록](archive/a/A110-unconfirmed-exit-keeps-lock.md)
 - [x] A134 앱 종료가 세션 정지 기록(STOP-01)을 기다린 뒤 Guard·Store를 닫음(#58 B 답변의 `SystemControlError`) · [기록](archive/a/A134-shutdown-waits-for-stop-record.md)
-- [ ] A134 #58 writer로 경합 재현·해소 확인 — 막힘: B 재현 조건([사후 확인·요청](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6473123051))
+- [ ] A134 #58 writer로 경합 재현·해소 확인 — A 차례(A143): B 재현 방법([#70 B 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6473893617))
 - [x] A136 #58 병합: Store 닫기 뒤 `wait_closed(5.0)`으로 연결 종료 확인, 미확인이면 `CLEANUP_UNCONFIRMED`·잠금 유지(시작 실패·시연 포함) · [기록](archive/a/A136-store-close-confirmed.md)
 - [ ] A19·A20 실제 codex.exe 세션 — C 쪽 막힘은 풀림(L2 C6.14 #41, 설정 파일 CFG-01 #44·A129, CODEX_HOME `secrets` 허용 #35). 남은 것: A `run_l2` 연결, 세션 관리자 공통 계약 합의(막힌 것 표)
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
 - [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
 - [x] A109 기기 코드 제한 안내·브라우저 로그인 A 연결부·취소/시간초과·중복 요청 처리 · [기록](archive/a/A109-browser-login-wiring.md)
 - [ ] A109 제품 브라우저 로그인 활성화·실제 계정 확인 — 막힘: C URL 검증·브라우저 열기 입구(이번 작업은 사용자 지정으로 A 연결만 구현)
+- [x] A142 A109 후속: app-server가 거절한 계정 요청은 프로세스 유지·거절된 취소는 종료, 계정 명령 거부·미확인 문구를 명령별로 · [기록](archive/a/A142-account-refusal-and-command-notices.md)
+- [ ] A109·A142 C 독립 리뷰 — 막힘: C
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
 - [x] A58 JSON-RPC 전송 마감·처리기 안 close 교착·종료 사유 보정 · [기록](archive/a/A58-jsonrpc-send-and-close.md)
@@ -125,9 +128,9 @@
 - [x] A130 #52 B·C 리뷰 후속: 저장 중 취소도 Guard를 닫음, 앱 밖에서 바뀐 설정 파일은 저장하지 않고 재시작 안내, `turn/start` 키 집합 고정 테스트 · [기록](archive/a/A130-pr52-review-followups.md)
 - [x] A131 승인 대기 강조: 대화 화면 승인 안내 띠(사본 확인 버튼), 활동 패널 승인 구역 warn 강조, 승인 사본 한 필드 한 줄, 사이드바 승인 대기 행 글자색 · [기록](archive/a/A131-approval-emphasis.md)
 - [x] A135 실행 컨트롤 안내의 내부 코드를 접힌 줄로 내림(#52 C 리뷰 UI 3. UI 1·2는 A131) · [기록](archive/a/A135-internal-code-fold.md)
-- [ ] A135 설정 파일이 없을 때 화면에서 첫 파일 만들기(#52 C 리뷰 참고) — 등록 흐름(A81·A91)에서. 막힘: B6.8
-- [ ] A24–A27 제품 Guard 조립·시작 복구 — 막힘: B6.8(영속 call_seq·실패 감사); C2.6·C2.5는 병합됨
-- [ ] A138 제품 Guard 조립 때 #58 연결: `on_global_halt=store.halt_execution`, 새 turn·도구 응답·새 Task 전 `execution_state()` 확인과 `state_revision` 비교([#58](https://github.com/hsminu/MCP-Runtime-Guard/pull/58) A 요청) — A24–A27과 같이
+- [ ] A135 설정 파일이 없을 때 화면에서 첫 파일 만들기(#52 C 리뷰 참고) — A 차례: 등록 흐름(A81·A91)에서. B6.8 병합(#69)
+- [ ] A24–A27 제품 Guard 조립·시작 복구 — A 차례: B6.8 병합(#69), A138로 연결. C2.6·C2.5도 병합됨
+- [ ] A138 제품 Guard 조립 때 #58 연결: `on_global_halt=store.halt_execution`, 새 turn·도구 응답·새 Task 전 `execution_state()` 확인과 `state_revision` 비교([#58](https://github.com/hsminu/MCP-Runtime-Guard/pull/58) A 요청), B6.8 명시 시작·복구 화면([#69 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/69#issuecomment-6474818368)) — A 차례, A24–A27과 같이
 - [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
 - [ ] A33·A34 과거 승인·제품 목록 통합 — 막힘: B-SQL-02/03
@@ -157,7 +160,7 @@
 - [x] A117 겹친 서버 접근 변경이 앞 변경이 저장한 문서에서 시작함(정책 잠금 안에서 문서를 읽음, A112 발견) · [기록](archive/a/A117-overlapping-policy-changes.md)
 - [x] A106 제품 DB를 앱 폴더 고정 경로(`data\guard.sqlite3`, C2.17)로 옮기고 `--db-path`는 시연 전용으로, `--demo`는 앱 폴더 안을 열지 못하게 함(#35 B 리뷰 1번) · [기록](archive/a/A106-product-db-path.md)
 - [x] A106 C `AppFolders.db_path()`(DB·`-wal`·`-shm` 링크·권한 확인)로 교체, 거부되면 창을 열기 전에 시작하지 않음 · [기록](archive/a/A106-db-path-check.md)
-- [ ] A81·A91 제품 화면에서 Profile 저장·서버 활성화 — 막힘: 제품 Guard 조립(B6.8); 저장은 A129, 서버 실행 입구는 C2.6으로 제공됨
+- [ ] A81·A91 제품 화면에서 Profile 저장·서버 활성화 — A 차례: 제품 Guard 조립(A138) 뒤; 저장은 A129, 서버 실행 입구는 C2.6으로 제공됨
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
@@ -188,7 +191,7 @@
 - [x] A38–A40 합성 경로·SQLite/mock/stdio·HTTP ASK·ALLOW·DENY 계수, 재시작·시작 실패 게이트
 - [ ] A38–A40 전체 복구·launcher/endpoint·독립 인수 — 막힘: C T/S
 - [x] A41 lock·설치·단위 검증, CI 1단계(#4)
-- [ ] A41 보안 스캔(CI 2단계) — 막힘: AGT 제거 뒤 C CI 2단계(C6.3)
+- [ ] A41 보안 스캔(CI 2단계) — 막힘: pip-audit 단계(C6.24). import 계약·Bandit·Semgrep·contract 시험은 #72로 CI에 들어감
 - [ ] A42 인수: 리뷰 결과와 검증 인계
 - [x] A84 제품 `CodexTaskRunner`·제품 시작 경로·icons/style 테스트 보강 · [기록](archive/a/A84-product-runner-and-startup-tests.md)
 - [x] A94 GPT·Opus QA와 B7.2 리뷰의 A 결함 수정(승인 경로·서버 단위 지문 차단·세션 정지 전역 정지 방지 등) · [기록](archive/a/A94-qa-gpt-opus-fixes.md)
@@ -216,7 +219,7 @@
 - [x] A114 3단계: Codex 계층(`codex_session`·`jsonrpc_client`·`codex_stream`·`guard_relay`) 정리 · [기록](archive/a/A114-codex-layer-cleanup.md)
 - [x] A119 A114에서 찾은 Codex 세션 테스트 빈틈 4개와 멈춤 1개를 메움 · [기록](archive/a/A119-codex-session-test-gaps.md)
 - [x] A115 4단계: `BackendBridge` 안쪽 분리 · [기록](archive/a/A115-backend-bridge-split.md)
-- [ ] A115 bridge 분리 독립 리뷰 — 막힘: [#70](https://github.com/hsminu/MCP-Runtime-Guard/pull/70) C 리뷰
+- [x] A115 bridge 분리 독립 리뷰: [#70 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474250735) 막는 문제 없음
 - [ ] A137 A115에서 찾은 bridge 테스트 빈틈 11개와 멈춤 1개 메우기 — A 차례
 - [ ] A116 5단계: UI 화면 조립·`__main__` 정리(C 리뷰) — A 차례(B2.11 #47 병합)
-- [ ] A139 A 모듈 ID 생성을 `new_id`·`new_suffix`로 통합(`bridge_ingress.bridge_id` 포함), B6.8 복구에 `new_id("run")` 연결 — 막힘: [#65](https://github.com/hsminu/MCP-Runtime-Guard/pull/65) 병합([수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/65#issuecomment-6472889394))
+- [ ] A139 A 모듈 ID 생성을 `new_id`·`new_suffix`로 통합(`bridge_ingress.bridge_id` 포함), B6.8 복구에 `new_id("run")` 연결 — A 차례: [#65](https://github.com/hsminu/MCP-Runtime-Guard/pull/65) 병합됨([수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/65#issuecomment-6472889394))
