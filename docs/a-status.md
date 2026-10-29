@@ -254,6 +254,7 @@
 - [x] A199 #94 B 답 3번: 조립이 파일 서버 루트를 args 모양과 앱 Python 실행 파일(`sys.executable`)이 모두 맞을 때만 인정, 아니면 자원형 READ는 예약 전 거부 · [기록](archive/a/A199-file-server-command.md)
 - [x] A203 현황 정리: 이미 풀린 막힘 줄(A05 조회 DTO, `ModelClient`, mcp 고정·A145, A가 막는 것) 고치기, B·C 현황의 낡은 A 대기 줄 확인 · [기록](archive/a/A203-status-cleanup.md)
 - [x] A204 채팅 한글 표시·생각 중 표시: 대화·세션 제목은 숨은 문자·RTL만 `⟦U+…⟧`로 표기하고 한글·기호·역슬래시는 그대로(승인 화면 규칙 유지), 첫 답 조각 전까지 `생각 중 · n초` 임시 줄 · [기록](archive/a/A204-chat-text-and-thinking.md)
+- [x] A205 드롭다운 휠 무시: `SelectionBox`는 휠로 값을 바꾸지 않고 페이지가 스크롤됨(`StrongFocus`), 호출 로그 필터도 `SelectionBox`로, A204 생각 중 줄 색은 `$mute` · [기록](archive/a/A205-selection-wheel.md)
 
 ## 통합·패키징
 

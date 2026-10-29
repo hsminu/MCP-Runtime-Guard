@@ -17,6 +17,7 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPen,
     QResizeEvent,
+    QWheelEvent,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -148,7 +149,17 @@ class ConfirmDialog(QDialog):
 
 
 class SelectionBox(QComboBox):
-    """Native keyboard/popup behavior with a platform-independent chevron."""
+    """Native keyboard/popup behavior with a platform-independent chevron.
+
+    The wheel scrolls the page, never the choice.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        event.ignore()
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)

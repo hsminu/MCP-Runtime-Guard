@@ -73,6 +73,7 @@ from .style import TOKENS, ui_font
 from .widgets import (
     KeyboardActionButton,
     ResponsiveRow,
+    SelectionBox,
     StateMessage,
     StatusPill,
     plain_label,
@@ -595,11 +596,11 @@ class CallLogPage(QWidget):
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(4)
             choices.add_widget(group, 1)
-        self.server_filter = QComboBox()
+        self.server_filter = SelectionBox()
         self.server_filter.setAccessibleName("서버 선택")
         self.server_filter.addItem("모든 서버", "")
         self.server_filter.currentIndexChanged.connect(self._server_changed)
-        self.status_filter = QComboBox()
+        self.status_filter = SelectionBox()
         self.status_filter.setAccessibleName("상태 선택")
         for text, value in (
             ("모든 상태", ""),
@@ -613,7 +614,7 @@ class CallLogPage(QWidget):
         ):
             self.status_filter.addItem(text, value)
         self.status_filter.currentIndexChanged.connect(self._apply_filter)
-        self.period_filter = QComboBox()
+        self.period_filter = SelectionBox()
         self.period_filter.setAccessibleName("기간 선택")
         for text, value in (
             ("전체 기간", ""),

@@ -176,7 +176,7 @@ QPushButton#jumpLatest { background: $raised; color: $body; border: 1px solid $h
 QLabel#answerText { font-size: 14px; color: $body; }
 QLabel#answerLabel { font-size: 12px; color: $mute; }
 QLabel#answerLabel[tone="live"] { color: $primary_text; }
-QLabel#thinkingLabel { font-size: 12px; color: $primary_text; }
+QLabel#thinkingLabel { font-size: 12px; color: $mute; }
 QLabel#answerLabel[tone="stopped"] { color: $danger; }
 QLabel#emptyTitle { font-size: 15px; font-weight: 600; color: $ink; }
 QLabel#emptyDetail { font-size: 13px; color: $mute; }
