@@ -11,8 +11,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
+from guard_app.services.bridge_types import BackendCleanupError
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 from guard_app.services.session_preparation import (
+    L2_FAILURE_CODES,
     ConfigurationReceipt,
     SessionPreparation,
     StartupReceipt,
@@ -32,6 +34,8 @@ async def call_preparation[Result](action: Callable[[], Awaitable[Result]]) -> R
         return await operation
     finally:
         if operation.done() and not operation.cancelled() and operation.exception() is not None:
+            if isinstance(operation.exception(), BackendCleanupError):
+                raise BackendCleanupError from None
             raise SessionRuntimeError("CODEX_PREPARATION_FAILED") from None
 
 
@@ -47,6 +51,9 @@ def startup_refusal(receipt: object) -> str | None:
     """Why an app-wide startup receipt refuses sessions; None when it passes."""
     if type(receipt) is not StartupReceipt or not valid_configuration(receipt.configuration):
         return "CODEX_PREPARATION_FAILED"
+    if receipt.l2_failures:
+        code = receipt.l2_failures[0]
+        return code if code in L2_FAILURE_CODES else "CODEX_L2_FAILED"
     if receipt.l2_configuration is None:
         return "CODEX_L2_UNAVAILABLE"
     if receipt.l2_passed is not True:

@@ -99,8 +99,10 @@ class CodexAppServerSession:
         version: str,
         limits: SessionLimits | None = None,
         on_partial: Callable[[str], None] | None = None,
+        execution_allowed: Callable[[], bool] | None = None,
     ) -> None:
         self._task = task
+        self._execution_allowed = execution_allowed
         self._plan = plan
         self._relay = relay
         self._model = model
@@ -127,6 +129,7 @@ class CodexAppServerSession:
             on_server_request=self._server_request,
             version_field=False,
             on_reply_sent=self._reply_sent,
+            before_send=self._before_send,
         )
         self._queue: TaskToolCallQueue[DynamicToolCall, RelayResult] = TaskToolCallQueue(
             task.task_id, self._handle_call
@@ -192,6 +195,8 @@ class CodexAppServerSession:
             self._sending = False
 
     async def _send(self, text: str, effort: str | None) -> str:
+        if not self._execution_permitted():
+            raise CodexSessionError("CODEX_STORE_HALTED")
         thread_id = self._require_running()
         try:
             params = turn_start_params(thread_id, text, effort)
@@ -318,11 +323,14 @@ class CodexAppServerSession:
         counts[call.call_id] = counts.get(call.call_id, 0) + 1
         if result.stop_code is not None:
             self._defer_stop("item/tool/call", result.stop_code)
+        if not self._execution_permitted():
+            self._defer_stop("item/tool/call", "CODEX_STORE_HALTED")
+            return stopped
         return result.response
 
     async def _handle_call(self, _task_id: str, call: DynamicToolCall) -> RelayResult:
         stopped = tool_call_response(*_as_texts(fixed_model_message(ModelMessageKind.STOPPED)))
-        if self.stop_code is not None:
+        if self.stop_code is not None or not self._execution_permitted():
             # Already queued calls never reach Guard once the session stopped.
             return RelayResult(stopped)
         self.observations.guard_submits += 1
@@ -333,6 +341,13 @@ class CodexAppServerSession:
                 return await self._relay(call)
         except TimeoutError:
             return RelayResult(stopped, "CODEX_WATCHDOG_TIMEOUT")
+
+    def _execution_permitted(self) -> bool:
+        return self._execution_allowed is None or self._execution_allowed()
+
+    def _before_send(self, method: str) -> None:
+        if method in {"turn/start", "item/tool/call"} and not self._execution_permitted():
+            raise JsonRpcError("EXECUTION_HALTED")
 
     def _defer_stop(self, method: str, code: str) -> None:
         self._deferred_stops.setdefault(method, code)

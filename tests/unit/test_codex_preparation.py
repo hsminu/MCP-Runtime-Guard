@@ -2,7 +2,7 @@
 
 Like C's launcher tests, this Python's python.exe stands in for codex.exe with a
 pinned copy of `codex.lock.json`. Real folders, DACLs, the app lock and a real
-child process run; L2 (C6.14) is not connected, so sessions stay refused (I11,
+child process run; L2 (C6.14) is stubbed to fail, so sessions stay refused (I11,
 T22/T43 A part). The real codex.exe is C's evidence, not exercised here.
 
 A102: the product claims the single-instance lock before its DB opens and does
@@ -30,6 +30,8 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
+
+from .product_folders import product_folders
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -114,7 +116,7 @@ def _run_bounded(coroutine):
     return asyncio.run(run())
 
 
-def test_startup_prepares_folders_and_codex_home_and_reports_no_l2(tmp_path, pin) -> None:
+def test_startup_prepares_folders_and_codex_home_and_reports_failed_l2(tmp_path, pin) -> None:
     owner = preparation(tmp_path, pin)
 
     async def run():
@@ -128,7 +130,8 @@ def test_startup_prepares_folders_and_codex_home_and_reports_no_l2(tmp_path, pin
         receipt = _run_bounded(run())
     lock = json.loads((CODEX_CONFIG_DIR / LOCK_FILE).read_text(encoding="utf-8"))
     assert valid_configuration(receipt.configuration)
-    assert receipt.l2_configuration is None
+    assert receipt.l2_configuration == receipt.configuration
+    assert receipt.l2_failures == ("L2_TOOLS_UNEXPECTED",)
     assert receipt.l2_passed is False
     assert receipt.configuration.executable_digest == pin[1]
     assert receipt.configuration.model_digest == lock["codex_home"]["model_catalog.json"]
@@ -333,7 +336,7 @@ def test_product_start_shows_why_sessions_are_refused(tmp_path, pin, subtests):
 
         async def run():
             bindings = await bootstrap_product(
-                str(tmp_path / "product.db"), preparation=owner.preparation()
+                product_folders(str(tmp_path / "product.db")), preparation=owner.preparation()
             )
             try:
                 assert bindings.session_blocker is not None
@@ -351,7 +354,7 @@ def test_product_start_shows_why_sessions_are_refused(tmp_path, pin, subtests):
         assert list((tmp_path / "app" / "tasks").iterdir()) == []
 
     for index, (pinned_size, blocker) in enumerate(
-        [(None, "CODEX_L2_UNAVAILABLE"), (1, "CODEX_PREPARATION_FAILED")]
+        [(None, "L2_TOOLS_UNEXPECTED"), (1, "CODEX_PREPARATION_FAILED")]
     ):
         case_path = tmp_path / str(index)
         case_path.mkdir()
@@ -450,14 +453,14 @@ def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
     class StoppedError(Exception):
         pass
 
-    def bridge(bootstrap: Callable[[], object]) -> None:
+    def bridge(bootstrap: Callable[[], object], **_kwargs) -> None:
         assert_lock_held(root)
         seen.append(db.exists())
         bootstrap()
         raise StoppedError
 
     def recording_bootstrap(db_path: str, **kwargs: object) -> None:
-        opened.append(db_path)
+        opened.append(str(db_path.db_path()))
         accounts.append(kwargs.get("account"))
 
     monkeypatch.setattr(paths, "app_root", lambda: root)
@@ -597,3 +600,21 @@ def test_demo_db_outside_the_app_folder_is_allowed(monkeypatch, tmp_path) -> Non
 
     monkeypatch.setattr(paths, "app_root", unavailable)
     assert not entry._outside_app_folder(str(tmp_path / "demo.db"))
+
+
+@pytest.fixture(autouse=True)
+def fake_l2(monkeypatch):
+    from guard_app.security.codex_home import load_codex_pins
+    from guard_app.security.codex_l2 import L2Report
+
+    async def run(launcher, folders, **kwargs):
+        pins = load_codex_pins(launcher.source_dir)
+        return L2Report(
+            False,
+            ("L2_TOOLS_UNEXPECTED",),
+            launcher.home_digest,
+            launcher.executable_sha256,
+            dict(pins.home_sha256)["model_catalog.json"],
+        )
+
+    monkeypatch.setattr(codex_preparation, "run_l2", run)

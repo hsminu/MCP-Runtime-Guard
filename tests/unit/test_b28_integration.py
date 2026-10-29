@@ -21,6 +21,7 @@ from guard_app.services.session_runtime import SessionRuntimeError, bootstrap_pr
 from guard_app.services.session_stops import stop_reason
 
 from .fake_codex_app_server import THREAD_ID, FakeAppServer
+from .product_folders import product_folders
 from .test_codex_product_flow import TaskEvents, preparation, read_then_answer
 from .test_product_assembly import READ_DEFINITION, Peer, Registry, document, inputs
 from .test_session_runtime import StoppableSession, make_runtime
@@ -72,7 +73,7 @@ def test_l3_stop_and_user_input_are_audited_on_the_system_channel(tmp_path) -> N
 
     async def run():
         bindings = await bootstrap_product(
-            str(db_path),
+            product_folders(str(db_path)),
             preparation=preparation(servers, ask_then_answer),
             product=inputs(
                 Peer([READ_DEFINITION]), Registry(tool_fingerprint(READ_DEFINITION)), document()
@@ -165,7 +166,7 @@ async def policy_product(
 
     peer = Peer([READ_DEFINITION])
     bindings = await bootstrap_product(
-        str(tmp_path / "policy.db"),
+        product_folders(str(tmp_path / "policy.db")),
         preparation=preparation(servers, script),
         product=inputs(peer, Registry(tool_fingerprint(READ_DEFINITION)), document()),
         profile_saver=saver,
@@ -294,9 +295,8 @@ def test_saved_but_unapplied_change_closes_guard_until_restart(tmp_path, monkeyp
                 with pytest.raises(SessionRuntimeError) as created:
                     await bindings.create_session(SessionOptions())
                 runner = bindings.runner_for_task(old.task_id)
-                runner.add_user_message("summarize the public document")
-                update = await asyncio.wait_for(runner.advance(), 5)
-                return (refused.value, again.value, created.value), blocker, update, peer
+                assert not runner.can_accept_message
+                return (refused.value, again.value, created.value), blocker, runner, peer
             finally:
                 assert bindings.close is not None
                 await bindings.close()
@@ -307,9 +307,9 @@ def test_saved_but_unapplied_change_closes_guard_until_restart(tmp_path, monkeyp
         assert blocker == "POLICY_APPLY_FAILED"
         assert len(saved) == 1  # never saved a second time
         # The old session's READ is refused by the closed Guard, never dispatched.
-        assert update.status == "complete"
+        assert not update.can_advance
         assert peer.calls == []
-        assert servers[0].last_reply["result"]["success"] is False  # type: ignore[attr-defined]
+        assert not hasattr(servers[0], "last_reply")
         assert len(servers) == 1  # no new session was launched
 
     for case_index, failure in enumerate(["refused", "failed"]):
@@ -438,7 +438,7 @@ def test_overlapping_server_access_changes_build_on_each_other(tmp_path) -> None
 def test_without_a_profile_saver_policy_change_is_unavailable(tmp_path) -> None:
     async def run():
         bindings = await bootstrap_product(
-            str(tmp_path / "nosave.db"),
+            product_folders(str(tmp_path / "nosave.db")),
             preparation=preparation([], read_then_answer),
             product=inputs(
                 Peer([READ_DEFINITION]), Registry(tool_fingerprint(READ_DEFINITION)), document()
@@ -469,7 +469,7 @@ def test_human_stop_with_guard_leaves_the_store_to_guard(tmp_path, subtests):
 
         async def run():
             bindings = await bootstrap_product(
-                str(db_path),
+                product_folders(str(db_path)),
                 preparation=preparation([], read_then_answer),
                 product=inputs(
                     Peer([READ_DEFINITION]), Registry(tool_fingerprint(READ_DEFINITION)), document()

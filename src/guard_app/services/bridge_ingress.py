@@ -20,6 +20,7 @@ from guard_app.services.bridge_types import (
     CommandEvent,
     CommandStage,
     ControlAction,
+    RegistrationRequest,
     SessionOptions,
 )
 
@@ -45,6 +46,7 @@ class BridgeCommand:
     user_text: str | None = field(default=None, repr=False)
     options: SessionOptions | None = None
     access: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+    registration: RegistrationRequest | None = field(default=None, repr=False)
     effort: str | None = None
 
     def event(self, stage: CommandStage, code: str) -> CommandEvent:

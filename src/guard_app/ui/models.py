@@ -63,6 +63,7 @@ class ServerSummary:
     registry_status: str | None = None
     session_status: str | None = None
     transport: str | None = None
+    executable_pinned: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

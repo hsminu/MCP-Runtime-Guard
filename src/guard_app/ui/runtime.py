@@ -35,6 +35,7 @@ from .presentation import (
     RUN_RESULTS,
     task_label_text,
 )
+from .recovery import RecoveryPanel
 from .task_status import FINAL_STATUSES, status_code, status_detail, status_title
 from .widgets import KeyboardActionButton, plain_label
 
@@ -165,6 +166,8 @@ class RuntimePanel(QWidget):
         self._stop_actions.setSpacing(8)
         self._stop_label = plain_label("작업 제어", name="secondary")
         layout.addWidget(stop)
+        self.recovery = RecoveryPanel(bridge)
+        layout.addWidget(self.recovery)
         self._compact_actions: bool | None = None
         self._reflow_actions()
         # Match keyboard order to the visual groups. Reflow never changes focus.

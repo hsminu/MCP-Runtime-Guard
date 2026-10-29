@@ -21,7 +21,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from guard_app.services.bridge import (
+    BackendBridge,
+    CommandEvent,
+    CommandStage,
+    RegistrationRequest,
+    RegistrationView,
+    new_command_id,
+)
+
 from .models import LoadState, ServerSummary, Surface
+from .policy import CHANGE_RESULTS, ToolAllowDialog
 from .presentation import (
     LABELS,
     REGISTRY_NAMES,
@@ -44,6 +54,12 @@ from .widgets import (
     size_detail_for_viewport,
     table_row_height,
 )
+
+
+def _pin_status(server: ServerSummary) -> str:
+    if server.executable_pinned is None:
+        return "해당 없음 또는 미확인"
+    return "저장 지문과 일치" if server.executable_pinned else "지문 재확인 필요"
 
 
 def _detail_field(title: str, value: str) -> tuple[QWidget, QLabel]:
@@ -109,6 +125,8 @@ class ServerDetailDialog(QDialog):
             "연결 방식 · transport", fixed(TRANSPORTS, server.transport)
         )
         layout.addWidget(transport_field)
+        pin_field, self._pin_value = _detail_field("실행 파일 지문", _pin_status(server))
+        layout.addWidget(pin_field)
         self.scan_status_card = ScanStatusCard()
         self.scan_status_card.setMinimumWidth(0)
         self.scan_status_card.setSizePolicy(
@@ -134,6 +152,7 @@ class ServerDetailDialog(QDialog):
         self._display_value.setText(public_display_text(server.display_name or server.server_id))
         self._server_id_value.setText(public_display_text(server.server_id))
         self._transport_value.setText(fixed(TRANSPORTS, server.transport))
+        self._pin_value.setText(_pin_status(server))
         self.scan_status_card.set_snapshot(Surface(LoadState.LOADING))
 
 
@@ -148,6 +167,10 @@ class ServerListPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._servers: tuple[ServerSummary, ...] = ()
+        self._activation_bridge: BackendBridge | None = None
+        self._activation_command = ""
+        self._activation_action = "activate"
+        self._activation_dialog: ToolAllowDialog | None = None
         self._visible_servers: list[ServerSummary] = []
         self._state = LoadState.UNAVAILABLE
         self._detail_dialog: ServerDetailDialog | None = None
@@ -235,6 +258,15 @@ class ServerListPage(QWidget):
         self.detail_button.clicked.connect(self._open_selected)
         self.detail_button.setEnabled(False)
         layout.addWidget(self.detail_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self.activate_button = KeyboardActionButton("선택한 서버 활성화")
+        self.activate_button.clicked.connect(lambda: self._preview_activation("activate"))
+        layout.addWidget(self.activate_button)
+        self.block_button = KeyboardActionButton("선택한 서버 차단")
+        self.block_button.clicked.connect(lambda: self._preview_activation("block"))
+        layout.addWidget(self.block_button)
+        self.activation_notice = plain_label("", name="runtimeMessage")
+        layout.addWidget(self.activation_notice)
+        self._selection_changed()
         self._set_filters_enabled(False)
         self._update_table_columns()
 
@@ -327,7 +359,11 @@ class ServerListPage(QWidget):
             )
             columns = (
                 (label, ""),
-                (fixed(TRANSPORTS, server.transport), ""),
+                (
+                    fixed(TRANSPORTS, server.transport)
+                    + (" · " + _pin_status(server) if server.executable_pinned is not None else ""),
+                    "",
+                ),
                 (fixed(TIER_NAMES, server.tier), fixed_code(TIERS, server.tier)),
                 (self._label_text(server.max_label), fixed_code(LABELS, server.max_label)),
                 (
@@ -368,6 +404,102 @@ class ServerListPage(QWidget):
 
     def _selection_changed(self) -> None:
         self.detail_button.setEnabled(self._selected_id() is not None)
+        selected = next((s for s in self._servers if s.server_id == self._selected_id()), None)
+        ready = self._activation_bridge is not None and not self._activation_command
+        self.activate_button.setEnabled(
+            ready and selected is not None and selected.registry_status == "pending"
+        )
+        self.block_button.setEnabled(
+            ready and selected is not None and selected.registry_status in ("pending", "active")
+        )
+
+    def attach_activation(self, bridge: BackendBridge) -> None:
+        self._activation_bridge = bridge
+        bridge.registration_changed.connect(self._activation_result)
+        bridge.command_changed.connect(self._activation_command_result)
+        self._selection_changed()
+
+    def _send_activation(self, request: RegistrationRequest) -> None:
+        if self._activation_bridge is None:
+            return
+        self._activation_command = new_command_id()
+        self.activation_notice.setText("서버 설정 처리 중임.")
+        self._selection_changed()
+        self._activation_bridge.request_registration(request, command_id=self._activation_command)
+
+    def _preview_activation(self, action: str) -> None:
+        server_id = self._selected_id()
+        if server_id is None:
+            return
+        self._activation_action = action
+        self._send_activation(RegistrationRequest("activation_preview", server_id))
+
+    def _activation_command_result(self, event: CommandEvent) -> None:
+        if event.command_id == self._activation_command and event.stage in (
+            CommandStage.REJECTED,
+            CommandStage.UNCONFIRMED,
+        ):
+            self._activation_result(RegistrationView("REG_ACTIVATION_UNKNOWN", event.command_id))
+
+    def _activation_result(self, view: RegistrationView) -> None:
+        if not self._activation_command or view.command_id != self._activation_command:
+            return
+        self._activation_command = ""
+        self._selection_changed()
+        if view.code == "REG_ACTIVATION_PREVIEW" and view.activation is not None:
+            action = self._activation_action
+            server = view.activation.servers[0]
+            dialog = ToolAllowDialog(server, view.activation, self)
+            self._activation_dialog = dialog
+            dialog.setWindowTitle("서버 활성화 확인" if action == "activate" else "서버 차단 확인")
+            dialog.warning.setText(
+                "검사 결과 표시는 아직 연결되지 않음. 검사 없이 확인하는 단계임.\n"
+                "종류 미정 도구는 허용할 수 없음. 종류·출처·목적지 설정이 필요함.\n"
+                "저장하면 실행 중인 Task가 모두 정지됨.\n"
+                "다시 시작하면 연결됨. 저장 후 앱을 다시 시작하세요."
+                if action == "activate"
+                else (
+                    "서버의 모든 도구를 차단함. 실행 중인 Task가 정지됨. "
+                    "저장 후 앱을 다시 시작하세요."
+                )
+            )
+            if action == "block":
+                for box in dialog.boxes.values():
+                    box.setChecked(False)
+                    box.setEnabled(False)
+            dialog.save_button.setText("활성화 확인" if action == "activate" else "차단 확인")
+            dialog.accepted.connect(
+                lambda: self._send_activation(
+                    RegistrationRequest(
+                        action,
+                        server.server_id,
+                        expected_row_revision=view.row_revision,
+                        allowed=dialog.selection()[0],
+                        denied=dialog.selection()[1],
+                    )
+                )
+            )
+            dialog.open()
+            self.activation_notice.setText("서버 설정을 확인하세요.")
+            return
+        messages = {
+            **CHANGE_RESULTS,
+            # Unlike a policy-screen save, a failed activation write closes Guard.
+            "POLICY_SAVE_FAILED": "설정을 저장하지 못해 Guard를 정지함. 앱을 다시 시작하세요.",
+            "REG_ACTIVATION_RESTART_REQUIRED": (
+                "서버 설정 저장 완료 · 다시 시작하면 연결됨. 앱을 다시 시작하세요."
+            ),
+            "REG_ACTIVATION_STALE": "서버 상태가 바뀌어 저장하지 않음. 목록을 다시 확인하세요.",
+            "REG_SERVER_UNRECORDED": (
+                "도구 대조 기록을 확인하지 못해 활성화하지 않음. 앱을 다시 시작하세요."
+            ),
+        }
+        self.activation_notice.setText(
+            messages.get(
+                view.code,
+                "서버 설정 결과를 확인하지 못함. 다시 저장하지 말고 앱을 다시 시작하세요.",
+            )
+        )
 
     def select_server(self, server_id: str) -> None:
         self._target_id = server_id

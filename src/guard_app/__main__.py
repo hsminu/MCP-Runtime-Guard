@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import logging
 import os
 import re
 import sys
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
@@ -114,9 +116,33 @@ def main() -> int:
             print(_claim_refusal(error), file=sys.stderr)
             return 1
     confirmed: bool | None = None  # None: _run raised before the backend reported
+    handler: RotatingFileHandler | None = None
+    root = logging.getLogger()
+    previous_level = root.level
     try:
+        if codex is not None:
+            try:
+                handler = RotatingFileHandler(
+                    codex.folders.paths.data / "guard.log",
+                    maxBytes=1024 * 1024,
+                    backupCount=2,
+                    encoding="utf-8",
+                )
+            except OSError:
+                print("로그 파일을 열지 못해 앱을 시작하지 않음", file=sys.stderr)
+                return 1
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+            )
+            root.addHandler(handler)
+            root.setLevel(logging.INFO)
         code, confirmed = _run(args, codex, settings)
     finally:
+        if handler is not None:
+            root.removeHandler(handler)
+            handler.close()
+            root.setLevel(previous_level)
         # Release the single-instance lock unless the backend left cleanup
         # unconfirmed: then the process ends while it still holds the lock.
         if codex is not None and confirmed is not False:
@@ -201,7 +227,7 @@ def _run(
     from PySide6.QtGui import QCloseEvent
     from PySide6.QtWidgets import QApplication
 
-    from guard_app.services.bridge import BackendBridge
+    from guard_app.services.bridge import BackendBridge, BridgeState
     from guard_app.ui.runtime import RuntimePanel
     from guard_app.ui.window import GuardWindow
 
@@ -222,6 +248,10 @@ def _run(
         )
     else:
         from guard_app.security.login_browser import open_login_browser
+        from guard_app.services.codex_preparation import (
+            PRODUCT_SHUTDOWN_TIMEOUT_S,
+            PRODUCT_STARTUP_TIMEOUT_S,
+        )
         from guard_app.services.session_runtime import bootstrap_product
 
         # A101: C's app folders and launcher behind each Task's Codex session.
@@ -230,15 +260,26 @@ def _run(
         # A52: the login screen's app-server and logout cleanup go through it too.
         preparation = codex.preparation()
         account = codex.account_access(open_browser=open_login_browser)
-        db_file = str(codex.db_file)
         bridge = BackendBridge(
             lambda: bootstrap_product(
-                db_file, preparation=preparation, settings=settings, account=account
-            )
+                codex.folders,
+                preparation=preparation,
+                settings=settings,
+                account=account,
+                on_step=lambda step: bridge.store_progress(step),
+            ),
+            startup_timeout=PRODUCT_STARTUP_TIMEOUT_S,
+            shutdown_timeout=PRODUCT_SHUTDOWN_TIMEOUT_S,
         )
+
+        codex.set_progress_listener(bridge.codex_progress)
 
     close_limit_s = bridge.shutdown_timeout + CLOSE_OBSERVATION_S
     closing_since: list[float] = []
+    start_failed: list[bool] = []
+    bridge.lifecycle_changed.connect(
+        lambda event: start_failed.append(True) if event.state is BridgeState.FAILED else None
+    )
 
     class ApplicationWindow(GuardWindow):
         def closeEvent(self, event: QCloseEvent) -> None:
@@ -256,7 +297,15 @@ def _run(
         if bridge.thread_done or overdue:
             app.quit()
 
-    window = ApplicationWindow()
+    if codex is None:
+        window = ApplicationWindow()
+    else:
+        from guard_app.security.secrets import save_scanner_key
+
+        window = ApplicationWindow(
+            scanner_key_saver=save_scanner_key,
+            scanner_key_tail=_scanner_key_tail,
+        )
     panel = RuntimePanel(bridge)
     window.attach_runtime(panel)
     window.set_runtime_context(
@@ -274,7 +323,17 @@ def _run(
     # A quit from elsewhere (session end) also gets the observation window.
     waited_s = time.monotonic() - closing_since[0] if closing_since else 0.0
     done = bridge.wait_done(close_limit_s - waited_s)
-    return code, done and not bridge.cleanup_unconfirmed
+    return (1 if start_failed else code), done and not bridge.cleanup_unconfirmed
+
+
+def _scanner_key_tail() -> str | None:
+    """Only C's safe suffix crosses into the UI; store errors carry no UI text."""
+    from guard_app.security.secrets import ScannerKeyError, scanner_key_tail
+
+    try:
+        return scanner_key_tail()
+    except ScannerKeyError:
+        return None
 
 
 if __name__ == "__main__":

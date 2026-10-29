@@ -12,6 +12,9 @@ from guard_app.security import redact
 
 @pytest.fixture
 def preserve_logging_state(monkeypatch):
+    root = logging.getLogger()
+    handlers = root.handlers[:]
+    level = root.level
     # captureWarnings also keeps its previous showwarning in logging itself.
     for owner, name in (
         (logging, "_logRecordFactory"),
@@ -23,3 +26,10 @@ def preserve_logging_state(monkeypatch):
         (redact, "_active"),
     ):
         monkeypatch.setattr(owner, name, getattr(owner, name))
+    yield
+    for handler in root.handlers[:]:
+        if handler not in handlers:
+            root.removeHandler(handler)
+            handler.close()
+    root.handlers[:] = handlers
+    root.setLevel(level)

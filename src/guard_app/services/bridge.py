@@ -29,6 +29,10 @@ from typing import Any
 
 from PySide6.QtCore import QCoreApplication, QObject, QThread, Signal
 
+from guard_app.domain.enums import StorePrepareStep
+from guard_app.domain.errors import StorePrepareError
+from guard_app.domain.models import RecoveryItemPage as RecoveryItemPage
+from guard_app.domain.models import RecoveryReport as RecoveryReport
 from guard_app.services import catalog_sources
 from guard_app.services.bridge_bindings import BindingsOwner, usable
 from guard_app.services.bridge_commands import (
@@ -43,6 +47,7 @@ from guard_app.services.bridge_ingress import (
     CommandLedger,
     IngressItem,
     account_command,
+    bridge_id,
     control_command,
     ingress_lane,
     message_command,
@@ -53,6 +58,7 @@ from guard_app.services.bridge_ingress import (
 from guard_app.services.bridge_ingress import new_command_id as new_command_id
 from guard_app.services.bridge_ingress import new_draft_key as new_draft_key
 from guard_app.services.bridge_lanes import CommandLanes
+from guard_app.services.bridge_registration import endpoint_input as endpoint_input
 from guard_app.services.bridge_streams import MAX_PARTIAL_CHARS as MAX_PARTIAL_CHARS
 from guard_app.services.bridge_streams import PARTIAL_FLUSH_S as PARTIAL_FLUSH_S
 from guard_app.services.bridge_streams import AnswerStreams
@@ -69,6 +75,8 @@ from guard_app.services.bridge_types import CommandStage as CommandStage
 from guard_app.services.bridge_types import ControlAction as ControlAction
 from guard_app.services.bridge_types import ConversationEvent as ConversationEvent
 from guard_app.services.bridge_types import LifecycleEvent as LifecycleEvent
+from guard_app.services.bridge_types import RegistrationRequest as RegistrationRequest
+from guard_app.services.bridge_types import RegistrationView as RegistrationView
 from guard_app.services.bridge_types import SessionCreated as SessionCreated
 from guard_app.services.bridge_types import SessionOptions as SessionOptions
 from guard_app.services.bridge_types import SessionStartError as SessionStartError
@@ -77,6 +85,7 @@ from guard_app.services.codex_account import AccountView as AccountView  # UI re
 from guard_app.services.policy_view import PolicyServer as PolicyServer  # UI re-export
 from guard_app.services.policy_view import PolicyTool as PolicyTool  # UI re-export
 from guard_app.services.policy_view import PolicyView as PolicyView  # UI re-export
+from guard_app.services.session_preparation import L2_FAILURE_CODES as L2_FAILURE_CODES
 
 
 def valid_server_id(server_id: object) -> bool:
@@ -171,6 +180,9 @@ class BackendBridge(QObject):
     account_changed = Signal(object)
     policy_changed = Signal(object)
     settings_changed = Signal(object)
+    registration_changed = Signal(object)
+    recovery_changed = Signal(object)
+    recovery_page_changed = Signal(object)
 
     def __init__(
         self,
@@ -195,6 +207,7 @@ class BackendBridge(QObject):
         )
         super().__init__()
         self._bootstrap = bootstrap
+        self._recovery_loading = False
         self._start_gate = _PROCESS_START_GATE if start_gate is None else start_gate
         self._start_owner = object()
         self._state_code = "NEW"
@@ -222,6 +235,7 @@ class BackendBridge(QObject):
             session_capability=self.session_capability_changed.emit,
             account_changed=self.account_changed.emit,
             policy_changed=self.policy_changed.emit,
+            registration_changed=self.registration_changed.emit,
         )
         self._streams = AnswerStreams(self.conversation_partial.emit, stopped)
         self._views = TaskViews(self._bindings, outlet, stopped, self._consume_task)
@@ -330,6 +344,30 @@ class BackendBridge(QObject):
 
         self._require_qt_thread()
         return self._submit(policy_command(server_id, allowed, denied))
+
+    def request_registration(
+        self, request: RegistrationRequest, *, command_id: str | None = None
+    ) -> str:
+        self._require_qt_thread()
+        if type(request) is not RegistrationRequest or request.action not in (
+            "prepare",
+            "confirm",
+            "recheck",
+            "list",
+            "activation_preview",
+            "activate",
+            "block",
+        ):
+            raise ValueError("REG_REQUEST_INVALID")
+        return self._submit(
+            BridgeCommand(
+                bridge_id(command_id, generate=True),
+                "control",
+                "registration",
+                "registry",
+                registration=request,
+            )
+        )
 
     def request_new_session(
         self, draft_key: str, options: SessionOptions, *, command_id: str | None = None
@@ -583,7 +621,9 @@ class BackendBridge(QObject):
             return_when=asyncio.FIRST_COMPLETED,
         )
         if boot not in done or boot.cancelled() or boot.exception() is not None:
-            self._end_startup(await self._bindings.discard(boot), "STARTUP_FAILED")
+            error = boot.exception() if boot.done() and not boot.cancelled() else None
+            code = error.code.value if isinstance(error, StorePrepareError) else "STARTUP_FAILED"
+            self._end_startup(await self._bindings.discard(boot), code)
             return None
         adopted = self._bindings.adopt(boot)
         bindings = self._bindings.current
@@ -626,12 +666,46 @@ class BackendBridge(QObject):
         )
         self.policy_changed.emit(bindings.policy)
         status = bindings.settings_status
+        self.recovery_changed.emit(bindings.recovery_report)
+        self.recovery_page_changed.emit(bindings.recovery_page)
         self.settings_changed.emit(status if type(status) is str else None)
         if bindings.task_events is not None:
             bindings.task_events(self._views.task_event)
         if bindings.answer_partials is not None:
             bindings.answer_partials(self._streams.add)
         self._set_state(BridgeState.READY, "READY")
+
+    def codex_progress(self, code: str) -> None:
+        """Only the fixed startup phase crosses to Qt."""
+        if code == "CODEX_L2_CHECK" and self.state is BridgeState.STARTING:
+            self.lifecycle_changed.emit(LifecycleEvent(BridgeState.STARTING, code))
+
+    def store_progress(self, step: StorePrepareStep) -> None:
+        """Backend-loop callback; fixed progress values only, no state transition."""
+        if isinstance(step, StorePrepareStep) and self.state is BridgeState.STARTING:
+            self.lifecycle_changed.emit(LifecycleEvent(BridgeState.STARTING, step.value))
+
+    def load_recovery_page(self) -> None:
+        loop = self._loop
+        if loop is not None and self.state is BridgeState.READY:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._start_recovery_page)
+
+    def _start_recovery_page(self) -> None:
+        bindings = self._bindings.current
+        if self._recovery_loading or bindings is None or bindings.recovery_next is None:
+            return
+        self._recovery_loading = True
+        task = asyncio.ensure_future(bindings.recovery_next())
+
+        def finished(result: asyncio.Future[RecoveryItemPage]) -> None:
+            self._recovery_loading = False
+            if result.cancelled() or result.exception() is not None:
+                self.recovery_page_changed.emit(None)
+            elif self.state is BridgeState.READY:
+                self.recovery_page_changed.emit(result.result())
+
+        task.add_done_callback(finished)
 
     async def _shut_down(self) -> None:
         self._set_state(BridgeState.CLOSING, "CLOSING")

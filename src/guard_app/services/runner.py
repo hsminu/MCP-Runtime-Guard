@@ -102,11 +102,13 @@ class CodexTaskRunner:
         epoch: int,
         session: CodexSession,
         failure: Callable[[str], Awaitable[None]],
+        execution_allowed: Callable[[], bool] | None = None,
     ) -> None:
         self.task_id = task_id
         self.epoch = epoch
         self._session = session
         self._failure = failure
+        self._execution_allowed = execution_allowed
         self._input: str | None = None
         self._effort: str | None = None
         self._closed = False
@@ -165,7 +167,11 @@ class CodexTaskRunner:
         Any other exception reaches advance(), which halts with CODEX_SESSION_FAILED.
         """
         try:
+            if self._execution_allowed is not None and not self._execution_allowed():
+                return "CODEX_STORE_HALTED", ""
             response = await self._session.send(text, effort)
+            if self._execution_allowed is not None and not self._execution_allowed():
+                return "CODEX_STORE_HALTED", ""
         except CodexSessionError as error:
             return error.code, ""
         if type(response) is not str or len(response) > 65_536:

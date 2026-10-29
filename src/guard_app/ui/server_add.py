@@ -9,14 +9,12 @@ and headers in it are never kept, only environment variable names.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import re
 import tomllib
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from PySide6.QtCore import QDir, Qt, Signal
 from PySide6.QtGui import QResizeEvent
@@ -35,9 +33,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from guard_app.services.bridge import valid_server_id
+from guard_app.services.bridge import (
+    BackendBridge,
+    BridgeState,
+    CommandEvent,
+    CommandStage,
+    LifecycleEvent,
+    RegistrationRequest,
+    RegistrationView,
+    endpoint_input,
+    new_command_id,
+    valid_server_id,
+)
 
 from .presentation import LABELS, TIER_NAMES, is_hidden_char
+from .untrusted_text import untrusted_display_text
 from .widgets import KeyboardActionButton, SelectionBox, plain_label
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -51,9 +61,6 @@ _MAX_PASTE_CHARS = 65_536
 _MAX_SUGGESTED_ID_CHARS = 64
 _SLUG_GAP = re.compile(r"[^a-z0-9]+")
 _CODEX_TOML_SERVER = re.compile(r"^\s*\[mcp_servers\.", re.MULTILINE)
-# Numeric host spellings (decimal, octal, hex, dotted or not) that resolvers
-# may accept as an IPv4 address even though they are not dotted-quad text.
-_NUMERIC_HOST = re.compile(r"(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*\.?\Z")
 
 
 def _has_hidden_char(value: str) -> bool:
@@ -138,44 +145,29 @@ def _command_error(command: str) -> str | None:
     return None
 
 
+URL_MESSAGES = {
+    "URL_INVALID": "URL에는 공백·제어 문자·역슬래시를 넣지 말고 전체 주소를 입력하세요.",
+    "URL_SCHEME": "https 주소를 입력하세요. http는 루프백 IP에만 허용됨.",
+    "URL_USERINFO": "URL에서 계정·암호를 제거하세요.",
+    "URL_QUERY": "URL에서 쿼리(?)를 제거하세요.",
+    "URL_FRAGMENT": "URL에서 fragment(#)를 제거하세요.",
+    "URL_HOST": "호스트를 확인하세요. IPv4는 네 개의 십진수로 입력하고 끝 점·인코딩을 제거하세요.",
+    "URL_IDNA": "국제화 도메인 이름 형식이 맞지 않음. 호스트 이름을 확인하세요.",
+    "URL_PORT": "포트는 1–65535 사이로 입력하세요.",
+    "URL_PATH": "경로의 인코딩·점(.)·상위 경로(..)·빈 구간을 제거하세요.",
+    "URL_ADDRESS_FORBIDDEN": (
+        "링크 로컬·메타데이터·미지정·멀티캐스트·예약 주소 및 IPv4 포함 IPv6는 사용할 수 없음."
+    ),
+    "URL_HTTP_NOT_LOOPBACK": (
+        "http는 루프백 IP(127.0.0.1 또는 [::1])만 허용됨. https를 사용하세요."
+    ),
+    "URL_NOT_CANONICAL": "정규화된 URL을 확인하세요.",
+}
+
+
 def _url_error(url: str) -> str | None:
-    if any(char.isspace() for char in url) or _has_hidden_char(url):
-        return "URL에는 공백, 제어 문자, 보이지 않는 문자를 넣지 마세요."
-    if "\\" in url:
-        return "URL에 역슬래시(\\)를 넣지 마세요. 주소창에서는 다른 호스트로 해석될 수 있음."
-    try:
-        parts = urlsplit(url)
-        port = parts.port
-        host = parts.hostname or ""
-        valid = (
-            parts.scheme in ("http", "https")
-            and bool(host)
-            and "@" not in parts.netloc
-            and not parts.query
-            and not parts.fragment
-        )
-    except ValueError:
-        valid = False
-    if not valid:
-        return "http(s) 전체 URL만 입력하세요. 계정·암호·쿼리·fragment는 제외하세요."
-    if port == 0:
-        return "포트는 1–65535 사이로 입력하세요."
-    if not host.isascii():
-        return "호스트 이름은 ASCII로 입력하세요. 국제화 도메인은 xn-- 형식으로 바꿔 입력하세요."
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        if _NUMERIC_HOST.fullmatch(host):
-            return "IP 주소는 점으로 구분한 네 개의 십진수(예: 10.0.0.1)로 입력하세요."
-        return None
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
-        address = address.ipv4_mapped
-    if address.is_link_local or address.is_unspecified or address.is_multicast:
-        return (
-            "링크 로컬·클라우드 메타데이터(169.254.x.x 등)·미지정·멀티캐스트 주소는 "
-            "MCP endpoint로 쓸 수 없음."
-        )
-    return None
+    _, code = endpoint_input(url)
+    return None if code is None else URL_MESSAGES[code]
 
 
 def _parse_stdio_args(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
@@ -360,6 +352,9 @@ class ServerAddForm(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._registration_bridge: BackendBridge | None = None
+        self._registration_id = ""
+        self._registration_token = ""
         self._known_ids: frozenset[str] = frozenset()
         self._validated_draft: LocalServerDraft | None = None
         self._prepared = False
@@ -476,11 +471,21 @@ class ServerAddForm(QWidget):
         self.status = plain_label(name="draftStatus")
         outer.addWidget(self.status)
         actions = QHBoxLayout()
+        self._registration_actions = actions
         self.prepare_button = KeyboardActionButton("입력 확인")
         self.prepare_button.set_visual(icon="check", variant="primary")
         self.prepare_button.setObjectName("prepareDraftButton")
         self.prepare_button.setAccessibleName("입력 형식 확인")
         actions.addWidget(self.prepare_button)
+        self.confirm_button = KeyboardActionButton("확인한 내용으로 등록")
+        self.confirm_button.setEnabled(False)
+        self.confirm_button.hide()
+        self.confirm_button.clicked.connect(self._confirm_registration)
+        actions.addWidget(self.confirm_button)
+        self.recheck_button = KeyboardActionButton("기존 실행 파일 다시 확인")
+        self.recheck_button.hide()
+        self.recheck_button.clicked.connect(self._recheck_registration)
+        actions.addWidget(self.recheck_button)
         actions.addStretch(1)
         outer.addLayout(actions)
         scroll.setWidget(content)
@@ -512,7 +517,8 @@ class ServerAddForm(QWidget):
         """Optional local duplicate hint; backend uniqueness remains authoritative."""
 
         self._known_ids = frozenset(ids)
-        self._input_changed()
+        if self._registration_bridge is None:
+            self._input_changed()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -520,6 +526,9 @@ class ServerAddForm(QWidget):
         if compact == self._compact_form:
             return
         self._compact_form = compact
+        self._registration_actions.setDirection(
+            QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight
+        )
         policy = (
             QFormLayout.RowWrapPolicy.WrapAllRows
             if compact
@@ -658,6 +667,9 @@ class ServerAddForm(QWidget):
         form.addRow(_form_label(title), wrapper)
 
     def _input_changed(self, *_args: object) -> None:
+        self._registration_id = ""
+        self._registration_token = ""
+        self.confirm_button.setEnabled(False)
         self._prepared = False
         self._validated_draft = None
         self._refresh()
@@ -749,13 +761,15 @@ class ServerAddForm(QWidget):
             else:
                 env_allow = names
         else:
-            url = self.url.text().strip()
+            url = self.url.text()
             if not url:
                 errors["url"] = "전체 MCP endpoint URL을 입력하세요."
             elif len(url) >= self.url.maxLength():
                 errors["url"] = "URL이 입력 칸 한도를 넘어 잘렸을 수 있음. 주소를 확인하세요."
             elif (url_error := _url_error(url)) is not None:
                 errors["url"] = url_error
+            else:
+                url, _ = endpoint_input(url)
 
         if errors:
             return None, errors
@@ -818,7 +832,13 @@ class ServerAddForm(QWidget):
             if draft is not None
             else "입력 오류를 고치면 등록할 내용이 표시됨."
         )
-        self.status.setText(STATUS_CHECKED if self._prepared else STATUS_IDLE)
+        self.status.setText(
+            "등록 전 내용을 확인하세요. 등록 후에도 검사·활성화 전에는 실행되지 않음."
+            if self._registration_bridge is not None
+            else STATUS_CHECKED
+            if self._prepared
+            else STATUS_IDLE
+        )
 
     def _prepare_local_draft(self) -> None:
         if self._prepared:
@@ -830,7 +850,140 @@ class ServerAddForm(QWidget):
         self._validated_draft = draft
         self._prepared = True
         self._refresh()
-        self.local_draft_prepared.emit(self._preview_for(draft))
+        if self._registration_bridge is not None:
+            self._send_registration(
+                RegistrationRequest(
+                    "prepare",
+                    draft.server_id,
+                    draft.transport,
+                    draft.tier,
+                    draft.max_label,
+                    draft.command,
+                    draft.args or (),
+                    draft.env_allow or (),
+                    draft.url,
+                )
+            )
+        else:
+            self.local_draft_prepared.emit(self._preview_for(draft))
+
+    def attach_registration(self, bridge: BackendBridge) -> None:
+        self._registration_bridge = bridge
+        self.prepare_button.setText("등록 내용 확인")
+        self.confirm_button.show()
+        self.recheck_button.show()
+        bridge.registration_changed.connect(self._registration_result)
+        bridge.command_changed.connect(self._registration_command)
+        bridge.lifecycle_changed.connect(self._registration_lifecycle)
+        self._refresh()
+
+    def _registration_lifecycle(self, event: LifecycleEvent) -> None:
+        if event.state is BridgeState.READY and self._registration_bridge is not None:
+            self._registration_bridge.request_registration(RegistrationRequest("list"))
+        elif event.state in (BridgeState.CLOSING, BridgeState.CLOSED, BridgeState.FAILED):
+            self._registration_id = ""
+            self._registration_token = ""
+            self.confirm_button.setEnabled(False)
+            self.prepare_button.setEnabled(False)
+            self.recheck_button.setEnabled(False)
+
+    def _send_registration(self, request: RegistrationRequest) -> None:
+        bridge = self._registration_bridge
+        if bridge is None:
+            return
+        self._registration_id = new_command_id()
+        self.confirm_button.setEnabled(False)
+        self.prepare_button.setEnabled(False)
+        self.recheck_button.setEnabled(False)
+        self.status.setText("확인 중 · 아직 등록 결과가 아님.")
+        bridge.request_registration(request, command_id=self._registration_id)
+
+    def _confirm_registration(self) -> None:
+        token = self._registration_token
+        self._registration_token = ""
+        if token:
+            self._send_registration(RegistrationRequest("confirm", token=token))
+
+    def _recheck_registration(self) -> None:
+        self._registration_token = ""
+        self._send_registration(
+            RegistrationRequest("recheck", server_id=self.server_id.text().strip())
+        )
+
+    def _registration_command(self, event: CommandEvent) -> None:
+        if event.command_id == self._registration_id and event.stage in (
+            CommandStage.REJECTED,
+            CommandStage.UNCONFIRMED,
+        ):
+            self._registration_result(
+                RegistrationView("REG_UNCONFIRMED", command_id=event.command_id)
+            )
+
+    def _registration_result(self, view: RegistrationView) -> None:
+        if view.command_id != self._registration_id:
+            return
+        self._registration_id = ""
+        self._registration_token = view.token
+        self.recheck_button.setEnabled(True)
+        self._prepared = False
+        self._refresh()
+        if view.token:
+            lines = []
+            if view.command is not None:
+                lines = [
+                    "실행 파일: " + untrusted_display_text(view.command)[0],
+                    f"크기: {view.size} bytes",
+                    f"SHA-256: {view.sha256}",
+                    "지문은 실행 파일만 포함함. 스크립트·패키지는 포함하지 않음.",
+                ]
+            elif view.url is not None:
+                self.url.blockSignals(True)
+                self.url.setText(view.url)
+                self.url.blockSignals(False)
+                lines = ["정규화 URL: " + view.url]
+            self.preview.setPlainText(chr(10).join(lines))
+            self.confirm_button.setEnabled(True)
+            self.status.setText(
+                "실행 파일 지문이 바뀜. 다시 확인하세요."
+                if view.code == "REG_PIN_CHANGED"
+                else "표시된 내용을 확인한 뒤 등록 버튼을 누르세요."
+            )
+            return
+        self.confirm_button.setEnabled(False)
+        messages = {
+            "REG_REGISTERED": (
+                "Registry 등록·설정 저장 완료 · PENDING. 검사·활성화 전에는 실행되지 않음."
+            ),
+            "REG_PIN_SAVED": "실행 파일 지문 저장 완료 · 다시 연결하려면 앱을 재시작하세요.",
+            "REG_SERVER_EXISTS": (
+                "이미 등록된 ID임. 새 ID를 입력하거나 기존 실행 파일을 다시 확인하세요."
+            ),
+            "REG_STORE_UNKNOWN": "등록 저장 결과 불명. 재등록하지 말고 앱을 재시작해 확인하세요.",
+            "REG_SETTINGS_SAVE_FAILED": (
+                "설정 저장 실패 · Registry 행은 남아 있을 수 있음. 앱을 재시작해 확인하세요."
+            ),
+            "REG_EXECUTABLE_INVALID": (
+                "실행 파일·인자·환경변수 검증 거부. 파일과 입력을 확인하세요."
+            ),
+            "REG_SERVER_UNREACHABLE": (
+                "서버에 연결하지 못해 등록하지 않음. 서버를 확인한 뒤 다시 등록하세요."
+            ),
+            "REG_LISTING_INVALID": (
+                "도구 목록을 끝까지 받지 못했거나 등록 조건에 맞지 않아 등록하지 않음. "
+                "서버를 확인한 뒤 다시 등록하세요."
+            ),
+            "REG_UNAVAILABLE": "등록 서비스가 연결되지 않음.",
+            "REG_RECHECK_UNAVAILABLE": ("설정과 Registry에 있는 stdio 서버 ID를 입력하세요."),
+            "REG_CONFIRM_EXPIRED": "확인 내용이 만료됨. 등록 내용을 다시 확인하세요.",
+        }
+        self.status.setText(
+            messages.get(
+                view.code,
+                URL_MESSAGES.get(
+                    view.code, "등록 완료를 확인하지 못함. 입력을 확인하거나 앱을 재시작하세요."
+                ),
+            )
+        )
 
 
 # ---- 로컬 파일 MCP 서버의 폴더 등급 (contracts 2026-10-15 로컬 파일 접근 결정) ----

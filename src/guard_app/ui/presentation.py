@@ -6,6 +6,8 @@ import unicodedata
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 
+from guard_app.services.bridge import L2_FAILURE_CODES
+
 # Current operational records use KST (UTC+09:00). This avoids a runtime tzdata
 # dependency on Windows; historical Korea daylight-saving dates need a separate
 # Asia/Seoul database decision before they can be displayed as local time.
@@ -196,6 +198,33 @@ APPROVAL_RESULTS = {
 # Bridge lifecycle codes -> current backend state for the operator. The code
 # itself stays visible only as secondary text.
 LIFECYCLE_MESSAGES = {
+    "CODEX_L2_CHECK": "Codex 시작 검사 중 · 잠시 기다리세요.",
+    "STORE_CHECK": "저장소 구조 확인 중",
+    "STORE_BACKUP": "이관 전 저장소 백업 중",
+    "STORE_MIGRATE": "저장소 이관 중",
+    "STORE_VERIFY": "저장소 이관 결과 검증 중",
+    "STORE_RECOVER": "이전 실행의 미종결 작업 정리 중",
+    "STORE_SCHEMA_UNSUPPORTED": (
+        "지원하지 않는 저장소 구조로 시작하지 않음. 저장소 버전을 확인한 뒤 앱을 다시 시작하세요."
+    ),
+    "STORE_INTEGRITY_FAILED": (
+        "저장소 무결성을 확인하지 못해 시작하지 않음. 저장소를 점검한 뒤 앱을 다시 시작하세요."
+    ),
+    "STORE_RECOVERY_UNRESOLVED": (
+        "이전 실행 상태를 정리하지 못해 시작하지 않음. 저장소를 점검한 뒤 앱을 다시 시작하세요."
+    ),
+    "STORE_BACKUP_FAILED": (
+        "백업을 완료하지 못해 시작하지 않음. 저장 공간과 권한을 확인한 뒤 앱을 다시 시작하세요."
+    ),
+    "STORE_MIGRATION_FAILED": (
+        "저장소 이관을 완료하지 못해 시작하지 않음. 저장소를 점검한 뒤 앱을 다시 시작하세요."
+    ),
+    "STORE_COMMIT_UNKNOWN": "저장소 변경 완료를 확인하지 못해 시작하지 않음. 앱을 다시 시작하세요.",
+    "STORE_DEADLINE_EXCEEDED": "저장소 준비 제한 시간을 넘겨 시작하지 않음. 앱을 다시 시작하세요.",
+    "STORE_IO_FAILED": (
+        "저장소를 읽거나 쓰지 못해 시작하지 않음. "
+        "저장 공간과 권한을 확인한 뒤 앱을 다시 시작하세요."
+    ),
     "PROCESS_RESTART_REQUIRED": "정리 확인 실패 · 프로그램을 다시 시작하세요.",
     "BACKEND_ALREADY_ACTIVE": "이전 백엔드가 아직 종료되지 않음 · 프로그램을 다시 시작하세요.",
     "STARTING": "백엔드 시작 중 · 준비되면 실행할 수 있음.",
@@ -255,12 +284,16 @@ _CODEX_FAILURE_DETAILS = {
     "SETTINGS_PROFILE_INVALID": "설정 파일의 Guard 정책(Profile) 내용이 올바르지 않음.",
     "REGISTRY_UNAVAILABLE": "서버 등록 기록을 불러오지 못함.",
 }
+_CODEX_FAILURE_DETAILS.update(dict.fromkeys(L2_FAILURE_CODES, "Codex 시작 검사를 통과하지 못함."))
 # What the start made of the CFG-01 settings file (settings screen). The file
 # location is fixed (C2.13), never a path the backend reported.
 SETTINGS_FILE_LOCATION = r"%LOCALAPPDATA%\MCPRuntimeGuard\config\settings.json"
 SETTINGS_FILE_PENDING = "설정 파일을 아직 확인하지 않음."
 SETTINGS_FILE_NOT_READ = "이 실행은 설정 파일을 읽지 않음(시연)."
 SETTINGS_FILE_STATUS = {
+    "SETTINGS_REGISTRATION_SAVED": (
+        "서버 등록 설정을 저장함. 첫 설정·실행 파일 변경 후에는 앱을 다시 시작하세요."
+    ),
     "SETTINGS_LOADED": "설정 파일을 읽고 Guard 정책(Profile)을 확인함.",
     "SETTINGS_FILE_MISSING": (
         "설정 파일이 없음(첫 실행). Guard 정책이 없어 새 세션을 시작할 수 없음. "
@@ -319,6 +352,14 @@ _CODEX_STOP_NOTICES = {
         "Codex 중단을 확인하지 못함. 앱을 종료하고 정리 상태를 확인하세요."
     ),
     "CODEX_SESSION_FAILED": "Codex 세션이 실패해 이 Task를 정지함. 새 세션에서 다시 시작하세요.",
+    "REG_PIN_RESTART_REQUIRED": "실행 파일 지문을 저장함. 다시 연결하려면 앱을 재시작하세요.",
+    "REG_ACTIVATION_RESTART_REQUIRED": (
+        "서버 설정 저장 완료 · 다시 시작하면 연결됨. 앱을 다시 시작하세요."
+    ),
+    "REG_ACTIVATION_UNKNOWN": (
+        "서버 설정 결과를 확인하지 못해 Guard를 정지함. 앱을 다시 시작하세요."
+    ),
+    "CODEX_STORE_HALTED": "저장소 실행 권한이 닫혀 모든 세션을 정지함. 앱을 다시 시작하세요.",
 }
 
 

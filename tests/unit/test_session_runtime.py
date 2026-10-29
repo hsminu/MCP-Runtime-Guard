@@ -28,6 +28,8 @@ from guard_app.services.session_preparation import (
 from guard_app.services.session_runtime import SessionRuntime, SessionRuntimeError
 from guard_app.storage.sqlite_store import SQLiteStore
 
+from .product_folders import product_folders
+
 
 class Session:
     def __init__(self):
@@ -640,7 +642,7 @@ def test_product_bootstrap_without_c_components_starts_and_refuses_sessions(tmp_
     from guard_app.services.session_runtime import bootstrap_product
 
     async def run():
-        bindings = await bootstrap_product(str(tmp_path / "product.db"))
+        bindings = await bootstrap_product(product_folders(str(tmp_path / "product.db")))
         try:
             assert bindings.settings_status is None
             assert bindings.human_control is None
@@ -671,7 +673,8 @@ def test_product_bootstrap_starts_and_keeps_a_startup_refusal_as_the_blocker(tmp
 
     async def run():
         bindings = await bootstrap_product(
-            str(tmp_path / "failed.db"), preparation=replace(preparation, prepare_startup=startup)
+            product_folders(str(tmp_path / "failed.db")),
+            preparation=replace(preparation, prepare_startup=startup),
         )
         try:
             assert bindings.session_blocker is not None

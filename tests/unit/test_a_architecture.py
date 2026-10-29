@@ -19,6 +19,7 @@ A_SERVICES = frozenset(
         "bridge_bindings",
         "bridge_commands",
         "bridge_ingress",
+        "bridge_registration",
         "bridge_lanes",
         "bridge_streams",
         "bridge_types",
@@ -35,6 +36,7 @@ A_SERVICES = frozenset(
         "runner",
         "session_admission",
         "session_cleanup",
+        "session_execution",
         "session_policy",
         "session_preparation",
         "session_runtime",
@@ -246,7 +248,9 @@ def _no_risky_operation_or_output_channel(module: str, path: Path) -> None:
     if module != "__main__":
         assert "os" not in roots  # the entry point's os._exit only (A110)
     if "logging" in roots:
-        assert module == f"{TRANSPORT}.sdk_logging"  # installs the redacting record factory
+        # A147: the entry point owns the rotating file handler after C redaction.
+        # The transport installs its scoped redacting record factory.
+        assert module in {"__main__", f"{TRANSPORT}.sdk_logging"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             assert node.func.id not in FORBIDDEN_CALLS, node.func.id
@@ -313,3 +317,64 @@ def test_module_security_rules() -> None:
             except AssertionError as error:
                 failures.append((check.__name__, module, str(error)))
     assert not failures, failures
+
+
+def test_product_stdio_spawn_is_confined_to_c_launcher() -> None:
+    """A09 / I1 / EXE-01: SDK process creation belongs only to the demo factory."""
+    for module, path in a_modules():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "mcp.client.stdio":
+                assert module in {TRANSPORT, f"{TRANSPORT}.streams"}
+        if module == f"{TRANSPORT}.streams":
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.name == "stdio_stream_factory":
+                        continue
+                    assert not any(
+                        isinstance(child, ast.Name) and child.id == "stdio_client"
+                        for child in ast.walk(node)
+                    )
+        elif module != TRANSPORT:
+            assert not any(
+                isinstance(node, ast.Name) and node.id in {"stdio_client", "stdio_stream_factory"}
+                for node in ast.walk(tree)
+            )
+    product = ast.parse((SRC / "services/product_assembly.py").read_text(encoding="utf-8"))
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "launcher_stdio_stream_factory"
+        for node in ast.walk(product)
+    )
+
+
+def test_product_inputs_never_inject_streams_in_application_source() -> None:
+    """A09 / I1 / EXE-01: only tests and examples may supply streams."""
+    for path in SRC.rglob("*.py"):
+        tree = _tree(path)
+        constructors = {"ProductInputs"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                constructors.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "ProductInputs"
+                )
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else None
+            )
+            if name in constructors:
+                assert len(node.args) <= 5, (path, node.lineno)
+                assert not any(isinstance(arg, ast.Starred) for arg in node.args)
+                assert all(kw.arg not in {None, "server_streams"} for kw in node.keywords), (
+                    path,
+                    node.lineno,
+                )

@@ -13,11 +13,10 @@
 | 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
 | T43/T46·수신 상한 독립 인수(C5.8) ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A52 |
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
-| Codex 로그인 URL 검증·기본 브라우저 열기 입구와 독립 검증([#77](https://github.com/hsminu/MCP-Runtime-Guard/pull/77), A 리뷰 막는 문제 없음) | C | A109 제품 브라우저 로그인 |
-| mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145가 main에 들어간 뒤 C가 올림 | C | A144 |
-| C6.18 권고(제출·시연 기본 로그인은 API 키, OpenAI 제휴 암시 금지) 반영 여부([#79](https://github.com/hsminu/MCP-Runtime-Guard/pull/79)) | 사용자 | A148 |
+| mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
+| 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
 
-**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49, #63·#64·#67 병합됨), C2.10 키 입력 화면 연결(#60, A 브랜치에 병합됨), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드는 #58로 병합됨), EXE-01 지문 확인 화면(A128), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 먼저).
+**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49, #63·#64·#67 병합됨), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
 
 ## 계약·환경
 
@@ -26,7 +25,9 @@
 - [x] A02·A06 AGT core 5.0.0 포함 lock, Python 3.12 새 환경 설치 재현
 - [x] A02·A06 AGT 제거 뒤 lock·새 환경 설치 재확인 · [기록](archive/a/A02-A06-lock-recheck-after-agt-removal.md)
 - [ ] A02·A06 Scanner 포함 공통 제품 조합 인수 — 막힘: C 조합 인수(main lock에는 Scanner 포함, #6)
-- [ ] A04 C Registry 제품 연결 — A 차례: Registry 구현 병합, A128 등록·활성화 연결
+- [x] A04 C Registry 제품 등록(PENDING·설정 저장·목록 복원) 연결 · [기록](archive/a/A128-registry-registration.md)
+- [x] A04 C Registry 제품 활성화·차단을 정책 잠금으로 연결 · [기록](archive/a/A105-activation-lock.md)
+- [ ] A04 활성화·차단 독립 수신·부작용 인수 — 막힘: C T/S
 - [x] A05 앱 내부 Task projection·사람 review 연결
 - [ ] A05 공통 조회 DTO — 막힘: B·C 계약 검토
 
@@ -36,20 +37,22 @@
 - [ ] A07·A11 정식 C 수신 fixture로 인수 — 막힘: C fixture
 - [x] A08·A12 Streamable HTTP adapter·loopback 왕복·JSON/SSE·재전송 차단 · [기록](archive/tasks/a-http-integration.md)
 - [x] A08 HTTP 연결 직전 endpoint를 C `canonical_endpoint`(C2.5, #50)로 다시 검사 · [기록](archive/a/A08-canonical-endpoint.md)
-- [ ] A08 등록 화면·A128 붙여넣기의 URL 확인을 C `normalize_endpoint`·거부 코드별 문구로 — A 차례(#52 C 리뷰)
+- [x] A08 등록 화면·A128 붙여넣기의 URL 확인을 C `normalize_endpoint`·거부 코드별 문구로(#52 C 리뷰) · [기록](archive/a/A128-registry-registration.md)
 - [ ] A08·A12 독립 fixture 인수·인증 확장 — 막힘: C
 - [x] A09·A10 worker 구현·회귀 검증
 - [x] A09·A10 `tools/list` 수집과 도구 수·페이지·깊이·시간 상한 · [기록](archive/a/A09-A10-tools-list-collection.md)
 - [x] A57 수집 시간 기준(연결 포함·초기화 시작부터)·반복 cursor·중복 이름·수집 중 종료 보정 · [기록](archive/a/A57-tools-list-timing-and-loop-rules.md)
 - [x] A76 `tools/list` 파싱 전 페이지 1MiB·조회 누적 8MiB와 주입형 MCP 파이프 연결 · [기록](archive/a/A76-mcp-listing-byte-ingress.md)
 - [x] A77 HTTP JSON·SSE 압축 해제 후 바이트 제한·종료 확인과 실패 격리 · [기록](archive/a/A77-http-listing-byte-ingress.md)
-- [ ] A09·A10 C launcher 파이프 실제 연결·수신 상한 독립 인수 — A 차례(EXE-01 B 필드 #58·C2.6 #54 병합됨). 독립 인수는 C5.8([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6247463861))
+- [x] A09·A10 제품 stdio를 C launcher 파이프로 연결, 연결별 종료 확인·시작 실패 격리 · [기록](archive/a/A09-launcher-pipes.md)
+- [ ] A09·A10 launcher 파이프 수신 상한 독립 인수 — 막힘: C5.8([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6247463861))
 - [x] A13 미종결 거부·정리 미확인 재시작 차단, SQLite 같은 스레드 종료 순서(W1)
-- [ ] A13 이전 Task 종결·시작 복구 — A 차례: B6.8 시작 복구 병합(#69), 연결은 A138. C 인수 남음
+- [x] A13 이전 Task 종결·명시 시작 복구 제품 연결(B6.8 #69) · [기록](archive/a/A138-product-store-startup.md)
+- [ ] A13 시작 복구의 실제 강제 종료·재시작·부작용 계수 — 막힘: C 독립 인수
 - [x] A14 errlog 필수·SDK·합성 HTTP 서버 로그 격리
 - [ ] A14 공개 handler 인수 — 막힘: C 로그 정책(A39와 함께)
-- [ ] A146 제품 진입점(`__main__`) 맨 앞에서 C `install_log_redaction()` 호출. 시험이 부르는 조립 함수에는 넣지 않음([#74 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/74#issuecomment-6488073755)) — A 차례: C2.8 [#74](https://github.com/hsminu/MCP-Runtime-Guard/pull/74) 병합됨, main(#73·#74)을 A 브랜치에 합친 뒤
-- [ ] A147 제품 로그 handler(위치·크기 상한) 정하기. 지금은 handler가 없어 창 앱에서 로그가 보이지 않음(#74 A 리뷰) — A 차례, A14와 같이
+- [x] A146 제품 진입점(`__main__`) 맨 앞에서 C `install_log_redaction()` 호출, 시험이 부르는 조립 함수에는 넣지 않음([#74 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/74#issuecomment-6488073755)) · [기록](archive/a/A146-log-redaction-install.md)
+- [x] A147 제품 로그 handler(앱 폴더 `data\guard.log`, 1 MiB·백업 2개, 앱 폴더 확보 뒤에만) · [기록](archive/a/A147-product-log-handler.md)
 - [x] A15·A16 등록 요구·단위 구현
 - [x] A86 연결 직후 지문 대조·불일치 도구 차단(A15·A16, 주입형 Registry) · [기록](archive/a/A86-profile-guard-assembly.md)
 - [x] A96 등록에 없는 도구가 보이면 서버 차단(PR #29 B 리뷰 3) · [기록](archive/a/A96-live-listing-added-tools.md)
@@ -57,15 +60,16 @@
 - [x] A100 대조 뒤 `tools/list_changed`를 받으면 그 서버를 이번 실행 동안 PENDING 취급, 새 세션 도구 목록에서 제외(LIST-01, PR #34 결정) · [기록](archive/a/A100-tools-list-changed.md)
 - [x] A140 A100 후속: 서버별 첫 목록 성공 응답 뒤 알림은 대조 전에도 이번 실행 차단 · [기록](archive/a/A140-list-change-before-seal.md)
 - [x] A140 수신 순서·서버 격리 리뷰: [B](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6473893617)·[C](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474250735) 모두 막는 문제 없음, 콜백 설명 제안은 반영
-- [x] A140 결정 문서 제안 [#71](https://github.com/hsminu/MCP-Runtime-Guard/pull/71)에 [B 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/71#issuecomment-6474704011) 반영: 약점 대장 리뷰 칸, "첫 성공 응답", 10.1절 SDK 업그레이드 확인 구절(`16fe9cd`)
+- [x] A140 결정 문서 제안 [#71](https://github.com/hsminu/MCP-Runtime-Guard/pull/71)에 [B 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/71#issuecomment-6474704011) 반영: 약점 대장 리뷰 칸, "첫 성공 응답", 10.1절 SDK 업그레이드 확인 구절(`16fe9cd`), main 병합됨
 - [ ] A140 실제 알림 시점 관찰 — 막힘: C5.9
-- [ ] A144 mcp 고정 버전을 올릴 때 SDK 내부에 기대는 세 곳(요청 ID 배정 순서, `_handle_response`, `_DeliveryCheckedStream`) 재검증 — 막힘: C mcp 1.30.0 고정 PR([#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 빼고 병합됨). 1.30.0 파일 비교와 A transport·계수 시험 1,114개는 통과([#73 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/73#issuecomment-6488073230)), A145 먼저
-- [ ] A145 HTTP 클라이언트 `max_redirects=0`과 같은 URL 307/308 시험. mcp 1.30.0은 `follow_redirects`를 보지 않고 같은 출처 리다이렉트를 따라가서, 같은 URL 307/308이면 `tools/call`을 다시 보냄(실측 POST 2회, 두 번째 응답이 결과가 됨) — A 차례, mcp 1.30.0 고정 전에 main 반영
+- [ ] A144 mcp 고정 버전을 올릴 때 SDK 내부에 기대는 세 곳(요청 ID 배정 순서, `_handle_response`, `_DeliveryCheckedStream`) 재검증 — 막힘: C mcp 1.30.0 고정 PR([#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 빼고 병합됨). 1.30.0 파일 비교와 A transport·계수 시험 1,114개는 통과([#73 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/73#issuecomment-6488073230)), A145 main 병합 먼저
+- [x] A145 HTTP 클라이언트 `max_redirects=0`과 같은 URL 307/308 시험(mcp 1.30.0은 `follow_redirects`를 보지 않음). [#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82) B·C 리뷰 막는 문제 없음, B 의견대로 `max_redirects` 단언 추가 · [기록](archive/a/A145-http-no-redirects.md)
 - [x] A132 HTTP 세션이 요청 오류(`httpx.HTTPError`)만으로 끝나면 종료를 완료로 봄(#61 A 후속 2) · [기록](archive/a/A132-http-teardown-completed.md)
 - [x] A141 A132의 HTTP 종료 기대값 C 수정(#68)을 A 브랜치에 통합·전체 재검사 · [기록](archive/a/A141-c68-integration-check.md)
 - [x] A133 세션이 끊긴 서버를 이번 실행 동안 PENDING으로 보고 다음 호출을 예약 전 `REG_NOT_ACTIVE`로 거부(#61 A 후속 3) · [기록](archive/a/A133-failed-server-pending.md)
+- [ ] A158 initialize 중 끝나는 stdio 서버: SDK 세션 종료가 `McpError('Connection closed')`로 끝나 C launcher가 종료를 확인해도 `SessionCloseFailed`가 됨. 제품 시작에서 그 서버만 격리되지 않고 transport 시작 전체가 실패, 등록은 "확인하지 못함" — A 차례(A132의 stdio 판, [A157](archive/a/A157-pr83-c-review-followups.md)에서 발견)
 - [x] A15·A16 연결 직후 목록을 C `ServerRegistry.observe`로 기록(정의 변경은 PENDING으로 저장, 기록 실패는 이번 실행 차단) · [기록](archive/a/A129-settings-file-registry-connection.md)
-- [ ] A15·A16 실제 launcher 연결 — A 차례(EXE-01 B 필드 #58·C2.6 #54 병합됨)
+- [x] A15·A16 실제 launcher 연결(EXE-01 지문 고정 실행) · [기록](archive/a/A09-launcher-pipes.md)
 
 ## 접근 규칙·모델·Runner
 
@@ -84,20 +88,25 @@
 - [x] A103 Task 폴더 삭제를 작업 스레드로 옮기고 삭제 상한을 따로 둠(PR #35 B 리뷰) · [기록](archive/a/A103-task-folder-removal-thread.md)
 - [x] A110 앱을 닫을 때 정리가 확인되지 않으면 단일 실행 잠금을 쥔 채 프로세스 종료(B6.17 8.1, #37) · [기록](archive/a/A110-unconfirmed-exit-keeps-lock.md)
 - [x] A134 앱 종료가 세션 정지 기록(STOP-01)을 기다린 뒤 Guard·Store를 닫음(#58 B 답변의 `SystemControlError`) · [기록](archive/a/A134-shutdown-waits-for-stop-record.md)
-- [ ] A134 #58 writer로 경합 재현·해소 확인 — A 차례(A143): B 재현 방법([#70 B 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6473893617))
+- [x] A134 #58 writer로 경합 재현·해소 확인(A143, B 재현 방법 [#70 B 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6473893617)). [#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82) B 리뷰 막는 문제 없음 · [기록](archive/a/A143-a134-writer-shutdown-race.md)
 - [x] A136 #58 병합: Store 닫기 뒤 `wait_closed(5.0)`으로 연결 종료 확인, 미확인이면 `CLEANUP_UNCONFIRMED`·잠금 유지(시작 실패·시연 포함) · [기록](archive/a/A136-store-close-confirmed.md)
-- [ ] A19·A20 실제 codex.exe 세션 — C 쪽 막힘은 풀림(L2 C6.14 #41, 설정 파일 CFG-01 #44·A129, CODEX_HOME `secrets` 허용 #35). 남은 것: A `run_l2` 연결, 세션 관리자 공통 계약 합의(막힌 것 표)
+- [ ] A19·A20 실제 codex.exe 세션 — 막힘: 세션 관리자 공통 계약 합의(막힌 것 표). L2 연결은 A151, 실제 실행 확인 남음
+- [x] A151 제품 시작에 C `run_l2`(C6.14) 1회 연결·지문 대조·고정 실패 코드·진행 표시·종료 취소 정리 · [기록](archive/a/A151-l2-startup-connection.md)
+- [ ] A151 실제 codex.exe L2·로그인한 CODEX_HOME 시작·정리 시간 확인 — 사용자 실제 실행, C 리뷰
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
 - [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
 - [x] A109 기기 코드 제한 안내·브라우저 로그인 A 연결부·취소/시간초과·중복 요청 처리 · [기록](archive/a/A109-browser-login-wiring.md)
-- [ ] A109 제품 브라우저 로그인 활성화·실제 계정 확인 — 막힘: C URL 검증·브라우저 열기 입구([#77](https://github.com/hsminu/MCP-Runtime-Guard/pull/77), [A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/77#issuecomment-6488074120)). 병합 뒤 제품 시작부에서 `account_access(open_browser=open_login_browser)`, `BROWSER_OPEN_FAILED` 안내가 기기 코드·API 키 로그인으로 이어지는지 확인
-- [x] A142 A109 후속: app-server가 거절한 계정 요청은 프로세스 유지·거절된 취소는 종료, 계정 명령 거부·미확인 문구를 명령별로 · [기록](archive/a/A142-account-refusal-and-command-notices.md)
+- [x] A109 제품 시작부에서 C2.21 `open_login_browser` 연결, 열기 실패 안내를 API 키·기기 코드 로그인으로([#77](https://github.com/hsminu/MCP-Runtime-Guard/pull/77)) · [기록](archive/a/A109-product-browser-login.md)
+- [ ] A109 실제 PC에서 브라우저 로그인 완료와 `BROWSER_OPEN_FAILED` 대체 안내 확인 — 사용자 실제 실행
+- [x] A142 A109 후속: app-server가 거절한 계정 요청은 프로세스 유지·거절된 취소는 종료, 계정 명령 거부·미확인 문구를 명령별로([#78](https://github.com/hsminu/MCP-Runtime-Guard/pull/78) main 병합) · [기록](archive/a/A142-account-refusal-and-command-notices.md)
 - [x] A109·A142 C 독립 리뷰: A109 [#70 C 리뷰 2](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474936812), A142 [#78 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/78#issuecomment-6487980338) 모두 막는 문제 없음
   - 실제 Codex 0.162.1 확인(C): JSON-RPC 오류는 요청 형식 검증(-32600)에서만 왔고 남는 것 없음. 로그인 취소의 `notFound`는 오류가 아니라 결과로 옴
   - 정정: A142 기록·#78 본문의 "API 키·기기 코드를 오류로 거절"은 실제와 다름. 0.162.1은 틀린 API 키도 검증 없이 저장하고 `API_KEY` 로그인으로 보이며, 실패는 첫 모델 요청 때 남. 기기 코드 거절은 미실측
   - 관찰: 브라우저 로그인 대기 중 `login/start`를 다시 보내면 Codex는 이전 `loginId`를 버림. 지금은 bridge가 대기 중 취소·로그아웃만 받아 생기지 않음. 그 제한을 풀 때 다시 확인
-- [ ] A149 틀린 API 키가 성공처럼 보이는 문구 고치기: API 키 로그인 뒤 "로그인되어 있음"(`ui/model_settings.py`)은 키 확인 전임을 알리고, 첫 요청의 `CODEX_AUTH_FAILED` 정지 문구(`ui/sessions.py` "만료되거나 갱신되지 않아")에 키가 틀린 경우를 넣음(#78 C 리뷰 2) — A 차례, A148과 같이
-- [ ] A148 C6.18 권고 반영: 제출·시연의 기본 로그인을 API 키로, OpenAI 제휴를 암시하는 문구 없음 — 막힘: 사용자 결정([#79](https://github.com/hsminu/MCP-Runtime-Guard/pull/79))
+- [x] A149 API 키 로그인 뒤 "첫 요청에서 키를 확인함" 안내, `CODEX_AUTH_FAILED` 정지 문구에 틀린 키와 다시 로그인하는 방법(#78 C 리뷰 2) · [기록](archive/a/A149-api-key-unverified-notice.md)
+- [x] A148 C6.18 권고 반영: API 키를 기본 로그인으로, OpenAI 제휴 암시 문구는 정적 검사로 막음(사용자 결정, [#79](https://github.com/hsminu/MCP-Runtime-Guard/pull/79)) · [기록](archive/a/A148-api-key-default-login.md)
+- [x] A109·A146·A148·A149·A139·A137 C 독립 리뷰: [#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82) C 리뷰 막는 문제 없음(전체 단위·contract 시험 C 실행 통과)
+- [ ] A148·A149 실제 API 키·틀린 키의 첫 요청 안내 확인 — 사용자 실제 실행
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
 - [x] A58 JSON-RPC 전송 마감·처리기 안 close 교착·종료 사유 보정 · [기록](archive/a/A58-jsonrpc-send-and-close.md)
@@ -137,9 +146,9 @@
 - [x] A130 #52 B·C 리뷰 후속: 저장 중 취소도 Guard를 닫음, 앱 밖에서 바뀐 설정 파일은 저장하지 않고 재시작 안내, `turn/start` 키 집합 고정 테스트 · [기록](archive/a/A130-pr52-review-followups.md)
 - [x] A131 승인 대기 강조: 대화 화면 승인 안내 띠(사본 확인 버튼), 활동 패널 승인 구역 warn 강조, 승인 사본 한 필드 한 줄, 사이드바 승인 대기 행 글자색 · [기록](archive/a/A131-approval-emphasis.md)
 - [x] A135 실행 컨트롤 안내의 내부 코드를 접힌 줄로 내림(#52 C 리뷰 UI 3. UI 1·2는 A131) · [기록](archive/a/A135-internal-code-fold.md)
-- [ ] A135 설정 파일이 없을 때 화면에서 첫 파일 만들기(#52 C 리뷰 참고) — A 차례: 등록 흐름(A81·A91)에서. B6.8 병합(#69)
-- [ ] A24–A27 제품 Guard 조립·시작 복구 — A 차례: B6.8 병합(#69), A138로 연결. C2.6·C2.5도 병합됨
-- [ ] A138 제품 Guard 조립 때 #58 연결: `on_global_halt=store.halt_execution`, 새 turn·도구 응답·새 Task 전 `execution_state()` 확인과 `state_revision` 비교([#58](https://github.com/hsminu/MCP-Runtime-Guard/pull/58) A 요청), B6.8 명시 시작·복구 화면([#69 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/69#issuecomment-6474818368)) — A 차례, A24–A27과 같이
+- [x] A135 설정 파일이 없을 때 첫 등록에서 파일을 만들고 활성화 저장까지 연결(#52 C 리뷰) · [기록](archive/a/A105-activation-lock.md)
+- [x] A24–A27 제품 설정 기반 Guard 조립·명시 Store 시작·활성화 ACK 뒤 접수·복구 화면 · [기록](archive/a/A138-product-store-startup.md)
+- [x] A138 #58 전역 정지 연결(`on_global_halt=store.halt_execution`), 새 Task·turn·도구 응답 전 `execution_state()` 확인과 `state_revision` 감시, B6.8 명시 시작·복구 화면([#69 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/69#issuecomment-6474818368)) · [기록](archive/a/A138-product-store-startup.md)
 - [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
 - [ ] A33·A34 과거 승인·제품 목록 통합 — 막힘: B-SQL-02/03
@@ -149,9 +158,10 @@
 - [ ] A36·A37 전체 GUI 인수 — 막힘: C
 - [x] A47 신뢰하지 않는 텍스트 표시 위젯(모델 답변·서버 설명·threat_summary) · [기록](archive/a/A47-untrusted-text-view.md)
 - [x] A47 모델 대화의 비신뢰 텍스트·일반 텍스트 표시 연결 · [기록](archive/a/A63-session-workspace.md)
-- [ ] A47 등록 화면·Scanner 경고에 연결 — 막힘: UI 이벤트 계약(B1.5)·검토된 설명(#20 3번)·SCAN-01
+- [ ] A47 등록 화면·Scanner 경고에 연결 — 막힘: UI 이벤트 계약(B1.5)·검토된 설명(#20 3번)·SCAN-01. 지금 활성화는 검사 미연결 안내와 `reviewed_scan_id=None`(A105)
 - [x] A48 Scanner API 키 입력 화면(가림·끝 4자리·주입형 저장) · [기록](archive/a/A48-scanner-key-form.md)
-- [ ] A48 자격증명 관리자 저장 연결 — A 차례: C2.10 [#60](https://github.com/hsminu/MCP-Runtime-Guard/pull/60) 병합됨. `ScannerKeyForm(saver=save_scanner_key)`, 화면을 열 때 `scanner_key_tail()`로 끝 4자리([#62 요청](https://github.com/hsminu/MCP-Runtime-Guard/pull/62))
+- [x] A48 자격증명 관리자 저장 연결(C2.10 `save_scanner_key`, 끝 4자리는 `scanner_key_tail()`, [#62 요청](https://github.com/hsminu/MCP-Runtime-Guard/pull/62)) · [기록](archive/a/A48-scanner-key-credential-store.md)
+- [ ] A48 실제 Windows 자격 증명 관리자 저장·재시작 뒤 끝자리 조회 확인 — 사용자 실제 실행
 - [x] A49 로컬 파일 서버 루트·하위 폴더 등급 입력 폼 · [기록](archive/a/A49-local-folder-labels-form.md)
 - [x] A59 폴더 규칙 중복을 대소문자 무시로 검사 · [기록](archive/a/A59-folder-rule-case.md)
 - [ ] A49 등록·출처 규칙 연결 — A 차례: 폴더 선택 UI·`file_resource_resolver`·파일 서버 등록 값·상위 폴더 등급 안내([#63 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/63#issuecomment-6472888055), [#64 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/64#issuecomment-6472888675))
@@ -165,11 +175,12 @@
 - [x] A81 규칙 저장을 B3.10에 연결(prepare → 주입형 저장 → apply, 정지 세션 종료) · [기록](archive/a/A81-policy-change-save.md)
 - [x] A104 저장 뒤 적용 실패·적용 전 거부면 Guard를 닫고 새 세션·재저장을 막아 재시작 안내(#33 B 답변) · [기록](archive/a/A104-policy-apply-failure-restart.md)
 - [x] A105 새 Task 행을 정책 잠금 안에서 그때의 policy_version으로 씀(B3.12의 Task 생성 직렬화) · [기록](archive/a/A105-task-creation-policy-lock.md)
-- [ ] A105 서버 활성화도 같은 잠금으로 묶음 — A 차례: C Registry 활성화(C4.10) 병합됨
+- [x] A105 서버 활성화·차단과 설정 저장을 Task 생성·정책 변경과 같은 잠금으로 묶음(C4.10·C4.11) · [기록](archive/a/A105-activation-lock.md)
 - [x] A117 겹친 서버 접근 변경이 앞 변경이 저장한 문서에서 시작함(정책 잠금 안에서 문서를 읽음, A112 발견) · [기록](archive/a/A117-overlapping-policy-changes.md)
 - [x] A106 제품 DB를 앱 폴더 고정 경로(`data\guard.sqlite3`, C2.17)로 옮기고 `--db-path`는 시연 전용으로, `--demo`는 앱 폴더 안을 열지 못하게 함(#35 B 리뷰 1번) · [기록](archive/a/A106-product-db-path.md)
 - [x] A106 C `AppFolders.db_path()`(DB·`-wal`·`-shm` 링크·권한 확인)로 교체, 거부되면 창을 열기 전에 시작하지 않음 · [기록](archive/a/A106-db-path-check.md)
-- [ ] A81·A91 제품 화면에서 Profile 저장·서버 활성화 — A 차례: 제품 Guard 조립(A138) 뒤; 저장은 A129, 서버 실행 입구는 C2.6으로 제공됨
+- [x] A81·A91 제품 서버 목록의 활성화 확인·도구별 허용·정책 저장·Task 정지·재시작 안내 · [기록](archive/a/A105-activation-lock.md)
+- [ ] A81·A91 새로 등록한 도구(OTHER)의 종류·출처·목적지 편집 — A 차례. 지금은 종류가 정해진 READ/SEND 도구만 허용 선택
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
@@ -191,10 +202,15 @@
 - [x] A126 정책 화면 표가 폭을 다 쓰고 Codex 제외 도구 이름·이유가 잘리지 않음 · [기록](archive/a/A126-policy-table-width.md)
 - [x] A127 현황 화면을 줄 목록·막대그래프로 줄임(시연 기준 5075px → 1673px) · [기록](archive/a/A127-overview-rows.md)
 - [x] A128 MCP 서버 추가: '초안' 표기 제거, 설정 붙여넣기로 칸 채우기, 표시 이름·ID 추천·찾아보기·명령줄 인자, `.exe`만 통과(EXE-01) · [기록](archive/a/A128-server-add-paste.md)
-- [ ] A128 실제 Registry 등록·EXE-01 지문 확인 화면 — A 차례: EXE-01 B 필드(B3.14, #58)·C2.6(#54)·Scanner(C2.10 #60, C4.14 #59)가 A 브랜치에 병합됨
+- [x] A128 실제 Registry 등록·EXE-01 지문 확인(`command_sha256`·`command_size` 저장, C2.22)·변경 재확인·목록 반영 · [기록](archive/a/A128-registry-registration.md)
+- [ ] A128 등록 뒤 Scanner 검사·경고 표시 — 막힘: A47·SCAN-01
   - 검사 서비스: `ScanService(registry, cisco_connector())`를 백엔드 루프 안에서 하나 만들고 그 루프에서만 부름. 앱 종료 때 진행 중 검사 Task를 먼저 취소한 뒤 `close()`([#59 A 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/59#issuecomment-6468803889))
   - 흐름: `register` → `scan(on_started=)` → 경고(LLM 검사 빠짐 포함) → `activate(expected_row_revision=검사 뒤 row_revision, reviewed_scan_id=)`. `SCAN_RECORD_UNKNOWN`은 `refresh` 뒤 다시 검사 안내, revision 거부도 다시 검사 안내
-  - 지문: 등록 화면에서 `pin_executable` 결과를 `command_sha256`·`command_size`에 저장([#74](https://github.com/hsminu/MCP-Runtime-Guard/pull/74) C2.22 요청)
+- [ ] A128·A105 등록과 설정 저장 중 하나만 성공해 남은 PENDING 행의 복구 화면 — A 차례
+- [ ] A128 실제 MCP 서버 PENDING 등록·EXE-01 화면 확인 — 사용자 실제 실행
+- [x] A157 #83 C 리뷰 후속: 시작하지 못한 서버의 등록 거부 문구, 설정 파일 URL 거부를 그 서버만 격리, 시작 예산에 서버 조립, `main()` 시험의 로그 상태 복원 · [기록](archive/a/A157-pr83-c-review-followups.md)
+- [x] A159 #83 B 리뷰 참고: 제품 조립은 Store 전역 정지(`halt_execution`) 없이 시작하지 않음, 주입 조립만 허용 · [기록](archive/a/A159-product-global-halt-required.md)
+- [ ] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 — 막힘: C 상수 추가([#83 C 참고 4](https://github.com/hsminu/MCP-Runtime-Guard/pull/83#issuecomment-6493041009))
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 
@@ -232,6 +248,7 @@
 - [x] A119 A114에서 찾은 Codex 세션 테스트 빈틈 4개와 멈춤 1개를 메움 · [기록](archive/a/A119-codex-session-test-gaps.md)
 - [x] A115 4단계: `BackendBridge` 안쪽 분리 · [기록](archive/a/A115-backend-bridge-split.md)
 - [x] A115 bridge 분리 독립 리뷰: [#70 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474250735) 막는 문제 없음
-- [ ] A137 A115에서 찾은 bridge 테스트 빈틈 11개와 멈춤 1개 메우기 — A 차례
+- [x] A137 A115에서 찾은 bridge 테스트 빈틈 11개와 멈춤 1개 메움 · [기록](archive/a/A137-bridge-test-gaps.md)
 - [ ] A116 5단계: UI 화면 조립·`__main__` 정리(C 리뷰) — A 차례(B2.11 #47 병합)
-- [ ] A139 A 모듈 ID 생성을 `new_id`·`new_suffix`로 통합(`bridge_ingress.bridge_id` 포함), B6.8 복구에 `new_id("run")` 연결 — A 차례: [#65](https://github.com/hsminu/MCP-Runtime-Guard/pull/65) 병합됨([수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/65#issuecomment-6472889394))
+- [x] A139 A 모듈 ID 생성을 `security/ids.py`로 통합([#65 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/65#issuecomment-6472889394)), B6.8 복구에 `new_id("run")` 연결(A138) · [기록](archive/a/A139-ids-module.md)
+- [ ] A150 A 단위 시험 압축 — A 차례: 1차(같은 모양 시험 묶기)는 [#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)로 올림, 2차(줄 수 줄이기) 뒤 기록 하나
