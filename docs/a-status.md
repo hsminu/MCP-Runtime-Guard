@@ -14,7 +14,6 @@
 | T43/T46·수신 상한 독립 인수(C5.8) ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A52 |
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
 | Codex 로그인 URL 검증·기본 브라우저 열기 입구와 독립 검증([#77](https://github.com/hsminu/MCP-Runtime-Guard/pull/77), A 리뷰 막는 문제 없음) | C | A109 제품 브라우저 로그인 |
-| A109·A142 독립 리뷰(A109는 C 리뷰 없이 #70으로 병합됨) | C | A109, A142 |
 | mcp 1.30.0 고정 변경([#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)). A145가 먼저 main에 들어가야 함 | C | A144 |
 | 로그 마스킹 입구 `install_log_redaction`(C2.8, [#74](https://github.com/hsminu/MCP-Runtime-Guard/pull/74), A 리뷰 막는 문제 없음) 병합 | C | A146 |
 | C6.18 권고(제출·시연 기본 로그인은 API 키, OpenAI 제휴 암시 금지) 반영 여부([#79](https://github.com/hsminu/MCP-Runtime-Guard/pull/79)) | 사용자 | A148 |
@@ -57,8 +56,9 @@
 - [x] A96 등록에 없는 도구가 보이면 서버 차단(PR #29 B 리뷰 3) · [기록](archive/a/A96-live-listing-added-tools.md)
 - [x] A97 MCP 도구 오류(`is_error`)를 Codex에 실패로 전달 · [기록](archive/a/A97-released-tool-error.md)
 - [x] A100 대조 뒤 `tools/list_changed`를 받으면 그 서버를 이번 실행 동안 PENDING 취급, 새 세션 도구 목록에서 제외(LIST-01, PR #34 결정) · [기록](archive/a/A100-tools-list-changed.md)
-- [x] A140 A100 후속: 서버별 첫 목록 응답 뒤 알림은 대조 전에도 이번 실행 차단 · [기록](archive/a/A140-list-change-before-seal.md)
+- [x] A140 A100 후속: 서버별 첫 목록 성공 응답 뒤 알림은 대조 전에도 이번 실행 차단 · [기록](archive/a/A140-list-change-before-seal.md)
 - [x] A140 수신 순서·서버 격리 리뷰: [B](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6473893617)·[C](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474250735) 모두 막는 문제 없음, 콜백 설명 제안은 반영
+- [x] A140 결정 문서 제안 [#71](https://github.com/hsminu/MCP-Runtime-Guard/pull/71)에 [B 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/71#issuecomment-6474704011) 반영: 약점 대장 리뷰 칸, "첫 성공 응답", 10.1절 SDK 업그레이드 확인 구절(`16fe9cd`)
 - [ ] A140 실제 알림 시점 관찰 — 막힘: C5.9
 - [ ] A144 mcp 고정 버전을 올릴 때 SDK 내부에 기대는 세 곳(요청 ID 배정 순서, `_handle_response`, `_DeliveryCheckedStream`) 재검증 — 막힘: C 의존성 PR([#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)). 1.30.0 파일 비교와 A transport·계수 시험 1,114개는 통과([#73 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/73#issuecomment-6488073230)), A145 먼저
 - [ ] A145 HTTP 클라이언트 `max_redirects=0`과 같은 URL 307/308 시험. mcp 1.30.0은 `follow_redirects`를 보지 않고 같은 출처 리다이렉트를 따라가서, 같은 URL 307/308이면 `tools/call`을 다시 보냄(실측 POST 2회, 두 번째 응답이 결과가 됨) — A 차례, mcp 1.30.0 고정 전에 main 반영
@@ -93,7 +93,11 @@
 - [x] A109 기기 코드 제한 안내·브라우저 로그인 A 연결부·취소/시간초과·중복 요청 처리 · [기록](archive/a/A109-browser-login-wiring.md)
 - [ ] A109 제품 브라우저 로그인 활성화·실제 계정 확인 — 막힘: C URL 검증·브라우저 열기 입구([#77](https://github.com/hsminu/MCP-Runtime-Guard/pull/77), [A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/77#issuecomment-6488074120)). 병합 뒤 제품 시작부에서 `account_access(open_browser=open_login_browser)`, `BROWSER_OPEN_FAILED` 안내가 기기 코드·API 키 로그인으로 이어지는지 확인
 - [x] A142 A109 후속: app-server가 거절한 계정 요청은 프로세스 유지·거절된 취소는 종료, 계정 명령 거부·미확인 문구를 명령별로 · [기록](archive/a/A142-account-refusal-and-command-notices.md)
-- [ ] A109·A142 C 독립 리뷰 — 막힘: C
+- [x] A109·A142 C 독립 리뷰: A109 [#70 C 리뷰 2](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474936812), A142 [#78 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/78#issuecomment-6487980338) 모두 막는 문제 없음
+  - 실제 Codex 0.162.1 확인(C): JSON-RPC 오류는 요청 형식 검증(-32600)에서만 왔고 남는 것 없음. 로그인 취소의 `notFound`는 오류가 아니라 결과로 옴
+  - 정정: A142 기록·#78 본문의 "API 키·기기 코드를 오류로 거절"은 실제와 다름. 0.162.1은 틀린 API 키도 검증 없이 저장하고 `API_KEY` 로그인으로 보이며, 실패는 첫 모델 요청 때 남. 기기 코드 거절은 미실측
+  - 관찰: 브라우저 로그인 대기 중 `login/start`를 다시 보내면 Codex는 이전 `loginId`를 버림. 지금은 bridge가 대기 중 취소·로그아웃만 받아 생기지 않음. 그 제한을 풀 때 다시 확인
+- [ ] A149 틀린 API 키가 성공처럼 보이는 문구 고치기: API 키 로그인 뒤 "로그인되어 있음"(`ui/model_settings.py`)은 키 확인 전임을 알리고, 첫 요청의 `CODEX_AUTH_FAILED` 정지 문구(`ui/sessions.py` "만료되거나 갱신되지 않아")에 키가 틀린 경우를 넣음(#78 C 리뷰 2) — A 차례, A148과 같이
 - [ ] A148 C6.18 권고 반영: 제출·시연의 기본 로그인을 API 키로, OpenAI 제휴를 암시하는 문구 없음 — 막힘: 사용자 결정([#79](https://github.com/hsminu/MCP-Runtime-Guard/pull/79))
 - [x] A50 Codex용 JSON-RPC 클라이언트 뼈대(채널 주입, 프로세스 미실행) · [기록](archive/a/A50-jsonrpc-client-skeleton.md)
 - [x] A55 JSON-RPC 클라이언트를 Codex 0.159 형식(`jsonrpc` 필드 없음)에 대응·알림 처리기 실패 구분 · [기록](archive/a/A55-jsonrpc-codex-envelope.md)
