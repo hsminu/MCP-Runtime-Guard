@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-29 · main `b14c181` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-29 · main `ce18a88` · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -11,7 +11,6 @@
 | AGT-04 표시 문구 리뷰 | A | B2.10 |
 | AGT-02 감사 범위 합의 | A·B·C | B6.15 |
 | A66 세션 관리자 계약 합의(legacy 시연이 ModelClient 사용) | A·B·C | B1.7 |
-| B6-01 C 확인(#89) | C | B6.9 |
 | 자원 ID 판정기의 제품 조립 연결 | A | B3.3 |
 | 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 합의 | A·B·C | B6.19 |
 | 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
@@ -107,7 +106,7 @@
 - [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
 - [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — 1단계·2a·2b B 단위 구현 완료, #69 `b796ff0` 병합 · A 제품 연결·C 독립 인수 대기 · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
   - #65(C2.7) 후속으로 명시 모드 기본 감사 ID 출처를 `security.ids`로 옮기고 B 모듈의 직접 생성 금지 정적 검사를 추가했다.
-- [ ] B6.9 승인 생성·종결 원자화 B 단위 제안 구현 · A 동의(#76), C 확인(#89) 대기 · [기록](archive/b/B6.9-atomic-approvals.md)
+- [x] B6.9 승인 생성·종결 원자화 · #89 병합, A·C 동의(C 독립 결함 주입 인수는 B7.6·B7.8) · [기록](archive/b/B6.9-atomic-approvals.md)
 - [x] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙 구현·시험 완료, 시간 수치는 C 측정 뒤 확정 · [기록](archive/b/B6.10-B6.12-unblocked.md)
