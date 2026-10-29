@@ -111,7 +111,7 @@
 - [ ] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 — 막힘: B6-02
 - [ ] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 — 막힘: B6-03·B6-04
 - [ ] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙과 예산(잠금 대기 1000ms는 미측정 제안값) — 막힘: B6-03
-- [ ] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — B 단위 구현·C 독립 검증 및 측정 완료, A 연결·#55와 C 기록 PR 대기 · [기록](archive/b/B6.13-sqlite-writer.md) · [C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468999539)
+- [ ] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — B 단위 구현·C 독립 검증 및 측정 완료, A 연결·#55와 C 기록 PR 대기 · [기록](archive/b/B6.13-sqlite-writer.md) · [늦은 결과 전달](archive/b/B6.13-2-late-publish.md) · [C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468999539)
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.15 규칙 버전 감사(AGT-02) — 막힘: 판정·감사 버전 추적 범위와 직접 저장·간접 조회 합의 · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
 - [ ] B6.16 화면용 권위 조회 B 단위 제안 구현 · #86 병합 · C 계수 대조 완료(#86 C 리뷰), A 연결 대기 · #76 최종 합의 대기 · [기록](archive/b/B6.16-store-queries.md)
