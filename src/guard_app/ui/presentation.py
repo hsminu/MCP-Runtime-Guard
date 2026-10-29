@@ -114,7 +114,9 @@ CODEX_LOGIN_TEXT = {
 }
 CODEX_LOGIN_NOTICES = {
     "BROWSER_LOGIN_UNAVAILABLE": "브라우저 로그인 연결 준비 중임.",
-    "BROWSER_OPEN_FAILED": "로그인 페이지를 열지 못해 요청을 취소함. 다시 시도하세요.",
+    "BROWSER_OPEN_FAILED": (
+        "로그인 페이지를 열지 못해 요청을 취소함. 기기 코드 또는 API 키로 로그인하세요."
+    ),
     "LOGIN_CANCELLED": "로그인 요청을 취소함.",
     "LOGIN_TIMEOUT": "로그인 대기 시간이 지나 요청을 취소함. 다시 시도하세요.",
     "LOGIN_REQUEST_UNCONFIRMED": "로그인 요청 처리를 확인하지 못함. 상태를 다시 확인하세요.",

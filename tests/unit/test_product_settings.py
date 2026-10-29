@@ -57,8 +57,11 @@ from guard_app.ui.presentation import SETTINGS_FILE_NOT_READ, SETTINGS_FILE_STAT
 from guard_app.ui.window import GuardWindow
 
 from .fake_codex_app_server import FakeAppServer
+from .logging_state import preserve_logging_state  # noqa: F401
 from .test_codex_product_flow import preparation, read_then_answer
 from .test_product_assembly import READ_DEFINITION, Peer, Registry, document, inputs
+
+pytestmark = pytest.mark.usefixtures("preserve_logging_state")
 
 windows_only = pytest.mark.skipif(
     sys.platform != "win32", reason="C2.14 settings file operations are Windows only"
@@ -582,7 +585,7 @@ def test_main_starts_without_a_settings_file_and_hands_the_first_run_on(
         handed.append(kwargs.get("settings"))
 
     monkeypatch.setattr(paths, "app_root", lambda: root)
-    monkeypatch.setattr(entry, "BackendBridge", bridge)
+    monkeypatch.setattr("guard_app.services.bridge.BackendBridge", bridge)
     monkeypatch.setattr(session_runtime, "bootstrap_product", recording_bootstrap)
     monkeypatch.setattr(sys, "argv", ["guard-app"])
     instance = QApplication.instance() or QApplication([])

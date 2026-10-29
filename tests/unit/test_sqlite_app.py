@@ -24,7 +24,11 @@ from guard_app.services import bridge as bridge_module
 from guard_app.services.bridge import BackendBridge, BridgeState, CommandStage
 from guard_app.storage.sqlite_store import SQLiteStore
 
+from .logging_state import preserve_logging_state  # noqa: F401
 from .test_bridge import pump_until
+
+# A146: main() installs process-wide log redaction; restore it after each test.
+pytestmark = pytest.mark.usefixtures("preserve_logging_state")
 
 
 def observe(monkeypatch):
@@ -856,7 +860,6 @@ def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeyp
 def test_cli_product_does_not_start_without_the_app_lock(monkeypatch, capsys, subtests):
     def check(code, shown, monkeypatch):
         """A102: a refused claim ends with exit 1 before the DB, the backend and the window."""
-        import guard_app.__main__ as entry
         from guard_app.security.paths import AppPathError
         from guard_app.services.codex_preparation import CodexProcessPreparation
 
@@ -867,7 +870,7 @@ def test_cli_product_does_not_start_without_the_app_lock(monkeypatch, capsys, su
             raise AssertionError("the backend must not start")
 
         monkeypatch.setattr(CodexProcessPreparation, "claim", refuse)
-        monkeypatch.setattr(entry, "BackendBridge", no_bridge)
+        monkeypatch.setattr(bridge_module, "BackendBridge", no_bridge)
         monkeypatch.setattr(sys, "argv", ["guard-app"])
         assert main() == 1
         error = capsys.readouterr().err

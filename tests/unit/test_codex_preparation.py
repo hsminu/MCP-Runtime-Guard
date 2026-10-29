@@ -57,7 +57,12 @@ from guard_app.services.codex_session import CodexPipes
 from guard_app.services.session_preparation import valid_configuration
 from guard_app.services.session_runtime import SessionRuntimeError, bootstrap_product
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="C2.12·C2.13은 Windows 전용이다")
+from .logging_state import preserve_logging_state  # noqa: F401
+
+pytestmark = [
+    pytest.mark.usefixtures("preserve_logging_state"),
+    pytest.mark.skipif(sys.platform != "win32", reason="C2.12·C2.13은 Windows 전용이다"),
+]
 
 PYTHON = Path(sys.base_prefix) / "python.exe"
 TASK_ID = "session-0123456789abcdef"
@@ -365,7 +370,7 @@ def test_main_does_not_start_while_another_instance_holds_the_lock(
     root = tmp_path / "app"
     db = root / "data" / "guard.sqlite3"
     monkeypatch.setattr(paths, "app_root", lambda: root)
-    monkeypatch.setattr(entry, "BackendBridge", no_bridge)
+    monkeypatch.setattr("guard_app.services.bridge.BackendBridge", no_bridge)
     monkeypatch.setattr(sys, "argv", ["guard-app"])
     first = prepare_app_folders(root)
     with closing(first):
@@ -456,7 +461,7 @@ def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
         accounts.append(kwargs.get("account"))
 
     monkeypatch.setattr(paths, "app_root", lambda: root)
-    monkeypatch.setattr(entry, "BackendBridge", bridge)
+    monkeypatch.setattr("guard_app.services.bridge.BackendBridge", bridge)
     monkeypatch.setattr(session_runtime, "bootstrap_product", recording_bootstrap)
     monkeypatch.setattr(sys, "argv", ["guard-app"])
     app = QApplication.instance() or QApplication([])
@@ -472,6 +477,9 @@ def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
     # A52: the login screen reaches C's launcher through the same claimed owner.
     assert len(accounts) == 1
     assert isinstance(accounts[0], AccountAccess)
+    from guard_app.security.login_browser import open_login_browser
+
+    assert accounts[0].open_browser is open_login_browser
     prepare_app_folders(root).close()
 
 
@@ -547,7 +555,7 @@ def test_demo_refuses_a_db_in_the_product_app_folder(monkeypatch, capsys, tmp_pa
         if kind == "hardlink":
             os.link(product, target)
         monkeypatch.setattr(paths, "app_root", lambda: root)
-        monkeypatch.setattr(entry, "BackendBridge", no_bridge)
+        monkeypatch.setattr("guard_app.services.bridge.BackendBridge", no_bridge)
         monkeypatch.setattr(
             sys,
             "argv",

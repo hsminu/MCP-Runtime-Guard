@@ -256,14 +256,51 @@ async def test_browser_open_or_success_notification_alone_is_not_signed_in():
             assert view.state == expected
 
 
-def browser_bridge(fake, loops):
+def browser_bridge(fake, loops, opener=opened):
     async def bootstrap():
         loops.append(asyncio.get_running_loop())
-        account = CodexAccountClient(fake, version="test", open_browser=opened)
+        account = CodexAccountClient(fake, version="test", open_browser=opener)
         await account.start()
         return BackendBindings(lambda _: None, FakeControl(), close=account.aclose, account=account)
 
     return BackendBridge(bootstrap, control_workers=2)
+
+
+def test_browser_open_failure_offers_device_and_api_key_without_url(app, caplog):
+    fake, loops, views = BrowserServer(), [], []
+    fake.account = None
+    bridge = browser_bridge(fake, loops, refused_open)
+    receiver = attach(bridge)
+    bridge.account_changed.connect(views.append)
+    window = GuardWindow()
+    window.attach_runtime(RuntimePanel(bridge))
+    form = window.codex_login_info
+    bridge.start()
+    try:
+        pump_until(app, lambda: bridge.state is BridgeState.READY)
+        bridge.request_account("account_read")
+        pump_until(app, lambda: form.browser_button.isEnabled())
+        form.browser_button.click()
+        pump_until(app, lambda: form.view.notice == "BROWSER_OPEN_FAILED")
+        assert form.view.state == "FAILED"
+        assert fake.cancelled == ["browser-1"]
+        assert form.login_button.isEnabled()
+        assert form.browser_button.isEnabled()
+        assert form.api_key_input.isEnabled()
+        assert not form.api_key_button.isEnabled()  # empty input stays disabled
+        form.api_key_input.setText("sk-test-fallback")
+        assert form.api_key_button.isEnabled()
+        assert "기기 코드 또는 API 키로 로그인하세요." in form.status.text()
+        assert not form.cancel_button.isEnabled()
+        assert AUTH_URL not in repr(views)
+        assert "private-login-state" not in repr(views)
+        assert AUTH_URL not in caplog.text
+        assert AUTH_URL not in repr(receiver.commands)
+        assert AUTH_URL not in repr(receiver.states)
+        assert all(AUTH_URL not in label.text() for label in form.findChildren(QLabel))
+    finally:
+        window.close()
+        close_bridge(app, bridge)
 
 
 def test_bridge_serializes_duplicate_starts_and_ignores_cancelled_login_completion(app):
