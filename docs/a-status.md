@@ -195,7 +195,7 @@
 - [x] A81·A91 제품 서버 목록의 활성화 확인·도구별 허용·정책 저장·Task 정지·재시작 안내 · [기록](archive/a/A105-activation-lock.md)
 - [x] A155 새로 등록한 도구(OTHER)의 종류·도구 단위 READ 등급·SEND 목적지 인자 편집, 정책 잠금 저장·ACTIVE 재검토·재시작 뒤 대조로 활성화 연결(A81·A91 후속) · [기록](archive/a/A155-tool-kind-settings.md)
 - [x] A156 SEND 목적지 경계 등록·변경·삭제와 Profile 선택, 정책 잠금 저장·즉시 적용·실행 Task 정지(정책 화면) · [기록](archive/a/A156-send-destinations.md)
-- [ ] A155·A156 독립 인수 — B: 정책 문서·부분 저장, C: 재검토·대조 순서, 목적지 판정 계수, 실제 서버 화면 확인
+- [ ] A155·A156 독립 인수 — B: 정책 문서·부분 저장 통과(#101), C: 재검토·대조 순서, 목적지 판정 계수, 실제 서버 화면 확인
 - [x] A83 조회 화면 미연결 표시·세션 시작 가능 여부·모델 이름 상수·창 제목·실행 옵션 정리 · [기록](archive/a/A83-ui-unconnected-and-product-cli.md)
 - [x] A85 Task 등급·미분류 표시 · [기록](archive/a/A85-task-label-display.md)
 - [x] A56 입력·수집 규칙 다섯 개 사용자 승인 확인 · [기록](archive/a/A56-input-rules-approved.md)
@@ -241,6 +241,7 @@
 - [x] A176 #99 B 리뷰 제안: 저장기 없음은 Registry 쓰기 전에 거부됨을 시험으로 고정 · [기록](archive/a/A176-missing-saver-order.md)
 - [x] A177 #94 F-02: 도구 설정 화면에 도구 단위 READ 등급 안내 추가 · [기록](archive/a/A177-tool-read-grade-hint.md)
 - [x] A178 #92 중단 원인: 부모 없는 하위 레이아웃이 남긴 Qt 위젯 이중 소유 제거·소유 회귀 시험 · [기록](archive/a/A178-qt-double-ownership.md)
+- [x] A180 #101 제안: 정책·목적지 저장 성공 뒤 B 적용 중 취소에도 재시작 요구·Guard 닫기, 일곱 저장 경로 취소 시험 · [기록](archive/a/A180-cancel-during-apply.md)
 
 ## 통합·패키징
 
