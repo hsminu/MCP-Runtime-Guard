@@ -8,7 +8,7 @@
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| AGT-04 표시 문구 리뷰·contract 테스트 | A·C | B2.10 |
+| AGT-04 표시 문구 리뷰 | A | B2.10 |
 | AGT-02 감사 범위 합의 | A·B·C | B6.15 |
 | A66 세션 관리자 계약 합의(legacy 시연이 ModelClient 사용) | A·B·C | B1.7 |
 | B6-01 C 확인(#89) | C | B6.9 |
@@ -44,7 +44,7 @@
 - [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증 · 순수 함수 속성 검사의 시간 제한 해제 · [기록](archive/b/B3.15-B3.16-server-settings.md)
 - [x] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계) · [기록](archive/b/B2.8-access-rules.md)
 - [x] B2.9 AccessChecker 동기 포트·Guard 대기 장치 제거(ACCESS-01 결정 이행) · #47 병합 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
-- [ ] B2.10 AGT-04 접근 사유 코드 교체·과거 저장값 판독 B 단위 구현 완료 · A 표시 문구 리뷰·C contract 테스트 대기 · [기록](archive/b/B2.10-agt04-access-reasons.md)
+- [ ] B2.10 AGT-04 접근 사유 코드 교체·과거 저장값 판독 B 구현·C contract 확인 완료(#81·#84), A 문구 확인만 남음 · [기록](archive/b/B2.10-agt04-access-reasons.md)
 - [x] B2.11 기존 AGT 코드 제거 · #47 병합 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
 
 ## B3 · Catalog와 요청 해석
@@ -132,7 +132,7 @@
 - [ ] B7.6 B6 저장소의 C 리뷰·독립 검증 받기 — 막힘: C
 - [ ] B7.7 C 보안 모듈·Registry·Scanner·CI·테스트 리뷰(PR #6·#8의 `adapters/cisco*.py`, `security/secrets.py`·`redact.py` 포함)
 - [ ] B7.8 C 독립 통합 인수 결과와 대상 커밋 기록 — 막힘: C
-- [ ] B7.9 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 A·C에 전달
+- [x] B7.9 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 A·C에 전달 · [기록](archive/b/B7.9-contract-handoff.md)
 - [x] B7.10 공통 문서 미결 상태 갱신 제안 · [PR #18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) · [기록](archive/b/B7.10-contract-status-proposal.md)
 - [x] B7.11 A 리뷰 후속 최종 알림 고정 문구·실행 본문 A 경로 위임·예약 전 취소 Task 격리 · [기록](archive/b/B7.11-a-review-followups.md)
 - [x] B7.12 C 리뷰 후속 미소비 공개 본문 폐기·예약 뒤 취소 최종 알림 · [기록](archive/b/B7.12-c-review-followups.md)
