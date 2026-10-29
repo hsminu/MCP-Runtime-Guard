@@ -656,9 +656,25 @@ def test_pin_recheck_is_not_shown_as_a_duplicate_registration(monkeypatch):
         assert form.preview.toPlainText() == "입력 오류를 고치면 등록할 내용이 표시됨."
 
 
+class FakeProductScanner:
+    def __init__(self):
+        self.calls = []
+        self.closes = 0
+
+    async def scan(self, server_id, listing, *, on_started=None):
+        if on_started is not None:
+            on_started()
+        self.calls.append((server_id, listing))
+
+    def close(self):
+        self.closes += 1
+
+
 def test_product_bridge_registration_updates_window_and_survives_restart(tmp_path, monkeypatch):
     from guard_app.services import product_startup, session_runtime
+    from guard_app.services import scanner as scanner_module
     from guard_app.services.bridge import BridgeState
+    from guard_app.services.registration_scans import RegistrationScans
     from guard_app.ui.runtime import RuntimePanel
     from guard_app.ui.window import GuardWindow
 
@@ -667,6 +683,18 @@ def test_product_bridge_registration_updates_window_and_survives_restart(tmp_pat
     app = QApplication.instance() or QApplication([])
     folders = prepare_app_folders(tmp_path / "product")
     calls = []
+    scanner = FakeProductScanner()
+
+    def unexpected_cisco_connector():
+        raise AssertionError("Product registration test must not use Cisco")
+
+    monkeypatch.setattr(scanner_module, "cisco_connector", unexpected_cisco_connector)
+    monkeypatch.setattr(product_startup, "cisco_connector", unexpected_cisco_connector)
+    monkeypatch.setattr(
+        product_startup,
+        "_registration_scans",
+        lambda registry, collect: RegistrationScans(registry, scanner, collect),
+    )
 
     async def collect(server, selected_folders):
         assert selected_folders is folders
@@ -683,7 +711,9 @@ def test_product_bridge_registration_updates_window_and_survives_restart(tmp_pat
     window.attach_runtime(RuntimePanel(bridge))
     form = window.server_add_form
     views = []
+    scans = []
     bridge.registration_changed.connect(views.append)
+    bridge.scan_changed.connect(scans.append)
     bridge.start()
     try:
         pump_until(app, lambda: bridge.state is BridgeState.READY and bool(views), timeout=10)
@@ -702,9 +732,17 @@ def test_product_bridge_registration_updates_window_and_survives_restart(tmp_pat
         assert window.server_page.table.rowCount() == 1
         assert window.server_page.table.item(0, 4).text() == "등록 검토 중"
         assert len(calls) == 1
+        pump_until(
+            app,
+            lambda: any(s.server_id == "remote" and s.run == "done" for s in scans),
+            timeout=10,
+        )
+        assert [s.run for s in scans if s.server_id == "remote"] == ["queued", "running", "done"]
+        assert [server_id for server_id, _ in scanner.calls] == ["remote"]
     finally:
         close_bridge(app, bridge)
         window.close()
+    assert scanner.closes == 1
     # A new product start reads the real C-written file and B SQLite registration.
     second = BackendBridge(boot)
     restored = []
@@ -717,6 +755,7 @@ def test_product_bridge_registration_updates_window_and_survives_restart(tmp_pat
         assert restored[-1].rows[0].server_id == "remote"
         assert restored[-1].rows[0].status == "pending"
         assert len(calls) == 1
+        assert len(scanner.calls) == 1
     finally:
         close_bridge(app, second)
         folders.close()

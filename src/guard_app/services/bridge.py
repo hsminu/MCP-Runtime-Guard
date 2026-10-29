@@ -50,6 +50,9 @@ from guard_app.services.bridge_ingress import (
 from guard_app.services.bridge_ingress import new_command_id as new_command_id
 from guard_app.services.bridge_ingress import new_draft_key as new_draft_key
 from guard_app.services.bridge_registration import endpoint_input as endpoint_input
+from guard_app.services.bridge_registration import (
+    reviewed_description_issue as reviewed_description_issue,
+)
 from guard_app.services.bridge_streams import MAX_PARTIAL_CHARS as MAX_PARTIAL_CHARS
 from guard_app.services.bridge_streams import PARTIAL_FLUSH_S as PARTIAL_FLUSH_S
 from guard_app.services.bridge_types import CODEX_DEFAULT_EFFORT as CODEX_DEFAULT_EFFORT
@@ -64,12 +67,14 @@ from guard_app.services.bridge_types import CommandEvent as CommandEvent
 from guard_app.services.bridge_types import CommandStage as CommandStage
 from guard_app.services.bridge_types import ControlAction as ControlAction
 from guard_app.services.bridge_types import ConversationEvent as ConversationEvent
+from guard_app.services.bridge_types import DescriptionRow as DescriptionRow
 from guard_app.services.bridge_types import DestinationEdit as DestinationEdit
 from guard_app.services.bridge_types import LifecycleEvent as LifecycleEvent
 from guard_app.services.bridge_types import QueryReply as QueryReply
 from guard_app.services.bridge_types import QueryRequest
 from guard_app.services.bridge_types import RegistrationRequest as RegistrationRequest
 from guard_app.services.bridge_types import RegistrationView as RegistrationView
+from guard_app.services.bridge_types import ScanState as ScanState
 from guard_app.services.bridge_types import SessionCreated as SessionCreated
 from guard_app.services.bridge_types import SessionOptions as SessionOptions
 from guard_app.services.bridge_types import SessionStartError as SessionStartError
@@ -142,6 +147,7 @@ class BackendBridge(QObject):
     policy_changed = Signal(object)
     settings_changed = Signal(object)
     registration_changed = Signal(object)
+    scan_changed = Signal(object)
     recovery_changed = Signal(object)
     recovery_page_changed = Signal(object)
     # B6-05: whether this run answers approval/call queries, then QueryReply values.
@@ -179,6 +185,7 @@ class BackendBridge(QObject):
             account_changed=self.account_changed.emit,
             policy_changed=self.policy_changed.emit,
             registration_changed=self.registration_changed.emit,
+            scan_changed=self.scan_changed.emit,
         )
         lifecycle = LifecycleOutlet(
             self.lifecycle_changed.emit,
@@ -298,6 +305,10 @@ class BackendBridge(QObject):
             "confirm",
             "recheck",
             "list",
+            "scan",
+            "scan_status",
+            "descriptions_preview",
+            "descriptions_save",
             "activation_preview",
             "tool_settings_preview",
             "tool_settings_save",

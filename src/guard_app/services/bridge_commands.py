@@ -32,6 +32,7 @@ from guard_app.services.bridge_types import (
     ControlAction,
     ConversationEvent,
     RegistrationView,
+    ScanState,
     SessionCreated,
     SessionStartError,
     TaskProjection,
@@ -60,6 +61,7 @@ class BridgeOutlet:
     account_changed: Callable[[AccountView], None]
     policy_changed: Callable[[PolicyView], None]
     registration_changed: Callable[[RegistrationView], None] = lambda view: None
+    scan_changed: Callable[[ScanState], None] = lambda state: None
 
 
 class TaskViews:
@@ -352,7 +354,7 @@ class CommandExecutor:
         if control is None:
             return await self._stop_without_guard(bindings, command, execution)
         if command.action == ControlAction.REVIEW:
-            return await self._review(control, command)
+            return await self._review(bindings, control, command)
         if command.action in _STOPS:
             return await self._stop(bindings, control, command, execution)
         return await self._decide(bindings, control, command, execution)
@@ -450,7 +452,9 @@ class CommandExecutor:
         await bindings.stop_session(command.target_id, command.epoch, ControlAction(command.action))
         return "SESSION_STOP_RETURNED"
 
-    async def _review(self, control: HumanControl, command: BridgeCommand) -> str:
+    async def _review(
+        self, bindings: BackendBindings, control: HumanControl, command: BridgeCommand
+    ) -> str:
         snapshot = await control.review(command.target_id)
         if snapshot is None:
             return "REVIEW_UNAVAILABLE"
@@ -463,6 +467,10 @@ class CommandExecutor:
                 review_header(snapshot),
                 snapshot.arguments_bytes,
                 review_fields(snapshot),
+                tool_name=snapshot.request.tool.tool_name,
+                scan=bindings.scan_for_review(snapshot.request.tool.server_id)
+                if bindings.scan_for_review is not None
+                else None,
             )
         )
         return "REVIEW_READY"

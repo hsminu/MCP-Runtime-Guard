@@ -36,6 +36,7 @@ from .presentation import (
     task_label_text,
 )
 from .recovery import RecoveryPanel
+from .scan_report import ToolScanWarningPanel
 from .task_status import FINAL_STATUSES, status_code, status_detail, status_title
 from .widgets import Disclosure, KeyboardActionButton, plain_label
 
@@ -162,6 +163,9 @@ class RuntimePanel(QWidget):
             "승인 요청이 도착하면 ‘승인 사본 확인’을 눌러 내용을 확인하세요."
         )
         approval_layout.addWidget(self.detail)
+        self.scan_warning = ToolScanWarningPanel()
+        self.scan_warning.hide()
+        approval_layout.addWidget(self.scan_warning)
         self._fit_detail()
         layout.addWidget(approval)
 
@@ -404,6 +408,7 @@ class RuntimePanel(QWidget):
         self._review_command = None
         self._reviewed = None
         self.detail.clear()
+        self.scan_warning.clear()
         self._fit_detail()
 
     def _mark_approval(self, waiting: bool) -> None:
@@ -569,6 +574,7 @@ class RuntimePanel(QWidget):
             lines = [visible_review_text(review.receiving_boundaries)]
         lines += ["", "전체 인자:", visible_review_text(review.arguments_bytes.decode("utf-8"))]
         self.detail.setPlainText("\n".join(lines))
+        self.scan_warning.set_review(review.scan, review.tool_name)
         self._fit_detail()
         self._reviewed = review.approval_id
         self._refresh()
