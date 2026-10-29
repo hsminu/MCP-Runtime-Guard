@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from guard_app.domain.contracts import (
+    ApprovalCommit,
     ApprovalRecord,
     Conversation,
     FingerprintChange,
@@ -416,6 +417,35 @@ class Store(Protocol):
         reason: Reason,
     ) -> TaskState:
         """revision·허용 상태 전이를 검사한다. HALTED/UNKNOWN_OUTCOME 재개는 금지다."""
+        ...
+
+    async def open_approval(
+        self, approval: ApprovalRecord, *, expected_task: TaskState
+    ) -> ApprovalCommit:
+        """합의 전 제안(B6-01, #76): 승인·요청·Task 대기 전이와 감사를 원자 기록.
+
+        관계·epoch·revision을 조건부 검사한다. 충돌과 커밋 불명을 구분하고,
+        결과가 불명이면 실행 권한을 닫는다(C 조건 1·3).
+        """
+        ...
+
+    async def finish_approval(
+        self,
+        approval_id: str,
+        status: ApprovalStatus,
+        *,
+        expected_approval_revision: int,
+        task_after: TaskStatus,
+        expected_task_revision: int,
+        reason: Reason,
+        halt_reason: Reason | None = None,
+        now_utc: datetime,
+    ) -> ApprovalCommit:
+        """합의 전 제안(B6-01, #76): 승인·요청 종결, Task 복귀/정지와 감사 원자 기록.
+
+        관계·epoch·revision을 조건부 검사한다. 충돌과 커밋 불명을 구분하고,
+        결과가 불명이면 실행 권한을 닫는다(C 조건 2·3). 소비는 기존 연산을 쓴다.
+        """
         ...
 
     async def create_approval(self, approval: ApprovalRecord) -> None:
