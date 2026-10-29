@@ -120,7 +120,7 @@
 - [x] C6.21 CODEX_HOME `secrets/` 허용(알려진 암호문·임시 파일만, 해시 대조 제외, 앱 시작 때 유지)과 L1 `include_permissions_instructions`·`include_environment_context` = false, `codex.lock.json` 갱신(C-CODEX-08) · [기록](archive/c/C6.21-codex-secrets-and-prompt-blocks.md)
 - [ ] C6.22 CI에서 실제 L2: 워크플로에서 `tools/install_codex.py`로 codex.exe를 받고 `GUARD_TEST_CODEX_EXE`로 `test_real_codex_passes_l2`를 켬(C6.14 후속, 공용 CI 파일 변경이라 따로 제안)
 - [x] C6.23 #41 A 리뷰 후속(L2): 전체 시간 상한 `deadline_s`(기본 30초)와 `L2_DEADLINE_EXCEEDED`, 최악 시간·취소·예외 경로 설명, 가짜 모델 서버 밖 통신은 관찰하지 않는다는 범위 명시, L2·L3 허용 항목 같음 테스트 · [기록](archive/c/C6.23-l2-a-review-followup.md)
-- [ ] C6.24 의존성 취약점 정리(pip-audit 16건, C-DEP-01–03): certifi·cryptography·filelock lock 갱신, mcp 1.30.0(A·B 합의, A transport 재검증), litellm 1.93.2는 예외 등록(Scanner 고정, 2026-10-29 사용자 결정). 끝나면 pip-audit을 실패로 막는 단계로 · [기록](archive/c/C2.9-ci-static-checks.md)
+- [ ] C6.24 의존성 취약점 정리(pip-audit 16건, C-DEP-01–03): certifi·cryptography·filelock lock 갱신 완료(C-DEP-03), litellm 1.93.2 두 ID는 예외 PA-01(Scanner 고정, 2026-10-29 사용자 결정). 남은 것: mcp 1.30.0(C-DEP-01, A·B 합의·A transport 재검증) 뒤 pip-audit을 실패로 막는 단계로 · [기록](archive/c/C2.9-ci-static-checks.md)
 
 ## 인수 기준
 
