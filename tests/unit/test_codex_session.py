@@ -436,11 +436,25 @@ async def test_request_user_input_gets_an_empty_answer_and_is_only_counted() -> 
 
 
 async def test_failed_turn_maps_auth_and_usage_limits_to_fixed_codes() -> None:
-    for info, error in [
-        ("unauthorized", CodexAuthenticationError),
-        ("usageLimitExceeded", CodexSessionError),
-        ("rateLimitExceeded", CodexSessionError),
-        ("serverOverloaded", CodexSessionError),
+    for info, error, expected in [
+        ("unauthorized", CodexAuthenticationError, "CODEX_AUTH_FAILED"),
+        ("usageLimitExceeded", CodexSessionError, "CODEX_USAGE_LIMIT"),
+        ("rateLimitExceeded", CodexSessionError, "CODEX_USAGE_LIMIT"),
+        ("serverOverloaded", CodexSessionError, "CODEX_TURN_FAILED"),
+        (
+            {"httpConnectionFailed": {"httpStatusCode": 401}},
+            CodexAuthenticationError,
+            "CODEX_AUTH_FAILED",
+        ),
+        ({"httpConnectionFailed": {"httpStatusCode": 500}}, CodexSessionError, "CODEX_TURN_FAILED"),
+        (
+            {"httpConnectionFailed": {"httpStatusCode": "401"}},
+            CodexSessionError,
+            "CODEX_TURN_FAILED",
+        ),
+        ({"unknown": {"httpStatusCode": 401}}, CodexSessionError, "CODEX_TURN_FAILED"),
+        ({"httpConnectionFailed": None}, CodexSessionError, "CODEX_TURN_FAILED"),
+        (["unauthorized"], CodexSessionError, "CODEX_TURN_FAILED"),
     ]:
 
         async def script(server: FakeAppServer, turn_id: str, _text: str, *, info=info) -> None:
@@ -449,11 +463,6 @@ async def test_failed_turn_maps_auth_and_usage_limits_to_fixed_codes() -> None:
         async with running(FakeAppServer(script)) as session:
             with pytest.raises(error) as failed:
                 await asyncio.wait_for(session.send("go"), 2)
-            expected = {
-                "unauthorized": "CODEX_AUTH_FAILED",
-                "usageLimitExceeded": "CODEX_USAGE_LIMIT",
-                "rateLimitExceeded": "CODEX_USAGE_LIMIT",
-            }.get(info, "CODEX_TURN_FAILED")
             assert failed.value.code == expected
             assert "PRIVATE" not in str(failed.value)
 

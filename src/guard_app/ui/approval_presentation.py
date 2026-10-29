@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import StrEnum
 
 from guard_app.domain.enums import ApprovalStatus
@@ -84,7 +85,9 @@ class ApprovalSummary:
     created_at: datetime
     resolved_at: datetime | None = None
     reason_code: str | None = None
+    # The Store row's revision, the expected value for a command from this list.
     row_revision: int | None = None
+    expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -97,8 +100,17 @@ class ApprovalPage:
     as_of: datetime | None = None
 
 
-DEFAULT_APPROVAL_TTL_SECONDS = 300
 SOURCE_NOT_CONNECTED = "승인 목록 조회가 아직 연결되지 않음 · 승인 요청은 대화 화면에서 처리하세요."
+# B6-05: a failed query is unknown, never an empty list.
+QUERY_UNKNOWN = "불러오지 못함 · 항목이 없다는 뜻이 아님. 새로고침하세요."
+QUERY_TEXT_INVALID = "검색어와 서버 ID는 영문·숫자와 _ . : - 만 64자까지 입력하세요."
+_QUERY_TEXT = re.compile(r"[A-Za-z0-9_.:-]{0,64}")
+
+
+def valid_query_text(text: str) -> bool:
+    """B's search pattern; checked before sending, sent unchanged (case kept)."""
+
+    return type(text) is str and _QUERY_TEXT.fullmatch(text) is not None
 
 
 def valid_page(page: ApprovalPage) -> bool:
@@ -170,7 +182,7 @@ def selected_detail_text(row: ApprovalSummary) -> str:
             f"Task ID: {one_line(row.task_id)} · 요청 ID: {one_line(row.request_id)}",
             "수신처 요약: "
             f"{one_line(row.destination_summary) if row.destination_summary else MISSING}",
-            f"요청 시각: {format_kst(row.created_at)}",
+            f"요청 시각: {format_kst(row.created_at)} · 만료 시각: {format_kst(row.expires_at)}",
             f"처리 시각: {format_kst(row.resolved_at)}",
         )
     )
@@ -196,18 +208,20 @@ def status_display(
     row: ApprovalSummary,
     query: ApprovalQuery | None,
     now: datetime | None,
-    ttl_seconds: int,
     *,
     narrow: bool,
 ) -> tuple[str, int, str, str]:
     status = _STATUS_TEXT[row.status]
+    # The Store's own expiry, never a guess from a default TTL (#86).
     if (
         query is not None
         and query.lane is ApprovalLane.PENDING
         and now is not None
         and now.tzinfo is not None
         and now.utcoffset() is not None
-        and now - row.created_at >= timedelta(seconds=ttl_seconds)
+        and row.expires_at is not None
+        and row.expires_at.tzinfo is not None
+        and now >= row.expires_at
     ):
         status += " · 승인 유효 시간 지남 · 상태 다시 확인(참고)"
     if narrow:

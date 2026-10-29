@@ -81,6 +81,7 @@ from guard_app.domain.queries import (
     ListSort,
 )
 from guard_app.domain.reasons import Reason
+from guard_app.domain.schema_jobs import MAX_REGISTERED_SCHEMA_BYTES
 from guard_app.ports import BackupDestination
 from guard_app.security.digest import jcs_canonicalize, json_digest
 from guard_app.security.ids import new_id
@@ -163,7 +164,7 @@ _RECOVERED_WRITES = frozenset(
     }
 )
 # B6-06 제안 한계: UTF-8 정규화 후 크기. 등록 UI/검사 결과의 메모리·DB 폭주 제한.
-_MAX_SCHEMA_BYTES = 256 * 1024
+_MAX_SCHEMA_BYTES = MAX_REGISTERED_SCHEMA_BYTES
 _MAX_TOOLS_BYTES = 8 * 1024 * 1024
 _MAX_REPORT_BYTES = 1024 * 1024
 _TASK_TRANSITIONS = {

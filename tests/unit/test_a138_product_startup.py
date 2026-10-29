@@ -577,7 +577,8 @@ async def test_settings_build_real_guard_and_own_server_exit(
         server.update(command_size=123, command_sha256="a" * 64)
     else:
         server.pop("command")
-        server.update(transport="streamable_http", url="http://127.0.0.1:80/mcp")
+        # Canonical only: B's Profile check refuses "…:80/mcp" and it is not started (#86).
+        server.update(transport="streamable_http", url="http://127.0.0.1/mcp")
     async with closing_store(folders.db_path(), audit_id_factory=lambda: new_id("audit")) as store:
         await registered(store, doc)
     peer = Peer([READ_DEFINITION])
@@ -592,7 +593,12 @@ async def test_settings_build_real_guard_and_own_server_exit(
     monkeypatch.setattr(assembly, "http_stream_factory", http)
     try:
         bindings = await bootstrap_product(folders, settings=SettingsFile(folders, doc, None))
-        for binding in (bindings.human_control, bindings.policy_access, bindings.policy):
+        for binding in (
+            bindings.human_control,
+            bindings.policy_access,
+            bindings.policy,
+            bindings.queries,  # B6-05 list reads on the real SQLiteStore
+        ):
             assert binding is not None
         assert peer.calls == []  # listing only; no tool execution during startup
         if confirmed:

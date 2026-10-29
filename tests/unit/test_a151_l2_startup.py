@@ -301,3 +301,26 @@ def test_startup_budget_covers_one_window_of_server_starts():
         + module.L2_CANCEL_TIMEOUT_S
         + 10.0
     )
+
+
+def test_startup_progress_shows_on_the_default_session_screen(app):
+    """Real-run follow-up: the L2 check was visible only in the activity panel."""
+    from guard_app.services.bridge import LifecycleEvent
+    from guard_app.ui.runtime import RuntimePanel
+    from guard_app.ui.window import GuardWindow
+
+    bridge = BackendBridge(lambda: None)
+    window = GuardWindow()
+    window.attach_runtime(RuntimePanel(bridge))
+    notice = window.sessions.current.notice
+    try:
+        idle = notice.text()
+        for code in ("STORE_CHECK", "CODEX_L2_CHECK"):
+            bridge.lifecycle_changed.emit(LifecycleEvent(BridgeState.STARTING, code))
+            assert notice.text() == LIFECYCLE_MESSAGES[code]
+            assert notice.isVisibleTo(window)
+        bridge.lifecycle_changed.emit(LifecycleEvent(BridgeState.READY, "READY"))
+        assert notice.text() == idle
+    finally:
+        window.close()
+        app.processEvents()

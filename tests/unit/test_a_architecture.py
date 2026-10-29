@@ -15,7 +15,8 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "guard_app"
 A_SERVICES = frozenset(
     (  # noqa: SIM905 - keep the explicit module allowlist compact.
         "account_runtime bridge bridge_bindings bridge_commands bridge_context "
-        "bridge_host bridge_ingress bridge_registration bridge_lanes bridge_streams "
+        "bridge_host bridge_ingress bridge_queries bridge_registration bridge_lanes "
+        "bridge_streams "
         "bridge_types codex_account codex_composition codex_preparation codex_prompt "
         "codex_session codex_turns guard_relay policy_view product_assembly "
         "product_settings product_startup runner session_admission session_cleanup "
@@ -34,7 +35,7 @@ A_ADAPTERS = frozenset(
 OTHER_SERVICES = frozenset(
     (  # noqa: SIM905 - keep the explicit module allowlist compact.
         "approvals catalog catalog_schema catalog_sources guard registry response_gate "
-        "scanner state_checks"
+        "scanner schema_jobs state_checks"
     ).split()
 )
 OTHER_ADAPTERS = frozenset({"cisco", "cisco_aggregation", "cisco_llm"})

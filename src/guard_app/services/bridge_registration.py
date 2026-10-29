@@ -16,6 +16,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from guard_app.domain.contracts import RegistryEntry
 from guard_app.domain.enums import RegStatus, ToolKind
 from guard_app.domain.errors import DispatchError, StoreError
 from guard_app.ports import RegistryStore
@@ -34,7 +35,12 @@ from guard_app.servers.file_server import (
 from guard_app.services.bridge_types import RegistrationRequest, RegistrationRow, RegistrationView
 from guard_app.services.catalog import CatalogConfigError, ServerSettings, load_profile_settings
 from guard_app.services.policy_view import PolicyServer, PolicyTool, PolicyView
-from guard_app.services.registry import RegistryError, ServerRegistry, ToolListingView
+from guard_app.services.registry import (
+    RegistryError,
+    ServerRegistry,
+    ToolListingView,
+    listing_fingerprints,
+)
 from guard_app.services.session_admission import SessionRuntimeError
 from guard_app.services.session_policy import TaskPolicy
 from guard_app.services.session_tool_settings import tool_settings_rows
@@ -129,7 +135,8 @@ class RegistrationCommands:
         self.execution_check = execution_check
         self._operator_id = operator_id
         self._lock = asyncio.Lock()
-        self._pending: tuple[str, ServerSettings, bool, RegistrationRequest | None] | None = None
+        # (token, server, "register" | "recheck" | "restore", file request)
+        self._pending: tuple[str, ServerSettings, str, RegistrationRequest | None] | None = None
         # Unknown Registry writes are not retried in this run.
         self._unknown = False
 
@@ -162,7 +169,8 @@ class RegistrationCommands:
 
     async def _rows(self) -> tuple[RegistrationRow, ...]:
         document = self.policy.registration_document()
-        configured = {s.id: s for s in load_profile_settings(document, self.registry).servers}
+        loaded = load_profile_settings(document, self.registry)
+        configured = {s.id: s for s in loaded.servers}
         entries = await self.store.list_registrations()
         pins: dict[str, bool] = {}
         for server in configured.values():
@@ -186,6 +194,8 @@ class RegistrationCommands:
                 if e.registration.server_id in configured
                 else None,
                 pins.get(e.registration.server_id, False),
+                loaded.server_issue(e.registration.server_id),
+                e.registration.server_id in configured,
             )
             for e in entries
         )
@@ -282,6 +292,7 @@ class RegistrationCommands:
         if request.action in ("prepare", "prepare_file", "recheck"):
             self._pending = None
             updating = request.action == "recheck"
+            restoring = request.restore is True and not updating
             file_request = request if request.action == "prepare_file" else None
             if file_request is not None:
                 # Freeze the C-resolved root into the confirmation snapshot too.
@@ -337,7 +348,11 @@ class RegistrationCommands:
                 else:
                     data["url"] = normalize_endpoint(request.url).url
                 server = ServerSettings.model_validate_json(json.dumps(data), strict=True)
-                if self.registry.entry(server.id) is not None or any(
+                if restoring:
+                    refused = self._restore_refusal(server, self.registry.entry(server.id))
+                    if refused is not None:
+                        return RegistrationView(refused)
+                elif self.registry.entry(server.id) is not None or any(
                     s.id == server.id
                     for s in load_profile_settings(
                         self.policy.registration_document(), self.registry
@@ -345,7 +360,8 @@ class RegistrationCommands:
                 ):
                     return RegistrationView("REG_SERVER_EXISTS")
             token = new_id("registration")
-            self._pending = (token, server, updating, file_request)
+            mode = "recheck" if updating else "restore" if restoring else "register"
+            self._pending = (token, server, mode, file_request)
             return self._preview(token, server, "REG_CONFIRM_REQUIRED")
         if (
             request.action != "confirm"
@@ -353,7 +369,8 @@ class RegistrationCommands:
             or request.token != self._pending[0]
         ):
             return RegistrationView("REG_CONFIRM_EXPIRED")
-        _, server, updating, file_request = self._pending
+        _, server, mode, file_request = self._pending
+        updating = mode == "recheck"
         self._pending = None  # single-use, also on errors/cancellation
         if server.transport == "stdio":
             check_stdio_values(server.command, server.args, server.env_allow)
@@ -363,7 +380,7 @@ class RegistrationCommands:
                     update={"command_size": pin.size, "command_sha256": pin.sha256}
                 )
                 token = new_id("registration")
-                self._pending = (token, server, updating, file_request)
+                self._pending = (token, server, mode, file_request)
                 return self._preview(token, server, "REG_PIN_CHANGED")
         if file_request is not None and real_root(
             Path(file_request.file_root or "")
@@ -385,28 +402,55 @@ class RegistrationCommands:
                 if not written:
                     self._unknown = True
         if not updating:
+            restored = await self.registry.refresh(server.id) if mode == "restore" else None
+            if mode == "restore":
+                refused = self._restore_refusal(server, restored)
+                if refused is not None:
+                    return RegistrationView(refused)
             try:
                 listing = await self.collect(server)
             except DispatchError as error:
                 if error.exception_type not in _SERVER_START_FAILURES:
                     raise
                 return RegistrationView("REG_SERVER_UNREACHABLE")  # nothing written
-            written = False
-            try:
-                await self.registry.register(server, listing)
-                written = True
-            except RegistryError:
-                written = True  # fixed validation refusal, no uncertain store write
-                raise
-            finally:
-                if not written:
-                    self._unknown = True
+            if restored is not None:
+                # Only the server the registration recorded gets its settings back.
+                registered = {t.tool_name: t.fingerprint for t in restored.registration.tools}
+                if listing_fingerprints(listing) != registered:
+                    return RegistrationView("REG_RESTORE_TOOLS_DIFFER")  # nothing written
+            else:
+                written = False
+                try:
+                    await self.registry.register(server, listing)
+                    written = True
+                except RegistryError:
+                    written = True  # fixed validation refusal, no uncertain store write
+                    raise
+                finally:
+                    if not written:
+                        self._unknown = True
         await self.policy.save_registration(
             server, self.registry, self.stop_sessions, updating=updating, sources=sources
         )
-        return RegistrationView(
-            "REG_PIN_SAVED" if updating else "REG_REGISTERED", rows=await self._rows()
-        )
+        codes = {"recheck": "REG_PIN_SAVED", "restore": "REG_SETTINGS_RESTORED"}
+        return RegistrationView(codes.get(mode, "REG_REGISTERED"), rows=await self._rows())
+
+    def _restore_refusal(self, server: ServerSettings, entry: RegistryEntry | None) -> str | None:
+        """Why `server`'s settings record cannot be written back now; None when it can.
+
+        Only a PENDING registration with no record in the settings file, and
+        only with the boundary that registration holds (A128·A105).
+        """
+        loaded = load_profile_settings(self.policy.registration_document(), self.registry)
+        if (
+            entry is None
+            or entry.registration.status is not RegStatus.PENDING
+            or any(s.id == server.id for s in loaded.servers)
+        ):
+            return "REG_RESTORE_UNAVAILABLE"
+        if server.as_boundary() != entry.registration.boundary:
+            return "REG_RESTORE_BOUNDARY_DIFFERS"
+        return None
 
     @staticmethod
     def _preview(token: str, server: ServerSettings, code: str) -> RegistrationView:

@@ -36,6 +36,7 @@ def session_display(
     pending_command: str | None,
     command_notice: str,
     session_blocker: str,
+    startup_notice: str,
 ) -> SessionDisplay:
     failure_notice = "" if snapshot is None else codex_failure_notice(snapshot.connection_code)
     active = snapshot is not None
@@ -55,6 +56,7 @@ def session_display(
         note = (
             command_notice
             or session_blocker_notice(session_blocker)
+            or startup_notice
             or (
                 "Codex 연결과 시작 검사가 확인되면 세션을 시작할 수 있음. "
                 "로그인은 설정에서 안내를 확인하세요."
