@@ -37,6 +37,7 @@ from guard_app.services.policy_view import PolicyServer, PolicyTool, PolicyView
 from guard_app.services.registry import RegistryError, ServerRegistry, ToolListingView
 from guard_app.services.session_admission import SessionRuntimeError
 from guard_app.services.session_policy import TaskPolicy
+from guard_app.services.session_tool_settings import tool_settings_rows
 
 
 def endpoint_input(value: str) -> tuple[str | None, str | None]:
@@ -191,6 +192,32 @@ class RegistrationCommands:
         self.policy.check_registration()
         if self._unknown:
             return RegistrationView("REG_STORE_UNKNOWN")
+        if request.action == "tool_settings_preview":
+            async with self.policy.lock:
+                self.policy.check_registration()
+                revision, rows = tool_settings_rows(
+                    self.policy.registration_document(), self.registry, request.server_id
+                )
+                return RegistrationView(
+                    "REG_TOOLS_PREVIEW",
+                    row_revision=revision,
+                    tool_settings=rows,
+                    server_id=request.server_id,
+                )
+        if request.action == "tool_settings_save":
+            await self.policy.save_tool_settings(
+                request.server_id,
+                request.expected_row_revision,
+                request.tool_settings,
+                self.registry,
+                self.stop_sessions,
+                self._review_unknown,
+            )
+            return RegistrationView(
+                "REG_TOOLS_RESTART_REQUIRED",
+                rows=await self._rows(),
+                current_policy=self.policy.registration_policy_view(),
+            )
         if request.action == "activation_preview":
             async with self.policy.lock:
                 self.policy.check_registration()
@@ -381,3 +408,6 @@ class RegistrationCommands:
             sha256=server.command_sha256,
             url=server.url,
         )
+
+    def _review_unknown(self) -> None:
+        self._unknown = True

@@ -9,6 +9,7 @@ from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.domain.enums import RegStatus, TaskStatus
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import TaskState
+from guard_app.services.bridge_types import ToolSettingsEdit
 from guard_app.services.catalog import (
     CatalogConfigError,
     GuardSettings,
@@ -26,6 +27,7 @@ from guard_app.services.product_settings import (
 )
 from guard_app.services.registry import ServerRegistry
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
+from guard_app.services.session_tool_settings import tool_settings_document
 
 # Stores B's prepared policy document (CFG-01: product_settings.SettingsFileSaver).
 # True only after the document is durably saved; apply follows only then. A save
@@ -300,6 +302,82 @@ class TaskPolicy:
             finally:
                 code = "REG_ACTIVATION_RESTART_REQUIRED" if completed else "REG_ACTIVATION_UNKNOWN"
                 self._admission.require_restart(code)
+                if self._assembled is not None:
+                    await self._assembled.guard.aclose()
+
+    async def save_tool_settings(
+        self,
+        server_id: str,
+        expected_row_revision: int,
+        edits: tuple[ToolSettingsEdit, ...],
+        registry: ServerRegistry,
+        stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
+        review_unknown: Callable[[], None],
+    ) -> None:
+        """Revoke authority, save, apply, close. Both writes require a restart."""
+        async with self.lock:
+            self.check_registration()
+            current = self.registration_document()
+            document = tool_settings_document(
+                current, registry, server_id, expected_row_revision, edits
+            )
+            try:
+                change = prepare_policy_change(
+                    current,
+                    document,
+                    self._assembled.registry if self._assembled else registry,
+                    resource_resolver=self._assembled.resource_resolver
+                    if self._assembled
+                    else None,
+                )
+            except CatalogConfigError:
+                raise SessionRuntimeError("REG_TOOLS_INVALID") from None
+            completed = False
+            try:
+                entry = registry.entry(server_id)
+                # The stored row, not status(): an unrecorded ACTIVE server reads
+                # as PENDING this run but keeps ACTIVE authority in the Store.
+                if entry is not None and entry.registration.status is RegStatus.ACTIVE:
+                    reviewed = False
+                    try:
+                        await registry.request_review(
+                            server_id, expected_row_revision=expected_row_revision
+                        )
+                        reviewed = True
+                    finally:
+                        if not reviewed:
+                            review_unknown()
+                if self._saver is None:
+                    raise SessionRuntimeError("REG_SETTINGS_UNAVAILABLE")
+                try:
+                    saved = await self._saver(change)
+                except SettingsFileChangedError:
+                    raise SessionRuntimeError("POLICY_SAVE_FILE_CHANGED") from None
+                except SaveOutcomeUnknownError:
+                    raise SessionRuntimeError("POLICY_SAVE_UNKNOWN") from None
+                if saved is not True:
+                    raise SessionRuntimeError("POLICY_SAVE_FAILED")
+                self._document = change.document
+                if self._assembled is not None and self._task_source is not None:
+                    await stop_sessions(
+                        await self._apply(self._assembled, change, self._task_source)
+                    )
+                    if not change.changed:
+                        control = self._assembled.guard.human_control(self._assembled.operator_id)
+                        running = tuple(
+                            s.task_id
+                            for s in await self._task_source()
+                            if s.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+                        )
+                        for task_id in running:
+                            await control.emergency_halt(task_id)
+                        await stop_sessions(running)
+                completed = True
+            finally:
+                # Also covers cancellation without swallowing it (A130).
+                self._admission.require_restart(
+                    "REG_TOOLS_RESTART_REQUIRED" if completed else "REG_TOOLS_UNKNOWN"
+                )
                 if self._assembled is not None:
                     await self._assembled.guard.aclose()
 

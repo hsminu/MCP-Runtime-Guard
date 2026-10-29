@@ -359,6 +359,12 @@ _CODEX_STOP_NOTICES = {
     "REG_ACTIVATION_UNKNOWN": (
         "서버 설정 결과를 확인하지 못해 Guard를 정지함. 앱을 다시 시작하세요."
     ),
+    "REG_TOOLS_RESTART_REQUIRED": (
+        "도구 설정 저장 완료 · Task 정지됨. 앱을 다시 시작한 뒤 서버 목록에서 활성화하세요."
+    ),
+    "REG_TOOLS_UNKNOWN": (
+        "도구 설정 결과를 확인하지 못해 Guard를 정지함. 다시 저장하지 말고 앱을 다시 시작하세요."
+    ),
     "CODEX_STORE_HALTED": "저장소 실행 권한이 닫혀 모든 세션을 정지함. 앱을 다시 시작하세요.",
 }
 
@@ -367,7 +373,9 @@ def codex_failure_notice(code: str, *, creating: bool = False) -> str:
     """Describe only known failures; cleanup uncertainty never implies no launch."""
 
     stopped = _CODEX_STOP_NOTICES.get(code)
-    if stopped is not None and not creating:
+    if stopped is not None and (
+        not creating or code in ("REG_TOOLS_RESTART_REQUIRED", "REG_TOOLS_UNKNOWN")
+    ):
         return stopped
     detail = _CODEX_FAILURE_DETAILS.get(code)
     if detail is None:
@@ -399,6 +407,8 @@ def session_blocker_notice(code: str) -> str:
 
     if not code:
         return ""
+    if code in ("REG_TOOLS_RESTART_REQUIRED", "REG_TOOLS_UNKNOWN"):
+        return _CODEX_STOP_NOTICES[code]
     if code == "SESSION_CREATION_UNAVAILABLE":
         return "이 실행 구성에는 새 Task 생성 기능이 연결되지 않음."
     detail = _CODEX_FAILURE_DETAILS.get(code)

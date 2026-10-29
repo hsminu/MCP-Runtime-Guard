@@ -41,6 +41,7 @@ A_SERVICES = frozenset(
         "session_cleanup",
         "session_execution",
         "session_policy",
+        "session_tool_settings",
         "session_preparation",
         "session_runtime",
         "session_startup",

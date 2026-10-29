@@ -193,6 +193,25 @@ class ApprovalReview:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class ToolSettingsEdit:
+    name: str
+    kind: str
+    label: str | None = None
+    destination_arg: str | None = None
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ToolSettingsRow:
+    name: str
+    registry_kind: str
+    kind: str
+    destination_arg: str | None
+    label: str | None
+    string_arguments: tuple[str, ...]
+    readonly: bool
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class RegistrationRequest:
     action: str
     server_id: str = ""
@@ -212,6 +231,7 @@ class RegistrationRequest:
     folder_labels: tuple[tuple[str, str], ...] = ()
     root_label: str = ""
     list_root_label: str = ""
+    tool_settings: tuple[ToolSettingsEdit, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,3 +257,5 @@ class RegistrationView:
     activation: PolicyView | None = None
     row_revision: int = 0
     current_policy: PolicyView | None = None
+    tool_settings: tuple[ToolSettingsRow, ...] = ()
+    server_id: str = ""

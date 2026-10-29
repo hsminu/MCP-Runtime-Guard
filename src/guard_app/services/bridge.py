@@ -69,6 +69,8 @@ from guard_app.services.bridge_types import SessionCreated as SessionCreated
 from guard_app.services.bridge_types import SessionOptions as SessionOptions
 from guard_app.services.bridge_types import SessionStartError as SessionStartError
 from guard_app.services.bridge_types import TaskProjection as TaskProjection
+from guard_app.services.bridge_types import ToolSettingsEdit as ToolSettingsEdit
+from guard_app.services.bridge_types import ToolSettingsRow as ToolSettingsRow
 from guard_app.services.codex_account import AccountView as AccountView  # UI re-export
 from guard_app.services.policy_view import PolicyServer as PolicyServer  # UI re-export
 from guard_app.services.policy_view import PolicyTool as PolicyTool  # UI re-export
@@ -278,6 +280,8 @@ class BackendBridge(QObject):
             "recheck",
             "list",
             "activation_preview",
+            "tool_settings_preview",
+            "tool_settings_save",
             "activate",
             "block",
         ):
