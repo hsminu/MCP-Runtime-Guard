@@ -10,8 +10,9 @@ A의 계정 클라이언트는 `account/login/start {type: "chatgpt"}`가 돌려
     정보·경로·fragment는 거부한다. 원문은 `[A-Za-z0-9-._~:/?&=+%]`만 받아 공백·따옴표·제어
     문자가 셸에 닿지 않는다.
   - 쿼리 키는 알려진 것만 한 번씩 받는다. `client_id`는 Codex 앱 값과 같아야 하고,
-    `redirect_uri`는 `http://127.0.0.1:<포트>/auth/callback`(또는 `localhost`)만, `scope`는
-    Codex가 요청하는 항목 안에서만 받는다. 다른 OAuth 앱·외부 콜백·넓힌 권한 동의를 막는다.
+    `redirect_uri`는 관찰한 `http://127.0.0.1:<포트>/auth/callback`만(`localhost` 이름 거부),
+    `scope`는 Codex가 요청하는 항목 안에서만 받는다. 다른 OAuth 앱·외부 콜백·넓힌 권한 동의를
+    막는다.
 - **열기:** `ShellExecuteExW`(`open`, `SEE_MASK_NOASYNC`·`SEE_MASK_FLAG_NO_UI`)를 스레드에서
   부른다. `cmd`·`subprocess`·`os.startfile`을 쓰지 않는다. 스레드는 COM을 단일 스레드 아파트로
   열고 닫는다.
@@ -45,7 +46,7 @@ _PREFIX = "https://auth.openai.com/oauth/authorize?"
 _RAW = re.compile(r"[A-Za-z0-9\-._~:/?&=+%]+")
 _ESCAPES = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _KEY = re.compile(r"[a-z_]{1,64}")
-_REDIRECT = re.compile(r"http://(?:127\.0\.0\.1|localhost):([1-9][0-9]{0,4})/auth/callback")
+_REDIRECT = re.compile(r"http://127\.0\.0\.1:([1-9][0-9]{0,4})/auth/callback")
 _TOKEN = re.compile(r"[A-Za-z0-9_\-]+")
 _VALUES: dict[str, Callable[[str], bool]] = {
     "response_type": lambda v: v == "code",

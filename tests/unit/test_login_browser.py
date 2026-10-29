@@ -61,7 +61,6 @@ def test_codex_shaped_url_is_accepted_unchanged():
 @pytest.mark.parametrize(
     "changes",
     [
-        {"redirect_uri": "http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"},
         {"redirect_uri": "http%3A%2F%2F127.0.0.1%3A50123%2Fauth%2Fcallback"},
         {"scope": "openid"},
         {"originator": None, "id_token_add_organizations": None, "codex_cli_simplified_flow": None},
@@ -108,6 +107,8 @@ def test_variants_codex_may_produce_are_accepted(changes):
         url(client_id=None),
         url(redirect_uri="https%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback"),
         url(redirect_uri="http%3A%2F%2Fevil.example%3A1455%2Fauth%2Fcallback"),
+        # 고정 Codex가 준 값은 127.0.0.1이다. localhost 이름은 받지 않는다(#77 B 리뷰).
+        url(redirect_uri="http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"),
         url(redirect_uri="http%3A%2F%2F127.0.0.1%3A1455%2Fother"),
         url(redirect_uri="http%3A%2F%2F127.0.0.1%3A0%2Fauth%2Fcallback"),
         url(redirect_uri="http%3A%2F%2F127.0.0.1%3A65536%2Fauth%2Fcallback"),
