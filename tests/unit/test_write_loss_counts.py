@@ -6,8 +6,8 @@ SEND를 실행한 뒤 응답을 잃는다. 응답 없음(`hang-`), 시간 제한
 307·308로 다른 경로를 가리키는 경우도 본다(리다이렉트를 따라가면 안 된다).
 
 I8: 결과를 모르는 쓰기는 자동으로 다시 보내지 않는다. 그 Task는 UNKNOWN_OUTCOME으로 잠기고,
-새 호출 ID로 같은 SEND를 내도, Guard를 새 연결로 다시 조립해도 서버에 다시 가지 않는다.
-같은 실행에서 다른 Task의 SEND가 실제로 1이 되어 0이 의미 있다.
+새 호출 ID로 같은 SEND를 내도, 앱을 다시 시작해도(B6.8 명시 시작, 새 연결) 서버에 다시 가지
+않는다. 다시 시작한 뒤 새 Task의 SEND가 실제로 1이 되어 0이 의미 있다.
 """
 
 from __future__ import annotations
@@ -68,14 +68,15 @@ def test_lost_write_response_is_unknown_and_never_resent(tmp_path, kind, loss, p
             # 늦은 응답이 도착할 시간과 자동 재전송을 기다린다.
             await asyncio.sleep(3.5)
             settled = await run.store.load_task("task-1")
-            # 새 연결(stdio는 새 프로세스)로 같은 Store에 Guard를 다시 조립한다.
+            # 앱을 다시 시작한다: Guard를 닫고 새 회차로 Store를 연 뒤 새 연결로 조립한다.
             await run.close_guard()
             close_errors = list(run.close_errors)
-            await run.assemble(create_tasks=False)
+            report = await run.restart()
             reconnected = await run.guard.submit("task-1", send("c3", body=token), expected_epoch=1)
             restarted = await run.store.load_task("task-1")
-            # 대조군: 다시 조립한 Guard로 다른 Task의 SEND는 실제로 나간다.
-            control = await run.guard.submit("task-2", send("c4"), expected_epoch=1)
+            # 대조군: 새 회차의 새 Task의 SEND는 실제로 나간다.
+            await run.create_task("task-3")
+            control = await run.guard.submit("task-3", send("c4"), expected_epoch=1)
             return (
                 lost,
                 first,
@@ -88,6 +89,7 @@ def test_lost_write_response_is_unknown_and_never_resent(tmp_path, kind, loss, p
                 run.request_counts(lost.request_id, token),
                 run.request_counts(control.request_id, "body-c4"),
                 close_errors,
+                report,
             )
 
     (
@@ -102,6 +104,7 @@ def test_lost_write_response_is_unknown_and_never_resent(tmp_path, kind, loss, p
         final,
         control_counts,
         close_errors,
+        report,
     ) = asyncio.run(scenario())
     # 서버는 실행했지만 Guard는 결과를 모른다.
     assert type(lost) is OutcomeUnknown
@@ -112,6 +115,9 @@ def test_lost_write_response_is_unknown_and_never_resent(tmp_path, kind, loss, p
     assert settled.status is TaskStatus.UNKNOWN_OUTCOME
     assert type(reconnected) is Denied
     assert restarted.status is TaskStatus.UNKNOWN_OUTCOME
+    # 복구는 결과 불명 호출 하나를 그대로 두고 다시 보내지 않는다. 격리·미해결은 없다.
+    assert report.unknown_outcome_count == 1
+    assert (report.quarantined_count, report.unresolved_count) == (0, 0)
     assert final == LOST_ONCE
     assert type(control) is Released
     assert control_counts == {"approval_consumed": 0, "host_dispatch": 1, "wire": 1, "effect": 1}
