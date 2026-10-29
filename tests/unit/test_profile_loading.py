@@ -44,7 +44,7 @@ def _document():
             {
                 "id": "remote",
                 "transport": "streamable_http",
-                "url": "https://unvalidated.invalid/mcp?secret=value",
+                "url": "https://unvalidated.invalid/mcp",
                 "tier": "general_external",
                 "max_label": "INTERNAL",
                 "tools": [{"name": "send", "kind": "send", "destination_arg": "target"}],
@@ -191,11 +191,14 @@ def test_registry_fingerprint_remains_live():
     assert error.value.reason is Reason.TOOL_FINGERPRINT_CHANGED
 
 
-@pytest.mark.parametrize("change", ["tier", "max_label", "kind", "resource_arg", "id"])
-def test_registry_metadata_mismatch_fails_closed(change):
+@pytest.mark.parametrize("status", [RegStatus.ACTIVE, RegStatus.PENDING, RegStatus.BLOCKED])
+@pytest.mark.parametrize("change", ["tier", "max_label", "kind", "resource_arg", "destination_arg"])
+def test_registry_metadata_mismatch_hides_only_affected_server(change, status):
     registry = _Registry()
     loaded = load_profile_settings(_document(), registry)
-    record = registry.records["docs"]
+    server = "remote" if change == "destination_arg" else "docs"
+    other = "docs" if server == "remote" else "remote"
+    record = registry.records[server].model_copy(update={"status": status})
     if change in {"tier", "max_label"}:
         boundary = Boundary(
             boundary_id="different-id-is-allowed",
@@ -203,16 +206,83 @@ def test_registry_metadata_mismatch_fails_closed(change):
             max_label=Label.INTERNAL,
         )
         record = record.model_copy(update={"boundary": boundary})
-    elif change == "id":
-        record = registry.records["remote"]
     else:
         tool = record.tools[0].model_copy(
             update={change: ToolKind.OTHER if change == "kind" else "another"}
         )
         record = record.model_copy(update={"tools": (tool,)})
-    registry.records["docs"] = record
-    with pytest.raises(CatalogConfigError, match="일치하지 않는다"):
-        loaded.catalog.resolve_tool("docs__read")
+    registry.records[server] = record
+    assert loaded.server_issue(server) == "REG_SETTINGS_MISMATCH"
+    assert loaded.server_issue(other) is None
+    with pytest.raises(ResolutionError) as error:
+        loaded.catalog.resolve_tool(f"{server}__{'send' if server == 'remote' else 'read'}")
+    assert error.value.reason is Reason.UNKNOWN_SERVER
+    assert [view.tool_ref for view in loaded.catalog.tool_views(("docs", "remote"))] == [
+        f"{other}__{'send' if other == 'remote' else 'read'}"
+    ]
+    assert loaded.catalog.resolve_tool(f"{other}__{'send' if other == 'remote' else 'read'}")
+
+
+def test_registry_wrong_id_and_invalid_record_remain_configuration_errors():
+    registry = _Registry()
+    loaded = load_profile_settings(_document(), registry)
+    registry.records["docs"] = registry.records["remote"]
+    for get in (loaded.server_issue, loaded.catalog.resolve_tool):
+        with pytest.raises(CatalogConfigError):
+            get("docs" if get == loaded.server_issue else "docs__read")
+    registry.records["docs"] = {"invalid": "record"}
+    with pytest.raises(CatalogConfigError):
+        loaded.server_issue("docs")
+
+
+def test_server_issue_ignores_absent_and_unselected_registration():
+    document = _document()
+    document["profile"]["servers"] = ["remote"]
+    document["profile"]["sources"] = []
+    registry = _Registry()
+    del registry.records["remote"]
+    loaded = load_profile_settings(document, registry)
+    assert loaded.server_issue("docs") is None
+    assert loaded.server_issue("remote") is None
+    assert loaded.server_issue("unknown") is None
+
+
+def test_startable_servers_filter_urls_but_keep_selection_order_and_policy():
+    document = _document()
+    document["servers"][1]["url"] = "https://example.com"
+    registry = _Registry()
+    for server_id in ("healthy-one", "healthy-two"):
+        settings = deepcopy(document["servers"][0])
+        settings["id"] = server_id
+        document["servers"].append(settings)
+        original = registry.records["docs"]
+        tools = tuple(tool.model_copy(update={"server_id": server_id}) for tool in original.tools)
+        registry.records[server_id] = original.model_copy(
+            update={"server_id": server_id, "tools": tools}
+        )
+    document["profile"]["servers"] = ["healthy-two", "remote", "healthy-one", "docs"]
+    before_document = deepcopy(document)
+    before_version = load_profile_settings(document, registry).policy_version
+    docs = registry.records["docs"]
+    registry.records["docs"] = docs.model_copy(
+        update={"boundary": docs.boundary.model_copy(update={"max_label": Label.INTERNAL})}
+    )
+    loaded = load_profile_settings(document, registry)
+    selected = loaded.selected_servers
+
+    assert loaded.server_issue("remote") == "URL_NOT_CANONICAL"
+    assert loaded.server_issue("docs") == "REG_SETTINGS_MISMATCH"
+    assert loaded.server_issue("healthy-one") is None
+    assert loaded.server_issue("healthy-two") is None
+    assert [server.id for server in selected] == ["docs", "remote", "healthy-one", "healthy-two"]
+    assert [server.id for server in loaded.startable_servers] == [
+        "docs",
+        "healthy-one",
+        "healthy-two",
+    ]
+    assert loaded.selected_servers == selected
+    assert loaded.policy_version == before_version
+    assert document == before_document
 
 
 def test_unconfigured_discovered_tools_are_hidden():
@@ -464,7 +534,9 @@ def test_loading_takes_immutable_snapshot_and_does_no_io(monkeypatch):
 
 
 def test_representations_redact_commands_arguments_and_urls():
-    loaded = load_profile_settings(_document(), _Registry())
+    document = _document()
+    document["servers"][1]["url"] += "?secret=value"
+    loaded = load_profile_settings(document, _Registry())
     for value in (loaded, loaded.profile, loaded.guard_settings, *loaded.servers):
         assert "<redacted>" in repr(value)
         assert "private-module-contents" not in repr(value)

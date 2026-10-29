@@ -361,18 +361,28 @@ def test_recorded_scan_is_the_one_the_user_activates_with(registry):
 
 
 def test_scan_of_a_different_listing_cannot_be_used_to_activate(registry):
-    registry, _ = registry
+    from guard_app.domain.reasons import Reason
+
+    registry, store = registry
     _registered_report(registry)
     changed = [definition("read_doc", description="changed"), DEFINITIONS[1]]
     scanner = InternalMetadataScanner(Analyzer(), Analyzer())
     result = run(scanner.scan("docs", changed))
     report = scan_report(result, pairs(changed), scanned_at_utc=NOW)
-    recorded = run(registry.record_scan("scan-other", report))
+    before = run(store.load_registration("docs"))
+    assert before is not None
+    with pytest.raises(StoreError) as error:
+        run(registry.record_scan("scan-other", report))
+    assert error.value.reason is Reason.TOOL_FINGERPRINT_CHANGED
+    after = run(store.load_registration("docs"))
+    assert after is not None
+    assert after.registration.row_revision == before.registration.row_revision
+    assert after.last_scan_id == before.last_scan_id
     with pytest.raises(StoreError):
         run(
             registry.activate(
                 "docs",
-                expected_row_revision=recorded.registration.row_revision,
+                expected_row_revision=before.registration.row_revision,
                 reviewed_by="operator",
                 reviewed_scan_id="scan-other",
             )

@@ -102,6 +102,17 @@ class _Reserved:
 
 
 @dataclass(frozen=True, slots=True)
+class _RevisionConflict:
+    """낡은 화면은 일반 거부 후처리 없이 호출자에게 반환한다."""
+
+    denial: Denied
+
+
+def _revision_conflicts(record: ApprovalRecord | None, expected: int | None) -> bool:
+    return expected is not None and record is not None and record.row_revision != expected
+
+
+@dataclass(frozen=True, slots=True)
 class _ClosingApproval:
     """원문 없이 종결 중 승인의 Task lock 소유 관계만 유지한다."""
 
@@ -793,7 +804,9 @@ class ApprovalService:
 
         return await fail_closed(operation, on_error=on_error, on_containment_error=fallback)
 
-    async def _approve(self, approval_id: str, operator_id: str) -> Outcome:
+    async def _approve(
+        self, approval_id: str, operator_id: str, *, expected_row_revision: int | None = None
+    ) -> Outcome:
         task_id = self._approval_task_id(approval_id)
         if task_id is None:
             return await self._pre_boundary(
@@ -801,15 +814,21 @@ class ApprovalService:
                 approval_id=approval_id,
                 task_id=None,
             )
+        if expected_row_revision is not None and (
+            type(expected_row_revision) is not int or expected_row_revision < 0
+        ):
+            return Denied(request_id=None, reasons=(Reason.INVALID_ARGUMENTS,))
         lock = await self._acquire_task_lock(task_id)
         if isinstance(lock, Denied):
             return lock
         try:
             prepared = await self._pre_boundary(
-                lambda: self._prepare_approval(approval_id, operator_id),
+                lambda: self._prepare_approval(approval_id, operator_id, expected_row_revision),
                 approval_id=approval_id,
                 task_id=task_id,
             )
+            if isinstance(prepared, _RevisionConflict):
+                return prepared.denial
             if isinstance(prepared, Denied):
                 return prepared
             # 소비 이후는 예약 후 경계다. fail_closed로 Denied를 만들지 않는다.
@@ -829,8 +848,12 @@ class ApprovalService:
         finally:
             lock.release()
 
-    async def _prepare_approval(self, approval_id: str, operator_id: str) -> _Reserved | Denied:
+    async def _prepare_approval(
+        self, approval_id: str, operator_id: str, expected_row_revision: int | None
+    ) -> _Reserved | Denied | _RevisionConflict:
         record = await self._load_approval(approval_id)
+        if _revision_conflicts(record, expected_row_revision):
+            return _RevisionConflict(self._denied(record, Reason.APPROVAL_RACE))
         snapshot = self._memory_snapshots.get(approval_id)
         if record is None or record.status not in _LIVE:
             self._memory_snapshots.pop(approval_id, None)
@@ -974,12 +997,19 @@ class ApprovalService:
         return _Reserved(req, state, snapshot.expires_at_utc, snapshot.monotonic_deadline)
 
     async def _reject_or_expire(
-        self, approval_id: str, operator_id: str, *, expire: bool
+        self,
+        approval_id: str,
+        operator_id: str,
+        *,
+        expire: bool,
+        expected_row_revision: int | None = None,
     ) -> Denied:
         task_id = self._approval_task_id(approval_id)
 
-        async def operation() -> Denied:
+        async def operation() -> Denied | _RevisionConflict:
             record = await self._load_approval(approval_id)
+            if _revision_conflicts(record, expected_row_revision):
+                return _RevisionConflict(self._denied(record, Reason.APPROVAL_RACE))
             snap = self._memory_snapshots.get(approval_id)
             if record is None or record.status not in _LIVE:
                 self._memory_snapshots.pop(approval_id, None)
@@ -1017,11 +1047,16 @@ class ApprovalService:
                 approval_id=approval_id,
                 task_id=None,
             )
+        if expected_row_revision is not None and (
+            type(expected_row_revision) is not int or expected_row_revision < 0
+        ):
+            return Denied(request_id=None, reasons=(Reason.INVALID_ARGUMENTS,))
         lock = await self._acquire_task_lock(task_id)
         if isinstance(lock, Denied):
             return lock
         try:
-            return await self._pre_boundary(operation, approval_id=approval_id, task_id=task_id)
+            result = await self._pre_boundary(operation, approval_id=approval_id, task_id=task_id)
+            return result.denial if isinstance(result, _RevisionConflict) else result
         finally:
             lock.release()
 
@@ -1364,11 +1399,20 @@ class HumanControl:
     async def review(self, approval_id: str) -> ApprovalSnapshot | None:
         return await self._service._review(approval_id, self._operator_id)
 
-    async def approve(self, approval_id: str) -> Outcome:
-        return await self._service._approve(approval_id, self._operator_id)
+    async def approve(
+        self, approval_id: str, *, expected_row_revision: int | None = None
+    ) -> Outcome:
+        return await self._service._approve(
+            approval_id, self._operator_id, expected_row_revision=expected_row_revision
+        )
 
-    async def reject(self, approval_id: str) -> Denied:
-        return await self._service._reject_or_expire(approval_id, self._operator_id, expire=False)
+    async def reject(self, approval_id: str, *, expected_row_revision: int | None = None) -> Denied:
+        return await self._service._reject_or_expire(
+            approval_id,
+            self._operator_id,
+            expire=False,
+            expected_row_revision=expected_row_revision,
+        )
 
     async def expire(self, approval_id: str) -> Denied:
         return await self._service._reject_or_expire(approval_id, self._operator_id, expire=True)

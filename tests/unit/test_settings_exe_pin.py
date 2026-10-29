@@ -21,15 +21,22 @@ def _load(document):
     return load_profile_settings(document, _Registry())
 
 
-def _pinned_document():
+def _baseline_document():
     document = _document()
+    # Keep the exact historical input used for BASELINE_POLICY_VERSION.
+    document["servers"][1]["url"] = "https://unvalidated.invalid/mcp?secret=value"
+    return document
+
+
+def _pinned_document():
+    document = _baseline_document()
     document["servers"][0]["command_sha256"] = PIN_SHA256
     document["servers"][0]["command_size"] = 42
     return document
 
 
 def test_unpinned_stdio_preserves_existing_policy_version_and_has_no_pin():
-    loaded = _load(_document())
+    loaded = _load(_baseline_document())
     assert loaded.policy_version == BASELINE_POLICY_VERSION
     assert loaded.servers[0].command_sha256 is None
     assert loaded.servers[0].command_size is None
