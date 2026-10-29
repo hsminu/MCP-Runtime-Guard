@@ -13,6 +13,7 @@ from guard_app.services.bridge import L2_FAILURE_CODES
 # Asia/Seoul database decision before they can be displayed as local time.
 _KST = timezone(timedelta(hours=9), name="KST")
 MISSING = "미제공"
+CODEX_INSTALL_COMMAND = r".venv\Scripts\python.exe tools\install_codex.py"
 
 LABELS = {
     "PUBLIC": ("공개", "PUBLIC", "public"),
@@ -269,6 +270,8 @@ PAGES = {
 # Fixed capability failures are shared by draft creation and existing Task views.
 # Backend exception text, filesystem paths and unknown codes are never echoed.
 _CODEX_FAILURE_DETAILS = {
+    "CODEX_EXECUTABLE_MISSING": "codex.exe가 설치되지 않음.",
+    "CODEX_EXECUTABLE_MISMATCH": "설치된 codex.exe가 고정 버전과 다름.",
     "CODEX_SESSION_UNAVAILABLE": "Codex 연결이 준비되지 않음.",
     "CODEX_SESSION_INVALID": "Codex 연결을 확인하지 못함.",
     "CODEX_L2_UNAVAILABLE": "Codex 시작 검사가 준비되지 않음.",
@@ -373,6 +376,16 @@ _CODEX_STOP_NOTICES = {
 }
 
 
+def codex_install_notice(code: str) -> str:
+    """Installation guidance for the two fixed executable refusals only."""
+    if code not in ("CODEX_EXECUTABLE_MISSING", "CODEX_EXECUTABLE_MISMATCH"):
+        return ""
+    return (
+        _CODEX_FAILURE_DETAILS[code]
+        + " 프로젝트 폴더에서 아래 명령을 실행한 뒤 앱을 다시 시작하세요."
+    )
+
+
 def codex_failure_notice(code: str, *, creating: bool = False) -> str:
     """Describe only known failures; cleanup uncertainty never implies no launch."""
 
@@ -389,6 +402,13 @@ def codex_failure_notice(code: str, *, creating: bool = False) -> str:
     if code == "CODEX_SIGNING_OUT":
         return detail + " 세션을 시작하지 않았음. 로그아웃이 끝난 뒤 다시 시작하세요."
     context = " 세션을 시작하지 않았음." if creating else " 이 Task를 실행할 수 없음."
+    if codex_install_notice(code):
+        return (
+            detail
+            + context
+            + " 프로젝트 폴더에서 아래 명령을 실행한 뒤 앱을 다시 시작하세요.\n"
+            + CODEX_INSTALL_COMMAND
+        )
     if code in _CODEX_MISSING_COMPONENTS:
         # The build lacks the component; restarting or editing settings cannot help.
         return detail + context + " 이 앱 구성에서는 아직 이 기능을 쓸 수 없음."
@@ -422,6 +442,11 @@ def session_blocker_notice(code: str) -> str:
         return detail + " 새 세션을 시작하지 않음. 앱을 종료하고 정리 상태를 확인하세요."
     if code == "CODEX_SIGNING_OUT":
         return detail + " 로그아웃이 끝난 뒤 새 세션을 시작하세요."
+    if codex_install_notice(code):
+        return (
+            detail + " 새 세션을 시작할 수 없음. 프로젝트 폴더에서 아래 명령을 실행한 뒤 "
+            "앱을 다시 시작하세요.\n" + CODEX_INSTALL_COMMAND
+        )
     if code in _CODEX_MISSING_COMPONENTS:
         return detail + " 이 앱 구성에서는 아직 새 세션을 시작할 수 없음."
     return detail + " 지금은 새 세션을 시작할 수 없음. 앱 설정을 확인하고 앱을 다시 시작하세요."
