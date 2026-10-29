@@ -53,7 +53,6 @@ from guard_app.adapters.mcp_transport import (
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import DispatchError
 from guard_app.domain.models import ProposedCall, TaskState
-from guard_app.domain.reasons import Reason
 from guard_app.security.launcher import ExecutablePin, LaunchedProcess, launch_mcp_server
 from guard_app.security.paths import AppFolders, prepare_app_folders
 from guard_app.services.catalog import ServerSettings
@@ -64,8 +63,6 @@ from guard_app.storage import SQLiteStore
 
 PYTHON = Path(sys.base_prefix) / "python.exe"
 KINDS = ("stdio", "http")
-DENY_REASONS = {getattr(Reason, n) for n in ("AGT_DENY", "ACCESS_DENY") if hasattr(Reason, n)}
-ERROR_REASONS = {getattr(Reason, n) for n in ("AGT_ERROR", "ACCESS_ERROR") if hasattr(Reason, n)}
 ZERO = {"approval_consumed": 0, "host_dispatch": 0, "wire": 0, "effect": 0}
 ONCE = {"approval_consumed": 1, "host_dispatch": 1, "wire": 1, "effect": 1}
 

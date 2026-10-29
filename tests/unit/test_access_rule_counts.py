@@ -25,8 +25,6 @@ from guard_app.services.catalog import prepare_server_access_change
 from guard_app.services.guard import GuardConfigError, PolicyChangeError
 
 from .c_counting import (
-    DENY_REASONS,
-    ERROR_REASONS,
     KINDS,
     ZERO,
     count_dispatches,
@@ -96,7 +94,7 @@ def test_denied_or_missing_tool_never_reaches_the_server(
     assert type(control) is Released
     assert reads["host_dispatch"] == reads["wire"] == reads["effect"] == 1
     assert type(denied) is Denied
-    assert set(denied.reasons) & DENY_REASONS
+    assert Reason.ACCESS_DENY in denied.reasons
     assert sends == ZERO
     assert state.status is TaskStatus.RUNNING
 
@@ -113,7 +111,7 @@ def test_tool_missing_from_allow_is_denied_even_for_an_ask_call(tmp_path, kind, 
 
     denied, sends = asyncio.run(scenario())
     assert type(denied) is Denied
-    assert set(denied.reasons) & DENY_REASONS
+    assert Reason.ACCESS_DENY in denied.reasons
     assert sends == ZERO
 
 
@@ -202,7 +200,7 @@ def test_checker_returning_a_non_result_is_an_error_denial(
     control, denied, sends = asyncio.run(scenario())
     assert type(control) is Released
     assert type(denied) is Denied
-    assert set(denied.reasons) & ERROR_REASONS
+    assert Reason.ACCESS_ERROR in denied.reasons
     assert sends == ZERO
 
 
@@ -253,7 +251,7 @@ def test_policy_change_to_deny_while_waiting_blocks_the_approval(tmp_path, kind,
     assert record.status is ApprovalStatus.CANCELLED
     # 바뀐 규칙으로 만든 새 Task에서도 SEND는 접근 규칙이 막는다.
     assert type(after) is Denied
-    assert set(after.reasons) & DENY_REASONS
+    assert Reason.ACCESS_DENY in after.reasons
     assert sends == ZERO
 
 
@@ -307,7 +305,7 @@ def test_async_checker_is_refused_by_a_policy_change(tmp_path, kind, pin, dispat
     state, denied, control, sends = asyncio.run(scenario())
     assert state.status is TaskStatus.RUNNING
     assert type(denied) is Denied
-    assert set(denied.reasons) & DENY_REASONS
+    assert Reason.ACCESS_DENY in denied.reasons
     assert type(control) is Released
     assert sends == ZERO
 
