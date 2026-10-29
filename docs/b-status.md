@@ -108,7 +108,7 @@
 - [x] B6.9 승인 생성·종결 원자화 · #89 병합, A·C 동의(C 독립 결함 주입 인수는 B7.6·B7.8) · [기록](archive/b/B6.9-atomic-approvals.md)
 - [x] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 · [기록](archive/b/B6.10-B6.12-unblocked.md)
-- [x] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙 구현·시험 완료, 시간 수치는 C 측정 뒤 확정 · [기록](archive/b/B6.10-B6.12-unblocked.md)
+- [x] B6.12 DB 대기·양시계 만료·취소·커밋 ACK 규칙 구현·시험 완료, 잠금 대기 1000ms 확정, C 실측 중앙 1.17초(이 PC 한 대, [#104](https://github.com/hsminu/MCP-Runtime-Guard/pull/104)) · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — B 단위 구현·C 독립 검증 및 측정 완료, [A 연결](https://github.com/hsminu/MCP-Runtime-Guard/pull/83) · [#55 종료](https://github.com/hsminu/MCP-Runtime-Guard/issues/55) · C 기록 #79·[#93](https://github.com/hsminu/MCP-Runtime-Guard/pull/93) 병합 · 늦은 결과 전달 [#97](https://github.com/hsminu/MCP-Runtime-Guard/pull/97) 병합 · [기록](archive/b/B6.13-sqlite-writer.md) · [늦은 결과 전달](archive/b/B6.13-2-late-publish.md) · [C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468999539)
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.15 규칙 버전 감사(AGT-02) — 막힘: 판정·감사 버전 추적 범위와 직접 저장·간접 조회 합의 · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
