@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-29 · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-10-30 · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -243,6 +243,7 @@
 - [x] A178 #92 중단 원인: 부모 없는 하위 레이아웃이 남긴 Qt 위젯 이중 소유 제거·소유 회귀 시험 · [기록](archive/a/A178-qt-double-ownership.md)
 - [x] A179 #101 B-ACCEPT-01: READY 뒤 예외에도 backend 종료 확인 전에는 앱 잠금 유지, 미확인이면 잠금을 쥔 채 종료 · [기록](archive/a/A179-ready-exception-lock-order.md)
 - [x] A180 #101 제안: 정책·목적지 저장 성공 뒤 B 적용 중 취소에도 재시작 요구·Guard 닫기, 일곱 저장 경로 취소 시험 · [기록](archive/a/A180-cancel-during-apply.md)
+- [x] A183 #107 C 리뷰 1번: UI 색 리터럴 검사가 주석의 이슈 번호(`#101`)를 색으로 읽지 않게 함 · [기록](archive/a/A183-color-check-skips-comments.md)
 
 ## 통합·패키징
 

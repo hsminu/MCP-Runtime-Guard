@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ast
+import io
 import os
 import re
+import tokenize
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -23,6 +25,12 @@ from guard_app.ui.style import PALETTES, STYLE, TOKENS, apply_style, set_theme, 
 _UI_SOURCES = sorted(
     path for path in Path(style.__file__).parent.glob("*.py") if path.name != "style.py"
 )
+
+
+def _without_comments(text: str) -> str:
+    """Code and strings only: issue numbers in comments such as #101 paint nothing."""
+    tokens = tokenize.generate_tokens(io.StringIO(text).readline)
+    return " ".join(token.string for token in tokens if token.type != tokenize.COMMENT)
 
 
 @pytest.fixture(scope="module")
@@ -192,7 +200,9 @@ def test_ui_sources_use_palette_colors_brand_accent_and_grid_spacing() -> None:
             failures.append((selector, "accent"))
     for path in _UI_SOURCES:
         text = path.read_text(encoding="utf-8")
-        literals = re.findall(r'#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\(|QColor\("', text)
+        literals = re.findall(
+            r'#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\(|QColor\("', _without_comments(text)
+        )
         if literals:
             failures.append((path.name, literals))
         if "eyebrow" in text.casefold():
