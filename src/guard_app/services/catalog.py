@@ -35,6 +35,7 @@ from guard_app.domain.models import (
 from guard_app.domain.reasons import Reason
 from guard_app.ports import Registry
 from guard_app.security.digest import JcsCanonicalizationError, digest, jcs_canonicalize
+from guard_app.security.endpoints import EndpointError, canonical_endpoint
 from guard_app.services.catalog_schema import ArgumentSchema, CatalogConfigError
 from guard_app.services.catalog_sources import (
     SourceClassifier,
@@ -662,7 +663,8 @@ class GuardSettings(_PolicySettings):
 class LoadedProfile:
     """검증된 독립 사본. servers는 해시에 포함된 전체 설정이며 선택 범위가 아니다.
 
-    실행 시작에는 selected_servers를 사용하고 C 경로·실행 파일 검증을 연결한다.
+    실행 시작(조립·목록 수집)에는 startable_servers를 사용하고 C 경로·실행 파일
+    검증을 연결한다. selected_servers는 설정에서 고른 서버 그대로다.
     """
 
     profile: Profile
@@ -670,6 +672,7 @@ class LoadedProfile:
     access_rules: AccessRules
     guard_settings: GuardSettings
     servers: tuple[ServerSettings, ...]
+    _profile_registry: _ProfileRegistry | None = None
 
     @property
     def policy_version(self) -> str:
@@ -677,8 +680,32 @@ class LoadedProfile:
 
     @property
     def selected_servers(self) -> tuple[ServerSettings, ...]:
-        """전체 설정 순서를 유지하면서 이 Profile이 선택한 서버만 반환한다."""
+        """전체 설정 순서대로 Profile이 설정에서 선택한 서버를 그대로 반환한다."""
         return tuple(server for server in self.servers if server.id in self.profile.server_ids)
+
+    @property
+    def startable_servers(self) -> tuple[ServerSettings, ...]:
+        """실행 시작(조립·목록 수집)에 쓸 선택 서버를 반환한다.
+
+        selected_servers는 설정에서 고른 서버 그대로이며 실행 허가가 아니다.
+        현재는 URL_* 이슈만 제외한다. A155 record_settings_change 순서 이관과
+        C apply_settings 연결 후 REG_SETTINGS_MISMATCH도 제외할 계획이다.
+        """
+        return tuple(
+            server
+            for server in self.selected_servers
+            if not (self.server_issue(server.id) or "").startswith("URL_")
+        )
+
+    def server_issue(self, server_id: str) -> str | None:
+        """선택된 서버의 재확인 문제를 조회한다. 이 값은 실행 허가가 아니다.
+
+        A가 저장된 값과 파일 값을 보여 준 뒤 record_settings_change, 설정 저장,
+        정책 적용, 다시 활성화 순서로 처리한다.
+        """
+        if self._profile_registry is None:
+            return None
+        return self._profile_registry.server_issue(server_id)
 
     def __repr__(self) -> str:
         return "LoadedProfile(<redacted>)"
@@ -780,28 +807,31 @@ class _ProfileRegistry:
     """현재 Registry를 읽고 Profile과 설정 범위만 Catalog에 노출한다."""
 
     def __init__(
-        self, registry: Registry, servers: tuple[ServerSettings, ...], allowed: tuple[str, ...]
+        self,
+        registry: Registry,
+        servers: tuple[ServerSettings, ...],
+        allowed: tuple[str, ...],
+        issues: Mapping[str, str] | None = None,
     ) -> None:
         self._registry = registry
         self._servers = {server.id: server for server in servers if server.id in allowed}
+        self._issues = MappingProxyType(dict(issues or {}))
 
-    def registration(self, server_id: str) -> RegisteredServer | None:
+    def _matching_registration(self, server_id: str) -> tuple[RegisteredServer | None, bool]:
         settings = self._servers.get(server_id)
-        if settings is None:
-            return None
+        if settings is None or server_id in self._issues:
+            return None, False
         record = self._registry.registration(server_id)
         if record is None:
-            return None
+            return None, False
         try:
             record = RegisteredServer.model_validate(record)
         except ValidationError:
             raise CatalogConfigError("Registry 등록 모델이 유효하지 않다") from None
-        if (
-            record.server_id != server_id
-            or record.boundary.tier != settings.tier
-            or record.boundary.max_label != settings.max_label
-        ):
-            raise CatalogConfigError("Registry와 서버 설정이 일치하지 않는다")
+        if record.server_id != server_id:
+            raise CatalogConfigError("Registry 조회 ID와 등록 서버 ID가 다르다")
+        if record.boundary.tier != settings.tier or record.boundary.max_label != settings.max_label:
+            return None, True
         configured = {tool.name: tool for tool in settings.tools}
         tools = tuple(tool for tool in record.tools if tool.tool_name in configured)
         for tool in tools:
@@ -811,8 +841,19 @@ class _ProfileRegistry:
                 or tool.resource_arg != expected.resource_arg
                 or tool.destination_arg != expected.destination_arg
             ):
-                raise CatalogConfigError("Registry와 도구 설정이 일치하지 않는다")
-        return record.model_copy(update={"tools": tools})
+                return None, True
+        return record.model_copy(update={"tools": tools}), False
+
+    def registration(self, server_id: str) -> RegisteredServer | None:
+        return self._matching_registration(server_id)[0]
+
+    def server_issue(self, server_id: str) -> str | None:
+        if server_id not in self._servers:
+            return None
+        if server_id in self._issues:
+            return self._issues[server_id]
+        _, mismatch = self._matching_registration(server_id)
+        return "REG_SETTINGS_MISMATCH" if mismatch else None
 
     def status(self, server_id: str) -> RegStatus | None:
         return self._registry.status(server_id)
@@ -852,6 +893,13 @@ def load_profile_settings(
         normalized = config.model_dump(mode="json")
         normalized["access_rules"] = normalize_access_rules(rules)
         version = digest(jcs_canonicalize(normalized))
+        issues: dict[str, str] = {}
+        for server in config.servers:
+            if server.transport == "streamable_http":
+                try:
+                    canonical_endpoint(server.url)
+                except EndpointError as error:
+                    issues[server.id] = cast(str, error.args[0])
         selected = config.profile
         profile = Profile(
             profile_id=selected.id,
@@ -859,8 +907,9 @@ def load_profile_settings(
             destination_ids=selected.destinations,
             source_rules=tuple(source.as_rule() for source in selected.sources),
         )
+        profile_registry = _ProfileRegistry(registry, config.servers, profile.server_ids, issues)
         catalog = Catalog(
-            _ProfileRegistry(registry, config.servers, profile.server_ids),
+            profile_registry,
             profile_id=profile.profile_id,
             destinations=tuple(
                 item.as_boundary()
@@ -878,7 +927,7 @@ def load_profile_settings(
         )
     except (ValidationError, JcsCanonicalizationError, SourceConfigError):
         raise CatalogConfigError("Profile 설정이 유효하지 않다") from None
-    return LoadedProfile(profile, catalog, rules, guard_settings, config.servers)
+    return LoadedProfile(profile, catalog, rules, guard_settings, config.servers, profile_registry)
 
 
 def _check_configuration(config: _Configuration) -> None:

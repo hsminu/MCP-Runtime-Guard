@@ -46,7 +46,36 @@ from guard_app.domain.models import (
     TaskState,
     ToolSpec,
 )
+from guard_app.domain.queries import (
+    ApprovalListPage,
+    ApprovalListQuery,
+    CallDetail,
+    CallListPage,
+    CallListQuery,
+)
 from guard_app.domain.reasons import Reason
+
+
+class StoreQueries(Protocol):
+    """합의 전 제안(B6-05, #76): 화면의 권위 있는 저장 사실을 조회한다.
+
+    각 조회는 한 읽기 트랜잭션에서 일관된 결과를 만든다.
+    인자·결과·예외 등의 원문을 반환하지 않는다.
+    각 행의 revision을 화면 명령의 기대값으로 전달한다.
+    정렬과 페이지 크기는 고정된 조회 계약을 따른다.
+    조회 실패는 결과 없음이 아닌 알 수 없음으로 표시한다.
+    """
+
+    async def list_approvals(self, query: ApprovalListQuery) -> ApprovalListPage: ...
+
+    async def list_calls(self, query: CallListQuery) -> CallListPage: ...
+
+    async def get_call(self, request_id: str) -> CallDetail | None:
+        """COMMITTED는 성공·실패·결과 불명인 결과를 기록했다는 뜻이다.
+
+        성공 여부는 CallRow.status로만 판단한다.
+        """
+        ...
 
 
 class PendingResult(Protocol):
@@ -282,7 +311,10 @@ class RegistryStore(Protocol):
     async def record_scan_report(
         self, scan_id: str, report: ScanReport, *, at_utc: datetime
     ) -> RegistryEntry:
-        """검사는 상태를 바꾸지 않는다. SDK 원문 Finding.description은 받지 않는다."""
+        """현재 등록의 도구 지문 집합과 일치하는 검사만 저장한다(#59).
+
+        검사는 상태를 바꾸지 않는다. SDK 원문 Finding.description은 받지 않는다.
+        """
         ...
 
     async def activate_server(
@@ -311,6 +343,17 @@ class RegistryStore(Protocol):
         정의·지문이 모두 같으면 revision·감사·상태를 바꾸지 않는다.
         changed_tools=()와 현재 저장 사본을 반환하며 목록 재정렬도 쓰지 않는다.
         """
+        ...
+
+    async def record_settings_change(
+        self,
+        server_id: str,
+        tools: tuple[ToolSpec, ...],
+        *,
+        expected_row_revision: int,
+        at_utc: datetime,
+    ) -> FingerprintChange:
+        """도구 설정 변경을 revision CAS로 기록한다(2026-10-28 B·C 합의, #46)."""
         ...
 
     async def block_server(

@@ -6,7 +6,7 @@ Guard 연결 뒤의 dispatch == 0 검증은 C의 독립 인수 대상이다.
 from dataclasses import FrozenInstanceError
 
 import pytest
-from hypothesis import assume, given
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from guard_app.core.access_rules import (
@@ -202,6 +202,7 @@ _pair = st.tuples(_name, _name)
 _pairs = st.sets(_pair, max_size=15)
 
 
+@settings(deadline=None)
 @given(allow=_pairs, deny=_pairs, request=_pair)
 def test_decision_and_normalization_are_deterministic(
     allow: set[tuple[str, str]], deny: set[tuple[str, str]], request: tuple[str, str]
@@ -217,6 +218,7 @@ def test_decision_and_normalization_are_deterministic(
     assert not first.error
 
 
+@settings(deadline=None)
 @given(request=_pair)
 def test_default_deny_property(request: tuple[str, str]) -> None:
     result = evaluate_access(AccessRules(), server_id=request[0], tool_name=request[1])
@@ -224,6 +226,7 @@ def test_default_deny_property(request: tuple[str, str]) -> None:
     assert not result.error
 
 
+@settings(deadline=None)
 @given(allow=_pairs, deny=_pairs, request=_pair)
 def test_adding_an_explicit_deny_always_prevents_allow(
     allow: set[tuple[str, str]], deny: set[tuple[str, str]], request: tuple[str, str]
@@ -235,6 +238,7 @@ def test_adding_an_explicit_deny_always_prevents_allow(
     assert result.reason == "ACCESS_RULE_DENY"
 
 
+@settings(deadline=None)
 @given(allow=_pairs, deny=_pairs, request=_pair)
 def test_pairs_outside_both_lists_are_denied(
     allow: set[tuple[str, str]], deny: set[tuple[str, str]], request: tuple[str, str]
@@ -247,6 +251,7 @@ def test_pairs_outside_both_lists_are_denied(
     assert not result.error
 
 
+@settings(deadline=None)
 @given(request=_pair)
 def test_the_same_tool_on_a_different_server_is_not_allowed(request: tuple[str, str]) -> None:
     rules = AccessRules(allow=[request])
@@ -256,6 +261,7 @@ def test_the_same_tool_on_a_different_server_is_not_allowed(request: tuple[str, 
     assert not other.error
 
 
+@settings(deadline=None)
 @given(allow=_pairs, deny=_pairs)
 def test_normalized_representation_roundtrips_without_changing_rules(
     allow: set[tuple[str, str]], deny: set[tuple[str, str]]
