@@ -6,22 +6,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from PySide6.QtCore import (
-    QModelIndex,
-    QPersistentModelIndex,
-    QPointF,
-    QRectF,
     QSize,
     Qt,
     Signal,
 )
 from PySide6.QtGui import (
-    QAction,
-    QActionGroup,
-    QColor,
-    QFont,
-    QFontMetrics,
-    QPainter,
-    QPen,
     QResizeEvent,
 )
 from PySide6.QtWidgets import (
@@ -32,23 +21,14 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMenu,
     QPlainTextEdit,
-    QScrollArea,
     QStackedWidget,
-    QStyle,
-    QStyledItemDelegate,
-    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.services.bridge import (
-    CODEX_DEFAULT_EFFORT,
-    CODEX_MODEL_ID,
-    CODEX_MODELS,
-    CODEX_REASONING_EFFORTS,
     ConversationEvent,
     SessionCreated,
     SessionOptions,
@@ -59,32 +39,59 @@ from guard_app.services.bridge import (
 
 from .icons import line_icon
 from .presentation import (
-    CODEX_AUTH_FAILED_NOTICE,
     COMMAND_REFUSALS,
-    EFFORT_NAMES,
-    MODEL_NAMES,
     RUN_RESULTS,
     codex_failure_notice,
-    session_blocker_notice,
     task_label_text,
 )
-from .style import TOKENS, ui_font
-from .task_status import FINAL_STATUSES, status_code, status_title
+from .session_list import (
+    _ROW_ROLE as _ROW_ROLE,
+)
+from .session_list import (
+    _SessionRow as _SessionRow,
+)
+from .session_list import (
+    _SessionRowDelegate as _SessionRowDelegate,
+)
+from .session_model import (
+    ModelPicker as ModelPicker,
+)
+from .session_projection import _STATUS_TONES as _STATUS_TONES
+from .session_projection import session_display, session_row_status
+from .session_transcript import (
+    ANSWER_LABEL as ANSWER_LABEL,
+)
+from .session_transcript import (
+    PARTIAL_ANSWER_LABEL as PARTIAL_ANSWER_LABEL,
+)
+from .session_transcript import (
+    STOPPED_ANSWER_LABEL as STOPPED_ANSWER_LABEL,
+)
+from .session_transcript import (
+    TRANSCRIPT_BODY_MARK as TRANSCRIPT_BODY_MARK,
+)
+from .session_transcript import (
+    USER_LABEL as USER_LABEL,
+)
+from .session_transcript import (
+    _message_label as _message_label,
+)
+from .session_transcript import (
+    _Transcript as _Transcript,
+)
+from .session_transcript import (
+    _Turn as _Turn,
+)
+from .task_status import status_code, status_title
 from .untrusted_text import untrusted_display_text
 from .widgets import IconMark, KeyboardActionButton, StatusPill, plain_label
 
-TRANSCRIPT_BODY_MARK = "│ "
-USER_LABEL = "나"
-ANSWER_LABEL = "Guard · 모델 답변 (검증되지 않은 내용)"
-PARTIAL_ANSWER_LABEL = "Guard · 모델 답변 작성 중 (검증되지 않은 내용)"
-STOPPED_ANSWER_LABEL = "Guard · 모델 답변 중단됨 (완료되지 않은 내용)"
 MEMORY_NOTICE = "대화·초안은 메모리에만 있음. Task 종료나 앱 종료 시 원문을 지움."
 APPROVAL_BAND_TITLE = "승인이 필요한 도구 호출이 있음"
 APPROVAL_BAND_DETAIL = "수신처와 전체 인자를 확인한 뒤 승인하거나 거절하세요."
 
 # The conversation column width shared by header, transcript and composer.
 _COLUMN_WIDTH = 720
-_ROW_ROLE = Qt.ItemDataRole.UserRole + 1
 # Header pill tones for Guard-confirmed statuses (words carry the meaning).
 _PILL_TONES = {
     TaskStatus.RUNNING: "live",
@@ -93,313 +100,6 @@ _PILL_TONES = {
     TaskStatus.HALTED: "deny",
     TaskStatus.UNKNOWN_OUTCOME: "deny",
 }
-# Session list marks for Guard-confirmed statuses; shape differs per tone.
-_STATUS_TONES = {
-    TaskStatus.READY: "idle",
-    TaskStatus.RUNNING: "running",
-    TaskStatus.HALTED: "stopped",
-    TaskStatus.UNKNOWN_OUTCOME: "stopped",
-}
-
-
-@dataclass(slots=True)
-class _Turn:
-    """One transcript entry. ``role`` comes from the writer, never the text."""
-
-    role: str  # "user", "answer", or "plain" for setPlainText content
-    label: str
-    text: str
-    widget: QWidget
-    body: QLabel
-    note: QLabel | None = None
-
-    @property
-    def plain(self) -> str:
-        if self.role == "plain":
-            return self.text
-        # Speaker labels alone start at column 0. Every body line is marked, so
-        # a model line such as "나" or "Guard · ..." cannot pose as a label.
-        body = "\n".join(f"{TRANSCRIPT_BODY_MARK}{line}" for line in self.text.split("\n"))
-        return f"{self.label}\n{body}\n"
-
-
-def _message_label(text: str, name: str) -> QLabel:
-    label = plain_label(text, name=name)
-    # Selectable for copying; links are never interactive.
-    label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-    return label
-
-
-class _Transcript(QScrollArea):
-    """Messenger transcript built from PlainText labels (technical design 12.4).
-
-    The user's message is a bubble on the right; a model answer is plain text
-    under Guard's unverified-answer label, with no avatar. Each turn is its own
-    widget whose role the writer sets, so model text cannot pose as the user or
-    as a label. ``toPlainText`` keeps the marked text form for copying and checks."""
-
-    changed = Signal()
-    _BUBBLE_PADDING = 12
-    # Orca caps a user bubble at 80% of the column; Paradev at 36rem.
-    _BUBBLE_MAX = 576
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.turns: list[_Turn] = []
-        self._side = 0
-        self._follow = True
-        self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        content = QWidget()
-        content.setObjectName("transcriptContent")
-        self._column = QVBoxLayout(content)
-        self._column.setSpacing(20)
-        self._column.addStretch(1)
-        self.setWidget(content)
-        bar = self.verticalScrollBar()
-        bar.valueChanged.connect(self._track_bottom)
-        bar.rangeChanged.connect(self._keep_bottom)
-
-    def is_empty(self) -> bool:
-        return not self.turns
-
-    def toPlainText(self) -> str:  # noqa: N802 - mirrors the Qt text widgets
-        return "\n".join(turn.plain for turn in self.turns)
-
-    def setPlainText(self, text: str) -> None:  # noqa: N802 - mirrors the Qt text widgets
-        self._remove_from(0)
-        if text:
-            row = QWidget()
-            column = QVBoxLayout(row)
-            column.setContentsMargins(0, 0, 0, 0)
-            body = _message_label(text, "answerText")
-            column.addWidget(body)
-            self._add(_Turn("plain", "", text, row, body))
-        self.changed.emit()
-
-    def clear(self) -> None:
-        self._remove_from(0)
-        self.changed.emit()
-
-    def write_turn(self, label: str, text: str, index: int | None) -> int:
-        """Append a turn, or replace the turn at ``index`` and all after it."""
-        role = "user" if label == USER_LABEL else "answer"
-        last = self.turns[-1] if index is not None and index == len(self.turns) - 1 else None
-        if last is not None and last.role == role == "answer" and last.note is not None:
-            # A streamed answer is updated in place instead of rebuilt.
-            last.label, last.text = label, text
-            self._style_note(last.note, label)
-            last.body.setText(text)
-        else:
-            if index is not None:
-                self._remove_from(index)
-            self._add(self._user_turn(text) if role == "user" else self._answer_turn(label, text))
-        self.changed.emit()
-        return len(self.turns) - 1
-
-    def set_side(self, side: int) -> None:
-        self._side = side
-        self._column.setContentsMargins(side, 20, side, 24)
-        self._fit_bubbles()
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._fit_bubbles()
-
-    def _add(self, turn: _Turn) -> None:
-        self.turns.append(turn)
-        self._column.insertWidget(self._column.count() - 1, turn.widget)
-        if turn.role == "user":
-            self._fit_bubble(turn)
-
-    def _remove_from(self, index: int) -> None:
-        for turn in self.turns[index:]:
-            # Drop the Qt text copy now; the widget itself goes on the next loop.
-            turn.body.clear()
-            turn.widget.hide()
-            self._column.removeWidget(turn.widget)
-            turn.widget.deleteLater()
-        del self.turns[index:]
-
-    def _user_turn(self, text: str) -> _Turn:
-        row = QWidget()
-        row.setAccessibleName("내 메시지")
-        line = QHBoxLayout(row)
-        line.setContentsMargins(0, 0, 0, 0)
-        line.addStretch(1)
-        bubble = QFrame()
-        bubble.setObjectName("userBubble")
-        inner = QVBoxLayout(bubble)
-        pad = self._BUBBLE_PADDING
-        inner.setContentsMargins(pad, 8, pad, 8)
-        body = _message_label(text, "userText")
-        inner.addWidget(body)
-        line.addWidget(bubble)
-        return _Turn("user", USER_LABEL, text, row, body)
-
-    def _answer_turn(self, label: str, text: str) -> _Turn:
-        row = QWidget()
-        column = QVBoxLayout(row)
-        column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(4)
-        note = plain_label(name="answerLabel")
-        self._style_note(note, label)
-        column.addWidget(note)
-        body = _message_label(text, "answerText")
-        column.addWidget(body)
-        return _Turn("answer", label, text, row, body, note)
-
-    @staticmethod
-    def _style_note(note: QLabel, label: str) -> None:
-        note.setText(label)
-        tone = {PARTIAL_ANSWER_LABEL: "live", STOPPED_ANSWER_LABEL: "stopped"}.get(label, "")
-        if note.property("tone") != tone:
-            note.setProperty("tone", tone)
-            note.style().unpolish(note)
-            note.style().polish(note)
-
-    def _fit_bubbles(self) -> None:
-        for turn in self.turns:
-            if turn.role == "user":
-                self._fit_bubble(turn)
-
-    def _fit_bubble(self, turn: _Turn) -> None:
-        """Hug the text up to the bubble cap, then wrap."""
-        column = self.viewport().width() - 2 * self._side
-        cap = min(self._BUBBLE_MAX, int(column * 0.8))
-        limit = max(80, cap - 2 * self._BUBBLE_PADDING - 2)
-        body = turn.body
-        body.ensurePolished()
-        metrics = body.fontMetrics()
-        natural = max(metrics.horizontalAdvance(line) for line in turn.text.split("\n")) + 2
-        body.setFixedWidth(min(natural, limit))
-
-    def _track_bottom(self, value: int) -> None:
-        self._follow = value >= self.verticalScrollBar().maximum() - 3
-
-    def _keep_bottom(self, _minimum: int, maximum: int) -> None:
-        # New text keeps a reader at the bottom there; a reader above stays put.
-        if self._follow:
-            self.verticalScrollBar().setValue(maximum)
-
-
-@dataclass(frozen=True, slots=True)
-class _SessionRow:
-    title: str
-    time: str
-    status: str
-    tone: str
-
-
-class _SessionRowDelegate(QStyledItemDelegate):
-    """Draw a session row as status mark, title, time and status line.
-
-    The item's display text stays "title\\nHH:MM · status" for search and
-    assistive technology. Marks differ in shape as well as color; the selected
-    row is a bordered card, as in Orca's worktree list."""
-
-    _HEIGHT = 44
-
-    def sizeHint(
-        self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
-    ) -> QSize:
-        return QSize(option.rect.width(), self._HEIGHT)
-
-    def paint(
-        self,
-        painter: QPainter,
-        option: QStyleOptionViewItem,
-        index: QModelIndex | QPersistentModelIndex,
-    ) -> None:
-        row = index.data(_ROW_ROLE)
-        if not isinstance(row, _SessionRow):
-            super().paint(painter, option, index)
-            return
-        state = option.state
-        rect = QRectF(option.rect).adjusted(0.5, 1.5, -0.5, -1.5)
-        selected = bool(state & QStyle.StateFlag.State_Selected)
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if selected:
-            painter.setPen(QPen(QColor(TOKENS["selected_line"]), 1))
-            painter.setBrush(QColor(TOKENS["selected"]))
-            painter.drawRoundedRect(rect, 6, 6)
-        elif state & QStyle.StateFlag.State_MouseOver:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(TOKENS["hover"]))
-            painter.drawRoundedRect(rect, 6, 6)
-        if state & QStyle.StateFlag.State_HasFocus:
-            painter.setPen(QPen(QColor(TOKENS["line_hover"]), 1))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(rect, 6, 6)
-        self._paint_mark(painter, row.tone, QPointF(rect.left() + 13, rect.top() + 13))
-        left = rect.left() + 26
-        right = rect.right() - 8
-        # Times are data: tabular mono, as in Paradev's workspace rows.
-        time_font = ui_font(11, mono=True)
-        time_width = QFontMetrics(time_font).horizontalAdvance(row.time)
-        painter.setFont(time_font)
-        painter.setPen(QColor(TOKENS["mute"]))
-        painter.drawText(
-            QRectF(right - time_width, rect.top() + 4, time_width, 18),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            row.time,
-        )
-        title_font = ui_font(13, QFont.Weight.Medium)
-        title_width = max(0, int(right - time_width - 8 - left))
-        painter.setFont(title_font)
-        painter.setPen(QColor(TOKENS["ink"]))
-        painter.drawText(
-            QRectF(left, rect.top() + 4, title_width, 18),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            QFontMetrics(title_font).elidedText(
-                row.title, Qt.TextElideMode.ElideRight, title_width
-            ),
-        )
-        status_font = ui_font(11)
-        status_width = max(0, int(right - left))
-        painter.setFont(status_font)
-        # Only a pending approval colors its words; other states stay gray.
-        painter.setPen(QColor(TOKENS["warn" if row.tone == "approval" else "mute"]))
-        painter.drawText(
-            QRectF(left, rect.top() + 22, status_width, 15),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            QFontMetrics(status_font).elidedText(
-                row.status, Qt.TextElideMode.ElideRight, status_width
-            ),
-        )
-        painter.restore()
-
-    @staticmethod
-    def _paint_mark(painter: QPainter, tone: str, center: QPointF) -> None:
-        x, y = center.x(), center.y()
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(Qt.PenStyle.NoPen)
-        if tone == "draft":
-            pen = QPen(QColor(TOKENS["subtle"]), 1.3)
-            pen.setStyle(Qt.PenStyle.DotLine)
-            painter.setPen(pen)
-            painter.drawEllipse(center, 4, 4)
-        elif tone == "running":
-            # An open ember arc reads as work in progress (Paradev's spinner glyph).
-            pen = QPen(QColor(TOKENS["accent"]), 1.8)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            painter.drawArc(QRectF(x - 4.5, y - 4.5, 9, 9), 90 * 16, -270 * 16)
-        elif tone == "idle":
-            painter.setPen(QPen(QColor(TOKENS["ok"]), 1.6))
-            painter.drawEllipse(center, 3.8, 3.8)
-        elif tone in ("attention", "approval"):
-            painter.setBrush(QColor(TOKENS["warn"]))
-            painter.drawPolygon(
-                [QPointF(x, y - 5), QPointF(x + 5, y), QPointF(x, y + 5), QPointF(x - 5, y)]
-            )
-        elif tone == "stopped":
-            painter.setBrush(QColor(TOKENS["danger"]))
-            painter.drawRoundedRect(QRectF(x - 4, y - 4, 8, 8), 1.5, 1.5)
-        else:
-            painter.setPen(QPen(QColor(TOKENS["subtle"]), 1.6))
-            painter.drawLine(QPointF(x - 3, y), QPointF(x + 3, y))
 
 
 @dataclass(slots=True)
@@ -409,91 +109,6 @@ class _PartialAnswer:
     command_id: str
     start: int  # turn index in the transcript
     text: str
-
-
-class ModelPicker(KeyboardActionButton):
-    """Composer chip: the session's model and reasoning level, from fixed lists.
-
-    The model is chosen before a Task starts and then belongs to that Task's
-    thread; the reasoning level goes with each message from then on. Neither
-    comes from model output.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setObjectName("modelChip")
-        self.set_visual(icon="chevron_down")
-        self.setIconSize(QSize(12, 12))
-        # Chevron after the text; the menu itself reads left to right.
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.model = CODEX_MODEL_ID
-        self.effort = CODEX_DEFAULT_EFFORT
-        self._fixed: str | None = None
-        menu = QMenu(self)
-        menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.model_actions = self._group(
-            menu, "모델", {model: MODEL_NAMES.get(model, model) for model in CODEX_MODELS}
-        )
-        self.effort_actions = self._group(
-            menu, "추론 수준", {effort: EFFORT_NAMES[effort] for effort in CODEX_REASONING_EFFORTS}
-        )
-        self.model_actions[self.model].setChecked(True)
-        self.effort_actions[self.effort].setChecked(True)
-        self.setMenu(menu)
-        self._render()
-
-    def _group(self, menu: QMenu, title: str, names: dict[str, str]) -> dict[str, QAction]:
-        # A disabled heading: styled menus drop addSection's text.
-        if menu.actions():
-            menu.addSeparator()
-        menu.addAction(title).setEnabled(False)
-        group = QActionGroup(menu)
-        actions = {}
-        for value, name in names.items():
-            action = menu.addAction(name)
-            action.setCheckable(True)
-            group.addAction(action)
-            action.triggered.connect(lambda _=False, v=value: self._pick(v))
-            actions[value] = action
-        return actions
-
-    def _pick(self, value: str) -> None:
-        if value in self.model_actions:
-            self.model = value
-        else:
-            self.effort = value
-        self._render()
-
-    @property
-    def message_effort(self) -> str | None:
-        """The level to send with a message; None when the model has no levels."""
-        return None if self._fixed is not None else self.effort
-
-    def set_model_locked(self, locked: bool) -> None:
-        """A started Codex Task keeps its model; only the reasoning level changes."""
-        self._fixed = None
-        for action in self.model_actions.values():
-            action.setEnabled(not locked)
-        self.setEnabled(True)
-        self._render()
-
-    def set_fixed(self, text: str) -> None:
-        """A non-Codex (synthetic) model: shown, nothing to pick."""
-        self._fixed = text
-        self.setEnabled(False)
-        self._render()
-
-    def _render(self) -> None:
-        if self._fixed is not None:
-            self.setText(self._fixed)
-            self.setAccessibleName(f"세션 {self._fixed}")
-            self.setToolTip("")
-            return
-        model = MODEL_NAMES.get(self.model, self.model)
-        effort = EFFORT_NAMES[self.effort]
-        self.setText(f"{model} · 추론 {effort}")
-        self.setAccessibleName(f"세션 모델 {model} · 추론 수준 {effort} · 눌러서 바꾸기")
-        self.setToolTip(f"Codex {self.model} · effort {self.effort}")
 
 
 @dataclass(slots=True)
@@ -885,19 +500,15 @@ class SessionWorkspace(QWidget):
 
     def _refresh_view(self, view: SessionView) -> None:
         snapshot = view.snapshot
-        failure_notice = "" if snapshot is None else codex_failure_notice(snapshot.connection_code)
-        active = snapshot is not None
-        busy = bool(snapshot and (snapshot.task_id, snapshot.epoch) in self._busy_scopes)
-        writable = bool(
-            active
-            and self._ready
-            and not busy
-            and snapshot is not None
-            and snapshot.status is TaskStatus.RUNNING
-            and snapshot.can_accept_message
-            and not failure_notice
-            and view.pending_command is None
+        display = session_display(
+            snapshot,
+            ready=self._ready,
+            busy_scopes=self._busy_scopes,
+            pending_command=view.pending_command,
+            command_notice=view.command_notice,
+            session_blocker=self._session_blocker,
         )
+        writable, active = display.writable, display.active
         view.send.setEnabled(writable and bool(view.draft.toPlainText().strip()))
         view.send.setVisible(snapshot is not None)
         view.start.setVisible(snapshot is None)
@@ -926,57 +537,15 @@ class SessionWorkspace(QWidget):
             view.pill.setToolTip(status_code(snapshot.status))
         view.epoch.setVisible(snapshot is not None)
         view.grade.setVisible(snapshot is not None)
-        if snapshot is None:
-            text = "아직 연결된 Task가 없음"
-            note = (
-                view.command_notice
-                or session_blocker_notice(self._session_blocker)
-                or (
-                    "Codex 연결과 시작 검사가 확인되면 세션을 시작할 수 있음. "
-                    "로그인은 설정에서 안내를 확인하세요."
-                )
-            )
-        else:
-            text = f"Task {snapshot.task_id}"
+        if snapshot is not None:
             view.epoch.setText(f"epoch {snapshot.epoch}")
             view.grade.setText(task_label_text(snapshot.label, snapshot.unclassified))
-            if failure_notice:
-                note = failure_notice
-            elif snapshot.status is TaskStatus.WAITING_APPROVAL:
-                note = "승인 대기 중 · 결과 · 실행 활동에서 요청 사본을 확인하세요."
-            elif snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
-                note = (
-                    CODEX_AUTH_FAILED_NOTICE
-                    if snapshot.connection_code == "CODEX_AUTH_FAILED"
-                    else "Task가 종료되거나 잠김. 대화·초안 원문을 지웠고 다시 실행할 수 없음."
-                )
-            elif snapshot.runner_state in ("model_error", "guard_error", "stopped"):
-                note = (
-                    "모델 응답을 완료하지 못해 이 Runner가 멈춤. 자동 재전송하지 않음. "
-                    "Store의 Task 상태는 위에 표시된 값임. 새 세션에서 다시 시작하세요."
-                )
-            elif not snapshot.model_ready:
-                note = "모델 연결을 확인하지 못해 실행할 수 없음."
-            elif busy or view.pending_command:
-                note = "실행 요청 처리 중 · 백엔드 결과를 기다리는 중임."
-            elif not self._ready:
-                note = "백엔드 준비 상태를 확인하는 중임."
-            elif view.command_notice:
-                note = view.command_notice
-            elif snapshot.can_advance:
-                note = "진행할 모델 단계가 있음. 결과 · 실행 활동에서 실행을 누르세요."
-            elif writable:
-                note = "다음 메시지를 보낼 수 있음. 도구 호출은 Guard를 통해 검사됨."
-            else:
-                note = "사용자 입력을 받을 수 있는지 백엔드 확인을 기다리는 중임."
-            if not snapshot.tools_available:
-                note = "도구 없는 대화 · " + note
-        view.status.setText(text)
-        view.notice.setText(note)
-        waiting = snapshot is not None and snapshot.status is TaskStatus.WAITING_APPROVAL
+        view.status.setText(display.text)
+        view.notice.setText(display.note)
+        waiting = display.waiting
         view.approval.setVisible(waiting)
         # The band says it; a failure notice still shows above it.
-        view.notice.setVisible(not waiting or bool(failure_notice))
+        view.notice.setVisible(not waiting or bool(display.failure_notice))
 
     def _send(self, view: SessionView) -> None:
         if not view.send.isEnabled() or view.snapshot is None or view is not self.current:
@@ -1126,17 +695,7 @@ class SessionWorkspace(QWidget):
         needle = self.search.text().casefold().strip()
         self.list.clear()
         for view in sorted(self.sessions.values(), key=lambda item: item.updated, reverse=True):
-            if view.snapshot is None:
-                status, tone = "초안 · 미연결", "draft"
-            elif view.snapshot.connection_code == "CODEX_CLEANUP_UNCONFIRMED":
-                status, tone = "정리 완료 미확인", "attention"
-            elif view.snapshot.status is TaskStatus.WAITING_APPROVAL:
-                status, tone = "승인 필요 · 대기 중", "approval"
-            elif view.snapshot.status not in FINAL_STATUSES and not view.snapshot.model_ready:
-                status, tone = "연결 필요", "attention"
-            else:
-                status = status_title(view.snapshot.status)
-                tone = _STATUS_TONES.get(view.snapshot.status, "closed")
+            status, tone = session_row_status(view.snapshot)
             shown, _ = untrusted_display_text(view.title)
             time = f"{view.updated:%H:%M}"
             text = f"{shown}\n{time} · {status}"

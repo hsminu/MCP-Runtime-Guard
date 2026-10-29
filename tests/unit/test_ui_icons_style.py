@@ -176,7 +176,7 @@ def test_ui_sources_use_palette_colors_brand_accent_and_grid_spacing() -> None:
             for number in map(int, re.findall(r"\b\d+\b", args)):
                 if number not in (0, 2) and number % 4 != 0:
                     failures.append((path.name, args))
-    if painted != {"sessions.py": 1, "window.py": 1}:
+    if painted != {"session_list.py": 1, "window.py": 1}:
         failures.append(("accent counts", painted))
     if PALETTES["light"]["selection"] == PALETTES["light"]["accent"]:
         failures.append(("palette", "selection equals accent"))
