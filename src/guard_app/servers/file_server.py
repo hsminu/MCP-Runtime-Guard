@@ -109,7 +109,6 @@ _MAX_PATH_CHARS = 32768
 
 if sys.platform == "win32":
     import ctypes
-    import msvcrt
     from ctypes import wintypes
 
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -160,6 +159,15 @@ if sys.platform == "win32":
     )
     _GetFileInformationByHandle = _api(
         "GetFileInformationByHandle", wintypes.BOOL, wintypes.HANDLE, ctypes.POINTER(_HandleInfo)
+    )
+    _ReadFile = _api(
+        "ReadFile",
+        wintypes.BOOL,
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPVOID,
     )
 
 
@@ -260,17 +268,15 @@ class FileServer:
                 raise FileToolError("PATH_NOT_FILE")
             return self._read(target, resource_id)
         except (FileToolError, SafePathError) as error:
-            return {"content": [{"type": "text", "text": str(error)}], "isError": True}
+            return _tool_error(str(error))
+        except OSError:
+            # 예상 밖 OS 오류도 고정 코드로 답하고 서버는 계속 돈다(B77-D1). OS 메시지는 경로를
+            # 담을 수 있어 싣지 않는다.
+            return _tool_error("FILE_READ_FAILED" if name == READ_FILE else "FOLDER_READ_FAILED")
 
     def _read(self, target: Path, resource_id: str) -> dict[str, Any]:
         with _opened(target, directory=False) as handle:
-            image = open(msvcrt.open_osfhandle(handle, os.O_RDONLY), "rb", closefd=False)  # noqa: SIM115
-            try:
-                data = image.read(MAX_TEXT_BYTES + len(_UTF8_BOM) + 1)
-            except OSError:
-                raise FileToolError("FILE_READ_FAILED") from None
-            finally:
-                image.close()
+            data = _read_handle(handle, MAX_TEXT_BYTES + len(_UTF8_BOM) + 1)
         if data.startswith(_UTF8_BOM):
             data = data[len(_UTF8_BOM) :]
         if len(data) > MAX_TEXT_BYTES:
@@ -356,6 +362,26 @@ def _opened(path: Path, *, directory: bool) -> Iterator[int]:
         _CloseHandle(handle)
 
 
+def _read_handle(handle: int, limit: int) -> bytes:
+    """핸들에서 `limit` 바이트까지 읽는다(B77-D1).
+
+    CRT fd(`msvcrt.open_osfhandle`)를 만들지 않는다. 그 fd는 핸들을 닫아도 풀리지 않아 읽을
+    때마다 하나씩 남았고, 8,189번쯤 뒤에는 열기가 실패했다. 핸들을 닫는 것은 `_opened` 하나다.
+    """
+    buffer = ctypes.create_string_buffer(limit)
+    done = wintypes.DWORD()
+    total = 0
+    while total < limit:
+        if not _ReadFile(
+            handle, ctypes.byref(buffer, total), limit - total, ctypes.byref(done), None
+        ):
+            raise FileToolError("FILE_READ_FAILED")
+        if done.value == 0:
+            break
+        total += done.value
+    return buffer.raw[:total]
+
+
 def _final_path(handle: int) -> str:
     buffer = ctypes.create_unicode_buffer(_MAX_PATH_CHARS)
     length = _GetFinalPathNameByHandleW(handle, buffer, _MAX_PATH_CHARS, 0)
@@ -370,6 +396,10 @@ def _final_path(handle: int) -> str:
 
 def _reject_constant(value: str) -> object:
     raise ValueError("JSON constant")
+
+
+def _tool_error(code: str) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": code}], "isError": True}
 
 
 def _result(request_id: str | int, result: dict[str, Any]) -> dict[str, Any]:

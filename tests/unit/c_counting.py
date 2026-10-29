@@ -25,6 +25,11 @@ READ는 파일 이름이 `forge`로 시작하면 실제로 읽은 경로 대신 
 
 호출마다 인자에 고유 표지(`path`·`body`)를 실어, 계수를 도구별로도 요청별로도 센다. 요청별
 계수는 승인 소비와 host_dispatch를 Guard `request_id`로, wire와 수신 효과를 그 표지로 잇는다.
+
+대역 범위(B77-N2): Store는 실제 SQLiteStore지만 `ProductInputs`의 `next_call_seq`는 메모리
+계수기, `failure_audit`는 목록 추가다. 그래서 이 하니스의 결과는 승인·전송 계수(C5.4·C5.6)의
+근거이고, 영속 call_seq와 허용된 실패 감사가 디스크에 남는지(B6.8)는 보여 주지 않는다. 그
+내구성은 제품 연결과 실제 Store 시험(C3.10·B6.8 C 인수)으로 따로 본다.
 """
 
 from __future__ import annotations
