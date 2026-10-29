@@ -7,7 +7,6 @@
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
 | fixture·로그 정책·독립 인수 | C | A07–A12, A14–A16, A23, A36–A40 |
-| B6-05 조회 계약 합의. B 구현은 #86으로 병합됐고 A 연결은 A163 | A·B·C | A33–A35 |
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
 | `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22, A50 |
 | 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
@@ -16,6 +15,7 @@
 | mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
 | Windows MSIX 가상 경로의 L2 config·model catalog 비교 실패(사용자: C 수정 보류) | C | A151·A161 |
+| 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인([#21 알림](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6496456303)) | C | A151 |
 
 **A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
 
@@ -96,7 +96,7 @@
 - [x] A151 실제 codex.exe L2·API 키/ChatGPT 로그인한 CODEX_HOME 시작·정리 시간 측정(정규 앱 경로 지정) · [기록](archive/a/A151-logged-in-startup-timing.md)
 - [ ] A151 기본 제품 MSIX 경로의 L2 성공 재확인·C 인수 — 사용자 결정으로 C 경로 비교 수정 보류 · [근거](archive/a/A161-msix-l2-path-observation.md)
 - [x] A161 실제 데스크톱 MSIX 가상 경로의 L2 실패 재현·정규 경로 대조·시작/종료 계측 · [기록](archive/a/A161-msix-l2-path-observation.md)
-- [ ] A151 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인 — C 판정 쪽, C에 알릴 것([A162](archive/a/A162-real-run-display-followups.md))
+- [ ] A151 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인 — 막힘: C 답([#21 알림](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6496456303), 관찰은 [A162](archive/a/A162-real-run-display-followups.md))
 - [x] A107 실제 codex.exe 0.162.1·가짜 모델로 Guard 도구 호출 turn 스파이크(ALLOW·ASK 승인·DENY, 제품 경로 밖) · [기록](archive/a/A107-codex-real-exe-fake-model-spike.md)
 - [x] A108 실제 로그인·실제 모델로 같은 turn(ALLOW·ASK 승인), 로그인 뒤 CODEX_HOME `secrets` 거부 발견 · [기록](archive/a/A108-codex-real-login-turn.md)
 - [x] A109 기기 코드 제한 안내·브라우저 로그인 A 연결부·취소/시간초과·중복 요청 처리 · [기록](archive/a/A109-browser-login-wiring.md)
@@ -157,7 +157,7 @@
 - [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
 - [x] A33·A34 승인 목록(대기·이력)을 B Store 조회에 연결: 만료 표시는 저장된 만료 시각, `row_revision` 보관, 조회 실패는 불명, 검색어는 B 형식만 보냄(#86 후속) · [기록](archive/a/A163-pr86-followups.md)
-- [ ] A33–A35 B6-05 조회 계약 합의 뒤 변환 맞춤 — 막힘: 3인 합의
+- [x] A33–A35 B6-05 조회 합의 확인: A 동의, C3.8 조건 충족, #86 구현 기준([#76 B 정리](https://github.com/hsminu/MCP-Runtime-Guard/issues/76#issuecomment-6497583247)). A163 변환이 그 구현을 그대로 씀 · [기록](archive/a/A163-pr86-followups.md)
 - [x] A35 로그 enum 매핑
 - [x] A35 호출 로그·상세를 B Store 조회에 연결: 페이지·서버 검색, B 단계만 사용(`COMMITTED`는 결과 기록), 신뢰 경계 열 제거(#86 후속) · [기록](archive/a/A163-pr86-followups.md)
 - [x] A36·A37 확정/요청 상태 분리·한글 표시
