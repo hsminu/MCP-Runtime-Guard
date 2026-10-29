@@ -251,6 +251,7 @@
 - [x] A191 대화: Enter 전송·Shift+Enter 줄바꿈·IME 조합 보호, PlainText 답변 블록·코드 복사, 최신 메시지 이동, 확인 뒤 Task 중지, 승인 대기 요약 카드, Ctrl+N/K/L(첨부·재생성·답변만 중단은 백엔드 미지원) · [기록](archive/a/A191-chat-usability.md)
 - [x] A192 호출 로그: 기본 다섯 열(ID는 선택 열), 판정·승인·현재 상태 알약 분리, 고정 헤더·열 너비 조절, 행 선택 시 옆 상세 패널, 서버 필터는 Store 질의·상태/기간은 현재 페이지(안내 표시), 실제 범위를 적은 CSV 복사 · [기록](archive/a/A192-call-log-readability.md)
 - [x] A198 #109 A 리뷰 후속: 등록과 다른 설정 서버를 띄우지 않음을 두 시험에 단언, 시험 이름·서버 상세 문구(연결하지 않음) 정리, Codex 스트림 기한 시험 간헐 실패(30ms→0.3s) · [기록](archive/a/A198-pr109-followups.md)
+- [x] A199 #94 B 답 3번: 조립이 파일 서버 루트를 args 모양과 앱 Python 실행 파일(`sys.executable`)이 모두 맞을 때만 인정, 아니면 자원형 READ는 예약 전 거부 · [기록](archive/a/A199-file-server-command.md)
 
 ## 통합·패키징
 
