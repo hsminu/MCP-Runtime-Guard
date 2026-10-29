@@ -105,6 +105,43 @@ _MAX_LINE_BYTES = 8 << 20
 _MAX_BODY_BYTES = 16 << 20
 
 
+# 이 모듈이 내는 고정 실패 코드 전부(`L2Report.failures`·`L2Error`). A는 이 밖의 값을 받으면
+# 그대로 보이지 않고 `CODEX_L2_FAILED`로 닫는다(#83 A151). 코드를 더하면 여기에도 더한다
+# (시험이 대조).
+L2_FAILURE_CODES = frozenset(
+    {
+        "L2_CODEX_EXITED",
+        "L2_CONFIG_LAYERS_UNEXPECTED",
+        "L2_CONFIG_MISMATCH",
+        "L2_CONFIG_UNREADABLE",
+        "L2_DEADLINE_EXCEEDED",
+        "L2_DEADLINE_INVALID",
+        "L2_EXIT_UNCONFIRMED",
+        "L2_FEATURE_ENABLED",
+        "L2_FOLDER_NOT_REMOVED",
+        "L2_FORBIDDEN_NOT_REFUSED",
+        "L2_ITEM_UNEXPECTED",
+        "L2_MODEL_REQUEST_MISSING",
+        "L2_MODEL_TRAFFIC_UNEXPECTED",
+        "L2_PROBE_CALLS_UNEXPECTED",
+        "L2_PROMPT_UNEXPECTED",
+        "L2_PROTOCOL_INVALID",
+        "L2_READER_STUCK",
+        "L2_REMOTE_CONTROL_ENABLED",
+        "L2_REQUEST_REJECTED",
+        "L2_REQUEST_TIMEOUT",
+        "L2_REQUIREMENTS_PRESENT",
+        "L2_SERVER_REQUEST_UNEXPECTED",
+        "L2_SESSION_FLAGS_UNEXPECTED",
+        "L2_THREAD_PARAMS_UNSAFE",
+        "L2_THREAD_START_INVALID",
+        "L2_TOOLS_UNEXPECTED",
+        "L2_TURN_NOT_COMPLETED",
+        "L2_TURN_TIMEOUT",
+    }
+)
+
+
 class L2Error(RuntimeError):
     """시험을 끝까지 하지 못한 고정 사유. `run_l2`는 이것을 실패 코드로 바꿔 담는다."""
 

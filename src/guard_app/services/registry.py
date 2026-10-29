@@ -27,6 +27,8 @@
   본다.
 - ACTIVE로 올리는 것(`activate`)은 사용자 확인 뒤 A의 정책 저장·적용 흐름이 부른다. 넘기는 지문은
   캐시의 등록 지문, 곧 사용자가 화면에서 본 지문이다.
+- 사용자가 도구 종류·인자를 바꾸면(A155) `apply_settings`가 지문은 두고 그 값만 등록에 쓴다. 바뀐
+  도구가 있으면 ACTIVE는 PENDING이 되어 다시 활성화해야 한다. 경계 변경은 여기서 다루지 않는다.
 
 정의는 신뢰하지 않는 서버 데이터다. 오류에 서버 텍스트를 싣지 않고, 저장 실패는 B의 `StoreError`
 (고정 사유)를 그대로 올린다. transport 패키지는 `services.product_assembly`만 가져오므로(I1, A
@@ -234,6 +236,59 @@ class ServerRegistry:
                 if invalidate_tool is not None:
                     for name in change.changed_tools:
                         await invalidate_tool(server.id, name)
+            return change
+
+    async def apply_settings(
+        self, server: ServerSettings, *, expected_row_revision: int
+    ) -> FingerprintChange:
+        """설정의 도구 종류·인자를 등록에 반영한다(B6.20 `record_settings_change`, #86).
+
+        등록 도구마다 스키마·지문은 그대로 두고 설정의 `kind`·`destination_arg`·`resource_arg`만
+        얹는다. 설정에 없는 도구는 등록 때와 같이 `OTHER`다. 바뀐 도구가 있으면 B가 그 도구의 검토
+        설명을 비우고 ACTIVE를 PENDING으로 내린다. 경계(`tier`·`max_label`)가 다르면 쓰지 않고
+        `REG_SETTINGS_MISMATCH`다. 기록 호출이 결과를 돌려주지 않으면 그 서버를 다시 읽게 표시하고
+        오류를 그대로 올린다(C4.19).
+        """
+        async with self._lock:
+            _check_settings(server)
+            await self._reread_if_stale(server.id)
+            current = self._entries.get(server.id)
+            if current is None:
+                raise RegistryError("REG_SERVER_UNKNOWN")
+            if server.as_boundary() != current.registration.boundary:
+                raise RegistryError("REG_SETTINGS_MISMATCH")
+            configured = {tool.name: tool for tool in server.tools}
+            tools: list[ToolSpec] = []
+            for tool in current.registration.tools:
+                setting = configured.get(tool.tool_name)
+                try:
+                    tools.append(
+                        ToolSpec(
+                            server_id=tool.server_id,
+                            tool_name=tool.tool_name,
+                            kind=ToolKind.OTHER if setting is None else setting.kind,
+                            input_schema=tool.input_schema,
+                            destination_arg=None if setting is None else setting.destination_arg,
+                            resource_arg=None if setting is None else setting.resource_arg,
+                            fingerprint=tool.fingerprint,
+                            reviewed_description=tool.reviewed_description,
+                        )
+                    )
+                except ValidationError:
+                    raise RegistryError("REG_TOOL_INVALID") from None
+            written = False
+            try:
+                change = await self._store.record_settings_change(
+                    server.id,
+                    tuple(tools),
+                    expected_row_revision=expected_row_revision,
+                    at_utc=self._clock(),
+                )
+                written = True
+            finally:
+                if not written:
+                    self._stale.add(server.id)
+            self._entries[server.id] = change.entry
             return change
 
     async def activate(

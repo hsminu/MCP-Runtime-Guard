@@ -320,6 +320,83 @@ def test_block_review_and_descriptions_replace_the_cache(registry, store):
     assert registry.entry("docs") == run(store.load_registration("docs"))
 
 
+# apply_settings: 사용자가 바꾼 도구 종류·인자를 지문은 둔 채 등록에 쓴다(A155, B6.20 #86).
+EXTRA_AS_READ = [*SERVER["tools"], {"name": "extra", "kind": "read"}]
+
+
+def test_apply_settings_writes_kinds_and_sends_an_active_server_back(registry, store):
+    entry = run(registry.register(settings(), listing()))
+    run(
+        registry.save_reviewed_descriptions(
+            "docs",
+            {"read": "검토한 읽기", "extra": "검토한 기타"},
+            expected_row_revision=entry.registration.row_revision,
+        )
+    )
+    active = run(
+        registry.activate("docs", expected_row_revision=_revision(registry), reviewed_by="operator")
+    )
+    before = {tool.tool_name: tool for tool in active.registration.tools}
+    change = run(
+        registry.apply_settings(
+            settings(tools=EXTRA_AS_READ), expected_row_revision=_revision(registry)
+        )
+    )
+    assert change.changed_tools == ("extra",)
+    assert registry.entry("docs") == run(store.load_registration("docs")) == change.entry
+    assert registry.status("docs") is RegStatus.PENDING
+    after = {tool.tool_name: tool for tool in registry.registration("docs").tools}
+    assert (after["extra"].kind, after["extra"].resource_arg) == (ToolKind.READ, None)
+    assert {n: t.fingerprint for n, t in after.items()} == {
+        n: t.fingerprint for n, t in before.items()
+    }
+    # 바뀐 도구만 검토 설명을 비운다.
+    assert (after["read"].reviewed_description, after["extra"].reviewed_description) == (
+        "검토한 읽기",
+        "",
+    )
+
+
+def test_apply_settings_without_a_change_writes_nothing(registry, store):
+    _active(registry)
+    before = registry.entry("docs")
+    change = run(registry.apply_settings(settings(), expected_row_revision=_revision(registry)))
+    assert change.changed_tools == ()
+    assert registry.entry("docs") == before == run(store.load_registration("docs"))
+    assert registry.status("docs") is RegStatus.ACTIVE
+
+
+def test_apply_settings_refuses_boundary_changes_and_unknown_servers(registry, store):
+    _active(registry)
+    before = run(store.load_registration("docs"))
+    for changed, code in (
+        (settings(tools=EXTRA_AS_READ, max_label="PUBLIC"), "REG_SETTINGS_MISMATCH"),
+        (
+            settings(tools=EXTRA_AS_READ, tier="general_external", max_label="PUBLIC"),
+            "REG_SETTINGS_MISMATCH",
+        ),
+        (settings(id="other"), "REG_SERVER_UNKNOWN"),
+    ):
+        with pytest.raises(RegistryError) as raised:
+            run(registry.apply_settings(changed, expected_row_revision=_revision(registry)))
+        assert str(raised.value) == code
+    assert run(store.load_registration("docs")) == before
+    assert registry.status("docs") is RegStatus.ACTIVE
+
+
+def test_apply_settings_with_a_stale_revision_closes_until_reread(registry, store):
+    """C4.19와 같다: 기록이 결과를 돌려주지 않으면 다시 읽기 전까지 ACTIVE로 보지 않는다."""
+    _active(registry)
+    seen = _revision(registry)
+    with pytest.raises(StoreError):
+        run(registry.apply_settings(settings(tools=EXTRA_AS_READ), expected_row_revision=seen - 1))
+    assert run(store.load_registration("docs")).registration.status is RegStatus.ACTIVE
+    assert registry.status("docs") is RegStatus.PENDING
+    change = run(registry.apply_settings(settings(tools=EXTRA_AS_READ), expected_row_revision=seen))
+    assert change.changed_tools == ("extra",)
+    assert registry.entry("docs") == run(store.load_registration("docs"))
+
+
 def test_control_operations_run_one_at_a_time(registry, store, monkeypatch):
     _active(registry)
     order = []
@@ -754,6 +831,23 @@ def test_catalog_shows_registered_tools_until_a_change_drops_them(registry):
     run(registry.observe(settings(), listing(edit={"send": {"description": "changed"}})))
     reloaded = load_profile_settings(DOCUMENT, registry)
     assert reloaded.catalog.tool_views(("docs",)) == ()
+
+
+def test_apply_settings_clears_the_settings_mismatch(registry):
+    """B3.16(#86): 설정과 등록의 종류가 다르면 그 서버를 숨긴다. `apply_settings` 뒤에는 맞는다."""
+    _active(registry)
+    edited = {
+        **DOCUMENT,
+        "servers": [{**SERVER, "tools": [*SERVER["tools"][:1], {"name": "send", "kind": "other"}]}],
+    }
+    assert load_profile_settings(edited, registry).server_issue("docs") == "REG_SETTINGS_MISMATCH"
+    server = load_profile_settings(edited, registry).servers[0]
+    run(registry.apply_settings(server, expected_row_revision=_revision(registry)))
+    loaded = load_profile_settings(edited, registry)
+    assert loaded.server_issue("docs") is None
+    # 바뀐 도구가 있어 PENDING이다. 다시 활성화하기 전에는 아무것도 보이지 않는다.
+    assert registry.status("docs") is RegStatus.PENDING
+    assert loaded.catalog.tool_views(("docs",)) == ()
 
 
 def test_errors_carry_no_server_text(registry):

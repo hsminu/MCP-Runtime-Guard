@@ -4,6 +4,7 @@
 `GUARD_TEST_CODEX_EXE`에 고정 버전 codex.exe 경로를 주면 마지막 테스트가 실제로 L2를 돌린다.
 """
 
+import ast
 import asyncio
 import copy
 import json
@@ -364,6 +365,30 @@ def test_each_departure_fails_with_its_code(name):
     observation = good()
     mutate(observation)
     assert code in _judge(observation)
+
+
+def test_failure_codes_list_every_code_the_module_emits():
+    """A는 `L2_FAILURE_CODES` 밖의 코드를 `CODEX_L2_FAILED`로 닫는다(#83 A151). 둘이 같아야 한다."""
+    tree = ast.parse(Path(codex_l2.__file__).read_text(encoding="utf-8"))
+    declared = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "L2_FAILURE_CODES"
+            for target in node.targets
+        )
+    )
+    inside = {id(node) for node in ast.walk(declared)}
+    emitted = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.startswith("L2_")
+        and id(node) not in inside
+    }
+    assert emitted == codex_l2.L2_FAILURE_CODES
 
 
 def test_allowed_extra_feature_and_missing_config_shapes():

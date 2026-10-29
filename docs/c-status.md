@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-29 · main `fa36962` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-29 · main `b14c181` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -83,6 +83,7 @@
 - [x] C4.18 등록 때 서버 ID의 `__`·끝 `_` 거부: B `valid_server_id`를 그대로 쓰고 등록 화면은 bridge가 넘기는 같은 검사 결과를 씀. Registry `register`·`observe`가 설정 검증과 별도로 다시 검사 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.19 Registry 쓰기 결과를 모를 때 닫기(#46 B 리뷰): 제어 쓰기가 실패하거나 커밋 뒤 취소되면 그 서버의 ACTIVE를 PENDING으로 보고, 다음 제어 연산·`refresh`가 DB 행을 다시 읽어 맞춤. `observe` 취소는 기록 실패와 같이 이번 실행 PENDING. 실제 writer 재현은 C4.20 · [기록](archive/c/C4.19-registry-unknown-write.md)
 - [x] C4.20 C4.19 실제 writer 재현: B6.13 writer가 COMMIT을 실행한 직후 취소해도 `register`·`activate`·`record_scan`·`request_review`·`save_reviewed_descriptions`는 다시 읽기 전까지 ACTIVE로 보이지 않고 `refresh`가 DB와 맞춤, `observe`는 이번 실행 PENDING·활성화 거부. `block`·시작 전 취소·COMMIT 실패는 #58 B 시험 · [기록](archive/c/C4.20-registry-real-writer.md)
+- [x] C4.21 도구 종류·인자 변경을 등록에 반영(`ServerRegistry.apply_settings`, A155): 지문·스키마는 두고 설정의 `kind`·`destination_arg`·`resource_arg`만 B `record_settings_change`(B6.20, #86)로 CAS 기록, 바뀐 도구가 있으면 ACTIVE→PENDING·검토 설명 비움, 경계 변경은 쓰기 전 `REG_SETTINGS_MISMATCH`, 결과 불명은 C4.19와 같이 다시 읽을 때까지 PENDING. 반영 뒤 B3.16 불일치(`server_issue`)가 풀림 · `test_server_registry`
 
 ## C5 · fixture와 계수
 
@@ -111,7 +112,7 @@
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [x] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록: Bandit·Semgrep은 `src`만 봐서 빠지고 배포물에도 없음(AF-01), Semgrep 제외 경로를 루트 기준 `/src/...`로 고정 · [기록](archive/c/C6.12-attack-fixture-scan-scope.md)
 - [x] C6.13 Codex 0.162.1 L1 설정·모델 정보 파일·고정값(`config/codex/`)·설치 스크립트, CODEX_HOME에 쓰고 해시를 돌려주는 함수(#21 4번) · [기록](archive/c/C6.13-codex-l1.md)
-- [x] C6.14 L2 시작 시험(T22·T39·T40, `security/codex_l2.py`): 같은 codex.exe·CODEX_HOME·환경에 가짜 모델만 바꿔 requirements·설정 층·적용 값·원격 제어·도구 목록·프롬프트 블록·금지 호출 30종 거부·Guard 호출 순차·종료를 판정, `run_l2`가 A 입구에 줄 결과를 돌려줌. 진행 중 종료 0.05–0.11초 측정 · [기록](archive/c/C6.14-codex-l2.md)
+- [x] C6.14 L2 시작 시험(T22·T39·T40, `security/codex_l2.py`): 같은 codex.exe·CODEX_HOME·환경에 가짜 모델만 바꿔 requirements·설정 층·적용 값·원격 제어·도구 목록·프롬프트 블록·금지 호출 30종 거부·Guard 호출 순차·종료를 판정, `run_l2`가 A 입구에 줄 결과를 돌려줌. 진행 중 종료 0.05–0.11초 측정. 실패 코드 집합 `L2_FAILURE_CODES` 공개(#83 C 참고 4, A 사본 교체용) · [기록](archive/c/C6.14-codex-l2.md)
 - [ ] C6.15 (허용 밖 항목 정지는 실제 codex.exe로 확인, [C6.8-2](archive/c/C6.8-2-codex-flow.md)) L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답, 원격 제어 상태가 `disabled`가 아닐 때 정지(C-CODEX-07) 검증 · [결정](contracts.md#사용자-결정)
 - [ ] C6.16 (DB 다섯 개의 Task 폴더 위치·CODEX_HOME 남는 항목·동시 실행 정리는 확인, [C6.8-2](archive/c/C6.8-2-codex-flow.md). TEMP 쓰기·stderr 크기 상한 남음) Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.sandbox_migration`·`tmp\arg0` 보조 파일·인증 파일(`secrets/*.age`는 C6.21에서 확인), T43·#21 8번)과 동시 실행 때 경합(T46) 확인. Codex가 TEMP에 쓰는 것을 보고 TEMP·TMP를 Task 폴더 아래로 둘지, `codex-stderr.log` 크기 상한(#35 B launcher 2·3번) · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C6.17 (후속·선택) codex.exe AppContainer 실행 실험(C-CODEX-04)
