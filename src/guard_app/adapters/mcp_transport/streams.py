@@ -290,6 +290,8 @@ def _http_client(
         ),
         timeout=timeout,
         follow_redirects=False,
+        # SDK request-level follow_redirects=True must not replay a POST.
+        max_redirects=0,
         trust_env=False,
         auth=None,
         event_hooks={"request": [constrain_request]},

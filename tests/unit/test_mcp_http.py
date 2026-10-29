@@ -52,6 +52,7 @@ class ProtocolProbe:
         self.effects = 0
         self.requests = []
         self.redirect_url = ""
+        self.redirect_once = False
         self.effect_done = asyncio.Event()
         self.release = asyncio.Event()
         self.list_calls = 0
@@ -113,6 +114,8 @@ class ProtocolProbe:
                 await self.respond(
                     send, int(self.mode), headers=[(b"location", self.redirect_url.encode())]
                 )
+                if self.redirect_once:
+                    self.mode = "ok"
                 return
             self.effects += 1
             self.effect_done.set()
@@ -405,8 +408,48 @@ async def test_http_failure_never_replays_send_or_releases_unknown_result(caplog
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["307", "308"])
+async def test_http_factory_blocks_same_url_post_when_sdk_forces_redirects(monkeypatch, mode):
+    """A145 (I6/I8, T15/T16): count POSTs even if the SDK overrides follow_redirects."""
+    probe = ProtocolProbe(mode)
+    probe.redirect_once = True
+
+    @asynccontextmanager
+    async def fake_stream(endpoint, *, http_client, terminate_on_close):
+        assert http_client.follow_redirects is False
+        try:
+            await asyncio.wait_for(
+                http_client.post(
+                    endpoint,
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {}},
+                    follow_redirects=True,
+                ),
+                2,
+            )
+        finally:
+            assert probe.wire_calls == 1
+            assert sum(method == "POST" for method, _ in probe.requests) == 1
+            assert probe.effects == 0
+        yield (None, None, None)
+
+    monkeypatch.setattr(streams, "streamable_http_client", fake_stream)
+    async with serve_loopback(probe) as endpoint:
+        probe.redirect_url = endpoint
+        with pytest.raises(httpx.TooManyRedirects):
+            async with http_stream_factory(endpoint)():
+                pass
+
+
+@pytest.mark.asyncio
 async def test_http_status_failure_fails_the_worker_but_its_teardown_is_complete():
-    for mode in ["307", "308", "401", "500"]:
+    for mode, same_url in [
+        ("307", False),
+        ("308", False),
+        ("401", False),
+        ("500", False),
+        ("307", True),
+        ("308", True),
+    ]:
         """#61 A follow-up: the SDK re-raises the request's HTTPStatusError only after
         the session is torn down, so closing reports no failure. The worker still
         refuses later calls for the rest of the run."""
@@ -415,12 +458,13 @@ async def test_http_status_failure_fails_the_worker_but_its_teardown_is_complete
             serve_loopback(redirect_target) as redirect_url,
             serve_loopback(probe) as endpoint,
         ):
-            probe.redirect_url = redirect_url
+            probe.redirect_url = endpoint if same_url else redirect_url
+            probe.redirect_once = same_url
             dispatches, failed = [], []
             transport = transport_for(endpoint, dispatches, failed=failed)
             await transport.start()
             worker = transport._workers["docs"]
-            with pytest.raises(DispatchError):
+            with _dispatch_error("WorkerInterrupted"):
                 await transport.call(_request("docs", seq=1))
             await asyncio.wait_for(worker._stopped.wait(), 2)
             assert worker._state.name == "FAILED"
