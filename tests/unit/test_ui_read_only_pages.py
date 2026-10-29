@@ -47,7 +47,18 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
     )
     assert window.set_approval_page(ApprovalPage(query, (summary,), 1))
     window.navigate("approvals", "approval-1")
+    # A212: opening the page reads again, and the target is selected from that response.
+    assert window.approval_page.selected_summary is None
+    assert window.set_approval_page(ApprovalPage(approval_queries[-1], (summary,), 1))
     assert window.approval_page.selected_summary == summary
+    # An older response or a failure does not select a later target.
+    window.navigate("approvals", "approval-1")
+    stale, current = query, approval_queries[-1]
+    assert not window.set_approval_page(ApprovalPage(stale, (summary,), 1))
+    assert window.set_approval_error(current)
+    window.approval_page.refresh()
+    assert window.set_approval_page(ApprovalPage(approval_queries[-1], (summary,), 1))
+    assert window.approval_page.selected_summary is None
     log_requests = []
     window.call_log_detail_requested.connect(log_requests.append)
     call = PublicCallSummary(

@@ -786,10 +786,18 @@ class GuardWindow(QMainWindow):
     def set_approval_page(self, page: ApprovalPage) -> bool:
         """Accept only the current approval query response."""
 
-        return self.approval_page.set_page(page)
+        accepted = self.approval_page.set_page(page)
+        if accepted and self._page == "approvals" and self._navigation_target:
+            # The same pending selection as a bridge reply (A212).
+            target, self._navigation_target = self._navigation_target, ""
+            self.approval_page.select_approval(target)
+        return accepted
 
     def set_approval_error(self, query: ApprovalQuery) -> bool:
-        return self.approval_page.set_error(query)
+        failed = self.approval_page.set_error(query)
+        if failed and self._page == "approvals":
+            self._navigation_target = ""
+        return failed
 
     def set_call_log_snapshot(self, snapshot: Surface[tuple[PublicCallSummary, ...]]) -> None:
         self.log_page.set_calls(snapshot)
