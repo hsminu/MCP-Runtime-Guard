@@ -14,11 +14,10 @@
 | T43/T46·수신 상한 독립 인수(C5.8) ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A52 |
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
 | Codex 로그인 URL 검증·기본 브라우저 열기 입구와 독립 검증([#77](https://github.com/hsminu/MCP-Runtime-Guard/pull/77), A 리뷰 막는 문제 없음) | C | A109 제품 브라우저 로그인 |
-| mcp 1.30.0 고정 변경([#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)). A145가 먼저 main에 들어가야 함 | C | A144 |
-| 로그 마스킹 입구 `install_log_redaction`(C2.8, [#74](https://github.com/hsminu/MCP-Runtime-Guard/pull/74), A 리뷰 막는 문제 없음) 병합 | C | A146 |
+| mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145가 main에 들어간 뒤 C가 올림 | C | A144 |
 | C6.18 권고(제출·시연 기본 로그인은 API 키, OpenAI 제휴 암시 금지) 반영 여부([#79](https://github.com/hsminu/MCP-Runtime-Guard/pull/79)) | 사용자 | A148 |
 
-**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49, #63·#64·#67 병합됨), C2.10 키 입력 화면 연결(#60, A 브랜치에 병합됨), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드는 #58로 병합됨), EXE-01 지문 확인 화면(A128), C6.20 설치판 리소스 위치(패키징), C6.24 mcp 1.30.0 고정(#73, A145 먼저).
+**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49, #63·#64·#67 병합됨), C2.10 키 입력 화면 연결(#60, A 브랜치에 병합됨), C5.8 launcher 파이프 연결(A09·A10, EXE-01 B 필드는 #58로 병합됨), EXE-01 지문 확인 화면(A128), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 먼저).
 
 ## 계약·환경
 
@@ -49,7 +48,7 @@
 - [ ] A13 이전 Task 종결·시작 복구 — A 차례: B6.8 시작 복구 병합(#69), 연결은 A138. C 인수 남음
 - [x] A14 errlog 필수·SDK·합성 HTTP 서버 로그 격리
 - [ ] A14 공개 handler 인수 — 막힘: C 로그 정책(A39와 함께)
-- [ ] A146 제품 진입점(`__main__`) 맨 앞에서 C `install_log_redaction()` 호출. 시험이 부르는 조립 함수에는 넣지 않음([#74 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/74#issuecomment-6488073755)) — 막힘: C2.8 #74 병합
+- [ ] A146 제품 진입점(`__main__`) 맨 앞에서 C `install_log_redaction()` 호출. 시험이 부르는 조립 함수에는 넣지 않음([#74 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/74#issuecomment-6488073755)) — A 차례: C2.8 [#74](https://github.com/hsminu/MCP-Runtime-Guard/pull/74) 병합됨, main(#73·#74)을 A 브랜치에 합친 뒤
 - [ ] A147 제품 로그 handler(위치·크기 상한) 정하기. 지금은 handler가 없어 창 앱에서 로그가 보이지 않음(#74 A 리뷰) — A 차례, A14와 같이
 - [x] A15·A16 등록 요구·단위 구현
 - [x] A86 연결 직후 지문 대조·불일치 도구 차단(A15·A16, 주입형 Registry) · [기록](archive/a/A86-profile-guard-assembly.md)
@@ -60,7 +59,7 @@
 - [x] A140 수신 순서·서버 격리 리뷰: [B](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6473893617)·[C](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474250735) 모두 막는 문제 없음, 콜백 설명 제안은 반영
 - [x] A140 결정 문서 제안 [#71](https://github.com/hsminu/MCP-Runtime-Guard/pull/71)에 [B 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/71#issuecomment-6474704011) 반영: 약점 대장 리뷰 칸, "첫 성공 응답", 10.1절 SDK 업그레이드 확인 구절(`16fe9cd`)
 - [ ] A140 실제 알림 시점 관찰 — 막힘: C5.9
-- [ ] A144 mcp 고정 버전을 올릴 때 SDK 내부에 기대는 세 곳(요청 ID 배정 순서, `_handle_response`, `_DeliveryCheckedStream`) 재검증 — 막힘: C 의존성 PR([#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)). 1.30.0 파일 비교와 A transport·계수 시험 1,114개는 통과([#73 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/73#issuecomment-6488073230)), A145 먼저
+- [ ] A144 mcp 고정 버전을 올릴 때 SDK 내부에 기대는 세 곳(요청 ID 배정 순서, `_handle_response`, `_DeliveryCheckedStream`) 재검증 — 막힘: C mcp 1.30.0 고정 PR([#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 빼고 병합됨). 1.30.0 파일 비교와 A transport·계수 시험 1,114개는 통과([#73 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/73#issuecomment-6488073230)), A145 먼저
 - [ ] A145 HTTP 클라이언트 `max_redirects=0`과 같은 URL 307/308 시험. mcp 1.30.0은 `follow_redirects`를 보지 않고 같은 출처 리다이렉트를 따라가서, 같은 URL 307/308이면 `tools/call`을 다시 보냄(실측 POST 2회, 두 번째 응답이 결과가 됨) — A 차례, mcp 1.30.0 고정 전에 main 반영
 - [x] A132 HTTP 세션이 요청 오류(`httpx.HTTPError`)만으로 끝나면 종료를 완료로 봄(#61 A 후속 2) · [기록](archive/a/A132-http-teardown-completed.md)
 - [x] A141 A132의 HTTP 종료 기대값 C 수정(#68)을 A 브랜치에 통합·전체 재검사 · [기록](archive/a/A141-c68-integration-check.md)
