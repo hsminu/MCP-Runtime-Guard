@@ -105,10 +105,23 @@ class TurnAnswers:
             return answer
         error = turn.get("error")
         info = error.get("codexErrorInfo") if type(error) is dict else None
-        if info == "unauthorized":
+        if info == "unauthorized" or _http_status(info) == 401:
             raise CodexAuthenticationError()
-        if info in _USAGE_LIMITS:
+        if type(info) is str and info in _USAGE_LIMITS:
             raise CodexSessionError("CODEX_USAGE_LIMIT")
         if status == "interrupted":
             raise CodexSessionError("CODEX_TURN_INTERRUPTED")
         raise CodexSessionError("CODEX_TURN_FAILED")
+
+
+def _http_status(info: object) -> int | None:
+    """Pinned Codex also reports API auth failure as a tagged HTTP error.
+
+    Read only its structured status; the message can contain the rejected key.
+    Other tags and malformed values retain the generic fixed failure.
+    """
+    if type(info) is not dict or set(info) != {"httpConnectionFailed"}:
+        return None
+    detail = info["httpConnectionFailed"]
+    status = detail.get("httpStatusCode") if type(detail) is dict else None
+    return status if type(status) is int else None
