@@ -7,7 +7,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6 import QtCore
+from PySide6.QtCore import QCoreApplication, QEvent, QTimer
 from PySide6.QtWidgets import QApplication, QWidget
 
 from guard_app import __main__ as entry
@@ -31,11 +32,22 @@ pytestmark = pytest.mark.usefixtures("preserve_logging_state")
 
 
 @pytest.fixture
-def app():
+def app(monkeypatch):
     app = QApplication.instance() or QApplication([])
     existing = set(app.topLevelWidgets())
     previous = app.quitOnLastWindowClosed()
+    timers = []
+
+    class TrackedTimer(QTimer):
+        def __init__(self):
+            super().__init__()
+            timers.append(self)
+
+    monkeypatch.setattr(QtCore, "QTimer", TrackedTimer)
     yield app
+    # Unconfirmed exits retain widgets until process exit; this test reuses Qt.
+    for timer in timers:
+        timer.stop()
     assert threading.current_thread() is threading.main_thread()
     for widget in app.topLevelWidgets():
         if widget not in existing:
@@ -160,7 +172,6 @@ def product(monkeypatch, tmp_path, app):
         for owner in owners:
             owner.close()
         for bridge in bridges:
-            app.aboutToQuit.disconnect(bridge.close)
             bridge.deleteLater()
 
 
@@ -211,6 +222,9 @@ def test_before_backend_start_exception_releases_lock(monkeypatch, product):
 
 class Signal:
     def connect(self, callback):
+        pass
+
+    def disconnect(self, callback):
         pass
 
 

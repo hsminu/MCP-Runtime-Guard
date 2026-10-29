@@ -22,7 +22,7 @@ def run_application(
     scanner_key_saver: KeySaver | None = None,
     scanner_key_tail: KeyTail | None = None,
 ) -> tuple[int, bool]:
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QCoreApplication, QEvent, QTimer
     from PySide6.QtGui import QCloseEvent
 
     from guard_app.services.bridge import BackendCleanupUnconfirmedError, BridgeState
@@ -66,6 +66,15 @@ def run_application(
     timer.timeout.connect(quit_when_closed)
     timer.start()
     app.aboutToQuit.connect(bridge.close)
+
+    def dispose_window() -> None:
+        # Drain final lifecycle signals while widgets are alive (A182, A172).
+        timer.stop()
+        QCoreApplication.sendPostedEvents()
+        QCoreApplication.processEvents()
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
     finished = False
     try:
         window.show()
@@ -73,6 +82,8 @@ def run_application(
         code = app.exec()
         finished = True
     finally:
+        # close was already requested on quit, or is requested below on error.
+        app.aboutToQuit.disconnect(bridge.close)
         # #101, REC-01/REC-05: even an exception must confirm Store shutdown
         # before the entry point can release the single-owner lock.
         if not finished:
@@ -80,8 +91,13 @@ def run_application(
             waited_s = time.monotonic() - closing_since[0] if closing_since else 0.0
             done = bridge.wait_done(close_limit_s - waited_s)
             if not done or bridge.cleanup_unconfirmed:
+                # Live backends may still signal the window before process exit (A182, A172).
                 raise BackendCleanupUnconfirmedError
+            dispose_window()
     # A quit from elsewhere (session end) also gets the observation window.
     waited_s = time.monotonic() - closing_since[0] if closing_since else 0.0
     done = bridge.wait_done(close_limit_s - waited_s)
-    return (1 if start_failed else code), done and not bridge.cleanup_unconfirmed
+    confirmed = done and not bridge.cleanup_unconfirmed
+    if confirmed:
+        dispose_window()
+    return (1 if start_failed else code), confirmed

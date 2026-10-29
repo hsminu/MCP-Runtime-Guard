@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 from types import SimpleNamespace
 
 import pytest
+import shiboken6
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QLabel
 
@@ -181,10 +182,12 @@ def test_run_wires_real_window_without_keeping_key(monkeypatch, owner, mode, cap
     try:
         with pytest.raises(StopBeforeBackendError):
             entry._run(args, None if mode == "demo" else owner)
+        assert all(not shiboken6.isValid(window) for window in windows)
     finally:
         for window in windows:
-            window.hide()
-            window.deleteLater()
+            if shiboken6.isValid(window):
+                window.hide()
+                window.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         app.processEvents()
         gc.collect()

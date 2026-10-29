@@ -232,7 +232,7 @@
 - [x] A171 #92 조회 연결 시험의 Qt 객체·순환 참조를 메인 스레드에서 정리(중단 원인 미확정) · [기록](archive/a/A171-store-query-link-qt-cleanup.md)
 - [x] A172 #92 GC·메인 스레드 지연 삭제 중단 경로 조사(최종 C++ 대상 미확정) · [기록](archive/a/A172-store-query-link-abort-cause.md)
 - [x] A 화면 시험 묶음이 모두 통과한 뒤 종료 중 abort(main에서도 재현) — 원인은 부모 없는 하위 레이아웃의 Qt 위젯 이중 소유, A178에서 제거(공용 conftest 불필요) · [기록](archive/a/A178-qt-double-ownership.md)
-- [ ] 제품 `run_application` 창·페이지 수명 정리(백엔드 종료 확인 → 남은 이벤트 처리 → 창 삭제) · [근거](archive/a/A172-store-query-link-abort-cause.md)
+- [x] A182 제품 `run_application` 창·페이지 수명 정리: 백엔드 종료가 확인된 경로에서 남은 이벤트 처리 뒤 창 삭제, 미확인 경로는 창 유지 · [기록](archive/a/A182-run-application-window-lifetime.md)
 - [x] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 · [기록](archive/a/A174-l2-failure-codes-from-c.md)
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
