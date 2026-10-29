@@ -33,13 +33,11 @@ unknown outcome. A call already reserved when it failed keeps its outcome.
 
 from __future__ import annotations
 
-import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field, replace
 from functools import partial
-from pathlib import Path
 from typing import Any
 
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
@@ -57,7 +55,7 @@ from guard_app.security.endpoints import EndpointError, normalize_endpoint
 from guard_app.security.ids import new_id
 from guard_app.security.launcher import ExecutablePin
 from guard_app.security.paths import AppFolders, file_resource_resolver
-from guard_app.servers.file_server import file_server_root
+from guard_app.servers.file_server import trusted_file_server_root
 from guard_app.services.catalog import (
     CatalogConfigError,
     GuardSettings,
@@ -379,17 +377,6 @@ class _RefusedStream(AbstractAsyncContextManager[tuple[Any, ...]]):
         return None
 
 
-def _file_server_root(server: ServerSettings) -> Path | None:
-    # #94: match registration's Python; EXE-01 checks its fingerprint on every launch.
-    if (
-        server.transport != "stdio"
-        or server.command is None
-        or Path(server.command) != Path(sys.executable)
-    ):
-        return None
-    return file_server_root(server.args or ())
-
-
 async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     """Load the Profile, start only its servers, compare fingerprints, build Guard."""
 
@@ -398,10 +385,17 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     registry = LiveCheckedRegistry(inputs.registry)
     try:
         configured = load_profile_settings(inputs.profile_document, registry)
+        # #94·C2.11-2: C decides which records are its file server; EXE-01
+        # checks the executable's fingerprint on every launch.
         roots = {
             server.id: root
             for server in configured.servers
-            if (root := _file_server_root(server)) is not None
+            if (
+                root := trusted_file_server_root(
+                    server.transport, server.command, server.args or ()
+                )
+            )
+            is not None
         }
         if roots:
             file_resolver = file_resource_resolver(roots)
