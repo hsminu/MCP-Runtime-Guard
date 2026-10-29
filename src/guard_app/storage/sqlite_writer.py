@@ -87,6 +87,8 @@ class SQLiteWriter:
             job.outcome = outcome
             job.event.set()
         elif job.loop is not None and job.future is not None:
+            if job.future.done() or job.loop.is_closed():
+                return
             # 결과를 받을 루프가 이미 닫혔으면 이 결과만 버린다.
             with suppress(RuntimeError):
                 job.loop.call_soon_threadsafe(self._set_result, job.future, outcome)
