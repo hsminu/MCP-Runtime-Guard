@@ -103,6 +103,8 @@
 - [x] A109 기기 코드 제한 안내·브라우저 로그인 A 연결부·취소/시간초과·중복 요청 처리 · [기록](archive/a/A109-browser-login-wiring.md)
 - [x] A109 제품 시작부에서 C2.21 `open_login_browser` 연결, 열기 실패 안내를 API 키·기기 코드 로그인으로([#77](https://github.com/hsminu/MCP-Runtime-Guard/pull/77)) · [기록](archive/a/A109-product-browser-login.md)
 - [x] A109 실제 브라우저 로그인 완료·재시작 유지 확인(`BROWSER_OPEN_FAILED` 대체 안내는 사용자 선행 확인) · [기록](archive/a/A109-real-browser-login.md)
+- [x] A109 첫 브라우저 로그인의 `invalid_auth_step` 출처: Guard·고정 Codex 0.162.1에 없는 문자열(로그인 서비스 쪽), A는 요청마다 받은 URL을 한 번만 염 · [기록](archive/a/A169-a109-invalid-auth-step-source.md)
+- [ ] A109 `invalid_auth_step` 원인 — 미확정: 실제 로그인 재현 때 표시 위치(로그인 서비스 페이지·`localhost` 콜백)와 직전 브라우저 상태 확인(사용자)
 - [x] A142 A109 후속: app-server가 거절한 계정 요청은 프로세스 유지·거절된 취소는 종료, 계정 명령 거부·미확인 문구를 명령별로([#78](https://github.com/hsminu/MCP-Runtime-Guard/pull/78) main 병합) · [기록](archive/a/A142-account-refusal-and-command-notices.md)
 - [x] A109·A142 C 독립 리뷰: A109 [#70 C 리뷰 2](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474936812), A142 [#78 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/78#issuecomment-6487980338) 모두 막는 문제 없음
   - 실제 Codex 0.162.1 확인(C): JSON-RPC 오류는 요청 형식 검증(-32600)에서만 왔고 남는 것 없음. 로그인 취소의 `notFound`는 오류가 아니라 결과로 옴
