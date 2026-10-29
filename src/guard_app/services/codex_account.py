@@ -193,7 +193,12 @@ class CodexAccountClient:
         return await self.read()
 
     async def cancel_login(self, login_id: str) -> AccountView:
-        await self._call("account/login/cancel", {"loginId": login_id})
+        try:
+            await self._call("account/login/cancel", {"loginId": login_id})
+        except AccountRefusedError:
+            # A refused cancel may leave Codex's login callback running, so the
+            # owner must end this app-server like any unknown outcome.
+            raise AccountError() from None
         self._completed.setdefault(login_id, False)
         self._changed.set()
         return await self.read()
@@ -213,7 +218,9 @@ class CodexAccountClient:
     async def _call(self, method: str, params: object) -> object:
         try:
             return await self._client.request(method, params)
-        except (JsonRpcError, JsonRpcRemoteError):
+        except JsonRpcRemoteError:
+            raise AccountRefusedError() from None
+        except JsonRpcError:
             raise AccountError() from None
 
     def _notification(self, method: str, params: object) -> None:
@@ -237,3 +244,7 @@ class AccountError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("CODEX_ACCOUNT_FAILED")
+
+
+class AccountRefusedError(AccountError):
+    """The app-server answered with a JSON-RPC error: nothing it refused runs on."""

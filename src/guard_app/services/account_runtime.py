@@ -22,6 +22,7 @@ from typing import Protocol
 
 from guard_app.services.codex_account import (
     AccountError,
+    AccountRefusedError,
     AccountView,
     BrowserLoginOpener,
     CodexAccountClient,
@@ -142,15 +143,20 @@ class ProductAccount:
                 client = await self._connect()
             except AccountUnavailableError:
                 return AccountView("UNAVAILABLE")
-            returned = False
+            known = False
             try:
                 view = await call(client)
-                returned = True
+                known = True
                 return view
+            except AccountRefusedError:
+                # Codex answered with an error, such as a refused API key or
+                # device code, so the app-server is kept for the next request.
+                known = True
+                raise
             finally:
                 # A109: a lost/malformed login reply or cancellation may leave
                 # a callback alive. End its process before another account RPC.
-                if not returned:
+                if not known:
                     await self._disconnect()
 
     async def _sign_out(self) -> AccountView:
