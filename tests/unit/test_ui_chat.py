@@ -416,7 +416,7 @@ def test_synchronous_stop_refusal_stays_unconfirmed(window, monkeypatch):
 
 def test_model_uses_applied_id_and_keeps_effort_editable(window):
     shell, _, bridge = window
-    assert shell.sessions.current.model.toolTip() == "세션을 시작할 때 이 모델을 요청함"
+    assert shell.sessions.current.model.toolTip().startswith("세션을 시작할 때 이 모델을 요청함")
     bridge.task_changed.emit(snapshot(model_mode="codex", model_id="actual-model"))
     picker = shell.sessions.current.model
     assert picker.text().startswith("actual-model")

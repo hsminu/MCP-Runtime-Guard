@@ -118,7 +118,8 @@ class ModelPicker(KeyboardActionButton):
         effort = EFFORT_NAMES[self.effort]
         self.setText(f"{model} · 추론 {effort}")
         self.setAccessibleName(f"세션 모델 {model} · 추론 수준 {effort} · 눌러서 바꾸기")
-        tooltip = "세션을 시작할 때 이 모델을 요청함"
+        # The raw request stays visible for support; the first line says what it means.
+        tooltip = f"세션을 시작할 때 이 모델을 요청함\nCodex {self.model} · effort {self.effort}"
         if self._locked:
             tooltip = "추론 수준은 다음 메시지부터 적용됨"
             if self.model != self._applied:

@@ -95,7 +95,9 @@ def test_new_session_has_fixed_codex_model_and_settings_keep_only_scanner_key():
     window = GuardWindow()
     view = window.sessions.current
     assert view.model.text() == "GPT-6.1-Sol · 추론 낮음"
-    assert view.model.toolTip() == "Codex gpt-6.1-sol · effort low"
+    assert view.model.toolTip() == (
+        "세션을 시작할 때 이 모델을 요청함\nCodex gpt-6.1-sol · effort low"
+    )
     assert not view.widget.findChildren(QComboBox)
     assert not view.widget.findChildren(QLineEdit)
     assert window.codex_login_info.findChildren(QLineEdit) == [
