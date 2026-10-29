@@ -286,35 +286,35 @@ def test_send_error_response_is_unknown_without_observation_merge() -> None:
     assert store.state.high_watermark is Label.PUBLIC
 
 
-@pytest.mark.parametrize(
-    "updates",
-    [
-        {"content": None},
-        {"content": {}},
-        {"content": ["body"]},
-        {"content": [{"type": "text", "text": 1}]},
-        {"content": [{"type": "text"}]},
-        {"content": [{"type": "image", "data": "secret"}]},
-        {"content": [{"type": "audio", "data": "secret"}]},
-        {"content": [{"type": "resource", "resource": {"text": "secret"}}]},
-        {"content": [{"type": "resource_link", "uri": "https://example.com"}]},
-        {"content": [{"type": "unknown", "text": "secret"}]},
-        {"structuredContent": []},
-        {"structuredContent": "secret"},
-        {"isError": 0},
-        {"isError": "false"},
-        {"isError": None},
-    ],
-)
-@pytest.mark.parametrize("kind", [ToolKind.READ, ToolKind.SEND])
-def test_unsupported_shapes_are_never_released(updates: dict[str, object], kind: ToolKind) -> None:
-    store = _GateStore()
-    result = asyncio.run(_gate(store).handle(_request(kind=kind), _raw(**updates)))
-    assert isinstance(result, OutcomeUnknown if kind is ToolKind.SEND else Withheld)
-    assert result.reasons == (Reason.UNSUPPORTED_CONTENT,)
-    assert _failure_fields(store)["task_status"] is (
-        TaskStatus.UNKNOWN_OUTCOME if kind is ToolKind.SEND else TaskStatus.HALTED
-    )
+def test_unsupported_shapes_are_never_released(subtests) -> None:
+    case_index = 0
+    for kind in (ToolKind.READ, ToolKind.SEND):
+        for updates in [
+            {"content": None},
+            {"content": {}},
+            {"content": ["body"]},
+            {"content": [{"type": "text", "text": 1}]},
+            {"content": [{"type": "text"}]},
+            {"content": [{"type": "image", "data": "secret"}]},
+            {"content": [{"type": "audio", "data": "secret"}]},
+            {"content": [{"type": "resource", "resource": {"text": "secret"}}]},
+            {"content": [{"type": "resource_link", "uri": "https://example.com"}]},
+            {"content": [{"type": "unknown", "text": "secret"}]},
+            {"structuredContent": []},
+            {"structuredContent": "secret"},
+            {"isError": 0},
+            {"isError": "false"},
+            {"isError": None},
+        ]:
+            with subtests.test(case=case_index):
+                store = _GateStore()
+                result = asyncio.run(_gate(store).handle(_request(kind=kind), _raw(**updates)))
+                assert isinstance(result, OutcomeUnknown if kind is ToolKind.SEND else Withheld)
+                assert result.reasons == (Reason.UNSUPPORTED_CONTENT,)
+                assert _failure_fields(store)["task_status"] is (
+                    TaskStatus.UNKNOWN_OUTCOME if kind is ToolKind.SEND else TaskStatus.HALTED
+                )
+            case_index += 1
 
 
 @pytest.mark.parametrize(("limit", "allowed"), [(2, False), (3, True)])
