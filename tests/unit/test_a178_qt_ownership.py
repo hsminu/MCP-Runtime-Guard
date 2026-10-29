@@ -39,7 +39,7 @@ from guard_app.ui.overview import OverviewPage
 from guard_app.ui.overview_rows import AttentionRow, MetricRow, RecentCallRow, ServerRow
 from guard_app.ui.policy import PolicyPage, ToolAllowDialog
 from guard_app.ui.runtime import RuntimePanel
-from guard_app.ui.scan_status import ScanStatusCard, ScanStatusProjection
+from guard_app.ui.scan_report import ScanReportPanel
 from guard_app.ui.scanner_key import ScannerKeyForm
 from guard_app.ui.server_add import LocalFolderRulesForm, ServerAddForm
 from guard_app.ui.server_add_folders import FileServerFolders
@@ -218,9 +218,9 @@ def test_runtime_with_visible_recovery(roots):
 
 
 def test_cards_and_populated_policy(roots):
-    scan = ScanStatusCard()
+    scan = ScanReportPanel()
     roots.append(scan)
-    scan.set_snapshot(Surface(LoadState.READY, ScanStatusProjection(scan_state="completed")))
+    scan.set_state(None)
     roots.append(TaskStatusCard(TaskStatus.UNKNOWN_OUTCOME))
     roots.append(ScannerKeyForm())
     untrusted = UntrustedTextView("synthetic", show_unverified_notice=True)

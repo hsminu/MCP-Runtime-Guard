@@ -142,6 +142,14 @@ class ScanReportPanel(QWidget):
     def clear(self) -> None:
         _clear_content(self._layout)
 
+    def set_loading(self) -> None:
+        self.clear()
+        self._layout.addWidget(plain_label("검사 결과 확인 중", name="runtimeMessage"))
+
+    def set_failed(self, text: str) -> None:
+        self.clear()
+        self._layout.addWidget(plain_label(text, name="runtimeMessage"))
+
     def set_state(self, state: ScanState | None) -> None:
         self.clear()
         layout = self._layout

@@ -48,7 +48,6 @@ from .presentation import (
     SETTINGS_FILE_STATUS,
 )
 from .runtime import RuntimePanel
-from .scan_status import ScanStatusProjection
 from .scanner_key import KeySaver, KeyTail
 from .server_add import ServerAddForm
 from .servers import ServerListPage
@@ -94,7 +93,6 @@ class GuardWindow(QMainWindow):
     navigation_requested = Signal(str, str)
     approval_query_requested = Signal(object)
     call_log_detail_requested = Signal(object)
-    scan_snapshot_requested = Signal(str, int)
 
     _COMPACT_NAV_WIDTH = 900
     _COMPACT_NAV_HEIGHT = 700
@@ -275,7 +273,6 @@ class GuardWindow(QMainWindow):
         self.overview.navigate_requested.connect(self.navigate)
         self._page_indices["overview"] = self.stack.addWidget(_scroll_page(self.overview))
         self.server_page = ServerListPage()
-        self.server_page.scan_snapshot_requested.connect(self.scan_snapshot_requested.emit)
         self.server_page.restore_requested.connect(self._start_settings_restore)
         self._page_indices["servers"] = self.stack.addWidget(_scroll_page(self.server_page))
         self.log_page = CallLogPage()
@@ -763,13 +760,6 @@ class GuardWindow(QMainWindow):
         """Update Registry rows from their own query, never overview rows."""
 
         self.server_page.set_servers(snapshot)
-
-    def set_scan_snapshot(
-        self, server_id: str, token: int, snapshot: Surface[ScanStatusProjection]
-    ) -> bool:
-        """Show only the current server detail's confirmed public scan query."""
-
-        return self.server_page.set_scan_snapshot(server_id, token, snapshot)
 
     def set_settings_status(self, code: object) -> None:
         """Show the settings file status without changing the current page."""

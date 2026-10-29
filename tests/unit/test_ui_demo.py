@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -13,10 +15,11 @@ import pytest
 from examples import ui_demo
 
 from guard_app.domain.enums import ApprovalStatus
-from guard_app.services.bridge import BackendBridge
+from guard_app.services.bridge import BackendBindings, BackendBridge, RegistrationRequest
 from guard_app.ui.approvals import PAGE_SIZE, ApprovalLane, ApprovalQuery, ApprovalSort
 from guard_app.ui.window import GuardWindow
 
+from .test_call_logs import panel_text
 from .test_ui_icons_style import app as app
 from .test_ui_icons_style import show_widget
 
@@ -30,6 +33,12 @@ def demo(app, monkeypatch):
         raise AssertionError("must not bootstrap")
 
     bridge = BackendBridge(unused)
+
+    def registration_reply(request, *, command_id):
+        view = asyncio.run(ui_demo.registration(request))
+        bridge.registration_changed.emit(replace(view, command_id=command_id))
+
+    monkeypatch.setattr(bridge, "request_registration", registration_reply)
     window = GuardWindow()
     data = ui_demo.build(bridge, window)
     show_widget(app, window, 1280, 800)
@@ -103,7 +112,9 @@ def test_details_answer_the_selected_call_and_open_server_dialog(app, demo) -> N
     window.server_page.detail_button.click()
     server = window.server_page._detail_dialog
     assert server is not None
-    assert settle(app, lambda: server.scan_status_card.scan_state.text() == "검사 실패")
+    assert settle(
+        app, lambda: "저장된 검사 결과가 지금 도구와 다름" in panel_text(server.scan_report)
+    )
     server.close()
 
 
@@ -125,3 +136,38 @@ def test_demo_starts_the_synthetic_backend_with_or_without_agt_options() -> None
     backend = ui_demo.synthetic_backend()
     assert inspect.iscoroutine(backend)
     backend.close()
+
+
+@pytest.mark.asyncio
+async def test_demo_bindings_answer_scan_status_only(monkeypatch):
+    from examples import synthetic_app
+
+    bindings = BackendBindings(runner_for_task=lambda _: None, human_control=None)
+
+    async def bootstrap(scenario):
+        assert scenario == "ask"
+        return bindings
+
+    monkeypatch.setattr(synthetic_app, "bootstrap", bootstrap)
+    monkeypatch.setattr(ui_demo, "REPLY_DELAY_MS", 0)
+    demo_bindings = await ui_demo.synthetic_backend()
+    assert demo_bindings.registration is not None
+    assert demo_bindings.runner_for_task is bindings.runner_for_task
+    states = {}
+    for server in ui_demo.SERVERS:
+        view = await demo_bindings.registration(
+            RegistrationRequest("scan_status", server.server_id)
+        )
+        assert view.code == "SCAN_STATUS"
+        assert view.server_id == server.server_id
+        states[server.server_id] = view.scan
+    assert states["docs"].run == states["mail"].run == "done"
+    assert states["docs"].report.max_severity == "LOW"
+    assert states["mail"].report.max_severity == "MEDIUM"
+    assert states["drive"].run == "running"
+    assert states["crm"].outdated
+    assert states["crm"].report is None
+    assert states["wiki"].report is None
+    assert states["wiki"].run == "none"
+    other = await demo_bindings.registration(RegistrationRequest("activate", "docs"))
+    assert other.code == "REG_UNAVAILABLE"

@@ -15,9 +15,10 @@ Run from the repository root::
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from itertools import count
@@ -27,8 +28,15 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication
 
+from guard_app.domain.contracts import ScanReport
 from guard_app.domain.enums import ApprovalStatus
-from guard_app.services.bridge import BackendBindings, BackendBridge
+from guard_app.services.bridge import (
+    BackendBindings,
+    BackendBridge,
+    RegistrationRequest,
+    RegistrationView,
+    ScanState,
+)
 from guard_app.services.codex_account import AccountView
 from guard_app.services.policy_view import PolicyServer, PolicyTool, PolicyView
 from guard_app.ui.approvals import (
@@ -56,7 +64,6 @@ from guard_app.ui.models import (
     Surface,
 )
 from guard_app.ui.runtime import RuntimePanel
-from guard_app.ui.scan_status import ScanStatusProjection
 from guard_app.ui.window import GuardWindow
 
 CONTEXT = "화면 시연 / 가짜 조회 데이터"
@@ -338,68 +345,44 @@ def approval_page(query: ApprovalQuery, rows: tuple[ApprovalSummary, ...]) -> Ap
     )
 
 
-def scans(now: datetime) -> dict[str, ScanStatusProjection]:
-    both = ("yara", "llm")
+def scans(now: datetime) -> dict[str, ScanState]:
+    def completed(server_id: str, risk: str, hours: int, summary: str) -> ScanState:
+        report = ScanReport(
+            server_id=server_id,
+            fingerprint_set=("a" * 64,),
+            analyzers_required=("YARA", "LLM"),
+            analyzers_completed=("YARA", "LLM"),
+            analyzers_skipped=(),
+            analyzers_failed=(),
+            max_severity=risk,
+            findings=(),
+            scanned_at_utc=now - timedelta(hours=hours),
+            scanner_version="1.4.2",
+            overall_risk=risk,
+            threat_summary=summary,
+        )
+        return ScanState(server_id, run="done", scan_id=f"demo-{server_id}", report=report)
+
     return {
-        "docs": ScanStatusProjection(
-            "active",
-            "connected",
-            "completed",
-            both,
-            both,
-            (),
-            (),
-            True,
-            False,
-            "1.4.2",
-            now - timedelta(hours=2),
-            "LOW",
-            "설명문에 외부 링크 1건 · 위험도 낮음",
-        ),
-        "mail": ScanStatusProjection(
-            "active",
-            "connected",
-            "completed",
-            both,
-            both,
-            (),
-            (),
-            True,
-            False,
-            "1.4.2",
-            now - timedelta(hours=5),
-            "MEDIUM",
-            "send 도구 설명에 수신처 지정 지시문 있음",
-        ),
-        "drive": ScanStatusProjection(
-            "pending",
-            "connecting",
-            "running",
-            both,
-            ("yara",),
-            (),
-            (),
-            True,
-            None,
-            "1.4.2",
-        ),
-        "crm": ScanStatusProjection(
-            "blocked",
-            "error",
-            "failed",
-            both,
-            ("yara",),
-            (),
-            ("llm",),
-            True,
-            True,
-            "1.4.2",
-            now - timedelta(days=1),
-            "HIGH",
-            "도구 지문이 바뀌어 재검사 필요",
-        ),
-        "wiki": ScanStatusProjection("active", "disconnected", "not_started"),
+        "docs": completed("docs", "LOW", 2, "설명문에 외부 링크 1건 · 위험도 낮음"),
+        "mail": completed("mail", "MEDIUM", 5, "send 도구 설명에 수신처 지정 지시문 있음"),
+        "drive": ScanState("drive", run="running"),
+        "crm": ScanState("crm", outdated=True),
+        "wiki": ScanState("wiki"),
     }
+
+
+async def registration(request: RegistrationRequest) -> RegistrationView:
+    """Synthetic scan data through the same registration command as the product."""
+    if request.action != "scan_status":
+        return RegistrationView("REG_UNAVAILABLE")
+    await asyncio.sleep(REPLY_DELAY_MS / 1000)
+    state = scans(datetime.now(UTC)).get(request.server_id)
+    return RegistrationView(
+        "SCAN_STATUS" if state is not None else "SCAN_UNAVAILABLE",
+        server_id=request.server_id,
+        scan=state,
+    )
 
 
 def overview(now: datetime, call_rows: tuple[PublicCallSummary, ...]) -> OverviewSnapshot:
@@ -509,7 +492,6 @@ class DemoData:
         now = datetime.now(UTC)
         self.calls = calls(now)
         self.approvals = approvals(now)
-        self.scans = scans(now)
         self.policy = PolicyView(
             profile_id="demo-profile",
             policy_version="demo-v1",
@@ -546,7 +528,6 @@ class DemoData:
         window.policy_page.allow_change_requested.connect(self._policy_change)
         window.approval_query_requested.connect(self._approval_query)
         window.call_log_detail_requested.connect(self._call_detail)
-        window.scan_snapshot_requested.connect(self._scan)
 
     def fill(self) -> None:
         now = datetime.now(UTC)
@@ -573,15 +554,6 @@ class DemoData:
             detail = PublicCallDetail(call, call_stages(call))
             surface = Surface(LoadState.READY, detail, datetime.now(UTC))
         self._later(lambda: self.window.set_call_log_detail(request, surface))
-
-    def _scan(self, server_id: str, token: int) -> None:
-        scan = self.scans.get(server_id)
-        surface = (
-            Surface[ScanStatusProjection](LoadState.ERROR)
-            if scan is None
-            else Surface(LoadState.READY, scan, datetime.now(UTC))
-        )
-        self._later(lambda: self.window.set_scan_snapshot(server_id, token, surface))
 
     def _account(self, view: AccountView) -> None:
         self.account = view
@@ -624,10 +596,10 @@ class DemoData:
         self._later(settle)
 
 
-def synthetic_backend() -> Awaitable[BackendBindings]:
+async def synthetic_backend() -> BackendBindings:
     from examples.synthetic_app import bootstrap
 
-    return bootstrap("ask")
+    return replace(await bootstrap("ask"), registration=registration)
 
 
 def build(bridge: BackendBridge, window: GuardWindow) -> DemoData:

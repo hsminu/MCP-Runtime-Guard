@@ -12,12 +12,13 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog
 
 from guard_app.domain.enums import ApprovalStatus
+from guard_app.services.bridge import RegistrationView, ScanState
 from guard_app.ui.approvals import ApprovalPage, ApprovalSummary
 from guard_app.ui.call_logs import PublicCallDetail, PublicCallSummary
 from guard_app.ui.models import LoadState, ServerSummary, Surface
-from guard_app.ui.scan_status import ScanStatusProjection
 from guard_app.ui.window import GuardWindow
 
+from .test_a201_scan_report_ui import bridge as bridge
 from .test_call_logs import panel_text
 from .test_ui_icons_style import app as app
 from .test_ui_icons_style import resize_widget
@@ -65,51 +66,56 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
     window.close()
 
 
-def test_server_scan_reply_is_bound_to_current_detail_opening(app: QApplication) -> None:
+def test_server_scan_reply_is_bound_to_current_detail_opening(app: QApplication, bridge) -> None:
+    backend, requested = bridge
     window = GuardWindow()
+    window.server_page.attach_activation(backend)
     window.set_server_snapshot(Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),)))
-    requested = []
-    window.scan_snapshot_requested.connect(
-        lambda server_id, token: requested.append((server_id, token))
-    )
     window.navigate("servers", "server-1")
     window.show()
     app.processEvents()
     window.server_page.detail_button.click()
-    server_id, token = requested[-1]
-    assert server_id == "server-1"
-    snapshot = Surface(
-        LoadState.READY, ScanStatusProjection(registry_status="pending", scan_state="completed")
+    request, kw = requested[-1]
+    command = kw["command_id"]
+    assert request.server_id == "server-1"
+    state = ScanState("server-1", run="done")
+    backend.registration_changed.emit(
+        RegistrationView("SCAN_STATUS", "wrong", server_id="server-1", scan=state)
     )
-    assert not window.set_scan_snapshot(server_id, token + 1, snapshot)
-    assert window.set_scan_snapshot(server_id, token, snapshot)
     detail = window.server_page._detail_dialog
     assert detail is not None
-    assert "검사 실행 완료" in detail.scan_status_card.scan_state.text()
-    assert "PENDING" in detail.scan_status_card.registry_status.text()
+    assert "검사 결과 확인 중" in panel_text(detail.scan_report)
+    backend.registration_changed.emit(
+        RegistrationView("SCAN_STATUS", command, server_id="server-1", scan=state)
+    )
+    assert "검사 끝남" in panel_text(detail.scan_report)
     detail.close()
     app.processEvents()
-    assert not window.set_scan_snapshot(server_id, token, snapshot)
+    backend.scan_changed.emit(ScanState("server-1", run="running"))
+    assert "검사 끝남" in panel_text(detail.scan_report)
     window.server_page.detail_button.click()
-    _, new_token = requested[-1]
-    assert new_token != token
-    assert not window.set_scan_snapshot(server_id, token, snapshot)
-    assert window.set_scan_snapshot(server_id, new_token, snapshot)
-    detail = window.server_page._detail_dialog
-    assert detail is not None
+    new_command = requested[-1][1]["command_id"]
+    assert new_command != command
+    backend.registration_changed.emit(
+        RegistrationView("SCAN_STATUS", command, server_id="server-1", scan=state)
+    )
+    assert "검사 결과 확인 중" in panel_text(detail.scan_report)
+    backend.registration_changed.emit(
+        RegistrationView("SCAN_STATUS", new_command, server_id="server-1", scan=state)
+    )
+    assert "검사 끝남" in panel_text(detail.scan_report)
     detail.close()
     window.close()
 
 
 def test_repeated_server_details_release_dialogs_and_reject_old_scan_reply(
     app: QApplication,
+    bridge,
 ) -> None:
+    backend, requested = bridge
     window = GuardWindow()
+    window.server_page.attach_activation(backend)
     window.set_server_snapshot(Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),)))
-    requested: list[tuple[str, int]] = []
-    window.scan_snapshot_requested.connect(
-        lambda server_id, token: requested.append((server_id, token))
-    )
     window.navigate("servers", "server-1")
     window.show()
     app.processEvents()
@@ -120,15 +126,24 @@ def test_repeated_server_details_release_dialogs_and_reject_old_scan_reply(
         detail.close()
         app.processEvents()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    assert len({token for _, token in requested}) == 100
+    assert len({kw["command_id"] for _, kw in requested}) == 100
     assert len(window.server_page.findChildren(QDialog)) == 1
     window.server_page.detail_button.click()
-    assert window.server_page._detail_dialog is not None
-    snapshot = Surface(LoadState.READY, ScanStatusProjection(scan_state="completed"))
-    assert not window.set_scan_snapshot("server-1", requested[0][1], snapshot)
-    assert window.set_scan_snapshot("server-1", requested[-1][1], snapshot)
     reused = window.server_page._detail_dialog
-    assert reused.scan_status_card.scan_state.text().startswith("검사 실행 완료")
+    assert reused is not None
+    state = ScanState("server-1", run="done")
+    backend.registration_changed.emit(
+        RegistrationView(
+            "SCAN_STATUS", requested[0][1]["command_id"], server_id="server-1", scan=state
+        )
+    )
+    assert "검사 결과 확인 중" in panel_text(reused.scan_report)
+    backend.registration_changed.emit(
+        RegistrationView(
+            "SCAN_STATUS", requested[-1][1]["command_id"], server_id="server-1", scan=state
+        )
+    )
+    assert "검사 끝남" in panel_text(reused.scan_report)
     reused.close()
     window.set_server_snapshot(
         Surface(
@@ -145,8 +160,12 @@ def test_repeated_server_details_release_dialogs_and_reject_old_scan_reply(
     assert reused.server_id == "server-2"
     assert reused._display_value.text() == "새 서버"
     assert "INTERNAL" in reused.max_label_badge.value.text()
-    assert reused.scan_status_card.scan_state.text() == "미제공"
-    assert not window.set_scan_snapshot("server-1", requested[-2][1], snapshot)
+    backend.registration_changed.emit(
+        RegistrationView(
+            "SCAN_STATUS", requested[-2][1]["command_id"], server_id="server-1", scan=state
+        )
+    )
+    assert "검사 결과 확인 중" in panel_text(reused.scan_report)
     reused.close()
     resize_widget(app, window, 360, 360)
     window.server_page.detail_button.click()

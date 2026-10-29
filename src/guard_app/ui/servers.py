@@ -27,6 +27,7 @@ from guard_app.services.bridge import (
     CommandStage,
     RegistrationRequest,
     RegistrationView,
+    ScanState,
     new_command_id,
 )
 
@@ -44,11 +45,16 @@ from .presentation import (
     fixed_code,
     public_display_text,
 )
-from .scan_report import ScanReviewDialog, activation_scan_text, attach_activation_scan
-from .scan_status import ScanStatusCard, ScanStatusProjection
+from .scan_report import (
+    ScanReportPanel,
+    ScanReviewDialog,
+    activation_scan_text,
+    attach_activation_scan,
+)
 from .tool_settings import ToolSettingsDialog
 from .widgets import (
     KeyboardActionButton,
+    ResponsiveRow,
     SecurityLabel,
     SelectionBox,
     StateMessage,
@@ -88,17 +94,17 @@ def _settings_issue(server: ServerSummary) -> str:
 
 
 def _detail_field(title: str, value: str) -> tuple[QWidget, QLabel]:
-    field = QWidget()
+    field = ResponsiveRow(breakpoint=400)
     field.setObjectName("infoField")
-    layout = QVBoxLayout(field)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(2)
-    layout.addWidget(plain_label(title, name="secondary"))
+    field.row.setSpacing(2)
+    label = plain_label(title, name="secondary")
+    label.setFixedWidth(148)
+    field.add_widget(label)
     value_label = plain_label(value)
     value_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     value_label.setMinimumWidth(0)
     value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-    layout.addWidget(value_label)
+    field.add_widget(value_label, 1)
     return field, value_label
 
 
@@ -115,7 +121,6 @@ class ServerDetailDialog(QDialog):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 24, 24, 20)
         outer.setSpacing(16)
-        outer.addWidget(plain_label("MCP 서버 등록 상세", name="pageTitle"))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -124,8 +129,20 @@ class ServerDetailDialog(QDialog):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 8, 0)
         layout.setSpacing(8)
+        self._display_value = plain_label(
+            public_display_text(server.display_name or server.server_id), name="pageTitle"
+        )
+        self._server_id_value = plain_label(public_display_text(server.server_id), name="secondary")
+        for value in (self._display_value, self._server_id_value):
+            value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            value.setMinimumWidth(0)
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            layout.addWidget(value)
+        self._display_value.setAccessibleName("표시 이름")
+        self._server_id_value.setAccessibleName("서버 식별자 · server_id")
         self.max_label_badge = SecurityLabel(server.max_label, show_code=True)
         layout.addWidget(self.max_label_badge)
+        layout.addWidget(plain_label("상태", name="sectionTitle"))
         self.registry_status_field, self._registry_status_value = _detail_field(
             "Registry 등록 상태", fixed(REGISTRY_STATUSES, server.registry_status)
         )
@@ -134,32 +151,24 @@ class ServerDetailDialog(QDialog):
             "세션 상태", fixed(SESSION_STATUSES, server.session_status)
         )
         layout.addWidget(self.session_status_field)
-        self.tier_field, self._tier_value = _detail_field(
-            "신뢰 경계 · tier", fixed(TIERS, server.tier)
-        )
-        layout.addWidget(self.tier_field)
-        display_field, self._display_value = _detail_field(
-            "표시 이름", public_display_text(server.display_name or server.server_id)
-        )
-        layout.addWidget(display_field)
-        server_id_field, self._server_id_value = _detail_field(
-            "서버 식별자 · server_id", public_display_text(server.server_id)
-        )
-        layout.addWidget(server_id_field)
+        issue_field, self._issue_value = _detail_field("설정 확인", _settings_issue(server))
+        layout.addWidget(issue_field)
+        layout.addWidget(plain_label("연결 설정", name="sectionTitle"))
         transport_field, self._transport_value = _detail_field(
             "연결 방식 · transport", fixed(TRANSPORTS, server.transport)
         )
         layout.addWidget(transport_field)
+        self.tier_field, self._tier_value = _detail_field(
+            "신뢰 경계 · tier", fixed(TIERS, server.tier)
+        )
+        layout.addWidget(self.tier_field)
         pin_field, self._pin_value = _detail_field("실행 파일 지문", _pin_status(server))
         layout.addWidget(pin_field)
-        issue_field, self._issue_value = _detail_field("설정 확인", _settings_issue(server))
-        layout.addWidget(issue_field)
-        self.scan_status_card = ScanStatusCard()
-        self.scan_status_card.setMinimumWidth(0)
-        self.scan_status_card.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
-        )
-        layout.addWidget(self.scan_status_card)
+        layout.addWidget(plain_label("최근 검사", name="sectionTitle"))
+        self.scan_report = ScanReportPanel()
+        self.scan_report.setMinimumWidth(0)
+        self.scan_report.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.scan_report)
         layout.addStretch(1)
         scroll.setWidget(body)
         outer.addWidget(scroll, 1)
@@ -168,7 +177,7 @@ class ServerDetailDialog(QDialog):
         outer.addWidget(close_button, 0, Qt.AlignmentFlag.AlignRight)
 
     def set_server(self, server: ServerSummary) -> None:
-        """Refresh reused dialog fields before requesting a new scan snapshot."""
+        """Refresh reused dialog fields before requesting a new scan status."""
 
         self.server_id = server.server_id
         self.setWindowTitle(f"MCP 서버 상세 · {public_display_text(server.server_id)}")
@@ -181,13 +190,12 @@ class ServerDetailDialog(QDialog):
         self._transport_value.setText(fixed(TRANSPORTS, server.transport))
         self._pin_value.setText(_pin_status(server))
         self._issue_value.setText(_settings_issue(server))
-        self.scan_status_card.set_snapshot(Surface(LoadState.LOADING))
+        self.scan_report.set_state(None)
 
 
 class ServerListPage(QWidget):
     """Filters only rows in the supplied Registry query result."""
 
-    scan_snapshot_requested = Signal(str, int)
     # The ServerSummary of a registration whose settings record is to be written back.
     restore_requested = Signal(object)
     _FULL_TABLE_WIDTH = 970
@@ -208,8 +216,7 @@ class ServerListPage(QWidget):
         self._detail_dialog: ServerDetailDialog | None = None
         self._cached_detail_dialog: ServerDetailDialog | None = None
         self._detail_return_focus: QWidget | None = None
-        self._scan_request_sequence = 0
-        self._active_scan_token: int | None = None
+        self._detail_scan_command = ""
         self._target_id: str | None = None
         self._compact_columns: tuple[bool, bool] | None = None
         self._stacked_filters: bool | None = None
@@ -366,7 +373,7 @@ class ServerListPage(QWidget):
         if self._detail_dialog is not None:
             self._detail_dialog.close()
             self._detail_dialog = None
-            self._active_scan_token = None
+            self._detail_scan_command = ""
         self._state = surface.state
         ready = surface.state in (LoadState.READY, LoadState.STALE) and surface.value is not None
         self._servers = tuple(surface.value or ()) if ready else ()
@@ -498,6 +505,9 @@ class ServerListPage(QWidget):
         self._activation_bridge = bridge
         bridge.registration_changed.connect(self._activation_result)
         bridge.command_changed.connect(self._activation_command_result)
+        bridge.registration_changed.connect(self._detail_registration)
+        bridge.command_changed.connect(self._detail_command)
+        bridge.scan_changed.connect(self._detail_scan)
         self._selection_changed()
 
     def _send_activation(self, request: RegistrationRequest) -> None:
@@ -618,16 +628,40 @@ class ServerListPage(QWidget):
         self._target_id = server_id
         self._select_visible(server_id)
 
-    def set_scan_snapshot(
-        self, server_id: str, token: int, surface: Surface[ScanStatusProjection]
-    ) -> bool:
-        """Apply only the reply for the currently open server detail query."""
-
+    def _detail_registration(self, view: RegistrationView) -> None:
         dialog = self._detail_dialog
-        if dialog is None or dialog.server_id != server_id or self._active_scan_token != token:
-            return False
-        dialog.scan_status_card.set_snapshot(surface)
-        return True
+        if (
+            dialog is None
+            or not self._detail_scan_command
+            or view.command_id != self._detail_scan_command
+        ):
+            return
+        # The bridge's missing registration binding returns no server id.
+        unavailable = view.code == "REG_UNAVAILABLE" and not view.server_id
+        if view.server_id != dialog.server_id and not unavailable:
+            return
+        self._detail_scan_command = ""
+        if view.code == "SCAN_STATUS" and view.scan is not None:
+            dialog.scan_report.set_state(view.scan)
+        elif view.code in ("SCAN_UNAVAILABLE", "REG_UNAVAILABLE") or view.scan is None:
+            dialog.scan_report.set_state(None)
+        else:
+            dialog.scan_report.set_failed("검사 결과를 확인하지 못함.")
+
+    def _detail_command(self, event: CommandEvent) -> None:
+        if (
+            self._detail_dialog is not None
+            and self._detail_scan_command
+            and event.command_id == self._detail_scan_command
+            and event.stage in (CommandStage.REJECTED, CommandStage.UNCONFIRMED)
+        ):
+            self._detail_scan_command = ""
+            self._detail_dialog.scan_report.set_failed("검사 결과를 확인하지 못함.")
+
+    def _detail_scan(self, state: ScanState) -> None:
+        dialog = self._detail_dialog
+        if dialog is not None and state.server_id == dialog.server_id:
+            dialog.scan_report.set_state(state)
 
     def _select_visible(self, server_id: str) -> None:
         for row, server in enumerate(self._visible_servers):
@@ -669,15 +703,21 @@ class ServerListPage(QWidget):
         self._detail_dialog = dialog
         size_detail_for_viewport(dialog, 700, 560)
         dialog.open()
-        self._scan_request_sequence += 1
-        self._active_scan_token = self._scan_request_sequence
-        self.scan_snapshot_requested.emit(dialog.server_id, self._active_scan_token)
+        if self._activation_bridge is None:
+            dialog.scan_report.set_state(None)
+        else:
+            self._detail_scan_command = new_command_id()
+            dialog.scan_report.set_loading()
+            self._activation_bridge.request_registration(
+                RegistrationRequest("scan_status", dialog.server_id),
+                command_id=self._detail_scan_command,
+            )
 
     def _detail_finished(self, dialog: ServerDetailDialog, _result: int) -> None:
         if self._detail_dialog is not dialog:
             return
         self._detail_dialog = None
-        self._active_scan_token = None
+        self._detail_scan_command = ""
         QTimer.singleShot(
             0, lambda: self._restore_detail_focus() if shiboken6.isValid(self) else None
         )
