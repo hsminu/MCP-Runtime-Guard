@@ -7,13 +7,10 @@ and apply the requested global order and snapshot/continuation policy.
 
 from __future__ import annotations
 
-import unicodedata
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from enum import StrEnum
+from datetime import UTC, datetime
 
 import shiboken6
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QTimer, Signal
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,106 +19,52 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QTabBar,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from guard_app.domain.enums import ApprovalStatus
-
+from .approval_presentation import (
+    _NARROW_STATUS_TEXT as _NARROW_STATUS_TEXT,
+)
+from .approval_presentation import (
+    _STATUS_TEXT as _STATUS_TEXT,
+)
+from .approval_presentation import (
+    DEFAULT_APPROVAL_TTL_SECONDS as DEFAULT_APPROVAL_TTL_SECONDS,
+)
+from .approval_presentation import (
+    PAGE_SIZE as PAGE_SIZE,
+)
+from .approval_presentation import (
+    SOURCE_NOT_CONNECTED as SOURCE_NOT_CONNECTED,
+)
+from .approval_presentation import (
+    ApprovalLane as ApprovalLane,
+)
+from .approval_presentation import (
+    ApprovalPage as ApprovalPage,
+)
+from .approval_presentation import (
+    ApprovalQuery as ApprovalQuery,
+)
+from .approval_presentation import (
+    ApprovalSort as ApprovalSort,
+)
+from .approval_presentation import (
+    ApprovalSummary as ApprovalSummary,
+)
+from .approval_presentation import (
+    _bounded_request_age as _bounded_request_age,
+)
+from .approval_presentation import (
+    selected_detail_text,
+    status_display,
+    summary_columns,
+    valid_page,
+)
+from .approval_rows import ApprovalTable
 from .models import LoadState
-from .presentation import MISSING, format_kst, public_display_text
 from .widgets import KeyboardActionButton, SelectionBox, StateMessage, plain_label
-
-
-class ApprovalLane(StrEnum):
-    PENDING = "pending"
-    HISTORY = "history"
-
-
-class ApprovalSort(StrEnum):
-    OLDEST = "oldest"
-    NEWEST = "newest"
-
-
-PAGE_SIZE = 6
-_STATUS_TEXT = {
-    ApprovalStatus.PENDING: "승인 대기",
-    ApprovalStatus.APPROVED: "승인됨 · 실행 결과 별도 확인",
-    ApprovalStatus.CONSUMED: "승인 소비됨 · 실행 결과 별도 확인",
-    ApprovalStatus.REJECTED: "거절됨",
-    ApprovalStatus.EXPIRED: "만료됨",
-    ApprovalStatus.CANCELLED: "취소됨",
-    ApprovalStatus.INVALIDATED: "무효화됨",
-}
-_NARROW_STATUS_TEXT = {
-    ApprovalStatus.PENDING: "승인 대기",
-    ApprovalStatus.APPROVED: "승인됨",
-    ApprovalStatus.CONSUMED: "승인 소비됨",
-    ApprovalStatus.REJECTED: "거절됨",
-    ApprovalStatus.EXPIRED: "만료됨",
-    ApprovalStatus.CANCELLED: "취소됨",
-    ApprovalStatus.INVALIDATED: "무효화됨",
-}
-
-
-def _bounded_request_age(created_at: datetime, now: datetime) -> str | None:
-    """A display hint only; never infer an age from an invalid or skewed clock."""
-
-    if now.tzinfo is None or now.utcoffset() is None or now < created_at:
-        return None
-    elapsed_minutes = int((now - created_at).total_seconds() // 60)
-    if elapsed_minutes >= 7 * 24 * 60:
-        return "7일 이상"
-    if elapsed_minutes >= 24 * 60:
-        return f"{elapsed_minutes // (24 * 60)}일"
-    if elapsed_minutes >= 60:
-        return f"{elapsed_minutes // 60}시간"
-    return f"{elapsed_minutes}분"
-
-
-@dataclass(frozen=True, slots=True)
-class ApprovalQuery:
-    """One UI query intent; token rejects replies to older search/page intents."""
-
-    token: int
-    lane: ApprovalLane
-    search: str
-    server_id: str
-    sort: ApprovalSort
-    page: int
-    page_size: int = PAGE_SIZE
-
-
-@dataclass(frozen=True, slots=True, repr=False)
-class ApprovalSummary:
-    """Backend-approved public projection. Never include raw arguments here."""
-
-    approval_id: str
-    task_id: str
-    request_id: str
-    server_id: str
-    destination_summary: str
-    status: ApprovalStatus
-    created_at: datetime
-    resolved_at: datetime | None = None
-    reason_code: str | None = None
-    row_revision: int | None = None
-
-
-@dataclass(frozen=True, slots=True, repr=False)
-class ApprovalPage:
-    """One backend page and its server-derived total, not a local row cache."""
-
-    query: ApprovalQuery
-    rows: tuple[ApprovalSummary, ...]
-    total_count: int
-    as_of: datetime | None = None
-
-
-DEFAULT_APPROVAL_TTL_SECONDS = 300
-SOURCE_NOT_CONNECTED = "승인 목록 조회가 아직 연결되지 않음 · 승인 요청은 대화 화면에서 처리하세요."
 
 
 class ApprovalListPage(QWidget):
@@ -192,7 +135,7 @@ class ApprovalListPage(QWidget):
 
         self.state_message = StateMessage()
         layout.addWidget(self.state_message)
-        self.table = QTableWidget(0, 6)
+        self.table = ApprovalTable(0, 6)
         self.table.setObjectName("approvalTable")
         self.table.setAccessibleName("승인 요청 요약 목록")
         self.table.setHorizontalHeaderLabels(
@@ -319,40 +262,15 @@ class ApprovalListPage(QWidget):
 
     def _update_status_cells(self) -> None:
         for index, row in enumerate(self._rows):
-            item = self.table.item(index, 4)
-            if item is None:
-                continue
-            status = _STATUS_TEXT[row.status]
-            now = self._display_now
-            if (
-                self._query is not None
-                and self._query.lane is ApprovalLane.PENDING
-                and now is not None
-                and now.tzinfo is not None
-                and now.utcoffset() is not None
-                and now - row.created_at >= timedelta(seconds=self._approval_ttl_seconds)
-            ):
-                status += " · 승인 유효 시간 지남 · 상태 다시 확인(참고)"
-            if self._column_mode == "narrow":
-                age = _bounded_request_age(row.created_at, now) if now else None
-                if row.status in (ApprovalStatus.APPROVED, ApprovalStatus.CONSUMED):
-                    elapsed = "결과 별도 확인"
-                elif age is None:
-                    elapsed = "요청 시각 확인"
-                elif row.status is ApprovalStatus.PENDING:
-                    elapsed = f"{age} 대기"
-                else:
-                    elapsed = f"요청 {age} 전"
-                item.setText(f"{_NARROW_STATUS_TEXT[row.status]}\n{elapsed}")
-                self.table.setRowHeight(index, 42)
-            else:
-                item.setText(status)
-                self.table.setRowHeight(index, 64)
-            requested_at = format_kst(row.created_at)
-            item.setToolTip(f"상태: {status}\n요청 시각: {requested_at}")
-            item.setData(
-                Qt.ItemDataRole.AccessibleTextRole,
-                f"상태: {status}, 요청 시각: {requested_at}",
+            self.table.update_status(
+                index,
+                status_display(
+                    row,
+                    self._query,
+                    self._display_now,
+                    self._approval_ttl_seconds,
+                    narrow=self._column_mode == "narrow",
+                ),
             )
 
     @property
@@ -469,22 +387,7 @@ class ApprovalListPage(QWidget):
         now = display_now if display_now is not None else datetime.now(UTC)
         self._display_now = now
         for index, row in enumerate(page.rows):
-            self.table.insertRow(index)
-            columns = (
-                public_display_text(row.approval_id),
-                public_display_text(row.server_id),
-                "\n".join(
-                    (
-                        public_display_text(row.task_id),
-                        public_display_text(row.request_id),
-                    )
-                ),
-                public_display_text(row.destination_summary),
-                "",
-                f"{format_kst(row.created_at)}\n{format_kst(row.resolved_at)}",
-            )
-            for column, value in enumerate(columns):
-                self.table.setItem(index, column, QTableWidgetItem(value))
+            self.table.insert_summary(index, summary_columns(row))
             if row.approval_id == previous_id:
                 self.table.selectRow(index)
         self._update_status_cells()
@@ -525,51 +428,7 @@ class ApprovalListPage(QWidget):
             self._selected_id = None
             self.summary_selected.emit(None)
 
-    @staticmethod
-    def _valid_page(page: ApprovalPage) -> bool:
-        if (
-            type(page.total_count) is not int
-            or page.total_count < 0
-            or type(page.query.page) is not int
-            or page.query.page < 1
-            or page.query.page_size != PAGE_SIZE
-            or type(page.rows) is not tuple
-        ):
-            return False
-        expected_rows = min(
-            PAGE_SIZE,
-            max(0, page.total_count - (page.query.page - 1) * PAGE_SIZE),
-        )
-        if len(page.rows) != expected_rows:
-            return False
-        seen: set[str] = set()
-        for row in page.rows:
-            if (
-                type(row) is not ApprovalSummary
-                or type(row.approval_id) is not str
-                or not row.approval_id
-                or row.approval_id in seen
-                or type(row.task_id) is not str
-                or type(row.request_id) is not str
-                or type(row.server_id) is not str
-                or type(row.destination_summary) is not str
-                or not isinstance(row.status, ApprovalStatus)
-                or type(row.created_at) is not datetime
-                or row.created_at.tzinfo is None
-                or row.created_at.utcoffset() is None
-                or (
-                    (row.status is ApprovalStatus.PENDING)
-                    != (page.query.lane is ApprovalLane.PENDING)
-                )
-            ):
-                return False
-            seen.add(row.approval_id)
-        ordered = sorted(
-            page.rows,
-            key=lambda row: (row.created_at, row.approval_id),
-            reverse=page.query.sort is ApprovalSort.NEWEST,
-        )
-        return list(page.rows) == ordered
+    _valid_page = staticmethod(valid_page)
 
     def _page_count(self) -> int:
         return max(1, (self._total_count + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -601,34 +460,4 @@ class ApprovalListPage(QWidget):
             )
             self.summary_selected.emit(summary)
 
-    @staticmethod
-    def _selected_detail_text(row: ApprovalSummary) -> str:
-        def one_line(value: str) -> str:
-            parts = []
-            for char in value:
-                if char == "\\":
-                    parts.append("\\\\")
-                elif char != " " and (
-                    char.isspace()
-                    or unicodedata.category(char).startswith("C")
-                    or unicodedata.bidirectional(char) in {"R", "AL", "AN"}
-                ):
-                    codepoint = ord(char)
-                    parts.append(
-                        f"\\u{codepoint:04X}" if codepoint <= 0xFFFF else f"\\U{codepoint:08X}"
-                    )
-                else:
-                    parts.append(char)
-            return "".join(parts)
-
-        return "\n".join(
-            (
-                f"승인 ID: {one_line(row.approval_id)} · 서버 ID: {one_line(row.server_id)}",
-                f"상태: {_STATUS_TEXT[row.status]}",
-                f"Task ID: {one_line(row.task_id)} · 요청 ID: {one_line(row.request_id)}",
-                "수신처 요약: "
-                f"{one_line(row.destination_summary) if row.destination_summary else MISSING}",
-                f"요청 시각: {format_kst(row.created_at)}",
-                f"처리 시각: {format_kst(row.resolved_at)}",
-            )
-        )
+    _selected_detail_text = staticmethod(selected_detail_text)
