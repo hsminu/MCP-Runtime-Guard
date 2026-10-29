@@ -29,6 +29,12 @@ A_SERVICES = frozenset(
     {
         "account_runtime",
         "bridge",
+        "bridge_bindings",
+        "bridge_commands",
+        "bridge_ingress",
+        "bridge_lanes",
+        "bridge_streams",
+        "bridge_types",
         "codex_account",
         "codex_composition",
         "codex_preparation",
@@ -220,6 +226,28 @@ def test_only_the_transport_package_imports_the_mcp_sdk() -> None:
     }
     assert importers  # the transport itself uses the SDK
     assert all(_in_transport(module) for module in importers), sorted(importers)
+
+
+def test_only_the_bridge_facade_brings_qt_into_a_services() -> None:
+    """A115: outside ui and the entry point, only the bridge facade uses Qt.
+
+    A module that builds or reads bridge values imports ``services.bridge_types``.
+    """
+    outside_ui = {
+        module: _imports(_tree(path), module, is_package=path.stem == "__init__")
+        for module, path in A_MODULES
+        if module != "__main__" and module != "ui" and not module.startswith("ui.")
+    }
+    qt = {
+        module
+        for module, names in outside_ui.items()
+        if any(name == "PySide6" or name.startswith("PySide6.") for name in names)
+    }
+    facade = {
+        module for module, names in outside_ui.items() if "guard_app.services.bridge" in names
+    }
+    assert qt == {"services.bridge"}
+    assert not facade, sorted(facade)
 
 
 @pytest.mark.parametrize(("module", "path"), A_MODULES, ids=A_IDS)

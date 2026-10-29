@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-from guard_app.services.bridge import SessionStartError
+from guard_app.services.bridge_types import SessionStartError
 
 
 class SessionRuntimeError(SessionStartError):

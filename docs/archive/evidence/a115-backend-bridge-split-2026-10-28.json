@@ -1,0 +1,1034 @@
+{
+ "label": "A115 BackendBridge split",
+ "method": "A111 thresholds and calibrated branch count (see A114 evidence). test_private_attribute_uses counts, in A test files (files importing an A module, without test_a_architecture), attributes starting with one underscore on objects other than self; A111's own counting rule could not be reproduced.",
+ "before": {
+  "thresholds": {
+   "function_lines": 50,
+   "function_complexity": 12,
+   "class_lines": 300,
+   "class_methods": 20
+  },
+  "a_modules": 56,
+  "a_lines": 17120,
+  "largest_modules": [
+   [
+    "services.bridge",
+    1500
+   ],
+   [
+    "ui.sessions",
+    1167
+   ],
+   [
+    "ui.server_add",
+    1078
+   ],
+   [
+    "ui.window",
+    725
+   ],
+   [
+    "ui.overview",
+    712
+   ],
+   [
+    "services.session_runtime",
+    662
+   ],
+   [
+    "ui.approvals",
+    634
+   ],
+   [
+    "ui.runtime",
+    580
+   ]
+  ],
+  "classes_over": [
+   [
+    "services.bridge",
+    "BackendBridge",
+    1160,
+    49
+   ],
+   [
+    "ui.window",
+    "GuardWindow",
+    642,
+    34
+   ],
+   [
+    "ui.sessions",
+    "SessionWorkspace",
+    629,
+    31
+   ],
+   [
+    "ui.runtime",
+    "RuntimePanel",
+    514,
+    24
+   ],
+   [
+    "ui.approvals",
+    "ApprovalListPage",
+    508,
+    25
+   ],
+   [
+    "ui.server_add",
+    "ServerAddForm",
+    480,
+    22
+   ],
+   [
+    "services.session_runtime",
+    "SessionRuntime",
+    422,
+    23
+   ],
+   [
+    "adapters.mcp_transport.worker",
+    "ServerWorker",
+    394,
+    21
+   ],
+   [
+    "ui.overview",
+    "OverviewPage",
+    356,
+    16
+   ],
+   [
+    "ui.call_logs",
+    "CallLogPage",
+    318,
+    14
+   ],
+   [
+    "ui.servers",
+    "ServerListPage",
+    309,
+    15
+   ]
+  ],
+  "functions_over": 51,
+  "functions_over_top": [
+   [
+    "ui.window",
+    "__init__",
+    264,
+    6
+   ],
+   [
+    "ui.sessions",
+    "_create",
+    158,
+    2
+   ],
+   [
+    "ui.server_add",
+    "__init__",
+    143,
+    3
+   ],
+   [
+    "services.bridge",
+    "_serve",
+    133,
+    50
+   ],
+   [
+    "services.bridge",
+    "_execute",
+    126,
+    37
+   ],
+   [
+    "ui.runtime",
+    "__init__",
+    118,
+    3
+   ],
+   [
+    "ui.approvals",
+    "__init__",
+    107,
+    1
+   ],
+   [
+    "ui.sessions",
+    "_refresh_view",
+    95,
+    35
+   ],
+   [
+    "ui.servers",
+    "__init__",
+    92,
+    3
+   ],
+   [
+    "ui.overview",
+    "__init__",
+    91,
+    2
+   ],
+   [
+    "__main__",
+    "main",
+    89,
+    24
+   ],
+   [
+    "ui.server_add",
+    "_build_draft",
+    86,
+    26
+   ],
+   [
+    "services.bridge",
+    "__init__",
+    86,
+    14
+   ],
+   [
+    "adapters.mcp_http_ingress",
+    "__aiter__",
+    78,
+    34
+   ],
+   [
+    "__main__",
+    "_run",
+    78,
+    13
+   ],
+   [
+    "ui.window",
+    "attach_runtime",
+    75,
+    5
+   ],
+   [
+    "ui.call_logs",
+    "__init__",
+    75,
+    1
+   ],
+   [
+    "ui.call_logs",
+    "_update_table_columns",
+    69,
+    24
+   ],
+   [
+    "services.session_runtime",
+    "bootstrap_product",
+    68,
+    11
+   ],
+   [
+    "services.product_assembly",
+    "assemble_guard",
+    68,
+    8
+   ],
+   [
+    "services.session_runtime",
+    "__init__",
+    68,
+    8
+   ],
+   [
+    "ui.sessions",
+    "paint",
+    64,
+    6
+   ],
+   [
+    "ui.approval_detail",
+    "visible_review_text",
+    58,
+    21
+   ],
+   [
+    "services.bridge",
+    "_drain_ingress",
+    58,
+    15
+   ],
+   [
+    "services.session_policy",
+    "change_server_access",
+    57,
+    14
+   ],
+   [
+    "ui.servers",
+    "__init__",
+    57,
+    2
+   ],
+   [
+    "ui.approvals",
+    "_update_table_columns",
+    54,
+    15
+   ],
+   [
+    "ui.model_settings",
+    "__init__",
+    54,
+    2
+   ],
+   [
+    "ui.approvals",
+    "set_page",
+    53,
+    15
+   ],
+   [
+    "services.codex_session",
+    "__init__",
+    53,
+    2
+   ],
+   [
+    "ui.servers",
+    "_apply_filters",
+    50,
+    17
+   ],
+   [
+    "adapters.mcp_transport.transport",
+    "__init__",
+    49,
+    13
+   ],
+   [
+    "services.product_assembly",
+    "live_fingerprints",
+    48,
+    16
+   ],
+   [
+    "adapters.mcp_http_ingress",
+    "decode",
+    48,
+    16
+   ],
+   [
+    "ui.runtime",
+    "_refresh",
+    47,
+    24
+   ],
+   [
+    "ui.overview",
+    "set_snapshot",
+    45,
+    21
+   ],
+   [
+    "ui.approvals",
+    "_valid_page",
+    44,
+    22
+   ],
+   [
+    "services.bridge",
+    "_thread_main",
+    44,
+    17
+   ],
+   [
+    "services.bridge",
+    "_admit",
+    43,
+    14
+   ],
+   [
+    "services.bridge",
+    "_submit",
+    39,
+    16
+   ],
+   [
+    "ui.server_add",
+    "_url_error",
+    38,
+    21
+   ],
+   [
+    "ui.overview",
+    "_render_servers",
+    38,
+    17
+   ],
+   [
+    "ui.approvals",
+    "_update_status_cells",
+    37,
+    14
+   ],
+   [
+    "ui.server_add",
+    "_build_draft",
+    36,
+    19
+   ],
+   [
+    "adapters.mcp_ingress",
+    "accept",
+    30,
+    14
+   ],
+   [
+    "ui.sessions",
+    "settle_command",
+    30,
+    13
+   ],
+   [
+    "ui.window",
+    "navigate",
+    28,
+    15
+   ],
+   [
+    "ui.runtime",
+    "_result_text",
+    28,
+    13
+   ],
+   [
+    "ui.model_settings",
+    "set_view",
+    27,
+    15
+   ],
+   [
+    "ui.call_logs",
+    "set_calls",
+    26,
+    13
+   ],
+   [
+    "ui.overview",
+    "__init__",
+    24,
+    14
+   ]
+  ],
+  "a_test_files": 54,
+  "a_test_functions": 777,
+  "test_private_attribute_uses": 274,
+  "commit": "85808a5"
+ },
+ "after": {
+  "thresholds": {
+   "function_lines": 50,
+   "function_complexity": 12,
+   "class_lines": 300,
+   "class_methods": 20
+  },
+  "a_modules": 62,
+  "a_lines": 17538,
+  "largest_modules": [
+   [
+    "ui.sessions",
+    1167
+   ],
+   [
+    "ui.server_add",
+    1078
+   ],
+   [
+    "ui.window",
+    725
+   ],
+   [
+    "ui.overview",
+    712
+   ],
+   [
+    "services.bridge",
+    663
+   ],
+   [
+    "services.session_runtime",
+    662
+   ],
+   [
+    "ui.approvals",
+    634
+   ],
+   [
+    "ui.runtime",
+    580
+   ]
+  ],
+  "classes_over": [
+   [
+    "ui.window",
+    "GuardWindow",
+    642,
+    34
+   ],
+   [
+    "ui.sessions",
+    "SessionWorkspace",
+    629,
+    31
+   ],
+   [
+    "services.bridge",
+    "BackendBridge",
+    518,
+    36
+   ],
+   [
+    "ui.runtime",
+    "RuntimePanel",
+    514,
+    24
+   ],
+   [
+    "ui.approvals",
+    "ApprovalListPage",
+    508,
+    25
+   ],
+   [
+    "ui.server_add",
+    "ServerAddForm",
+    480,
+    22
+   ],
+   [
+    "services.session_runtime",
+    "SessionRuntime",
+    422,
+    23
+   ],
+   [
+    "adapters.mcp_transport.worker",
+    "ServerWorker",
+    394,
+    21
+   ],
+   [
+    "ui.overview",
+    "OverviewPage",
+    356,
+    16
+   ],
+   [
+    "ui.call_logs",
+    "CallLogPage",
+    318,
+    14
+   ],
+   [
+    "ui.servers",
+    "ServerListPage",
+    309,
+    15
+   ]
+  ],
+  "functions_over": 45,
+  "functions_over_top": [
+   [
+    "ui.window",
+    "__init__",
+    264,
+    6
+   ],
+   [
+    "ui.sessions",
+    "_create",
+    158,
+    2
+   ],
+   [
+    "ui.server_add",
+    "__init__",
+    143,
+    3
+   ],
+   [
+    "ui.runtime",
+    "__init__",
+    118,
+    3
+   ],
+   [
+    "ui.approvals",
+    "__init__",
+    107,
+    1
+   ],
+   [
+    "ui.sessions",
+    "_refresh_view",
+    95,
+    35
+   ],
+   [
+    "ui.servers",
+    "__init__",
+    92,
+    3
+   ],
+   [
+    "ui.overview",
+    "__init__",
+    91,
+    2
+   ],
+   [
+    "__main__",
+    "main",
+    89,
+    24
+   ],
+   [
+    "ui.server_add",
+    "_build_draft",
+    86,
+    26
+   ],
+   [
+    "adapters.mcp_http_ingress",
+    "__aiter__",
+    78,
+    34
+   ],
+   [
+    "__main__",
+    "_run",
+    78,
+    13
+   ],
+   [
+    "ui.window",
+    "attach_runtime",
+    75,
+    5
+   ],
+   [
+    "ui.call_logs",
+    "__init__",
+    75,
+    1
+   ],
+   [
+    "ui.call_logs",
+    "_update_table_columns",
+    69,
+    24
+   ],
+   [
+    "services.session_runtime",
+    "bootstrap_product",
+    68,
+    11
+   ],
+   [
+    "services.product_assembly",
+    "assemble_guard",
+    68,
+    8
+   ],
+   [
+    "services.session_runtime",
+    "__init__",
+    68,
+    8
+   ],
+   [
+    "services.bridge",
+    "__init__",
+    65,
+    5
+   ],
+   [
+    "ui.sessions",
+    "paint",
+    64,
+    6
+   ],
+   [
+    "ui.approval_detail",
+    "visible_review_text",
+    58,
+    21
+   ],
+   [
+    "services.session_policy",
+    "change_server_access",
+    57,
+    14
+   ],
+   [
+    "ui.servers",
+    "__init__",
+    57,
+    2
+   ],
+   [
+    "ui.approvals",
+    "_update_table_columns",
+    54,
+    15
+   ],
+   [
+    "ui.model_settings",
+    "__init__",
+    54,
+    2
+   ],
+   [
+    "ui.approvals",
+    "set_page",
+    53,
+    15
+   ],
+   [
+    "services.codex_session",
+    "__init__",
+    53,
+    2
+   ],
+   [
+    "ui.servers",
+    "_apply_filters",
+    50,
+    17
+   ],
+   [
+    "adapters.mcp_transport.transport",
+    "__init__",
+    49,
+    13
+   ],
+   [
+    "services.product_assembly",
+    "live_fingerprints",
+    48,
+    16
+   ],
+   [
+    "adapters.mcp_http_ingress",
+    "decode",
+    48,
+    16
+   ],
+   [
+    "ui.runtime",
+    "_refresh",
+    47,
+    24
+   ],
+   [
+    "ui.overview",
+    "set_snapshot",
+    45,
+    21
+   ],
+   [
+    "ui.approvals",
+    "_valid_page",
+    44,
+    22
+   ],
+   [
+    "ui.server_add",
+    "_url_error",
+    38,
+    21
+   ],
+   [
+    "ui.overview",
+    "_render_servers",
+    38,
+    17
+   ],
+   [
+    "ui.approvals",
+    "_update_status_cells",
+    37,
+    14
+   ],
+   [
+    "ui.server_add",
+    "_build_draft",
+    36,
+    19
+   ],
+   [
+    "adapters.mcp_ingress",
+    "accept",
+    30,
+    14
+   ],
+   [
+    "ui.sessions",
+    "settle_command",
+    30,
+    13
+   ],
+   [
+    "ui.window",
+    "navigate",
+    28,
+    15
+   ],
+   [
+    "ui.runtime",
+    "_result_text",
+    28,
+    13
+   ],
+   [
+    "ui.model_settings",
+    "set_view",
+    27,
+    15
+   ],
+   [
+    "ui.call_logs",
+    "set_calls",
+    26,
+    13
+   ],
+   [
+    "ui.overview",
+    "__init__",
+    24,
+    14
+   ]
+  ],
+  "a_test_files": 55,
+  "a_test_functions": 795,
+  "test_private_attribute_uses": 274,
+  "commit": "232cfe8 + A115 working tree (A136 changes excluded)"
+ },
+ "mutations": {
+  "method": "One regression per run against the A115 tree (before the merge), then the bridge test set (test_bridge, test_bridge_conversation, test_bridge_streaming, test_codex_account, test_runtime, test_ui_sessions, test_sqlite_app, test_ui_approval_t18) with -x; 420 s limit. MISSED ones were rewritten against 85808a5 and run with the same tests.",
+  "results": [
+   {
+    "id": "M01",
+    "file": "bridge_ingress.py",
+    "regression": "입구 순서: 긴급 명령보다 실행 명령을 먼저 꺼냄",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M02",
+    "file": "bridge_ingress.py",
+    "regression": "입구 한도를 하나 넘겨 받음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M03",
+    "file": "bridge_ingress.py",
+    "regression": "본 적 있는 명령 ID를 재생 줄 대신 원래 줄에 넣음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M04",
+    "file": "bridge_ingress.py",
+    "regression": "기다리는 같은 ID의 다른 명령을 충돌로 거부하지 않음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M05",
+    "file": "bridge_ingress.py",
+    "regression": "닫힌 입구가 새 명령을 받음",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M06",
+    "file": "bridge_ingress.py",
+    "regression": "장부가 미확인 명령을 기억하지 않음",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M07",
+    "file": "bridge_ingress.py",
+    "regression": "장부가 끝난 명령을 한도 없이 쌓음",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M08",
+    "file": "bridge_ingress.py",
+    "regression": "메시지 추론 수준을 검사하지 않음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M09",
+    "file": "bridge_ingress.py",
+    "regression": "API 키 아닌 계정 명령에도 비밀값을 실음",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M10",
+    "file": "bridge.py",
+    "regression": "실행 명령 수 한도(run_queue_size + 1)를 지우고 queue만 봄",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M11",
+    "file": "bridge.py",
+    "regression": "재생 실패를 장부에 기록해 원래 처리 기록을 덮음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M12",
+    "file": "bridge_lanes.py",
+    "regression": "긴급 줄의 예약 작업자를 없앰",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M13",
+    "file": "bridge_lanes.py",
+    "regression": "같은 Task의 실행을 Task lock 없이 돌림",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M14",
+    "file": "bridge.py",
+    "regression": "종료 때 대기 중인 명령을 SHUTTING_DOWN으로 거부하지 않음",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M15",
+    "file": "bridge.py",
+    "regression": "종료 때 남은 명령을 SHUTDOWN_UNCONFIRMED로 정리하지 않음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M16",
+    "file": "bridge.py",
+    "regression": "종료 때 기기 로그인 대기를 취소하지 않음",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M17",
+    "file": "bridge_bindings.py",
+    "regression": "바인딩을 닫은 뒤에도 계속 들고 있음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M18",
+    "file": "bridge_bindings.py",
+    "regression": "늦게 끝난 bootstrap을 정리 확인 없이 완료로 봄",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M19",
+    "file": "bridge_bindings.py",
+    "regression": "bootstrap 결과에 HumanControl이 아닌 값을 받아들임",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M20",
+    "file": "bridge.py",
+    "regression": "첫 Task 화면이 실패해도 시작을 계속함",
+    "a115": "HUNG",
+    "before_a115": "HUNG"
+   },
+   {
+    "id": "M21",
+    "file": "bridge.py",
+    "regression": "시작 실패 코드를 정리 결과와 상관없이 고정함",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M22",
+    "file": "bridge_streams.py",
+    "regression": "스트리밍 답 크기 한도를 지움",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M23",
+    "file": "bridge_streams.py",
+    "regression": "다른 epoch의 조각을 받아들임",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M24",
+    "file": "bridge_streams.py",
+    "regression": "종료 요청 뒤에도 조각을 내보냄",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M25",
+    "file": "bridge_commands.py",
+    "regression": "끝난 Task의 Runner를 닫지 않음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M26",
+    "file": "bridge_commands.py",
+    "regression": "막힘 코드가 없을 때도 새 세션을 막음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M27",
+    "file": "bridge_commands.py",
+    "regression": "실행이 끝난 뒤 Task 화면을 다시 읽지 않음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M28",
+    "file": "bridge_commands.py",
+    "regression": "다른 epoch의 메시지를 받아들임",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M29",
+    "file": "bridge_commands.py",
+    "regression": "승인 결정 뒤 기다리던 Task 화면을 다시 읽지 않음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M30",
+    "file": "bridge_commands.py",
+    "regression": "로그아웃 뒤 새 세션 가능 여부를 다시 알리지 않음",
+    "a115": "MISSED",
+    "before_a115": "MISSED"
+   },
+   {
+    "id": "M31",
+    "file": "bridge_commands.py",
+    "regression": "대기열 비우기 실패 때 정지 명령을 보내지 않음",
+    "a115": "CAUGHT"
+   },
+   {
+    "id": "M32",
+    "file": "bridge_commands.py",
+    "regression": "Guard 정지 뒤 Codex 세션을 닫지 않음",
+    "a115": "CAUGHT"
+   }
+  ],
+  "summary": {
+   "caught": 20,
+   "missed": 11,
+   "hung": 1,
+   "missed_before_a115_too": 11,
+   "hung_before_a115_too": 1
+  }
+ }
+}

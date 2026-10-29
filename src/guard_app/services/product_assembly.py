@@ -14,12 +14,14 @@ when the Registry is C's `ServerRegistry`, each selected server's listing is
 also handed to its `observe`, which records a change durably. A server whose
 listing it cannot record or does not accept is blocked for this run too.
 
-A `notifications/tools/list_changed` received after that comparison makes its
+A `notifications/tools/list_changed` received after that server's first listing
+response makes its
 server PENDING for the rest of this run (LIST-01): new calls are denied with
 REG_NOT_ACTIVE, pending approvals fail their recheck, and new Codex sessions do
 not list its tools. Nothing is written to the Registry; the next connection
-compares again. A notice received before the comparison is not blocking, since
-that comparison already reads the newer listing.
+compares again. Only notices before that server's first listing response are
+nonblocking. Waiting for another server or recording the comparison must not
+discard a notice that makes an already received definition stale (A140).
 
 A server whose session stops serving during the run (an HTTP request error, a
 broken stream, a call past its watchdog) is PENDING for the rest of the run in
@@ -90,7 +92,7 @@ class LiveCheckedRegistry:
     the live value, so a registration rewritten during the run no longer
     matches the definitions this session actually received.
 
-    A server whose tool list changed after the comparison is PENDING too
+    A server whose tool list changed after a listing response is PENDING too
     (LIST-01), and so is one whose session stopped serving (#61). Their
     fingerprints stay the live values, so REG_NOT_ACTIVE is the only reason
     Guard reports for them.
@@ -102,6 +104,7 @@ class LiveCheckedRegistry:
         self._blocked: frozenset[str] = frozenset()
         self._mismatched: frozenset[tuple[str, str]] = frozenset()
         self._changed: set[str] = set()
+        self._received: set[str] = set()
         self._failed: set[str] = set()
         self._early_changes = 0
         self._sealed = False
@@ -138,10 +141,14 @@ class LiveCheckedRegistry:
     def tools_changed(self, server_id: str) -> None:
         """Record only the fact; the notification's params never reach here."""
 
-        if not self._sealed:
+        if not self._sealed and server_id not in self._received:
             self._early_changes += 1
             return
         self._changed.add(server_id)
+
+    def listing_received(self, server_id: str) -> None:
+        """A transport-owned request received a page; no definition becomes trusted here."""
+        self._received.add(server_id)
 
     def server_failed(self, server_id: str) -> None:
         """Only the fact that the server's session stopped serving (#61); no error text."""
@@ -152,8 +159,10 @@ class LiveCheckedRegistry:
         return self._registry.registration(server_id)
 
     def status(self, server_id: str) -> RegStatus | None:
-        if server_id in self._failed or (
-            self._sealed and (server_id in self._blocked or server_id in self._changed)
+        if (
+            server_id in self._failed
+            or server_id in self._changed
+            or (self._sealed and server_id in self._blocked)
         ):
             return RegStatus.PENDING
         return self._registry.status(server_id)
@@ -312,6 +321,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         tool_list_limits=inputs.tool_list_limits,
         on_tools_changed=registry.tools_changed,
         on_server_failed=registry.server_failed,
+        on_listing_received=registry.listing_received,
     )
     adopted = False
     try:

@@ -92,6 +92,39 @@ REASONS = {
     "APPROVAL_RACE": "승인 요청 중복 처리",
 }
 DECISIONS = {"ALLOW": "허용", "ASK": "승인 필요", "DENY": "차단"}
+
+CODEX_LOGIN_TEXT = {
+    "browser_button": "브라우저로 로그인",
+    "device_button": "기기 코드로 로그인",
+    "purpose": (
+        "Guard에서 사용할 Codex 계정으로 로그인하세요. 브라우저 로그인, ChatGPT 기기 코드와 "
+        "API 키는 모두 Codex 안에서 로그인하는 방식임. "
+        "자격증명은 Codex가 Windows 자격증명 관리자에 직접 저장함."
+    ),
+    "device_help": (
+        "계정이나 워크스페이스에서 기기 코드 로그인을 허용하지 않으면 브라우저 로그인을 "
+        "사용하세요. 코드 입력을 기다리는 중이면 먼저 로그인 취소를 누르세요."
+    ),
+    "browser_unavailable": "브라우저 로그인 연결 준비 중임.",
+    "starting": "로그인 시작을 요청함. 결과를 기다리는 중임.",
+    "browser_pending": (
+        "브라우저 열기를 요청함. 열린 로그인 탭에서 로그인을 마친 뒤 Guard로 돌아오세요. "
+        "Codex가 완료를 확인하면 상태가 바뀜."
+    ),
+}
+CODEX_LOGIN_NOTICES = {
+    "BROWSER_LOGIN_UNAVAILABLE": "브라우저 로그인 연결 준비 중임.",
+    "BROWSER_OPEN_FAILED": "로그인 페이지를 열지 못해 요청을 취소함. 다시 시도하세요.",
+    "LOGIN_CANCELLED": "로그인 요청을 취소함.",
+    "LOGIN_TIMEOUT": "로그인 대기 시간이 지나 요청을 취소함. 다시 시도하세요.",
+    "LOGIN_REQUEST_UNCONFIRMED": "로그인 요청 처리를 확인하지 못함. 상태를 다시 확인하세요.",
+    "LOGIN_CANCEL_UNCONFIRMED": "로그인 취소 처리를 확인하지 못함. 상태를 다시 확인하세요.",
+    "LOGOUT_REQUEST_UNCONFIRMED": "로그아웃 처리를 확인하지 못함. 상태를 다시 확인하세요.",
+    "ACCOUNT_READ_UNCONFIRMED": "상태 확인 결과를 받지 못함.",
+}
+# An account command refused before any backend work, with a code not listed
+# in COMMAND_REFUSALS.
+ACCOUNT_REQUEST_REFUSED = "요청을 접수하지 않음. 잠시 뒤 다시 보내세요."
 # Backend command codes -> what happened and what the operator can do next.
 # The code itself stays visible only as secondary text.
 RUN_RESULTS = {

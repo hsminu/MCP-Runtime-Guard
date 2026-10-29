@@ -28,6 +28,7 @@ C_MODULES = (
     "security/codex_l2.py",
     "security/endpoints.py",
     "security/launcher.py",
+    "security/login_browser.py",
     "security/paths.py",
     "security/redact.py",
     "security/secrets.py",
