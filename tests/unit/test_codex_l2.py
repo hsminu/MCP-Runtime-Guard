@@ -303,6 +303,26 @@ MUTATIONS = {
         lambda o: o.model_requests[0].update({"tools": [{"type": "web_search"}]}),
         "L2_TOOLS_UNEXPECTED",
     ),
+    # B77-D2: 두 번째 요청의 도구 목록도 같은 허용 집합과 대조한다.
+    "extra_tool_second_request": (
+        lambda o: o.model_requests[1]["input"].__setitem__(
+            0,
+            _tools_block(
+                (
+                    {
+                        "type": "namespace",
+                        "name": "functions",
+                        "tools": [{"type": "function", "name": "exec_command"}],
+                    },
+                )
+            ),
+        ),
+        "L2_TOOLS_UNEXPECTED",
+    ),
+    "tools_block_missing_second_request": (
+        lambda o: o.model_requests[1]["input"].pop(0),
+        "L2_TOOLS_UNEXPECTED",
+    ),
     "permissions_block": (
         lambda o: o.model_requests[0]["input"].append(
             _message("developer", "<permissions instructions>x")
@@ -619,11 +639,9 @@ def test_l2_failure_codes_are_exactly_the_codes_the_module_uses():
     assert len(codex_l2.L2_FAILURE_CODES) == 29
 
 
-def test_a_l2_failure_codes_are_the_c_constant():
-    """A151 이름(`session_preparation.L2_FAILURE_CODES`)이 사본이 아니라 C 상수인지(C6.14-2)."""
-    from guard_app.services.session_preparation import L2_FAILURE_CODES
-
-    assert L2_FAILURE_CODES is codex_l2.L2_FAILURE_CODES
+# A 이름이 C 상수와 같은 객체인지는 A174
+# `test_a151_l2_startup.py::test_l2_codes_reexport_the_c_constant`가
+# preparation·bridge·startup·presentation 네 곳에서 본다.
 
 
 @pytest.mark.asyncio

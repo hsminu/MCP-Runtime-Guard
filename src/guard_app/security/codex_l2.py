@@ -45,6 +45,8 @@ from guard_app.security.paths import AppFolders, AppPathError
 PROBE_NAMESPACE = "guard_l2"
 PROBE_TOOL = "probe"
 PROBE_RESULT = "guard l2 probe ok"
+# 모델 요청마다 `input.additional_tools`로 내놓아야 하는 도구 전부(이름공간, 이름).
+_OFFERED_TOOLS = frozenset({("functions", "request_user_input"), (PROBE_NAMESPACE, PROBE_TOOL)})
 L2_PROMPT = "Guard L2 self-test. Call the probe tool."
 L2_FINAL_TEXT = "guard l2 done"
 # 0.162.1 내장 도구 이름(`codex-rs/core/src/tools`, `rust-v0.162.1`). 앞의 6개와 local_shell_call은
@@ -912,15 +914,15 @@ def _check_model_requests(
             fail("L2_TOOLS_UNEXPECTED")
         if request.get("instructions") not in (None, ""):
             fail("L2_PROMPT_UNEXPECTED")
+        # 요청마다 같은 도구 목록이어야 한다. 첫 요청만 보면 두 번째 요청에서 늘거나 빠진
+        # 도구를 놓친다(B77-D2).
+        items = request.get("input")
+        if _offered_tools(items if type(items) is list else []) != _OFFERED_TOOLS:
+            fail("L2_TOOLS_UNEXPECTED")
     first = requests[0].get("input")
     if type(first) is not list:
         fail("L2_MODEL_REQUEST_MISSING")
         return
-    if _offered_tools(first) != {
-        ("functions", "request_user_input"),
-        (PROBE_NAMESPACE, PROBE_TOOL),
-    }:
-        fail("L2_TOOLS_UNEXPECTED")
     if _messages(first) != [
         ("developer", base),
         ("developer", "<collaboration_mode>"),
@@ -941,7 +943,7 @@ def _check_model_requests(
         fail("L2_PROBE_CALLS_UNEXPECTED")
 
 
-def _offered_tools(items: list[Any]) -> set[tuple[str, str]] | None:
+def _offered_tools(items: list[Any]) -> frozenset[tuple[str, str]] | None:
     offered: set[tuple[str, str]] = set()
     blocks = [
         item for item in items if type(item) is dict and item.get("type") == "additional_tools"
@@ -955,7 +957,7 @@ def _offered_tools(items: list[Any]) -> set[tuple[str, str]] | None:
             if type(tool) is not dict:
                 return None
             offered.add((str(namespace.get("name")), str(tool.get("name"))))
-    return offered
+    return frozenset(offered)
 
 
 def _messages(items: list[Any]) -> list[tuple[str, str | None]]:

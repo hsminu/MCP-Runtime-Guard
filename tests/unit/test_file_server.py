@@ -247,6 +247,45 @@ def test_file_held_open_for_writing_is_not_read(root):
     assert text_of(result) == "FILE_OPEN_FAILED"
 
 
+def test_repeated_reads_hold_no_crt_descriptors(root, tmp_path):
+    """B77-D1: 예전 `open_osfhandle` 경로는 읽을 때마다 CRT fd를 하나씩 남겼다(8,189번 뒤 고갈)."""
+    probe = tmp_path / "outside" / "Report.TXT"
+
+    def next_fd():
+        fd = os.open(probe, os.O_RDONLY)
+        os.close(fd)
+        return fd
+
+    server = FileServer(root)
+    before = next_fd()
+    for _ in range(50):
+        assert text_of(call(server, "read_file", {"path": "top.txt"})) == "top"
+    assert next_fd() == before
+
+
+def test_read_and_os_failures_are_fixed_codes_and_serving_continues(root, monkeypatch):
+    server = FileServer(root)
+    with monkeypatch.context() as patch:
+        patch.setattr(file_server, "_ReadFile", lambda *args: False)
+        assert text_of(call(server, "read_file", {"path": "top.txt"})) == "FILE_READ_FAILED"
+    hidden_path = "C:\\PRIVATE_PATH\\top.txt"
+
+    def exhausted(*args, **kwargs):
+        raise OSError(24, "Too many open files", hidden_path)
+
+    for name, arguments, target, code in (
+        ("read_file", {"path": "top.txt"}, "_read_handle", "FILE_READ_FAILED"),
+        ("list_folder", {"path": "Public"}, "_opened", "FOLDER_READ_FAILED"),
+        ("list_root", {}, "_opened", "FOLDER_READ_FAILED"),
+    ):
+        with monkeypatch.context() as patch:
+            patch.setattr(file_server, target, exhausted)
+            result = call(server, name, arguments)
+        assert result == {"content": [{"type": "text", "text": code}], "isError": True}
+        assert "PRIVATE_PATH" not in json.dumps(result)
+    assert text_of(call(server, "read_file", {"path": "top.txt"})) == "top"
+
+
 def test_swap_between_check_and_open_is_caught(root, tmp_path, monkeypatch):
     """C2.4: 검사 뒤 상위 폴더를 루트 밖 junction으로 바꿔치기해도 핸들 대조가 막는다."""
     real_check = file_server.safe_path
