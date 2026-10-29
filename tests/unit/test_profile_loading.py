@@ -247,6 +247,44 @@ def test_server_issue_ignores_absent_and_unselected_registration():
     assert loaded.server_issue("unknown") is None
 
 
+def test_startable_servers_filter_urls_but_keep_selection_order_and_policy():
+    document = _document()
+    document["servers"][1]["url"] = "https://example.com"
+    registry = _Registry()
+    for server_id in ("healthy-one", "healthy-two"):
+        settings = deepcopy(document["servers"][0])
+        settings["id"] = server_id
+        document["servers"].append(settings)
+        original = registry.records["docs"]
+        tools = tuple(tool.model_copy(update={"server_id": server_id}) for tool in original.tools)
+        registry.records[server_id] = original.model_copy(
+            update={"server_id": server_id, "tools": tools}
+        )
+    document["profile"]["servers"] = ["healthy-two", "remote", "healthy-one", "docs"]
+    before_document = deepcopy(document)
+    before_version = load_profile_settings(document, registry).policy_version
+    docs = registry.records["docs"]
+    registry.records["docs"] = docs.model_copy(
+        update={"boundary": docs.boundary.model_copy(update={"max_label": Label.INTERNAL})}
+    )
+    loaded = load_profile_settings(document, registry)
+    selected = loaded.selected_servers
+
+    assert loaded.server_issue("remote") == "URL_NOT_CANONICAL"
+    assert loaded.server_issue("docs") == "REG_SETTINGS_MISMATCH"
+    assert loaded.server_issue("healthy-one") is None
+    assert loaded.server_issue("healthy-two") is None
+    assert [server.id for server in selected] == ["docs", "remote", "healthy-one", "healthy-two"]
+    assert [server.id for server in loaded.startable_servers] == [
+        "docs",
+        "healthy-one",
+        "healthy-two",
+    ]
+    assert loaded.selected_servers == selected
+    assert loaded.policy_version == before_version
+    assert document == before_document
+
+
 def test_unconfigured_discovered_tools_are_hidden():
     registry = _Registry()
     record = registry.records["docs"]

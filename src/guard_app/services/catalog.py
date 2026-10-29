@@ -663,7 +663,8 @@ class GuardSettings(_PolicySettings):
 class LoadedProfile:
     """검증된 독립 사본. servers는 해시에 포함된 전체 설정이며 선택 범위가 아니다.
 
-    실행 시작에는 selected_servers를 사용하고 C 경로·실행 파일 검증을 연결한다.
+    실행 시작(조립·목록 수집)에는 startable_servers를 사용하고 C 경로·실행 파일
+    검증을 연결한다. selected_servers는 설정에서 고른 서버 그대로다.
     """
 
     profile: Profile
@@ -679,8 +680,22 @@ class LoadedProfile:
 
     @property
     def selected_servers(self) -> tuple[ServerSettings, ...]:
-        """전체 설정 순서를 유지하면서 이 Profile이 선택한 서버만 반환한다."""
+        """전체 설정 순서대로 Profile이 설정에서 선택한 서버를 그대로 반환한다."""
         return tuple(server for server in self.servers if server.id in self.profile.server_ids)
+
+    @property
+    def startable_servers(self) -> tuple[ServerSettings, ...]:
+        """실행 시작(조립·목록 수집)에 쓸 선택 서버를 반환한다.
+
+        selected_servers는 설정에서 고른 서버 그대로이며 실행 허가가 아니다.
+        현재는 URL_* 이슈만 제외한다. A155 record_settings_change 순서 이관과
+        C apply_settings 연결 후 REG_SETTINGS_MISMATCH도 제외할 계획이다.
+        """
+        return tuple(
+            server
+            for server in self.selected_servers
+            if not (self.server_issue(server.id) or "").startswith("URL_")
+        )
 
     def server_issue(self, server_id: str) -> str | None:
         """선택된 서버의 재확인 문제를 조회한다. 이 값은 실행 허가가 아니다.
