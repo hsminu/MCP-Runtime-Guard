@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-30 · 확인한 main `1da2f1a`(#103·#104, 이 브랜치에는 미병합) · 완료 89/95, 남음 6 · [#106 결정 기록](archive/b/B-106-agreement-closure.md) · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-30 · 확인한 main `f0c2643`(#103·#104·#109 병합) · 완료 89/95, 남음 6 · [#106 결정 기록](archive/b/B-106-agreement-closure.md) · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 `B6-01`처럼 하이픈이 붙은 ID는 [공통 계약](contracts.md#미결-요청)의 요청이고, `B6.1`처럼 점이 붙은 ID는 이 체크리스트의 항목이다.
 
@@ -23,7 +23,7 @@
 - [x] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 대조 · [기록](archive/b/B6.10-B6.12-unblocked.md)
 - [x] B1.7 ModelClient 공통 포트 제거·Protocol의 examples 이동 `9dae11b` · [#106 A·C 동의](https://github.com/hsminu/MCP-Runtime-Guard/issues/106) · [기록](archive/b/B1.7-B1.9-code-s.md)
 - [x] B1.8 SCAN-01 DTO 확장·표시 검사 오탐/명시적 무해화 보완 · [#32 DTO 형식 합의](https://github.com/hsminu/MCP-Runtime-Guard/pull/32#pullrequestreview-5649334182) · [기록](archive/b/B1.8-scan-report.md) · Hypothesis 반복 수 1,000 → 200(#100 `17df1ce`, 나머지 두 시험은 300 → 200), C가 4개 시험을 5,000회로 1회 확인해 반례 없음([#100 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/100#issuecomment-6503859925))
-- [x] B1.9 SCAN-01 B `Finding.code`가 C 번역 집합과 일치 `e4c08d4` · [#106 C 조건부 동의](https://github.com/hsminu/MCP-Runtime-Guard/issues/106#issuecomment-6505180007), #57 사례 C 확인 대기 · 후속: A 경고 화면(A47·A128) · [기록](archive/b/B1.7-B1.9-code-s.md)
+- [x] B1.9 SCAN-01 B `Finding.code`가 C 번역 집합과 일치 `e4c08d4` · [#106 C 조건부 동의](https://github.com/hsminu/MCP-Runtime-Guard/issues/106#issuecomment-6505180007), [#57 사례 C 확인 완료](https://github.com/hsminu/MCP-Runtime-Guard/pull/109#issuecomment-6506140831) · 후속: A 경고 화면(A47·A128) · [기록](archive/b/B1.7-B1.9-code-s.md)
 
 ## B2 · 순수 정책과 등급 누적
 
@@ -52,7 +52,7 @@
 - [x] B3.8 DESC-01 검토된 설명 필드·Catalog 연결·합의 전 제안 · [기록](archive/b/B3.8-reviewed-description.md)
 - [x] B3.9 파싱된 설정·Profile 로딩 1단계와 policy_version 계산(10-18 결정) · [기록](archive/b/B3.9-profile-loading.md)
 - [x] B3.10 정책 변경 준비·적용·Task 정지·승인 무효화(10-18 결정) · [기록](archive/b/B3.10-policy-change.md)
-- [x] B3.11 CFG-01 B 변환 함수 완료, C 파일 연산(C2.14)·A 시작/저장 연결(B3.12) 대기 · [기록](archive/b/B3.11-settings-file.md)
+- [x] B3.11 CFG-01 B 변환 함수 완료, C 파일 연산(C2.14)·A 시작/저장 연결 병합([#44](https://github.com/hsminu/MCP-Runtime-Guard/pull/44)·[#52](https://github.com/hsminu/MCP-Runtime-Guard/pull/52)); B3.12 인수 범위는 별도 대조 · [기록](archive/b/B3.11-settings-file.md)
 - [ ] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 — 막힘: C2.14 파일 연산·A 연결
 - [x] B3.13 DESC-01 검토 설명은 PENDING 저장→재활성화→재시작 후 새 세션에 적용, 원격 설명 별도 영속화 없음·화면 전 빈 설명([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · 후속: A 검토 입력 화면
 - [x] B3.14 EXE-01 실행 파일 고정 설정 필드 B 구현 · A 등록 화면·launcher 연결 대기 · [기록](archive/b/B3.14-exe01-settings-fields.md)
@@ -121,9 +121,9 @@
 - [ ] B7.2 A의 [Guard](https://github.com/hsminu/MCP-Runtime-Guard/pull/47#pullrequestreview-5669225500)·[Catalog](https://github.com/hsminu/MCP-Runtime-Guard/pull/36#pullrequestreview-5653883833), C의 [승인·예외](https://github.com/hsminu/MCP-Runtime-Guard/pull/32#pullrequestreview-5649334182)·[해시](https://github.com/hsminu/MCP-Runtime-Guard/pull/89#issuecomment-6497627122) 리뷰 확인 · C `core/policy.py`·`services/response_gate.py` 직접 리뷰 근거 미확인
 - [x] B7.3 10-15 AGT 제거 결정으로 대체 · [기록](archive/b/B7.3-agt-decision-superseded.md)
 - [x] B7.4 AGT-03 폐기 · [기록](archive/b/B7.4-agt-worker-retired.md)
-- [ ] B7.5 정규식 전체 스키마 검증(SCHEMA-01) · 2단계 B 구현(#B14 예정), A 조립 연결·C worker launcher 대기 · [기록](archive/b/B7.5-2-schema-boundary.md) · [1단계 기록](archive/b/B7.5-1-schema-jobs.md) · [연결안](archive/b-schema-validation-proposal.md)
+- [ ] B7.5 정규식 전체 스키마 검증(SCHEMA-01) · 2단계 B 구현 [#109](https://github.com/hsminu/MCP-Runtime-Guard/pull/109) 병합, [A 조립 연결](https://github.com/hsminu/MCP-Runtime-Guard/pull/109#issuecomment-6505998748)·[C worker launcher](https://github.com/hsminu/MCP-Runtime-Guard/pull/109#issuecomment-6506140831) 후속 · [기록](archive/b/B7.5-2-schema-boundary.md) · [1단계 기록](archive/b/B7.5-1-schema-jobs.md) · [연결안](archive/b-schema-validation-proposal.md)
 - [x] B7.6 B6 저장소의 C 리뷰·독립 검증 [#103](https://github.com/hsminu/MCP-Runtime-Guard/pull/103)·[#104](https://github.com/hsminu/MCP-Runtime-Guard/pull/104) 병합 · B6.8의 영속 순번·실패 감사 후속은 별도
-- [x] B7.7 C 보안 모듈·Registry·Scanner·CI·테스트 B 리뷰 완료 · [#102](https://github.com/hsminu/MCP-Runtime-Guard/issues/102), C 결함 2건 후속 및 B 재확인 대기
+- [x] B7.7 C 보안 모듈·Registry·Scanner·CI·테스트 B 리뷰 완료 · [#102 종료](https://github.com/hsminu/MCP-Runtime-Guard/issues/102) · [#105 병합·B 재검증](https://github.com/hsminu/MCP-Runtime-Guard/pull/105#issuecomment-6505263530) 완료 · C 결함 2건은 C 후속
 - [ ] B7.8 C 독립 통합 인수 결과와 대상 커밋 기록 — 막힘: C
 - [x] B7.9 확정 계약·reason_code·상태 전이·예외 주입 경계·검증 결과를 A·C에 전달 · [기록](archive/b/B7.9-contract-handoff.md)
 - [x] B7.10 공통 문서 미결 상태 갱신 제안 · [PR #18](https://github.com/hsminu/MCP-Runtime-Guard/pull/18) · [기록](archive/b/B7.10-contract-status-proposal.md)
