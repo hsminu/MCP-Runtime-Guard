@@ -72,8 +72,9 @@ TAMPER = {
 
 STOPPED = "STORE_INTEGRITY_FAILED"
 RECOVERED = "recovered"
-# 기대 결과. 요청 결속 세 필드는 시작 점검이 대조하지 않는다(발견 C-C3-01). 그래도 옛 승인은
-# 실행되지 않고 전송 0이다. 감사까지 함께 낮춘 변조는 대조 근거가 없어 복구된다(알려진 한계).
+# 기대 결과. 요청 결속 세 필드는 시작 점검 범위 밖이다(C-C3-01, #103 B 판단). 소비 시점에
+# B6.10 결속 검사가 막아 옛 승인은 실행되지 않고 전송 0이다. 감사까지 함께 낮춘 변조는 대조
+# 근거가 없어 복구된다(알려진 한계).
 EXPECTED = dict.fromkeys(TAMPER, STOPPED) | {
     "request-epoch": RECOVERED,
     "request-kind": RECOVERED,

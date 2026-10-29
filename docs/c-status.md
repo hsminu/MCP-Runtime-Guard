@@ -59,7 +59,7 @@
 - [ ] C3.6 쓰기·감사·잠금·COMMIT/ROLLBACK 실패와 중단 결함 주입
 - [x] C3.7 원문 비기록·재시작 승인 미복원·SEND 재전송 0: 전송 다섯 종류의 인자 표지가 DB·WAL·앱 폴더 전 파일에 0(자원 ID 양성 대조), 재시작 미복원은 T11·재전송 0은 C5.6. 결과 본문 표지는 C5.2 뒤 · [기록](archive/c/C3.3-C3.4-C3.7-gate-and-disk.md)
 - [ ] C3.8 (Store 조회 `list_calls`·`get_call`·`list_approvals`와 요청별 계수 대조는 정식 시험으로 완료(stdio·HTTP, T01·T02·T03·응답 유실), [C3.8-1](archive/c/C3.8-1-query-counts.md)) A 화면 연결 뒤 화면 쪽 대조 — 막힘: A 화면 연결
-- [x] C3.9 DB를 직접 고친 비정상 행(관계 깨짐·모르는 상태값·등급 하향)을 시작 점검이 잡고 멈추는지 검증: 13가지 × 정상·비정상 종료. 관계·상태값·legacy는 `STORE_INTEGRITY_FAILED`로 멈춤, 요청 epoch·kind·revision 변조는 멈추지 않고 복구(실행 0, C-C3-01 B 판단 대기) · [결정](contracts.md#사용자-결정) · [기록](archive/c/C3.9-C3.10-startup-tamper.md)
+- [x] C3.9 DB를 직접 고친 비정상 행(관계 깨짐·모르는 상태값·등급 하향)을 시작 점검이 잡고 멈추는지 검증: 13가지 × 정상·비정상 종료. 관계·상태값·legacy는 `STORE_INTEGRITY_FAILED`로 멈춤, 요청 epoch·kind·revision 변조는 멈추지 않고 복구(실행 0, C-C3-01: 소비 시점 B6.10이 막으므로 시작 점검 범위 밖, #103 B 판단) · [결정](contracts.md#사용자-결정) · [기록](archive/c/C3.9-C3.10-startup-tamper.md)
 - [x] C3.10 시작 복구가 감사 기록과 맞지 않는 등급·미분류 표시를 복구하지 않는지 검증: 등급 하향·승격 이력 삭제·미분류 해제는 멈춤, 감사까지 함께 낮춘 변조는 근거가 없어 복구(실행 0, 결정의 한계) · [기록](archive/c/C3.9-C3.10-startup-tamper.md)
 
 ## C4 · Registry와 Scanner
