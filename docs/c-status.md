@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-28 · main `6d5cbf7` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-29 · main `0033523` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -33,7 +33,7 @@
 - [x] C2.6 stdio MCP 서버 실행 입구(EXE-01, `security/launcher.py`): `check_stdio_values`(command·args·env_allow 검사), `pin_executable`(등록 지문), `launch_mcp_server`(연결마다 재검사·지문 대조, 지문 없으면 `LAUNCH_EXECUTABLE_UNPINNED`, 서버별 폴더 `AppFolders.server_folder`·연결별 stderr·기본 환경 5개와 서버 폴더 TEMP·`env_allow`만). A 화면·연결과 B 지문 필드(#48)는 각 담당 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.6-mcp-server-launch.md)
 - [x] C2.7 ids(`security/ids.py`): `new_id`·`new_suffix`·`new_token`·`token_matches`, `secrets`만 사용. C 파일 6개의 직접 생성을 옮기고 L2 가짜 모델 인증 비교를 `compare_digest`로. `src`의 `random` import와 C 모듈의 직접 생성을 `test_ids.py`가 막음(Semgrep은 C2.9). 비밀값 누락은 기존 고정 코드(`SCAN_LLM_KEY_MISSING_OR_INVALID`, 대체값 없음). A 모듈 전환은 A 요청 · [기록](archive/c/C2.7-ids.md)
 - [ ] C2.8 구조화 감사에서 원문·인자·인증정보 제외, 마스킹 필터
-- [ ] C2.9 단일 구현 지점을 Semgrep·import-linter로 강제 — 막힘: CI 2단계(C6.3)
+- [x] C2.9 단일 구현 지점 정적 강제: import-linter 계약 7개(core 순수·MCP SDK는 transport만·계층·ui는 bridge로·sqlite3는 storage만·subprocess는 launcher만·HTTP 클라이언트는 adapters만, `tools/ci/importlinter.ini`)와 Semgrep 규칙 10개(13.4절, `tools/ci/semgrep.yml`, CI Linux 작업). 예외 4곳(SG-01–04, B 3곳은 주석만), 설계 경계 6곳은 파일 제외 없이 줄 단위 표시(A 1·B 5, 주석만) · [기록](archive/c/C2.9-ci-static-checks.md)
 - [x] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용(`secrets.store_scanner_key`·`save_scanner_key`(A `KeySaver`)·`load_scanner_key`·`scanner_key_tail`·`delete_scanner_key`·`scanner_key_environ`). A 화면 연결과 #59 뒤 검사기 연결은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.10-scanner-key-store.md)
 - [x] C2.12 codex.exe 실행 launcher(`security/launcher.py`): 쓰기 금지 핸들로 실행마다 SHA-256 대조, 허용 목록 환경, `-c sqlite_home='<Task 폴더>'`, 멈춘 채 생성 후 Job Object 할당, stdin/stdout은 A `CodexPipes` 형식, stderr는 Task 폴더 격리 파일, `close()`로 종료 확인(#21 2번). stdio MCP 서버도 같은 `launch_process`를 쓴다(#21 5번) · [기록](archive/c/C2.12-codex-launcher.md)
 - [x] C2.13 앱 폴더 경로·권한(`security/paths.py`): `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 codex 설치·CODEX_HOME·Task 폴더·config에 사용자·SYSTEM만의 보호된 DACL, 단일 실행 잠금, Task 폴더 생성·삭제와 앱 시작 때 남은 폴더 삭제(#21 6번) · [기록](archive/c/C2.13-app-folders.md)
@@ -99,8 +99,8 @@
 
 - [x] C6.1 CI 1단계(Windows, Ruff·포맷·mypy·단위) · #4 · [통합 기록](archive/integration-a-b.md)
 - [x] C6.2 contract 테스트 Windows 수정(socket 차단·SDK import 경로·deadline) · #7
-- [ ] C6.3 CI 2단계(import-linter·Bandit·Semgrep·pip-audit, pip-audit 예외 없음)
-- [ ] C6.4 contract 테스트 CI 편입(C6.3과 함께)
+- [ ] C6.3 CI 2단계(import-linter·Bandit·Semgrep·pip-audit, pip-audit 예외 없음). import-linter·Bandit(`-ll`)·Semgrep은 CI에 넣음(C2.9). pip-audit은 의존성 정리(C6.24) 뒤 · [기록](archive/c/C2.9-ci-static-checks.md)
+- [x] C6.4 contract 테스트 CI 편입: Windows 작업에서 `tests/contract` 45개(외부 연결 차단) · [기록](archive/c/C2.9-ci-static-checks.md)
 - [ ] C6.5 실험 스크립트 Windows 수정(socket 차단·`PYTHONPATH`·인코딩)과 MCP 정의 수집기 저장소 반영
 - [ ] C6.6 Windows Cisco 실험(2026-10-14~15) 완료 기록 작성
 - [ ] C6.7 Fake·실제 Transport·Store·AccessChecker·Scanner에 같은 계약 테스트
@@ -120,6 +120,7 @@
 - [x] C6.21 CODEX_HOME `secrets/` 허용(알려진 암호문·임시 파일만, 해시 대조 제외, 앱 시작 때 유지)과 L1 `include_permissions_instructions`·`include_environment_context` = false, `codex.lock.json` 갱신(C-CODEX-08) · [기록](archive/c/C6.21-codex-secrets-and-prompt-blocks.md)
 - [ ] C6.22 CI에서 실제 L2: 워크플로에서 `tools/install_codex.py`로 codex.exe를 받고 `GUARD_TEST_CODEX_EXE`로 `test_real_codex_passes_l2`를 켬(C6.14 후속, 공용 CI 파일 변경이라 따로 제안)
 - [x] C6.23 #41 A 리뷰 후속(L2): 전체 시간 상한 `deadline_s`(기본 30초)와 `L2_DEADLINE_EXCEEDED`, 최악 시간·취소·예외 경로 설명, 가짜 모델 서버 밖 통신은 관찰하지 않는다는 범위 명시, L2·L3 허용 항목 같음 테스트 · [기록](archive/c/C6.23-l2-a-review-followup.md)
+- [ ] C6.24 의존성 취약점 정리(pip-audit 16건, C-DEP-01–03): certifi·cryptography·filelock lock 갱신, mcp 1.30.0(A·B 합의, A transport 재검증), litellm 1.93.2는 예외 등록(Scanner 고정, 2026-10-29 사용자 결정). 끝나면 pip-audit을 실패로 막는 단계로 · [기록](archive/c/C2.9-ci-static-checks.md)
 
 ## 인수 기준
 

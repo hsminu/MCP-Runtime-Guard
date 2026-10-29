@@ -489,8 +489,8 @@ def test_tools_list_changed_after_the_comparison_blocks_the_server_for_this_run(
     assert "secret-notice-text" not in caplog.text
 
 
-def test_tools_list_changed_before_the_comparison_does_not_block(tmp_path) -> None:
-    """LIST-01: the comparison itself reads the listing announced before it."""
+def test_tools_list_changed_before_the_first_listing_response_does_not_block(tmp_path) -> None:
+    """LIST-01/A140: an initial notice precedes every received listing page."""
     peer = Peer([READ_DEFINITION], notify_on_list=True)
     outcome, views, view = asyncio.run(
         submit_call(tmp_path, peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
@@ -797,6 +797,30 @@ def test_product_bootstrap_with_invalid_profile_closes_the_store(tmp_path):
     asyncio.run(run())
     with SQLiteStore(path, audit_id_factory=lambda: "probe"):
         pass  # the failed start released the database
+    path.unlink()  # its connection closed too: Windows refuses to delete an open database
+
+
+def test_a_failed_start_whose_store_close_is_unconfirmed_reports_cleanup(tmp_path, monkeypatch):
+    """#58: the Store's close only starts it. Unconfirmed, the bridge sees a cleanup failure."""
+    from guard_app.services import session_runtime
+    from guard_app.services.bridge_types import BackendCleanupError
+
+    class Late(SQLiteStore):
+        async def wait_closed(self, timeout):  # noqa: ASYNC109 - the Store port's signature
+            await super().wait_closed(timeout)
+            return False
+
+    monkeypatch.setattr(session_runtime, "SQLiteStore", Late)
+    peer = Peer([READ_DEFINITION])
+
+    async def run() -> None:
+        with pytest.raises(BackendCleanupError):
+            await session_runtime.bootstrap_product(
+                str(tmp_path / "late.db"),
+                product=inputs(peer, Registry("a" * 64), {"profile": {"id": "x"}}),
+            )
+
+    asyncio.run(run())
 
 
 def test_policy_view_is_built_from_the_profile_and_registry(tmp_path) -> None:

@@ -16,12 +16,12 @@ async def fail_closed[T](
     """예약 전 실패를 변환한다. 감사 실패 시 공급된 global-halt 경계를 사용한다."""
     try:
         return await operation()
-    except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
+    except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
         if on_containment_error is None:
             return await on_error(error)
         try:
             return await on_error(error)
-        except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001
+        except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
             return on_containment_error(containment_error)
 
 
@@ -44,18 +44,18 @@ async def after_dispatch[T](
     """
     try:
         return await operation()
-    except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
+    except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
         cancelled = error if isinstance(error, asyncio.CancelledError) else None
         try:
             result = await on_error(error)
-        except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001
+        except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
             result = on_containment_error(containment_error)
             if cancelled is None and isinstance(containment_error, asyncio.CancelledError):
                 cancelled = containment_error
         if cancelled is not None and on_cancelled is not None:
             try:
                 on_cancelled(result)
-            except (Exception, asyncio.CancelledError) as callback_error:  # noqa: BLE001
+            except (Exception, asyncio.CancelledError) as callback_error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
                 try:
                     on_containment_error(callback_error)
                 finally:

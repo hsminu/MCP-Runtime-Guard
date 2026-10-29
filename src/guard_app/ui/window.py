@@ -491,6 +491,10 @@ class GuardWindow(QMainWindow):
         login = self.codex_login_info
         login.read_requested.connect(lambda: bridge.request_account("account_read"))
         login.device_login_requested.connect(lambda: bridge.request_account("account_login_device"))
+        login.browser_login_requested.connect(
+            lambda: bridge.request_account("account_login_browser")
+        )
+        bridge.command_changed.connect(login.account_command_changed)
         login.cancel_requested.connect(
             lambda login_id: bridge.request_account("account_cancel_login", target_id=login_id)
         )
