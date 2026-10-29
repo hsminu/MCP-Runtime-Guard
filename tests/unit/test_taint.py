@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from itertools import product
+
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -79,10 +81,11 @@ def test_rising_reads_preserve_all_escalation_evidence() -> None:
     )
 
 
-@pytest.mark.parametrize("label", list(Label))
-def test_identical_known_read_returns_original_state(label: Label) -> None:
-    state = make_state(high_watermark=label, last_read_label=label)
-    assert merge(state, label, "document.txt", 0) is state
+def test_identical_known_read_returns_original_state(subtests) -> None:
+    for case_index, (label,) in enumerate(product(list(Label))):
+        with subtests.test(case=case_index):
+            state = make_state(high_watermark=label, last_read_label=label)
+            assert merge(state, label, "document.txt", 0) is state
 
 
 def test_classification_failure_halts_and_retains_known_history() -> None:
@@ -104,34 +107,34 @@ def test_repeated_classification_failure_without_security_change_is_idempotent()
     assert merge(halted, None, "unknown-source", 2) is halted
 
 
-@pytest.mark.parametrize(
-    ("unclassified", "status"),
-    [(False, TaskStatus.HALTED), (True, TaskStatus.RUNNING)],
-)
-def test_classification_failure_versions_each_actual_security_transition(
-    unclassified: bool, status: TaskStatus
-) -> None:
-    state = make_state(unclassified=unclassified, status=status)
-    result = merge(state, None, "unknown-source", 1)
-    assert result.unclassified is True
-    assert result.status is TaskStatus.HALTED
-    assert result.security_version == state.security_version + 1
+def test_classification_failure_versions_each_actual_security_transition(subtests) -> None:
+    for case_index, ((unclassified, status),) in enumerate(
+        product([(False, TaskStatus.HALTED), (True, TaskStatus.RUNNING)])
+    ):
+        with subtests.test(case=case_index):
+            state = make_state(unclassified=unclassified, status=status)
+            result = merge(state, None, "unknown-source", 1)
+            assert result.unclassified is True
+            assert result.status is TaskStatus.HALTED
+            assert result.security_version == state.security_version + 1
 
 
-@pytest.mark.parametrize("label", list(Label))
-def test_known_read_never_clears_unclassified_or_resumes_halted_task(label: Label) -> None:
-    halted = merge(make_state(), None, "unknown-source", 1)
-    result = merge(halted, label, "known-source", 2)
-    assert result.unclassified is True
-    assert result.status is TaskStatus.HALTED
+def test_known_read_never_clears_unclassified_or_resumes_halted_task(subtests) -> None:
+    for case_index, (label,) in enumerate(product(list(Label))):
+        with subtests.test(case=case_index):
+            halted = merge(make_state(), None, "unknown-source", 1)
+            result = merge(halted, label, "known-source", 2)
+            assert result.unclassified is True
+            assert result.status is TaskStatus.HALTED
 
 
-@pytest.mark.parametrize(
-    "status", [TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME, TaskStatus.CLOSED]
-)
-def test_known_observation_does_not_resume_terminal_task(status: TaskStatus) -> None:
-    state = make_state(status=status)
-    assert merge(state, Label.CONFIDENTIAL, "document.txt", 1).status is status
+def test_known_observation_does_not_resume_terminal_task(subtests) -> None:
+    for case_index, (status,) in enumerate(
+        product([TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME, TaskStatus.CLOSED])
+    ):
+        with subtests.test(case=case_index):
+            state = make_state(status=status)
+            assert merge(state, Label.CONFIDENTIAL, "document.txt", 1).status is status
 
 
 def test_store_row_revision_and_task_identity_are_preserved() -> None:
@@ -146,18 +149,24 @@ def test_store_row_revision_and_task_identity_are_preserved() -> None:
         assert result.policy_version == state.policy_version
 
 
-@pytest.mark.parametrize("observed", [False, True, 0, 1, 2, 0.0, "PUBLIC", object()])
-def test_non_label_observations_are_rejected_without_coercion(observed: object) -> None:
-    state = make_state()
-    with pytest.raises(TypeError, match="^READ 관측 등급은 Label 또는 None이어야 한다$"):
-        merge(state, observed, "document.txt", 1)
-    assert state.high_watermark is Label.PUBLIC
+def test_non_label_observations_are_rejected_without_coercion(subtests) -> None:
+    for case_index, (observed,) in enumerate(
+        product([False, True, 0, 1, 2, 0.0, "PUBLIC", object()])
+    ):
+        with subtests.test(case=case_index):
+            state = make_state()
+            with pytest.raises(TypeError, match="^READ 관측 등급은 Label 또는 None이어야 한다$"):
+                merge(state, observed, "document.txt", 1)
+            assert state.high_watermark is Label.PUBLIC
 
 
-@pytest.mark.parametrize("seq", [True, False, "1", 1.0, None])
-def test_sequence_requires_exact_integer(seq: object) -> None:
-    with pytest.raises(TypeError, match="^관측 순서는 정수여야 한다$"):
-        merge(make_state(), Label.PUBLIC, "document.txt", seq)
+def test_sequence_requires_exact_integer(subtests) -> None:
+    for case_index, (seq,) in enumerate(product([True, False, "1", 1.0, None])):
+        with (
+            subtests.test(case=case_index),
+            pytest.raises(TypeError, match="^관측 순서는 정수여야 한다$"),
+        ):
+            merge(make_state(), Label.PUBLIC, "document.txt", seq)
 
 
 def test_sequence_cannot_be_negative() -> None:
@@ -165,22 +174,25 @@ def test_sequence_cannot_be_negative() -> None:
         merge(make_state(), Label.PUBLIC, "document.txt", -1)
 
 
-@pytest.mark.parametrize("source_id", [None, False, 1, b"document.txt"])
-def test_source_id_requires_string(source_id: object) -> None:
-    with pytest.raises(TypeError, match="^관측 출처는 문자열이어야 한다$"):
-        merge(make_state(), Label.PUBLIC, source_id, 1)
+def test_source_id_requires_string(subtests) -> None:
+    for case_index, (source_id,) in enumerate(product([None, False, 1, b"document.txt"])):
+        with (
+            subtests.test(case=case_index),
+            pytest.raises(TypeError, match="^관측 출처는 문자열이어야 한다$"),
+        ):
+            merge(make_state(), Label.PUBLIC, source_id, 1)
 
 
-@pytest.mark.parametrize("source_id", ["", "PRIVATE_SOURCE_MARKER\ud800"])
-@pytest.mark.parametrize("observed", [Label.PUBLIC, Label.CONFIDENTIAL, None])
-def test_invalid_source_is_rejected_even_when_no_escalation_is_needed(
-    source_id: str, observed: Label | None
-) -> None:
-    with pytest.raises(
-        ValueError, match="^관측 출처는 비어 있지 않은 UTF-8 문자열이어야 한다$"
-    ) as captured:
-        merge(make_state(), observed, source_id, 1)
-    assert "PRIVATE_SOURCE_MARKER" not in str(captured.value)
+def test_invalid_source_is_rejected_even_when_no_escalation_is_needed(subtests) -> None:
+    for case_index, (observed, source_id) in enumerate(
+        product([Label.PUBLIC, Label.CONFIDENTIAL, None], ["", "PRIVATE_SOURCE_MARKER\ud800"])
+    ):
+        with subtests.test(case=case_index):
+            with pytest.raises(
+                ValueError, match="^관측 출처는 비어 있지 않은 UTF-8 문자열이어야 한다$"
+            ) as captured:
+                merge(make_state(), observed, source_id, 1)
+            assert "PRIVATE_SOURCE_MARKER" not in str(captured.value)
 
 
 _labels = st.sampled_from(list(Label))
