@@ -78,7 +78,7 @@ jobs:
           SEMGREP_ENABLE_VERSION_CHECK: "0"
           SEMGREP_SEND_METRICS: "off"
         run: .semgrep/bin/semgrep --test --metrics=off --config tools/ci/semgrep.yml tools/ci/semgrep.py
-      - name: Semgrep exceptions match the register (SG-01..04)
+      - name: Semgrep exceptions match the register (SG-01..04) and the designed boundaries
         env:
           SEMGREP_ENABLE_VERSION_CHECK: "0"
           SEMGREP_SEND_METRICS: "off"
