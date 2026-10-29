@@ -9,7 +9,7 @@
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
 | AGT-02 감사 범위 합의 | A·B·C | B6.15 |
-| A66 세션 관리자 계약 합의(legacy 시연이 ModelClient 사용) | A·B·C | B1.7 |
+| ModelClient 예제 이동에 관한 결정 요청 답변 | A·C | B1.7 |
 | 자원 ID 판정기의 제품 조립 연결 | A | B3.3 |
 | 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 합의 | A·B·C | B6.19 |
 | 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
@@ -27,9 +27,9 @@
 - [x] B1.4 Guard 결과 타입과 Transport·AccessChecker·Scanner·Store·ModelClient 계약 초안
 - [ ] B1.5 명령·이벤트 payload, 원시 결과 격리·공개 결과 구분, 계수 연결 확정 — 막힘: A·C 합의
 - [x] B1.6 policy_version·security_version·row_revision·fingerprint 역할 분리와 3인 합의 대조 · [기록](archive/b/B6.10-B6.12-unblocked.md)
-- [ ] B1.7 ModelClient 제거·세션 관리자 DTO(TaskIdentity 등, #20 5번) — 막힘: A66 세션 관리자 계약 합의(legacy 시연이 ModelClient 사용)
+- [ ] B1.7 ModelClient 공통 포트 제거 · B 구현(Protocol을 examples로 이동), [결정 요청 이슈](https://github.com/hsminu/MCP-Runtime-Guard/issues/106) 기본값 · A 예제 리뷰·A/C 답변 대기
 - [x] B1.8 SCAN-01 DTO 확장·표시 검사 오탐/명시적 무해화 보완·합의 전 제안 · [기록](archive/b/B1.8-scan-report.md) · Hypothesis 반복 수 1,000 → 200(#100 `17df1ce`, 나머지 두 시험은 300 → 200), C가 4개 시험을 5,000회로 1회 확인해 반례 없음([#100 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/100#issuecomment-6503859925))
-- [ ] B1.9 SCAN-01 필드·고정 코드/무해화 합의·C Scanner 번역·A 경고 표시 — 막힘: 3인 합의·A/C 연결
+- [ ] B1.9 SCAN-01 B 도메인 Finding.code 제한 보완 · [결정 요청 이슈](https://github.com/hsminu/MCP-Runtime-Guard/issues/106) 기본값 · A 경고 화면·C 확인 대기
 
 ## B2 · 순수 정책과 등급 누적
 
