@@ -231,7 +231,7 @@
 - [x] A170 #89의 `GUARD_CLOSED` 사유를 화면 문구로("미확인" 대신), 요청·승인 행 사유마다 문구가 있는지 시험 · [기록](archive/a/A170-guard-closed-reason-text.md)
 - [x] A171 #92 조회 연결 시험의 Qt 객체·순환 참조를 메인 스레드에서 정리(중단 원인 미확정) · [기록](archive/a/A171-store-query-link-qt-cleanup.md)
 - [x] A172 #92 GC·메인 스레드 지연 삭제 중단 경로 조사(최종 C++ 대상 미확정) · [기록](archive/a/A172-store-query-link-abort-cause.md)
-- [ ] A 화면 시험 묶음이 모두 통과한 뒤 종료 중 abort(main에서도 재현) — A 화면 시험 전체의 Qt 객체 정리 방법 결정, 공용 conftest는 합의 필요 · [근거](archive/a/A172-store-query-link-abort-cause.md)
+- [x] A 화면 시험 묶음이 모두 통과한 뒤 종료 중 abort(main에서도 재현) — 원인은 부모 없는 하위 레이아웃의 Qt 위젯 이중 소유, A178에서 제거(공용 conftest 불필요) · [기록](archive/a/A178-qt-double-ownership.md)
 - [ ] 제품 `run_application` 창·페이지 수명 정리(백엔드 종료 확인 → 남은 이벤트 처리 → 창 삭제) · [근거](archive/a/A172-store-query-link-abort-cause.md)
 - [x] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 · [기록](archive/a/A174-l2-failure-codes-from-c.md)
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
@@ -240,6 +240,7 @@
 - [x] A175 승인 목록 서버 거르기를 bridge의 B 서버 ID 규칙으로 검사 · [기록](archive/a/A175-approval-server-filter-id.md)
 - [x] A176 #99 B 리뷰 제안: 저장기 없음은 Registry 쓰기 전에 거부됨을 시험으로 고정 · [기록](archive/a/A176-missing-saver-order.md)
 - [x] A177 #94 F-02: 도구 설정 화면에 도구 단위 READ 등급 안내 추가 · [기록](archive/a/A177-tool-read-grade-hint.md)
+- [x] A178 #92 중단 원인: 부모 없는 하위 레이아웃이 남긴 Qt 위젯 이중 소유 제거·소유 회귀 시험 · [기록](archive/a/A178-qt-double-ownership.md)
 
 ## 통합·패키징
 

@@ -113,7 +113,9 @@ class ApprovalListPage(QWidget):
         self.lane_tabs.currentChanged.connect(self._filters_changed)
         layout.addWidget(self.lane_tabs)
 
+        # Attach before adding widgets: an orphan layout leaves them Python-owned (A178).
         self.filters = QBoxLayout(QBoxLayout.Direction.TopToBottom)
+        layout.addLayout(self.filters)
         self.search = QLineEdit()
         self.search.setPlaceholderText("승인·Task·요청 ID 검색")
         self.search.setAccessibleName("승인 검색어")
@@ -130,7 +132,6 @@ class ApprovalListPage(QWidget):
         self.sort.setAccessibleName("승인 목록 정렬")
         self.sort.currentIndexChanged.connect(self._filters_changed)
         self.filters.addWidget(self.sort)
-        layout.addLayout(self.filters)
 
         self.state_message = StateMessage()
         layout.addWidget(self.state_message)
@@ -169,6 +170,7 @@ class ApprovalListPage(QWidget):
         layout.addWidget(self.selection_detail)
 
         self.pager = QBoxLayout(QBoxLayout.Direction.TopToBottom)
+        layout.addLayout(self.pager)
         self.count_label = plain_label("총건수 미제공 · 현재 페이지 0건", name="secondary")
         # The count takes the free width (see call_logs: it broke mid-phrase).
         self.pager.addWidget(self.count_label, 1)
@@ -184,7 +186,6 @@ class ApprovalListPage(QWidget):
         self.refresh_button.set_visual(icon="refresh")
         self.refresh_button.clicked.connect(self.refresh)
         self.pager.addWidget(self.refresh_button)
-        layout.addLayout(self.pager)
         self._update_pager()
         self._update_table_columns()
 

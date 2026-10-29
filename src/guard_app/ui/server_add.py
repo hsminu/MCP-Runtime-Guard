@@ -383,6 +383,7 @@ class ServerAddForm(QWidget):
         outer.addWidget(plain_label("MCP 서버 추가", name="pageTitle"))
 
         paste = QVBoxLayout()
+        outer.addLayout(paste)
         paste.setSpacing(8)
         paste.addWidget(plain_label("설정 붙여넣기", name="sectionTitle"))
         paste.addWidget(plain_label(PASTE_HINT, name="secondary"))
@@ -396,6 +397,7 @@ class ServerAddForm(QWidget):
         self.quick_input.setTabChangesFocus(True)
         paste.addWidget(self.quick_input)
         paste_actions = QHBoxLayout()
+        paste.addLayout(paste_actions)
         paste_actions.setSpacing(12)
         self.fill_button = KeyboardActionButton("칸 채우기")
         self.fill_button.set_visual(icon="compose", variant="soft")
@@ -404,10 +406,9 @@ class ServerAddForm(QWidget):
         paste_actions.addWidget(self.fill_button)
         self.paste_status = plain_label(name="secondary")
         paste_actions.addWidget(self.paste_status, 1)
-        paste.addLayout(paste_actions)
-        outer.addLayout(paste)
 
         common = self._new_form()
+        outer.addLayout(common)
         self.display_name = QLineEdit()
         self.display_name.setObjectName("displayNameInput")
         self.display_name.setAccessibleName("표시 이름, 비우면 서버 ID")
@@ -427,7 +428,6 @@ class ServerAddForm(QWidget):
         self.transport.addItem("Streamable HTTP", "streamable_http")
         self.transport.addItem("로컬 파일 서버", "local_file")
         common.addRow(_form_label("연결 방식"), self.transport)
-        outer.addLayout(common)
 
         self.transport_fields = QStackedWidget()
         self.transport_fields.setObjectName("transportFields")
@@ -441,6 +441,7 @@ class ServerAddForm(QWidget):
         outer.addWidget(self.transport_fields)
 
         boundary = self._new_form()
+        outer.addLayout(boundary)
         self.tier = SelectionBox()
         self.tier.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.tier.setObjectName("tierSelect")
@@ -457,7 +458,6 @@ class ServerAddForm(QWidget):
         for value, (title, code, _tone) in LABELS.items():
             _add_coded_item(self.max_label, title, value, code)
         self._add_field(boundary, "최대 수신 등급", self.max_label, "max_label")
-        outer.addLayout(boundary)
         self.boundary_notice = plain_label(name="boundaryNotice")
         outer.addWidget(self.boundary_notice)
 
@@ -479,6 +479,7 @@ class ServerAddForm(QWidget):
         self.status = plain_label(name="draftStatus")
         outer.addWidget(self.status)
         actions = QHBoxLayout()
+        outer.addLayout(actions)
         self._registration_actions = actions
         self.prepare_button = KeyboardActionButton("입력 확인")
         self.prepare_button.set_visual(icon="check", variant="primary")
@@ -495,7 +496,6 @@ class ServerAddForm(QWidget):
         self.recheck_button.clicked.connect(self._recheck_registration)
         actions.addWidget(self.recheck_button)
         actions.addStretch(1)
-        outer.addLayout(actions)
         scroll.setWidget(content)
         shell.addWidget(scroll)
 
@@ -1155,6 +1155,7 @@ class _FolderRuleRow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         row = QHBoxLayout()
+        layout.addLayout(row)
         row.setSpacing(4)
         row.setDirection(QBoxLayout.Direction.TopToBottom)
         self._row_actions = row
@@ -1171,7 +1172,6 @@ class _FolderRuleRow(QWidget):
         self.remove_button = KeyboardActionButton("삭제")
         self.remove_button.setAccessibleName("이 폴더 규칙 삭제")
         row.addWidget(self.remove_button)
-        layout.addLayout(row)
         self.error = plain_label(name="folderRuleError")
         self.error.setAccessibleName("폴더 규칙 입력 오류")
         self.error.setVisible(False)
@@ -1230,6 +1230,7 @@ class LocalFolderRulesForm(QWidget):
         self.rules_error = plain_label(name="folderRulesError")
         outer.addWidget(self.rules_error)
         actions = QHBoxLayout()
+        outer.addLayout(actions)
         self.add_button = KeyboardActionButton("폴더 규칙 추가")
         self.add_button.setAccessibleName("하위 폴더 등급 규칙 추가")
         actions.addWidget(self.add_button)
@@ -1237,7 +1238,6 @@ class LocalFolderRulesForm(QWidget):
         self.prepare_button.setAccessibleName("입력 형식 확인 후 폴더 등급 준비")
         actions.addWidget(self.prepare_button)
         actions.addStretch(1)
-        outer.addLayout(actions)
         self.status = plain_label(name="folderDraftStatus")
         outer.addWidget(self.status)
 
