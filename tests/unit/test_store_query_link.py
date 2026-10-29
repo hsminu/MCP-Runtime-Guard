@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import os
 import threading
 from collections.abc import Callable
@@ -11,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 
 from guard_app.domain.enums import ApprovalStatus, Decision, RequestStatus, ToolKind
@@ -63,6 +65,24 @@ from .test_bridge import FakeControl, close_bridge, pump_until
 from .test_bridge import app as app
 
 NOW = datetime(2026, 10, 29, 3, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def cleanup_qt_objects():
+    application = QApplication.instance()
+    existing = set(application.topLevelWidgets()) if application is not None else set()
+    yield
+    # Leftover Qt cycles may cause an abort if a later worker thread collects them.
+    # Delete this test's widgets and collect cycles on the main thread instead.
+    assert threading.current_thread() is threading.main_thread()
+    application = QApplication.instance()
+    if application is not None:
+        for widget in application.topLevelWidgets():
+            if widget not in existing:
+                widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        application.processEvents()
+    gc.collect()
 
 
 def approval_row(number: int, *, status: ApprovalStatus = ApprovalStatus.PENDING) -> ApprovalRow:

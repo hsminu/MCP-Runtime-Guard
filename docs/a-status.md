@@ -14,7 +14,7 @@
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
 | mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
-| Windows MSIX 가상 경로의 L2 config·model catalog 비교 실패(사용자: C 수정 보류, MSIX 앱 아래에서만 실패) | C | A151·A161·A168 |
+| Windows MSIX 가상 경로의 L2 config·model catalog 비교 실패(사용자 결정으로 C가 경로 비교 수정을 맡음 · C PR 대기, MSIX 앱 아래에서만 실패) | C | A151·A161·A168 |
 | 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인([#21 알림](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6496456303)) | C | A151 |
 
 **A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
@@ -94,7 +94,7 @@
 - [ ] A19·A20 실제 codex.exe 세션 — 막힘: 세션 관리자 공통 계약 합의(막힌 것 표). L2 연결은 A151, 실제 실행 확인 남음
 - [x] A151 제품 시작에 C `run_l2`(C6.14) 1회 연결·지문 대조·고정 실패 코드·진행 표시·종료 취소 정리 · [기록](archive/a/A151-l2-startup-connection.md)
 - [x] A151 실제 codex.exe L2·API 키/ChatGPT 로그인한 CODEX_HOME 시작·정리 시간 측정(정규 앱 경로 지정) · [기록](archive/a/A151-logged-in-startup-timing.md)
-- [ ] A151 기본 제품 MSIX 경로의 L2 성공 재확인·C 인수 — 사용자 결정으로 C 경로 비교 수정 보류 · [근거](archive/a/A161-msix-l2-path-observation.md)
+- [ ] A151 기본 제품 MSIX 경로의 L2 성공 재확인·C 인수 — 사용자 결정으로 C가 경로 비교 수정을 맡음 · C PR 대기 · [근거](archive/a/A161-msix-l2-path-observation.md)
 - [x] A151 MSIX 경로 L2 재확인(수정 없음): Claude 데스크톱이 띄운 셸에서도 같은 두 코드로 실패, 패키지 밖 프로세스에서는 논리 경로도 통과 · [기록](archive/a/A168-msix-l2-host-check.md)
 - [x] A161 실제 데스크톱 MSIX 가상 경로의 L2 실패 재현·정규 경로 대조·시작/종료 계측 · [기록](archive/a/A161-msix-l2-path-observation.md)
 - [ ] A151 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인 — 막힘: C 답([#21 알림](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6496456303), 관찰은 [A162](archive/a/A162-real-run-display-followups.md))
@@ -229,6 +229,7 @@
 - [x] A163 #86 후속: 조립·목록 기록은 `startable_servers`만 시작, A155 경계 비교 제거, 서버 목록·상세에 서버별 설정 확인(`server_issue`) 표시 · [기록](archive/a/A163-pr86-followups.md)
 - [x] A163 #92 창 확인(실제 SQLite Store 행·제품 bridge, offscreen과 실제 Windows 창): 호출 로그 페이지·검색, 승인 만료 표시, 서버 상세 설정 확인 줄. 건수 줄이 구절 중간에서 끊기던 것을 고침 · [기록](archive/a/A166-pr92-window-check.md)
 - [x] A170 #89의 `GUARD_CLOSED` 사유를 화면 문구로("미확인" 대신), 요청·승인 행 사유마다 문구가 있는지 시험 · [기록](archive/a/A170-guard-closed-reason-text.md)
+- [x] A171 #92 조회 연결 시험의 Qt 객체·순환 참조를 메인 스레드에서 정리(중단 원인 미확정) · [기록](archive/a/A171-store-query-link-qt-cleanup.md)
 - [ ] A151 L2 실패 코드 사본을 C `codex_l2` 상수로 교체 — 막힘: C 상수 추가([#83 C 참고 4](https://github.com/hsminu/MCP-Runtime-Guard/pull/83#issuecomment-6493041009))
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
