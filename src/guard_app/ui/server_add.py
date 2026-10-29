@@ -57,6 +57,7 @@ _MAX_ARGS_JSON_CHARS = 65_536
 _MAX_ARGS_COUNT = 256
 _MAX_SERVER_ID_CHARS = 128
 _MAX_DISPLAY_NAME_CHARS = 256
+_DUPLICATE_ID = "현재 목록에 같은 ID가 있음. Registry에서도 다시 확인해야 함."
 _MAX_PASTE_CHARS = 65_536
 # Codex takes server IDs of ASCII letters, digits, _ and -, at most 64 long.
 _MAX_SUGGESTED_ID_CHARS = 64
@@ -354,6 +355,8 @@ class ServerAddForm(QWidget):
         self._registration_bridge: BackendBridge | None = None
         self._registration_id = ""
         self._registration_token = ""
+        # The server ID whose executable pin is being rechecked, or "".
+        self._recheck_id = ""
         self._known_ids: frozenset[str] = frozenset()
         self._validated_draft: LocalServerDraft | None = None
         self._prepared = False
@@ -718,7 +721,7 @@ class ServerAddForm(QWidget):
                 "서버 ID에 보이지 않는 문자나 제어 문자(NUL·방향 전환·zero-width 등)를 넣지 마세요."
             )
         elif server_id in self._known_ids:
-            errors["server_id"] = "현재 목록에 같은 ID가 있음. Registry에서도 다시 확인해야 함."
+            errors["server_id"] = _DUPLICATE_ID
         elif any(_id_key(server_id) == _id_key(known) for known in self._known_ids):
             errors["server_id"] = (
                 "현재 목록에 대소문자·전각 여부만 다른 같은 ID가 있음. 다른 ID를 입력하세요."
@@ -821,8 +824,17 @@ class ServerAddForm(QWidget):
             text=json.dumps(shown, ensure_ascii=False, indent=2),
         )
 
+    def _rechecking(self) -> bool:
+        return bool(self._recheck_id) and self.server_id.text().strip() == self._recheck_id
+
     def _refresh(self) -> None:
         draft, errors = self._build_draft()
+        rechecking = self._rechecking()
+        if self._recheck_id and not rechecking:
+            self._recheck_id = ""  # editing the ID ends the recheck
+        if rechecking and errors.get("server_id") == _DUPLICATE_ID:
+            # The listed ID is the server being rechecked, not a new registration.
+            del errors["server_id"]
         for key, widget in self._errors.items():
             widget.setProperty("validationError", key in errors)
             widget.setVisible(key in errors)
@@ -841,9 +853,12 @@ class ServerAddForm(QWidget):
                 notice += " CONFIDENTIAL 선택을 INTERNAL로 조정함."
             self.boundary_notice.setText(notice)
         self.prepare_button.setEnabled(draft is not None and not self._prepared)
+        self.confirm_button.setText("확인한 지문 저장" if rechecking else "확인한 내용으로 등록")
         self.preview.setPlainText(
             self._preview_for(draft).text
             if draft is not None
+            else "기존 서버의 실행 파일 지문만 다시 확인함. 다른 등록 내용은 바뀌지 않음."
+            if rechecking
             else "입력 오류를 고치면 등록할 내용이 표시됨."
         )
         self.status.setText(
@@ -863,6 +878,7 @@ class ServerAddForm(QWidget):
             return
         self._validated_draft = draft
         self._prepared = True
+        self._recheck_id = ""
         self._refresh()
         if self._registration_bridge is not None:
             self._send_registration(
@@ -901,6 +917,7 @@ class ServerAddForm(QWidget):
         elif event.state in (BridgeState.CLOSING, BridgeState.CLOSED, BridgeState.FAILED):
             self._registration_id = ""
             self._registration_token = ""
+            self._recheck_id = ""
             self.confirm_button.setEnabled(False)
             self.prepare_button.setEnabled(False)
             self.recheck_button.setEnabled(False)
@@ -913,7 +930,11 @@ class ServerAddForm(QWidget):
         self.confirm_button.setEnabled(False)
         self.prepare_button.setEnabled(False)
         self.recheck_button.setEnabled(False)
-        self.status.setText("확인 중 · 아직 등록 결과가 아님.")
+        self.status.setText(
+            "확인 중 · 아직 지문 저장 결과가 아님."
+            if self._rechecking()
+            else "확인 중 · 아직 등록 결과가 아님."
+        )
         bridge.request_registration(request, command_id=self._registration_id)
 
     def _confirm_registration(self) -> None:
@@ -924,9 +945,9 @@ class ServerAddForm(QWidget):
 
     def _recheck_registration(self) -> None:
         self._registration_token = ""
-        self._send_registration(
-            RegistrationRequest("recheck", server_id=self.server_id.text().strip())
-        )
+        self._recheck_id = self.server_id.text().strip()
+        self._refresh()
+        self._send_registration(RegistrationRequest("recheck", server_id=self._recheck_id))
 
     def _registration_command(self, event: CommandEvent) -> None:
         if event.command_id == self._registration_id and event.stage in (
@@ -964,10 +985,16 @@ class ServerAddForm(QWidget):
             self.status.setText(
                 "실행 파일 지문이 바뀜. 다시 확인하세요."
                 if view.code == "REG_PIN_CHANGED"
+                else "표시된 지문을 확인한 뒤 지문 저장 버튼을 누르세요."
+                if self._rechecking()
                 else "표시된 내용을 확인한 뒤 등록 버튼을 누르세요."
             )
             return
         self.confirm_button.setEnabled(False)
+        if view.code == "REG_RECHECK_UNAVAILABLE":
+            # Not a recheck target, so the duplicate hint applies again.
+            self._recheck_id = ""
+            self._refresh()
         messages = {
             "REG_FOLDER_INVALID": (
                 "폴더 검증 거부. 존재하는 루트와 하위 폴더를 고르고 겹친 규칙·등급을 확인하세요."

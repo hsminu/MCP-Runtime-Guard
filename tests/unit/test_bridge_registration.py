@@ -309,6 +309,56 @@ def test_form_confirmation_ignores_stale_reply_and_clears_on_edit():
         assert not form._registration_token
 
 
+def test_pin_recheck_is_not_shown_as_a_duplicate_registration(monkeypatch):
+    """A128 real-run follow-up: rechecking a listed server's executable is not a
+    new registration, so the duplicate hint and the register wording stay away."""
+    sent = []
+    with registration_form() as form:
+        bridge = BackendBridge(lambda: None)
+        monkeypatch.setattr(
+            bridge, "request_registration", lambda req, **kw: sent.append((req, kw))
+        )
+        form.attach_registration(bridge)
+        form.set_known_ids({"local"})
+        form.server_id.setText("local")
+        error = form._errors["server_id"]
+        assert not error.isHidden()
+        assert error.text().startswith("현재 목록에 같은 ID가 있음")
+        assert not form.prepare_button.isEnabled()
+        form.recheck_button.click()
+        request, kw = sent[-1]
+        assert (request.action, request.server_id) == ("recheck", "local")
+        assert error.isHidden()
+        assert form.status.text() == "확인 중 · 아직 지문 저장 결과가 아님."
+        form._registration_result(
+            RegistrationView(
+                "REG_CONFIRM_REQUIRED",
+                command_id=kw["command_id"],
+                token=new_id("preview"),
+                command="C:/server.exe",
+                size=20,
+                sha256="b" * 64,
+            )
+        )
+        assert form.confirm_button.text() == "확인한 지문 저장"
+        assert form.status.text() == "표시된 지문을 확인한 뒤 지문 저장 버튼을 누르세요."
+        assert "b" * 64 in form.preview.toPlainText()
+        assert error.isHidden()
+        form.confirm_button.click()
+        request, kw = sent[-1]
+        assert request.action == "confirm"
+        form._registration_result(RegistrationView("REG_PIN_SAVED", command_id=kw["command_id"]))
+        assert form.status.text().startswith("실행 파일 지문 저장 완료")
+        assert form.preview.toPlainText().startswith("기존 서버의 실행 파일 지문만")
+        assert error.isHidden()
+        # Editing the ID ends the recheck; the same ID is a duplicate again.
+        form.server_id.setText("other")
+        assert form.confirm_button.text() == "확인한 내용으로 등록"
+        form.server_id.setText("local")
+        assert not error.isHidden()
+        assert form.preview.toPlainText() == "입력 오류를 고치면 등록할 내용이 표시됨."
+
+
 def test_product_bridge_registration_updates_window_and_survives_restart(tmp_path, monkeypatch):
     from guard_app.services import product_startup, session_runtime
     from guard_app.services.bridge import BridgeState

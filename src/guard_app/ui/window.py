@@ -43,6 +43,7 @@ from .models import (
 from .overview import OverviewPage
 from .policy import PolicyPage
 from .presentation import (
+    LIFECYCLE_MESSAGES,
     PAGES,
     SETTINGS_FILE_LOCATION,
     SETTINGS_FILE_NOT_READ,
@@ -584,6 +585,13 @@ class GuardWindow(QMainWindow):
 
         def lifecycle(event: LifecycleEvent) -> None:
             self.sessions.set_ready(event.state is BridgeState.READY)
+            # Startup progress (Store, L2) also shows on the default screen,
+            # not only in the activity panel.
+            self.sessions.set_startup_notice(
+                LIFECYCLE_MESSAGES.get(event.code, "")
+                if event.state is BridgeState.STARTING
+                else ""
+            )
             if event.state in (BridgeState.FAILED, BridgeState.CLOSING, BridgeState.CLOSED):
                 self.sessions.clear_content()
 
