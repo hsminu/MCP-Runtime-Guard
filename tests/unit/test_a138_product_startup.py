@@ -575,11 +575,14 @@ async def test_settings_build_real_guard_and_own_server_exit(
         launched.append(args)
         return Process()
 
-    def http(endpoint):
+    def http(endpoint, *, read_timeout_s):
+        assert read_timeout_s == 60.0
         endpoints.append(endpoint)
         return validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
 
-    monkeypatch.setattr(assembly, "launch_mcp_server", launch)
+    from guard_app.adapters.mcp_transport import launcher_streams
+
+    monkeypatch.setattr(launcher_streams, "launch_mcp_server", launch)
     monkeypatch.setattr(assembly, "http_stream_factory", http)
     try:
         bindings = await bootstrap_product(folders, settings=SettingsFile(folders, doc, None))
@@ -591,6 +594,8 @@ async def test_settings_build_real_guard_and_own_server_exit(
             await bindings.close()
         else:
             with pytest.raises(BackendCleanupError):
+                await bindings.close()
+            with pytest.raises(SessionRuntimeError, match="CODEX_CLEANUP_UNCONFIRMED"):
                 await bindings.close()
         if transport == "stdio":
             assert len(launched) == len(closed) == 1

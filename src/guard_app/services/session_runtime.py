@@ -19,7 +19,7 @@ from typing import cast
 from guard_app.adapters.codex_protocol import build_dynamic_tools
 from guard_app.domain.contracts import TaskIdentity
 from guard_app.domain.enums import StorePrepareStep, TaskStatus
-from guard_app.domain.errors import StoreError
+from guard_app.domain.errors import DispatchError, StoreError
 from guard_app.domain.models import RecoveryItemPage, TaskState
 from guard_app.ports import SessionAudit, Store, StoreLifecycle
 from guard_app.security.ids import new_id
@@ -40,7 +40,6 @@ from guard_app.services.policy_view import PolicyView, policy_view
 from guard_app.services.product_assembly import (
     AssembledGuard,
     ProductInputs,
-    ProductServerStreams,
     assemble_guard,
 )
 from guard_app.services.product_settings import (
@@ -588,6 +587,10 @@ class SessionRuntime:
             self._running.clear()
             try:
                 self._stops_unconfirmed = not await self._close_guard()
+            except DispatchError:
+                # Transport owns launcher exit confirmation; retain refusal on repeated close.
+                self._admission.mark_cleanup_unconfirmed()
+                raise BackendCleanupError from None
             finally:
                 self._store_unconfirmed = not await self._close_store()
         self._raise_if_closing_unconfirmed()
@@ -685,7 +688,12 @@ async def bootstrap_product(
     account: AccountAccess | None = None,
     on_step: Callable[[StorePrepareStep], None] | None = None,
 ) -> BackendBindings:
-    """REC-01: no bindings or session before the activation commit ACK."""
+    """REC-01: no bindings or session before the activation commit ACK.
+
+    ``product`` is an explicit test/demo composition override. Its injected
+    streams require absent ProductInputs.folders. Normal product startup builds
+    ProductInputs from settings with the claimed folders and C launcher.
+    """
     deadline = time.monotonic() + 60.0
     run_id = new_id("run")
     store = SQLiteStore(
@@ -693,7 +701,6 @@ async def bootstrap_product(
     )
     assembled: AssembledGuard | None = None
     runtime: SessionRuntime | None = None
-    servers = ProductServerStreams(folders)
     adopted = False
     progress = BackgroundWork()
 
@@ -734,10 +741,10 @@ async def bootstrap_product(
                     product = ProductInputs(
                         profile_document,
                         registry,
-                        servers.streams(loaded),
                         store.allocate_call_seq,
                         durable_failure_audit(store),
                         operator_id="local-user",
+                        folders=folders,
                     )
         approvals: ApprovalOutcomes | None = None
         if product is not None:
@@ -747,7 +754,6 @@ async def bootstrap_product(
                 failure_audit=durable_failure_audit(store),
             )
             assembled = await assemble_guard(store, product)
-            assembled.close_servers = servers.close
             approvals = ApprovalOutcomes()
         # L2 may prepare app-wide resources, but no Task session is created here.
         runtime = SessionRuntime(
@@ -805,7 +811,5 @@ async def bootstrap_product(
                 try:
                     if assembled is not None:
                         await assembled.aclose()
-                    else:
-                        await servers.close()
                 finally:
                     await _close_failed_start(store)

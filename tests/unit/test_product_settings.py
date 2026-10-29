@@ -250,10 +250,12 @@ async def refuse_session(*_args):
 def test_product_start_reports_the_settings_and_refuses_tasks_without_a_profile(
     tmp_path, subtests, monkeypatch
 ):
+    from guard_app.services import product_assembly
+
     monkeypatch.setattr(
-        session_runtime.ProductServerStreams,
-        "streams",
-        lambda self, loaded: (
+        product_assembly,
+        "_server_streams",
+        lambda loaded, product: (
             inputs(Peer([READ_DEFINITION]), registry_stub(), document()).server_streams
         ),
     )

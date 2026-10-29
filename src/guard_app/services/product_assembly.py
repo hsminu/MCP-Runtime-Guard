@@ -1,9 +1,10 @@
 """A composition of B's Profile loading, A's transport and access rules into Guard.
 
 Every input here is trusted and supplied by the composition root: the parsed
-Profile document (file format B3.11, path validation C), C's Registry, per-server
-stream factories from C's launcher, and durable `next_call_seq`/`failure_audit`
-(B-SQL-04 / C). Nothing is read from disk, launched or retried here.
+Profile document (B3.11, path validation C), C's Registry, app folders for C's
+launcher, and durable `next_call_seq`/`failure_audit` (B-SQL-04 / C). Explicit
+stream injection is for tests. The stdio context owns launch and confirmed
+shutdown; calls are never retried.
 
 Right after `tools/list` the live definitions are compared with the registered
 fingerprints (A15/A16, FP-01 via B's `tool_fingerprint`). A mismatching or
@@ -33,16 +34,13 @@ unknown outcome. A call already reserved when it failed keeps its outcome.
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.mcp_transport import McpTransport, StreamFactory, ToolListLimits
-from guard_app.adapters.mcp_transport.streams import (
-    http_stream_factory,
-    validated_stdio_stream_factory,
-)
+from guard_app.adapters.mcp_transport.launcher_streams import launcher_stdio_stream_factory
+from guard_app.adapters.mcp_transport.streams import http_stream_factory
 from guard_app.domain.contracts import RegisteredServer, ToolView
 from guard_app.domain.enums import RegStatus
 from guard_app.domain.errors import StoreError
@@ -52,7 +50,7 @@ from guard_app.ports import Registry, Store
 from guard_app.security.digest import JcsCanonicalizationError, tool_fingerprint
 from guard_app.security.endpoints import normalize_endpoint
 from guard_app.security.ids import new_id
-from guard_app.security.launcher import ExecutablePin, LaunchedProcess, launch_mcp_server
+from guard_app.security.launcher import ExecutablePin
 from guard_app.security.paths import AppFolders
 from guard_app.services.catalog import (
     CatalogConfigError,
@@ -79,12 +77,16 @@ class ProductAssemblyError(RuntimeError):
 
 @dataclass(frozen=True, slots=True, repr=False)
 class ProductInputs:
+    """Trusted composition inputs. Stream injection is test/demo-only without folders."""
+
     profile_document: Mapping[str, object]
     registry: Registry
-    server_streams: Mapping[str, StreamFactory]
     next_call_seq: Callable[[str], Awaitable[int]]
     failure_audit: Callable[[FailureEvent], Awaitable[None]]
     operator_id: str
+    # Explicit injection for unit/demo composition only. Product uses folders.
+    server_streams: Mapping[str, StreamFactory] | None = None
+    folders: AppFolders | None = None
     resource_resolver: ResourceResolver | None = None
     tool_list_limits: ToolListLimits = field(default_factory=ToolListLimits)
     call_timeout_s: float = 30.0
@@ -275,7 +277,6 @@ class AssembledGuard:
     tool_views: tuple[ToolView, ...]
     operator_id: str
     call_timeout_s: float = 30.0
-    close_servers: Callable[[], Awaitable[None]] | None = None
 
     @property
     def settings(self) -> GuardSettings:
@@ -306,11 +307,40 @@ class AssembledGuard:
                 if settle is not None:
                     await settle()
             finally:
-                try:
-                    await self.guard.aclose()
-                finally:
-                    if self.close_servers is not None:
-                        await self.close_servers()
+                await self.guard.aclose()
+
+
+def _server_streams(loaded: LoadedProfile, inputs: ProductInputs) -> Mapping[str, StreamFactory]:
+    """Product folders and test/demo stream injection are mutually exclusive."""
+    if inputs.folders is not None and inputs.server_streams is not None:
+        raise ProductAssemblyError("PRODUCT_INPUTS_INVALID")
+    if inputs.folders is None:
+        if inputs.server_streams is None:
+            raise ProductAssemblyError("PROFILE_SERVER_UNAVAILABLE")
+        return inputs.server_streams
+    streams: dict[str, StreamFactory] = {}
+    for server in loaded.selected_servers:
+        if server.transport == "stdio":
+            pin = (
+                ExecutablePin(server.command_size, server.command_sha256)
+                if server.command_size is not None and server.command_sha256 is not None
+                else None
+            )
+            streams[server.id] = launcher_stdio_stream_factory(
+                inputs.folders.server_folder(server.id),
+                server.command,
+                server.args,
+                server.env_allow,
+                pin,
+            )
+        else:
+            if server.url is None:
+                raise ProductAssemblyError("PROFILE_SERVER_UNAVAILABLE")
+            streams[server.id] = http_stream_factory(
+                normalize_endpoint(server.url).url,
+                read_timeout_s=max(60.0, inputs.call_timeout_s),
+            )
+    return streams
 
 
 async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
@@ -326,15 +356,17 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     except CatalogConfigError:
         raise ProductAssemblyError("PROFILE_INVALID") from None
     server_ids = loaded.profile.server_ids
-    if any(server_id not in inputs.server_streams for server_id in server_ids):
+    streams = _server_streams(loaded, inputs)
+    if any(server_id not in streams for server_id in server_ids):
         raise ProductAssemblyError("PROFILE_SERVER_UNAVAILABLE")
     transport = McpTransport(
-        {server_id: inputs.server_streams[server_id] for server_id in server_ids},
+        {server_id: streams[server_id] for server_id in server_ids},
         call_timeout_s=inputs.call_timeout_s,
         tool_list_limits=inputs.tool_list_limits,
         on_tools_changed=registry.tools_changed,
         on_server_failed=registry.server_failed,
         on_listing_received=registry.listing_received,
+        isolate_start_failures=inputs.folders is not None,
     )
     adopted = False
     try:
@@ -383,53 +415,3 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     finally:
         if not adopted:
             await transport.close()
-
-
-class ProductServerStreams:
-    """C owns process creation; this composition owns confirmation of every exit."""
-
-    def __init__(self, folders: AppFolders) -> None:
-        self._folders = folders
-        self._processes: list[LaunchedProcess] = []
-
-    def streams(self, loaded: LoadedProfile) -> dict[str, StreamFactory]:
-        return {server.id: self._stream(server) for server in loaded.selected_servers}
-
-    def _stream(self, server: ServerSettings) -> StreamFactory:
-        if server.transport == "streamable_http":
-            return http_stream_factory(normalize_endpoint(server.url).url)
-
-        @asynccontextmanager
-        async def connect() -> AsyncIterator[tuple[object, ...]]:
-            pin = (
-                None
-                if server.command_size is None or server.command_sha256 is None
-                else ExecutablePin(server.command_size, server.command_sha256)
-            )
-            process = await launch_mcp_server(
-                self._folders.server_folder(server.id),
-                server.command,
-                server.args,
-                server.env_allow,
-                pin,
-            )
-            self._processes.append(process)
-            factory = validated_stdio_stream_factory(
-                process.read_bytes, process.write_bytes, process.drain
-            )
-            async with factory() as streams:
-                yield streams
-
-        return connect
-
-    async def close(self) -> None:
-        import asyncio
-
-        from guard_app.services.bridge_types import BackendCleanupError
-
-        results = await asyncio.gather(
-            *(process.close(grace_s=1.0, kill_s=1.0) for process in self._processes),
-            return_exceptions=True,
-        )
-        if any(result is not True for result in results):
-            raise BackendCleanupError

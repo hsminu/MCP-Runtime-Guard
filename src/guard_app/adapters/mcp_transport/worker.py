@@ -15,6 +15,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import CONNECTION_CLOSED
 
 from guard_app.adapters.mcp_ingress import IngressGate
+from guard_app.adapters.mcp_transport.launcher_streams import launcher_teardown_failed
 from guard_app.adapters.mcp_transport.result_budget import check_result_budget
 from guard_app.adapters.mcp_transport.sdk_session import SessionFactory, ToolSession
 from guard_app.adapters.mcp_transport.streams import http_teardown_completed
@@ -320,6 +321,8 @@ class ServerWorker:
 
     def _close_failure(self, owner_error: object) -> str | None:
         """The fixed failure of a finished owner; None when it closed cleanly."""
+        if launcher_teardown_failed(owner_error):
+            return "SessionCloseFailed"
         owner_failed = isinstance(owner_error, BaseException) and (
             not isinstance(owner_error, asyncio.CancelledError) or not self._owner_cancel_expected
         )
