@@ -1,16 +1,13 @@
 # C 현황
 
-갱신: 2026-10-30 · main `1da2f1a` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-30 · main `f0c2643` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| Store 계약 회신(B6-01–05) | B·A | C1.8 |
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
-| API 키 입력 화면 | A | C2.10 |
 | 설치판 리소스 위치(패키징) | A | C6.20 |
-| 호출·승인 조회 화면 연결(B6.16) | A | C3.8 |
 
 ## C1 · 계약과 관측 기반
 
@@ -21,7 +18,7 @@
 - [x] C1.5 Store 계약 처리 제안 v1 · [기록](archive/tasks/c-store-proposal.md)
 - [x] C1.6 B 승인 코드 검토, C-B-01 발견과 수정 확인 · [기록](archive/tasks/c-b-review.md)
 - [x] C1.7 공통 의존성 조합 고정(main `pyproject.toml`·`uv.lock`, Scanner 포함) · #4 · #6
-- [ ] C1.8 B Store·Scanner·Registry·상태·감사 계약 검토와 합의. B6-06·SCAN-01·DESC-01은 #32에서 합의 — 막힘: B6-01–05
+- [ ] C1.8 B Store·Scanner·Registry·상태·감사 계약 검토와 합의. B6-06·SCAN-01·DESC-01은 #32에서 합의, B6-01–06은 2026-10-29 합의·닫힘(#76)으로 막힘 풀림
 - [ ] C1.9 A와 fixture 실행 방법·host_dispatch 관측·지문 변경 알림 맞추기
 
 ## C2 · 위험 연산과 정적 강제
@@ -38,7 +35,7 @@
 - [x] C2.10 Scanner API 키를 Windows 자격증명 관리자에 저장·로딩, 제품 경로에서 `.env` 미사용(`secrets.store_scanner_key`·`save_scanner_key`(A `KeySaver`)·`load_scanner_key`·`scanner_key_tail`·`delete_scanner_key`·`scanner_key_environ`). A 화면 연결과 #59 뒤 검사기 연결은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.10-scanner-key-store.md)
 - [x] C2.12 codex.exe 실행 launcher(`security/launcher.py`): 쓰기 금지 핸들로 실행마다 SHA-256 대조, 허용 목록 환경, `-c sqlite_home='<Task 폴더>'`, 멈춘 채 생성 후 Job Object 할당, stdin/stdout은 A `CodexPipes` 형식, stderr는 Task 폴더 격리 파일, `close()`로 종료 확인(#21 2번). stdio MCP 서버도 같은 `launch_process`를 쓴다(#21 5번) · [기록](archive/c/C2.12-codex-launcher.md)
 - [x] C2.13 앱 폴더 경로·권한(`security/paths.py`): `%LOCALAPPDATA%\MCPRuntimeGuard` 아래 codex 설치·CODEX_HOME·Task 폴더·config에 사용자·SYSTEM만의 보호된 DACL, 단일 실행 잠금, Task 폴더 생성·삭제와 앱 시작 때 남은 폴더 삭제(#21 6번) · [기록](archive/c/C2.13-app-folders.md)
-- [x] C2.11 제품용 읽기 전용 파일 MCP 서버(`guard_app.servers.file_server`, stdio, 표준 라이브러리 JSON-RPC): `list_root`·`list_folder`·`read_file`(모두 READ), `structuredContent.resource_id`(C2.3), UTF-8 텍스트 192KiB, 목록 1,000개, 루트는 레코드 `args`의 `--root`(`file_server_args`·`file_server_root`). A 등록 화면·조립은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.11-file-server.md)
+- [x] C2.11 제품용 읽기 전용 파일 MCP 서버(`guard_app.servers.file_server`, stdio, 표준 라이브러리 JSON-RPC): `list_root`·`list_folder`·`read_file`(모두 READ), `structuredContent.resource_id`(C2.3), UTF-8 텍스트 192KiB, 목록 1,000개, 루트는 레코드 `args`의 `--root`(`file_server_args`·`file_server_root`). A 등록 화면·조립은 남음 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C2.11-file-server.md). 후속: 파일 서버 인정은 `trusted_file_server_root`(stdio·앱 Python·args 형식, #94 3번) 하나로 · [기록](archive/c/C2.11-2-trusted-file-server-root.md)
 - [x] C2.14 설정 파일 연산(CFG-01, #33, `security/settings_io.py`): `config\settings.json`을 링크 없이 열어 일반 파일·하드링크 1·사용자·SYSTEM 권한 확인, 상한+1바이트 읽기, 세대(크기·SHA-256)가 같을 때만 같은 폴더 임시 파일·fsync·`MoveFileExW(WRITE_THROUGH)` 교체, 실패와 결과 불명 구분, 앱 시작 때 남은 임시 파일 삭제. 서버 실행 파일·URL 검증은 C2.6·C2.5로 분리 · [기록](archive/c/C2.14-settings-file-io.md)
 - [x] C2.15 로그아웃 정리 함수 `clear_codex_credentials`(`security/codex_home.py`): `secrets/` 암호문과 자격증명 관리자 항목 두 개 삭제, 모르는 항목이 있으면 아무것도 지우지 않음. A가 `account/logout` 성공 뒤 부름 · [기록](archive/c/C2.15-codex-credential-cleanup.md)
 - [x] C2.16 앱 폴더 권한 확인의 SID 비교를 전체 SID로(C2.13 후속): SDDL 약어(`LA` 등) 때문에 CI 러너(내장 Administrator)에서 거부되던 문제 수정, 읽지 못한 ACE는 거부(#35 B 리뷰 3번) · [기록](archive/c/C2.16-sid-alias-compare.md)
@@ -58,7 +55,7 @@
 - [x] C3.5 승인 생성·종결·소비 원자성과 중복 소비: 별도 프로세스를 쓰기 문장 경계마다 강제 종료(생성 14·종결 14·소비 12회), 매번 DB가 연산 전 또는 후와 정확히 같고 다음 시작 복구가 닫힘. 중복 소비는 C5.4 · [기록](archive/c/C3.5-C3.6-store-kill.md)
 - [x] C3.6 쓰기·감사·잠금·COMMIT/ROLLBACK 실패와 중단 결함 주입: 판정 기록 8·READ 관측 12회 강제 종료도 반쪽 상태 0·복구 닫힘. 잠금 대기 실측 중앙 1.172초 뒤 고정 실패(B6-03 1000ms), WAL 읽기는 막히지 않음(최대 0.016초) · [기록](archive/c/C3.5-C3.6-store-kill.md)
 - [x] C3.7 원문 비기록·재시작 승인 미복원·SEND 재전송 0: 전송 다섯 종류의 인자 표지가 DB·WAL·앱 폴더 전 파일에 0(자원 ID 양성 대조), 재시작 미복원은 T11·재전송 0은 C5.6. 결과 본문 표지는 C5.2 뒤 · [기록](archive/c/C3.3-C3.4-C3.7-gate-and-disk.md)
-- [ ] C3.8 (Store 조회 `list_calls`·`get_call`·`list_approvals`와 요청별 계수 대조는 정식 시험으로 완료(stdio·HTTP, T01·T02·T03·응답 유실), [C3.8-1](archive/c/C3.8-1-query-counts.md)) A 화면 연결 뒤 화면 쪽 대조 — 막힘: A 화면 연결
+- [ ] C3.8 (Store 조회 `list_calls`·`get_call`·`list_approvals`와 요청별 계수 대조는 정식 시험으로 완료(stdio·HTTP, T01·T02·T03·응답 유실), [C3.8-1](archive/c/C3.8-1-query-counts.md)) 화면 쪽 대조는 미실행. A 화면(A33–A35, #86)이 `StoreQueries`로 그려 대조할 수 있음
 - [x] C3.9 DB를 직접 고친 비정상 행(관계 깨짐·모르는 상태값·등급 하향)을 시작 점검이 잡고 멈추는지 검증: 13가지 × 정상·비정상 종료. 관계·상태값·legacy는 `STORE_INTEGRITY_FAILED`로 멈춤, 요청 epoch·kind·revision 변조는 멈추지 않고 복구(실행 0, C-C3-01: 소비 시점 B6.10이 막으므로 시작 점검 범위 밖, #103 B 판단) · [결정](contracts.md#사용자-결정) · [기록](archive/c/C3.9-C3.10-startup-tamper.md)
 - [x] C3.10 시작 복구가 감사 기록과 맞지 않는 등급·미분류 표시를 복구하지 않는지 검증: 등급 하향·승격 이력 삭제·미분류 해제는 멈춤, 감사까지 함께 낮춘 변조는 근거가 없어 복구(실행 0, 결정의 한계) · [기록](archive/c/C3.9-C3.10-startup-tamper.md)
 

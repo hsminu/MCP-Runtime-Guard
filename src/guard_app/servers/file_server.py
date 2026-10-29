@@ -183,8 +183,8 @@ def file_server_args(root: Path) -> tuple[str, ...]:
 def file_server_root(args: Sequence[str]) -> Path | None:
     """설정 레코드의 `args`가 이 서버의 형식이면 그 루트, 아니면 None이다.
 
-    A는 이 값으로 C2.3 `file_resource_resolver({서버 ID: 루트})`를 만든다. 서버와 Guard가 같은
-    레코드에서 같은 루트를 읽는다.
+    형식만 본다. 이 서버로 인정해 자원형 출처 규칙을 쓸지는 `trusted_file_server_root`로 정한다.
+    서버와 Guard가 같은 레코드에서 같은 루트를 읽는다.
     """
     if type(args) not in (tuple, list) or len(args) != 5:
         return None
@@ -192,6 +192,27 @@ def file_server_root(args: Sequence[str]) -> Path | None:
         return None
     root = Path(args[4])
     return root if root.is_absolute() else None
+
+
+def trusted_file_server_root(
+    transport: object, command: object, args: Sequence[str]
+) -> Path | None:
+    """이 앱이 띄우는 파일 서버의 설정 레코드면 그 루트, 아니면 None이다(#94 3번, C2.11-2).
+
+    자원형 출처 규칙(비어 있지 않은 prefix)은 Guard가 기대 자원 ID를 계산하고 신뢰 코드가 응답
+    ID를 만드는 서버에만 쓴다. 그래서 args 형식에 더해 stdio이고 `command`가 실행 중인 앱의
+    Python(`sys.executable`)일 때만 인정한다. A는 이 값으로 C2.3
+    `file_resource_resolver({서버 ID: 루트})`를 만든다.
+
+    비교는 `os.path.normcase` 문자열 비교이고 파일 시스템을 읽지 않는다. 같은 파일을 다른
+    표기(짧은 이름·정션 등)로 적으면 인정하지 않는다. 그 서버는 일반 서버가 되어 자원형 READ가
+    예약 전에 거부되는 닫힌 쪽이다. 실행 파일 내용은 EXE-01 지문으로 실행마다 대조한다.
+    """
+    if transport != "stdio" or type(command) is not str or not command:
+        return None
+    if os.path.normcase(command) != os.path.normcase(sys.executable):
+        return None
+    return file_server_root(args)
 
 
 class FileServer:
