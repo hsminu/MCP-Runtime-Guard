@@ -8,7 +8,9 @@ C6.9(`test_access_rule_counts`)와 인수 기준 1·2(`test_approval_counts`)가
   서버(별도 프로세스), HTTP는 같은 프로세스의 루프백 FastMCP(Streamable HTTP, JSON 응답)다.
 - 계수 네 개
   - 승인 소비: DB `approvals`의 CONSUMED 행(읽기 전용 연결)
-  - host_dispatch: Guard가 부른 `McpTransport.call`
+  - host_dispatch: `ServerWorker._execute` 진입(개발문서 계수 표, worker `on_dispatch`와 같은 지점).
+    `McpTransport.call`에 들어왔어도 worker가 실행 전에 거절·정리한 명령(`WorkerClosed`·
+    `UnknownServer`·`WorkerQueueFull`·`discard_queued`)은 세지 않는다(#106 B1.5)
   - wire `tools/call`: 서버가 받은 `tools/call` 메시지
   - 수신 효과: 서버가 도구를 실제로 실행한 수
 
@@ -54,6 +56,7 @@ from mcp.server.fastmcp import FastMCP
 
 from guard_app.adapters.mcp_transport import (
     McpTransport,
+    ServerWorker,
     StreamFactory,
     ToolListLimits,
     http_stream_factory,
@@ -181,17 +184,21 @@ class Dispatch:
 
 
 def count_dispatches(monkeypatch: Any) -> list[Dispatch]:
-    """Guard가 부르는 `McpTransport.call`을 감싸 기록한다. 테스트 끝에 monkeypatch가 되돌린다."""
-    calls: list[Dispatch] = []
-    original = McpTransport.call
+    """worker가 명령을 실행하러 들어가는 `ServerWorker._execute`를 감싸 기록한다.
 
-    async def counted(self, req):
+    테스트 끝에 monkeypatch가 되돌린다.
+    """
+    calls: list[Dispatch] = []
+    original = ServerWorker._execute
+
+    async def counted(self, session, cmd):
+        req = cmd.req
         name = req.tool.tool_name
         token = req.arguments.to_dict().get(_TOKEN_ARG.get(name, ""), "")
         calls.append(Dispatch(req.request_id, name, str(token)))
-        return await original(self, req)
+        return await original(self, session, cmd)
 
-    monkeypatch.setattr(McpTransport, "call", counted)
+    monkeypatch.setattr(ServerWorker, "_execute", counted)
     return calls
 
 

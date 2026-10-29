@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-30 · main `194352d` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-30 · main `1da2f1a` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -92,6 +92,7 @@
 - [ ] C5.2 C2.11 서버를 합성 문서(public·personal·private, TEST_SECRET)로 띄우는 fixture
 - [ ] C5.3 Remote Send HTTP 서버(127.0.0.1, tools/call과 프로토콜 메시지 구분 계수)
 - [x] C5.4 approval_consumed·host_dispatch·wire tools/call·receiver_effect를 요청별로 연결: 공용 하니스 `tests/unit/c_counting.py`(승인 소비·dispatch는 `request_id`, wire·효과는 인자 표지) · [기록](archive/c/C5.4-approval-counts.md)
+- [x] C5.4-1 host_dispatch를 개발문서대로 `ServerWorker._execute` 진입에서 세게 하니스를 맞춤(#106 B1.5). 실행 전에 정리된 대기 명령은 0, 하니스 사용 시험 결론 변화 없음 · [기록](archive/c/C5.4-1-dispatch-at-execute.md)
 - [ ] C5.5 wire_tools_call과 wire_post 대응, 카운터는 테스트 임시 파일
 - [ ] C5.6 공격 fixture: 응답 유실·307/308·재연결·정의 변조·stderr/progress 유출. 응답 유실(응답 없음·늦은 응답·프로세스 종료·500)·307/308·재연결은 완료(`c_counting` 서버 동작) · [기록](archive/c/C5.6-write-loss-counts.md). 정의 변조·stderr/progress 유출 남음
 - [ ] C5.7 관찰 불가 경로를 검증 불가로 기록
