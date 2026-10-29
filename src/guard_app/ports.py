@@ -55,6 +55,17 @@ from guard_app.domain.queries import (
     CallListQuery,
 )
 from guard_app.domain.reasons import Reason
+from guard_app.domain.schema_jobs import SchemaJobRequest, SchemaJobResponse
+
+
+class SchemaJobRunner(Protocol):
+    """합의 전 제안(SCHEMA-01): 제한된 별도 프로세스의 스키마 작업.
+
+    C가 종료 가능한 프로세스에서 ``run_schema_job``을 실행한다. 시간 초과·자원 초과·
+    비정상 종료·응답 불명은 고정 실패이며 성공으로 취급하지 않는다. 늦은 결과는 버린다.
+    """
+
+    async def run(self, request: SchemaJobRequest, *, deadline: float) -> SchemaJobResponse: ...
 
 
 class StoreQueries(Protocol):

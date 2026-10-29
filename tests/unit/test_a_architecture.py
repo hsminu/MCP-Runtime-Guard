@@ -34,7 +34,7 @@ A_ADAPTERS = frozenset(
 OTHER_SERVICES = frozenset(
     (  # noqa: SIM905 - keep the explicit module allowlist compact.
         "approvals catalog catalog_schema catalog_sources guard registry response_gate "
-        "scanner state_checks"
+        "scanner schema_jobs state_checks"
     ).split()
 )
 OTHER_ADAPTERS = frozenset({"cisco", "cisco_aggregation", "cisco_llm"})
