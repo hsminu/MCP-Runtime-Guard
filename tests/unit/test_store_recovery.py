@@ -308,6 +308,7 @@ def test_real_legacy_migration_recovers_without_inventing_metadata(tmp_path, ver
         if version == 1:
             connection.execute("UPDATE tasks SET status='running'")
             connection.execute("DELETE FROM approvals")
+            connection.execute("UPDATE requests SET reasons=?", ('["AGT_DENY"]',))
             connection.execute(
                 "UPDATE requests SET status='DISPATCHING',dispatch_reserved_at_utc=?", (LATER,)
             )

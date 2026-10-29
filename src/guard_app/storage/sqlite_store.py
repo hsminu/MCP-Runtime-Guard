@@ -19,9 +19,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock, get_ident
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import Literal, cast
-from uuid import uuid4
 
 from guard_app.core.approval_time import approval_event_time
 from guard_app.core.taint import merge
@@ -71,6 +70,7 @@ from guard_app.domain.models import (
 from guard_app.domain.reasons import Reason
 from guard_app.ports import BackupDestination
 from guard_app.security.digest import jcs_canonicalize, json_digest
+from guard_app.security.ids import new_id
 from guard_app.services.catalog_sources import valid_server_id
 from guard_app.storage.sqlite_writer import SQLiteWriter
 from guard_app.storage.startup_inventory import (
@@ -83,6 +83,9 @@ from guard_app.storage.startup_inventory import (
 SCHEMA_VERSION = 3
 APPLICATION_ID = 0x4D435047  # MCPG. 기존 다른 앱의 DB를 자동 채택하지 않는다.
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
+_LEGACY_REASONS = MappingProxyType(
+    {"AGT_DENY": Reason.ACCESS_DENY, "AGT_ERROR": Reason.ACCESS_ERROR}
+)
 # 취소 경계는 각 공개 연산의 트랜잭션 유형으로 고정한다.
 _METHOD_WRITES = {
     "list_registrations": False,
@@ -457,7 +460,7 @@ class SQLiteStore:
     같은 앱/버전의 정확한 스키마만 다시 열며 다른/미래 버전은 거부한다.
     busy_timeout_ms=1000은 조정 가능한 잠금 대기 후보이며 전체 I/O 상한이 아니다.
     SQL/검증 오류와 writer 작업의 callback 실패는 원문·경로 없는 StoreError다.
-    명시 모드 기본 감사 ID는 UUID4다. 주입한 신뢰 audit_id_factory는 ID 또는
+    명시 모드 기본 감사 ID는 security.ids에서 만든다. 주입한 신뢰 audit_id_factory는 ID 또는
     원문 없는 StoreError를 공급한다. 즉시 모드에서 기본 factory는 없다.
     정상 상태 전이의 보안 버전 유지 등은 검토용 구현 선택이며 B6 합의는 별도다.
     audit_id_factory와 utc_now는 writer 스레드에서 호출된다. 생성자는 연결과
@@ -501,7 +504,7 @@ class SQLiteStore:
         )
         self._owner_thread = 0
         self._audit_id_factory = (
-            (lambda: f"audit-{uuid4().hex}")
+            (lambda: new_id("audit"))
             if startup == "explicit" and audit_id_factory is None
             else audit_id_factory
         )
@@ -1004,7 +1007,7 @@ class SQLiteStore:
             if connection.execute("SELECT 1 FROM store_runs WHERE run_id=?", (run_id,)).fetchone():
                 raise StorePrepareError(StoreStartFailure.STORE_INTEGRITY_FAILED)
             inventory = self._inspect_startup_rows_locked(
-                connection, inspect_reasons=False, deadline=deadline
+                connection, inspect_reasons=True, deadline=deadline
             )
             tasks = {item.state.task_id: item.state for item in inventory.tasks}
             requests = {item.request_id: item for item in inventory.requests}
@@ -1323,14 +1326,12 @@ class SQLiteStore:
             _utc_value(row["at_utc"])
             if row["event_type"] != "OBSERVED":
                 continue
+            reason = _stored_reason(row["reason_code"])
             label = row["label"]
             if label is None:
-                if row["reason_code"] != Reason.RESULT_UNCLASSIFIED.value or not task.unclassified:
+                if reason is not Reason.RESULT_UNCLASSIFIED or not task.unclassified:
                     raise StoreError()
-            elif (
-                row["reason_code"] != Reason.OK.value
-                or Label(_integer(label)) > task.high_watermark
-            ):
+            elif reason is not Reason.OK or Label(_integer(label)) > task.high_watermark:
                 raise StoreError()
 
     def _check_recovery_query(self) -> None:
@@ -4091,6 +4092,18 @@ def _text(value: object) -> str:
     return value
 
 
+def _stored_reason(value: object) -> Reason:
+    """저장된 기존 사유를 한곳에서 검증하고 현행 사유로 읽는다."""
+    if type(value) is not str:
+        raise StoreError()
+    if value in _LEGACY_REASONS:
+        return _LEGACY_REASONS[value]
+    try:
+        return Reason(value)
+    except ValueError:
+        raise StoreError() from None
+
+
 def _check_task(state: TaskState) -> None:
     for number in (state.epoch, state.security_version, state.row_revision):
         _integer(number)
@@ -4128,7 +4141,7 @@ def _decode_stored_request(row: sqlite3.Row, *, inspect_reasons: bool = True) ->
         if type(reasons) is not list or not reasons:
             raise StoreError()
         for reason in reasons:
-            Reason(_text(reason))
+            _stored_reason(reason)
     return _StoredRequest(
         request_id=_identifier(row["request_id"]),
         task_id=_identifier(row["task_id"]),

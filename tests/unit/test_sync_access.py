@@ -77,7 +77,7 @@ def _build_guard(harness, checker):
             "read",
             AccessResult(allowed=False, reason="deny", error=False),
             Denied,
-            Reason.AGT_DENY,
+            Reason.ACCESS_DENY,
             0,
         ),
         (
@@ -85,7 +85,7 @@ def _build_guard(harness, checker):
             "read",
             AccessResult(allowed=False, reason="error", error=True),
             Denied,
-            Reason.AGT_ERROR,
+            Reason.ACCESS_ERROR,
             0,
         ),
         (
@@ -101,7 +101,7 @@ def _build_guard(harness, checker):
             "send",
             AccessResult(allowed=False, reason="deny", error=False),
             Denied,
-            Reason.AGT_DENY,
+            Reason.ACCESS_DENY,
             0,
         ),
     ],
@@ -353,7 +353,7 @@ def test_non_exact_access_result_is_error_deny(invalid):
         checker = _install(h, lambda: invalid)
         outcome = await h.guard.submit("task", _call())
         assert isinstance(outcome, Denied)
-        assert outcome.reasons == (Reason.AGT_ERROR,)
+        assert outcome.reasons == (Reason.ACCESS_ERROR,)
         assert len(checker.calls) == 1
         assert h.transport.calls == []
         await h.guard.aclose()
@@ -379,7 +379,7 @@ def test_coroutine_return_is_closed_and_never_warns():
             warnings.simplefilter("error", RuntimeWarning)
             result = await h.guard.submit("task", _call())
             assert isinstance(result, Denied)
-            assert result.reasons == (Reason.AGT_ERROR,)
+            assert result.reasons == (Reason.ACCESS_ERROR,)
             assert len(checker.calls) == 1
             assert h.transport.calls == []
             assert inspect.getcoroutinestate(created[0]) == inspect.CORO_CLOSED

@@ -9,11 +9,12 @@
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
 | ACCESS-01 동기 포트 A·C 리뷰·3인 합의 | A·B·C | B2.9 |
-| AGT-04 reason 코드·AGT-02 감사 범위 합의 | A·B·C | B2.10, B6.15 |
+| AGT-04 표시 문구 리뷰·contract 테스트 | A·C | B2.10 |
+| AGT-02 감사 범위 합의 | A·B·C | B6.15 |
 | A66 세션 관리자 계약 합의(legacy 시연이 ModelClient 사용) | A·B·C | B1.7 |
 | AGT 제거에서 바꾼 A 소유 파일 리뷰 | A | B2.11 |
 | B6-01–06 계약 회신 | A·C | B1.5, B1.6, B6.9–B6.12, B6.16 |
-| safe_path | C | B3.3 |
+| 자원 ID 판정기의 제품 조립 연결 | A | B3.3 |
 | Registry 영속화 B 제안 완료·C 검토·C4.10 연결 대기(B6-06) | A·C | B6.18 |
 | 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 합의 | A·B·C | B6.19 |
 | 저장소 리뷰·독립 검증 | C | B7.6, B7.8 |
@@ -46,14 +47,14 @@
 - [x] B2.7 결정성·단조성·거부 흡수·전처리 우선 성질 hypothesis 검증
 - [x] B2.8 접근 규칙 판정 순수 함수(ACCESS-01 1단계) · [기록](archive/b/B2.8-access-rules.md)
 - [x] B2.9 AccessChecker 동기 포트·Guard 대기 장치 제거 구현 완료, 합의 전 제안(ACCESS-01 결정 이행) · A·C 리뷰·3인 합의 대기 · PR 미정 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
-- [ ] B2.10 AGT-04 reason code·AccessResult 정리 제안 작성 — 막힘: 3인 합의 · `AGT_*`를 `ACCESS_*`로 바꿀 때 `MODEL_REASON_MESSAGES` 키도 함께 변경 · [제안](archive/b/B2.10-agt04-reason-proposal.md)
+- [ ] B2.10 AGT-04 접근 사유 코드 교체·과거 저장값 판독 B 단위 구현 완료 · A 표시 문구 리뷰·C contract 테스트 대기 · [기록](archive/b/B2.10-agt04-access-reasons.md)
 - [x] B2.11 기존 AGT 코드 제거 구현 완료 · A 소유 파일 리뷰 대기 · PR 미정 · [기록](archive/b/B2.9-B2.11-agt-removal.md)
 
 ## B3 · Catalog와 요청 해석
 
 - [x] B3.1 `server_id__tool_name` 네임스페이스·고정 JSON Schema 검증, ToolKind는 annotation을 신뢰하지 않음 · [기록](archive/b3-catalog.md)
 - [x] B3.2 미등록 서버·도구·목적지·OTHER는 DENY
-- [ ] B3.3 자원형 READ의 expected_resource_id를 C safe_path로 계산하고 실제 resource_id와 대조 — 막힘: C safe_path
+- [x] B3.3 자원형 READ의 expected_resource_id 계산·대조 B 구현 완료. C2.3(#63) `file_resource_resolver`가 Catalog `ResourceResolver`와 연결됨 · A `ProductInputs.resource_resolver` 제품 조립 연결 대기
 - [x] B3.4 출처 접두어 매칭·중복은 최고 등급·미매칭은 Unclassified
 - [x] B3.5 도구 단위 READ는 `prefix: []` 규칙만, 없으면 Unclassified
 - [x] B3.6 목적지는 등록 목록 정확 일치, 이름·IP·DNS·stdio를 신뢰 근거로 쓰지 않음
@@ -105,6 +106,7 @@
 - [x] B6.6 영속 순번·시작 복구 설계와 검증 시나리오 50개 · [설계](archive/b6-sequence-recovery-design.md) · [시나리오](archive/b6-sequence-recovery-validation.md)
 - [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
 - [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — 1단계·2a·2b B 단위 구현 완료, #69 `b796ff0` 병합 · A 제품 연결·C 독립 인수 대기 · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
+  - #65(C2.7) 후속으로 명시 모드 기본 감사 ID 출처를 `security.ids`로 옮기고 B 모듈의 직접 생성 금지 정적 검사를 추가했다.
 - [ ] B6.9 승인 생성·종결 원자화(현재 두 커밋 간격) — 막힘: B6-01
 - [ ] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 — 막힘: B6-02
 - [ ] B6.11 U8 제어/응답 경쟁, 조건 충돌·rollback·확정 불가 구분 — 막힘: B6-03·B6-04
