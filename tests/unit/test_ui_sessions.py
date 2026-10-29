@@ -1017,12 +1017,16 @@ def test_streamed_answer_replaces_its_block_and_the_final_answer_replaces_it(win
     assert "│ Hello" in lines
     assert "나" not in lines[lines.index("│ Hello") :]
     assert "\u202e" not in view.transcript.toPlainText()
+    # The visible label follows the in-place update, not only the transcript model.
+    streamed = view.transcript.turns[-1]
+    assert streamed.body.text() == streamed.text
     bridge.conversation_partial.emit(ConversationEvent("task-one", 2, "assistant", "wrong", "c"))
     bridge.conversation_ready.emit(ConversationEvent("task-one", 1, "assistant", "Final", "c"))
     text = view.transcript.toPlainText()
     assert text.startswith("나\n│ question\n")
     assert text.count("Guard · 모델 답변 (검증되지 않은 내용)\n│ Final") == 1
     assert not any(gone in text for gone in ("작성 중", "Hello", "wrong"))
+    assert view.transcript.turns[-1].body.text() == "Final"
     # A late piece of an already answered command cannot reopen it.
     bridge.conversation_partial.emit(ConversationEvent("task-one", 1, "assistant", "late", "c"))
     assert view.transcript.toPlainText() == text
