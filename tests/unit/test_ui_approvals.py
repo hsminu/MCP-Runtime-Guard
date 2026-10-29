@@ -8,12 +8,14 @@ from datetime import UTC, datetime, timedelta
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QBoxLayout, QPushButton, QScrollArea
 
 from guard_app.domain.enums import ApprovalStatus
 from guard_app.services.bridge import BackendBindings, BackendBridge, PolicyView
+from guard_app.ui.approval_presentation import QUERY_TEXT_INVALID, SERVER_FILTER_INVALID
 from guard_app.ui.approvals import (
     PAGE_SIZE,
     ApprovalLane,
@@ -227,6 +229,58 @@ def test_equal_time_ties_require_stable_id_order_and_no_raw_actions(app: QApplic
     buttons = [button.text() for button in view.findChildren(QPushButton)]
     assert "승인" not in buttons
     assert "거절" not in buttons
+
+
+@pytest.mark.parametrize("server_id", ["한글-서버", "s" * 65, " a b ", ""])
+def test_server_filter_emits_the_exact_id(app: QApplication, server_id: str) -> None:
+    """A175 / T18 display support: valid server filters are not search terms."""
+    view = ApprovalListPage()
+    with closing_widgets(view):
+        requests = []
+        view.query_requested.connect(requests.append)
+        view.server_filter.setText(server_id)
+        view.server_filter.editingFinished.emit()
+        assert len(requests) == 1
+        assert requests[0].server_id == server_id
+        assert view.state is LoadState.LOADING
+
+
+@pytest.mark.parametrize("server_id", ["a__b", "server_", "server\x00", "server\n", "a\u200bb"])
+def test_server_filter_error_is_fixed_and_sends_nothing(app: QApplication, server_id: str) -> None:
+    """A175 / T18: clear old rows and never echo invalid filter input."""
+    view = ApprovalListPage()
+    with closing_widgets(view):
+        view.refresh()
+        previous = view.current_query
+        assert view.set_page(result(view, (summary(1),), 1))
+        requests = []
+        view.query_requested.connect(requests.append)
+        view.server_filter.setText(server_id)
+        view.server_filter.editingFinished.emit()
+        assert requests == []
+        assert view.state is LoadState.ERROR
+        assert view.current_query is None
+        assert view.table.rowCount() == 0
+        assert view.state_message.message.text() == SERVER_FILTER_INVALID
+        assert not view.set_page(ApprovalPage(previous, (summary(1),), 1))
+        view.server_filter.clear()
+        view.server_filter.editingFinished.emit()
+        assert len(requests) == 1 and requests[0].server_id == ""
+        assert view.state is LoadState.LOADING
+
+
+def test_korean_search_still_errors_with_a_valid_korean_server(app: QApplication) -> None:
+    """A175: the search contract stays unchanged."""
+    view = ApprovalListPage()
+    with closing_widgets(view):
+        requests = []
+        view.query_requested.connect(requests.append)
+        view.server_filter.setText("한글-서버")
+        view.search.setText("한글")
+        view.search.editingFinished.emit()
+        assert requests == []
+        assert view.state is LoadState.ERROR
+        assert view.state_message.message.text() == QUERY_TEXT_INVALID
 
 
 def test_filter_and_newest_sort_request_backend_wide_order(app: QApplication) -> None:

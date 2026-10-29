@@ -10,8 +10,44 @@ import pytest
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import TaskState
 from guard_app.storage import SQLiteStore
+from guard_app.storage.sqlite_writer import SQLiteWriter, _Job, _Outcome
 
 NOW = datetime(2026, 10, 27, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("write", [False, True])
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_publish_does_not_wake_loop_for_finished_future(monkeypatch, write, cancelled):
+    loop = asyncio.new_event_loop()
+    try:
+        future = loop.create_future()
+        if cancelled:
+            future.cancel()
+        else:
+            future.set_result(_Outcome())
+        calls = []
+        monkeypatch.setattr(loop, "call_soon_threadsafe", lambda *args: calls.append(args))
+        job = _Job(operation=lambda: None, write=write, loop=loop, future=future)
+
+        object.__new__(SQLiteWriter)._publish(job, _Outcome())
+
+        assert calls == []
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("write", [False, True])
+def test_publish_does_not_wake_closed_loop(monkeypatch, write):
+    loop = asyncio.new_event_loop()
+    future = loop.create_future()
+    loop.close()
+    calls = []
+    monkeypatch.setattr(loop, "call_soon_threadsafe", lambda *args: calls.append(args))
+    job = _Job(operation=lambda: None, write=write, loop=loop, future=future)
+
+    object.__new__(SQLiteWriter)._publish(job, _Outcome())
+
+    assert calls == []
 
 
 def _task(identifier: str) -> TaskState:

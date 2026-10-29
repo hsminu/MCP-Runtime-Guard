@@ -205,13 +205,36 @@ def test_screen_queries_follow_b_limits_and_keep_the_search_case() -> None:
     assert approvals("", "", 1) == ApprovalListQuery(
         lane=ApprovalListLane.HISTORY, sort=ListSort.NEWEST, offset=0, limit=PAGE_SIZE
     )
-    for search, server_id, page in (("한글", "", 1), ("", "a b", 1), ("x" * 65, "", 1)):
+    for search, server_id, page in (("한글", "", 1), ("", "a__b", 1), ("x" * 65, "", 1)):
         assert approvals(search, server_id, page) is None
     assert approvals("", "", 10_000 // PAGE_SIZE + 2) is None  # offset past 10,000
     assert call_list_query(CallLogQuery(1, "Docs", 3)) == CallListQuery(
         search="Docs", sort=ListSort.NEWEST, offset=100, limit=50
     )
     assert call_list_query(CallLogQuery(1, "docs/read", 1)) is None
+
+
+@pytest.mark.parametrize("server_id", ["한글-서버", "s" * 65, " a b ", ""])
+def test_approval_server_filter_reaches_b_query_unchanged(server_id: str) -> None:
+    """A175: exact ID or None, independent of search."""
+    assert server_id == "" or bridge_module.valid_server_id(server_id)
+    query = ApprovalQuery(1, ApprovalLane.PENDING, "Task-01", server_id, ApprovalSort.OLDEST, 1)
+    assert approval_list_query(query) == ApprovalListQuery(
+        lane=ApprovalListLane.PENDING,
+        search="Task-01",
+        server_id=server_id or None,
+        sort=ListSort.OLDEST,
+        offset=0,
+        limit=PAGE_SIZE,
+    )
+
+
+@pytest.mark.parametrize("server_id", ["a__b", "server_", "server\x00", "server\n", "a\u200bb"])
+def test_approval_server_filter_refuses_b_invalid_id(server_id: str) -> None:
+    """A175: malformed filters never become a backend query."""
+    assert not bridge_module.valid_server_id(server_id)
+    query = ApprovalQuery(1, ApprovalLane.PENDING, "", server_id, ApprovalSort.OLDEST, 1)
+    assert approval_list_query(query) is None
 
 
 def test_lane_runs_one_read_per_kind_and_keeps_only_the_newest_waiting() -> None:
@@ -435,6 +458,30 @@ def test_link_fills_both_pages_from_the_store_and_shows_failures_as_unknown(
         assert approvals.state is LoadState.ERROR
         assert approvals.state_message.message.text() == QUERY_TEXT_INVALID
         assert len(queries.requests) == sent
+
+        # A175: the real UI/link/bridge delivers the exact B query.
+        approvals.search.clear()
+        for server_id in ("한글-서버", "s" * 65, " a b ", ""):
+            sent = len(queries.requests)
+            approvals.server_filter.setText(server_id)
+            approvals.server_filter.editingFinished.emit()
+            pump_until(app, lambda: approvals.state is LoadState.READY)
+            assert queries.requests[sent:] == [
+                ApprovalListQuery(
+                    lane=ApprovalListLane.PENDING,
+                    server_id=server_id or None,
+                    sort=ListSort.OLDEST,
+                    offset=0,
+                    limit=PAGE_SIZE,
+                )
+            ]
+        for server_id in ("a__b", "server_", "server\n"):
+            sent = len(queries.requests)
+            approvals.server_filter.setText(server_id)
+            approvals.server_filter.editingFinished.emit()
+            app.processEvents()
+            assert approvals.state is LoadState.ERROR
+            assert len(queries.requests) == sent
 
         # The search is sent as typed: B matches a case-kept prefix.
         typed = CallListQuery(search="Request-0", sort=ListSort.NEWEST, offset=0, limit=50)

@@ -9,6 +9,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from guard_app.domain.enums import ApprovalStatus
+from guard_app.services.bridge import valid_server_id
 
 from .presentation import MISSING, format_kst, public_display_text
 
@@ -103,7 +104,8 @@ class ApprovalPage:
 SOURCE_NOT_CONNECTED = "승인 목록 조회가 아직 연결되지 않음 · 승인 요청은 대화 화면에서 처리하세요."
 # B6-05: a failed query is unknown, never an empty list.
 QUERY_UNKNOWN = "불러오지 못함 · 항목이 없다는 뜻이 아님. 새로고침하세요."
-QUERY_TEXT_INVALID = "검색어와 서버 ID는 영문·숫자와 _ . : - 만 64자까지 입력하세요."
+QUERY_TEXT_INVALID = "검색어는 영문·숫자와 _ . : - 만 64자까지 입력하세요."
+SERVER_FILTER_INVALID = "서버 ID에 밑줄 두 개 연속·끝 밑줄·제어 문자를 쓰지 마세요."
 _QUERY_TEXT = re.compile(r"[A-Za-z0-9_.:-]{0,64}")
 
 
@@ -111,6 +113,12 @@ def valid_query_text(text: str) -> bool:
     """B's search pattern; checked before sending, sent unchanged (case kept)."""
 
     return type(text) is str and _QUERY_TEXT.fullmatch(text) is not None
+
+
+def valid_server_filter(server_id: str) -> bool:
+    """An empty filter means all servers; otherwise use B's unchanged ID rule."""
+
+    return server_id == "" or valid_server_id(server_id)
 
 
 def valid_page(page: ApprovalPage) -> bool:
