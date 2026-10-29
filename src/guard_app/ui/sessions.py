@@ -48,6 +48,7 @@ from .composer import ATTACHMENT_NOTICE, MessageDraft
 from .icons import line_icon
 from .presentation import (
     COMMAND_REFUSALS,
+    PAGES,
     RUN_RESULTS,
     codex_failure_notice,
     task_label_text,
@@ -55,6 +56,7 @@ from .presentation import (
 from .session_list import (
     _ROW_ROLE as _ROW_ROLE,
 )
+from .session_list import _ActivityRow
 from .session_list import (
     _SessionRow as _SessionRow,
 )
@@ -191,6 +193,7 @@ class SessionWorkspace(QWidget):
     # task_id, epoch, text, command_id, reasoning effort or None
     message_requested = Signal(str, int, str, str, object)
     results_requested = Signal()
+    activity_page_requested = Signal()
     approval_review_requested = Signal()
     approval_lookup_requested = Signal(int, str)
     selection_changed = Signal(str)
@@ -217,6 +220,7 @@ class SessionWorkspace(QWidget):
         self._dialogs: dict[str, QDialog] = {}
         self._centering = 0
         self._activity_open = False
+        self._activity_page = False
         self.search = QLineEdit()
         self.search.setObjectName("sidebarSearch")
         self.search.setPlaceholderText("검색")
@@ -227,7 +231,7 @@ class SessionWorkspace(QWidget):
         self.list.setAccessibleName("세션 목록")
         self.list.setMinimumHeight(90)
         self.list.setWordWrap(True)
-        self.list.setUniformItemSizes(True)
+        self.list.setUniformItemSizes(False)
         self.list.setMouseTracking(True)
         self.list.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover)
         delegate = _SessionRowDelegate(self.list)
@@ -248,15 +252,9 @@ class SessionWorkspace(QWidget):
             shortcut.setAutoRepeat(False)
             shortcut.activated.connect(callback)
         self.list.itemClicked.connect(
-            lambda item: (
-                self.select(item.data(Qt.ItemDataRole.UserRole))
-                if not self._menu.isVisible()
-                else None
-            )
+            lambda item: self._activate_row(item) if not self._menu.isVisible() else None
         )
-        self.list.itemActivated.connect(
-            lambda item: self.select(item.data(Qt.ItemDataRole.UserRole))
-        )
+        self.list.itemActivated.connect(self._activate_row)
         self.search.textChanged.connect(self._refresh_list)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -279,19 +277,25 @@ class SessionWorkspace(QWidget):
     def set_stopper(self, stopper: Callable[[str, int], str | None] | None) -> None:
         self._stopper = stopper
 
+    def _activate_row(self, item: QListWidgetItem) -> None:
+        if isinstance(item.data(_ROW_ROLE), _ActivityRow):
+            self.activity_page_requested.emit()
+        else:
+            self.select(item.data(Qt.ItemDataRole.UserRole))
+
     def _rename_current_row(self) -> None:
         item = self.list.currentItem()
-        if item is not None:
+        if item is not None and not isinstance(item.data(_ROW_ROLE), _ActivityRow):
             self.rename_session(item.data(Qt.ItemDataRole.UserRole))
 
     def _delete_current_row(self) -> None:
         item = self.list.currentItem()
-        if item is not None:
+        if item is not None and not isinstance(item.data(_ROW_ROLE), _ActivityRow):
             self.delete_session(item.data(Qt.ItemDataRole.UserRole))
 
     def _menu_current_row(self) -> None:
         item = self.list.currentItem()
-        if item is not None:
+        if item is not None and not isinstance(item.data(_ROW_ROLE), _ActivityRow):
             self.open_menu(
                 item.data(Qt.ItemDataRole.UserRole),
                 self.list.viewport().mapToGlobal(self.list.visualItemRect(item).center()),
@@ -299,7 +303,7 @@ class SessionWorkspace(QWidget):
 
     def _context_menu(self, point: QPoint) -> None:
         item = self.list.itemAt(point)
-        if item is not None:
+        if item is not None and not isinstance(item.data(_ROW_ROLE), _ActivityRow):
             self.open_menu(
                 item.data(Qt.ItemDataRole.UserRole), self.list.viewport().mapToGlobal(point)
             )
@@ -1128,6 +1132,14 @@ class SessionWorkspace(QWidget):
             view.results.style().unpolish(view.results)
             view.results.style().polish(view.results)
 
+    def set_activity_page(self, active: bool) -> None:
+        """Select the activity subrow only while its full page is open."""
+        if type(active) is not bool:
+            raise TypeError("active must be bool")
+        if self._activity_page != active:
+            self._activity_page = active
+            self._refresh_list()
+
     def _refresh_list(self, *_args: object) -> None:
         needle = self.search.text().casefold().strip()
         self.list.clear()
@@ -1167,7 +1179,11 @@ class SessionWorkspace(QWidget):
             )
             self.list.addItem(item)
             if view.key == self.current_key:
-                self.list.setCurrentItem(item)
+                activity = QListWidgetItem(PAGES["results"])
+                activity.setData(_ROW_ROLE, _ActivityRow(active=self._activity_page))
+                activity.setToolTip(plain_tooltip("이 세션의 결과와 실행 활동을 엶."))
+                self.list.addItem(activity)
+                self.list.setCurrentItem(activity if self._activity_page else item)
 
     def _clear_content(self, view: SessionView) -> None:
         view.transcript.clear()

@@ -45,12 +45,18 @@ class _SessionRow:
     approval: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _ActivityRow:
+    active: bool = False
+
+
 class _SessionRowDelegate(QStyledItemDelegate):
     """Draw a session row as status mark, title, time and status line.
 
     The item's display text stays "title\\nHH:MM · status" for search and
     assistive technology. Marks differ in shape as well as color; the selected
-    row is a bordered card, as in Orca's worktree list."""
+    row is a bordered card, as in Orca's worktree list.
+    A compact activity subrow connects to the selected session with an elbow line."""
 
     _HEIGHT = 52
     menu_requested = Signal(str, object)
@@ -68,7 +74,8 @@ class _SessionRowDelegate(QStyledItemDelegate):
         index: QModelIndex | QPersistentModelIndex,
     ) -> bool:
         if (
-            isinstance(event, QMouseEvent)
+            isinstance(index.data(_ROW_ROLE), _SessionRow)
+            and isinstance(event, QMouseEvent)
             and event.button() == Qt.MouseButton.LeftButton
             and self.menu_rect(option.rect).contains(event.position().toPoint())
             and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease)
@@ -83,7 +90,8 @@ class _SessionRowDelegate(QStyledItemDelegate):
     def sizeHint(
         self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
     ) -> QSize:
-        return QSize(option.rect.width(), self._HEIGHT)
+        height = 32 if isinstance(index.data(_ROW_ROLE), _ActivityRow) else self._HEIGHT
+        return QSize(option.rect.width(), height)
 
     def paint(
         self,
@@ -92,6 +100,49 @@ class _SessionRowDelegate(QStyledItemDelegate):
         index: QModelIndex | QPersistentModelIndex,
     ) -> None:
         row = index.data(_ROW_ROLE)
+        if isinstance(row, _ActivityRow):
+            state = option.state
+            rect = QRectF(option.rect).adjusted(0.5, 1.5, -0.5, -1.5)
+            emphasized = row.active or bool(state & QStyle.StateFlag.State_Selected)
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(QColor(TOKENS["hairline_strong"]), 1.2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            center = QPointF(rect.left() + 13, rect.center().y())
+            painter.drawLine(QPointF(center.x(), option.rect.top()), center)
+            painter.drawLine(center, QPointF(rect.left() + 24, center.y()))
+            body = QRectF(rect.left() + 28, rect.top(), rect.width() - 28, rect.height())
+            if emphasized:
+                painter.setPen(QPen(QColor(TOKENS["selected_line"]), 1))
+                painter.setBrush(QColor(TOKENS["selected"]))
+                painter.drawRoundedRect(body, 6, 6)
+            elif state & QStyle.StateFlag.State_MouseOver:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(TOKENS["hover"]))
+                painter.drawRoundedRect(body, 6, 6)
+            if state & QStyle.StateFlag.State_HasFocus:
+                painter.setPen(QPen(QColor(TOKENS["primary"]), 1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(body, 6, 6)
+            icon = QRectF(body.left() + 8, body.center().y() - 7.5, 15, 15)
+            line_icon("panel", "primary_text" if emphasized else "mute").paint(
+                painter, icon.toRect()
+            )
+            left = icon.right() + 6
+            width = max(0, int(body.right() - 8 - left))
+            font = ui_font(13, QFont.Weight.DemiBold if emphasized else QFont.Weight.Normal)
+            painter.setFont(font)
+            painter.setPen(QColor(TOKENS["primary_text" if emphasized else "body"]))
+            painter.drawText(
+                QRectF(left, body.top(), width, body.height()),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                QFontMetrics(font).elidedText(
+                    index.data(Qt.ItemDataRole.DisplayRole), Qt.TextElideMode.ElideRight, width
+                ),
+            )
+            painter.restore()
+            return
         if not isinstance(row, _SessionRow):
             super().paint(painter, option, index)
             return

@@ -53,7 +53,7 @@ def test_small_window_keeps_navigation_and_runtime_status_available(app: QApplic
         assert window.menu_button.isVisible()
         assert window.runtime_identity.isVisible()
         assert window.runtime_identity.geometry().right() <= window.width()
-        assert set(window._menu_actions) == set(window._nav_buttons)
+        assert set(window._menu_actions) == set(window._nav_buttons) | {"results"}
         window.menu_button.setFocus()
         QTest.keyClick(window.menu_button, Qt.Key.Key_Return)
         app.processEvents()

@@ -170,7 +170,8 @@ class GuardWindow(QMainWindow):
 
     def _assemble_sidebar(self, root: QHBoxLayout) -> None:
         # Sessions first (Codex, Claude Code, Conductor): new session, search,
-        # three views, the session list, then the management pages below it.
+        # two views, sessions with an activity subrow under the selected session,
+        # then the management pages below them.
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
         self.sidebar.setFixedWidth(224)
@@ -195,7 +196,7 @@ class GuardWindow(QMainWindow):
         side.addWidget(self.new_session_button)
         side.addWidget(self.sessions.search)
         side.addSpacing(2)
-        for page in ("runs", "results", "approvals"):
+        for page in ("runs", "approvals"):
             side.addWidget(self._nav_button(page))
         side.addSpacing(16)
         sessions_caption = plain_label("세션", name="navCaption")
@@ -295,7 +296,7 @@ class GuardWindow(QMainWindow):
     def _assemble_activity(self) -> None:
         # A session's results and activity are one block that moves between
         # two hosts: the chat header's 활동 docks it beside the conversation,
-        # and the sidebar's 결과 · 실행 활동 opens it as a page of its own (the
+        # and the selected session's 결과 · 실행 활동 subrow opens its page (the
         # compact shell's only form). Status, run controls and approval review
         # scroll; the stop controls stay pinned below them in both.
         self._activity = QWidget()
@@ -403,6 +404,7 @@ class GuardWindow(QMainWindow):
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
         self._update_shell_layout()
         self.sessions.results_requested.connect(self._toggle_activity)
+        self.sessions.activity_page_requested.connect(lambda: self.navigate("results"))
         self.sessions.approval_review_requested.connect(self._open_approval_review)
         self.sessions.selection_changed.connect(self._session_selected)
         self.sessions.titles_changed.connect(self._session_titles_changed)
@@ -829,6 +831,7 @@ class GuardWindow(QMainWindow):
         self._place_activity()
         if page == "runs":
             self.sessions.return_to_conversation()
+        self.sessions.set_activity_page(page == "results")
         for key, button in self._nav_buttons.items():
             button.setProperty("selected", key == page)
             button.setIcon(

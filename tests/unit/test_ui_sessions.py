@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QTextCursor
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QPushButton, QScrollArea
 
 from guard_app.domain.enums import Label, TaskStatus
@@ -28,6 +29,7 @@ from guard_app.services.bridge import (
 from guard_app.ui.approval_detail import visible_review_text
 from guard_app.ui.presentation import APPROVAL_RESULTS, PAGES
 from guard_app.ui.runtime import RuntimePanel
+from guard_app.ui.session_list import _ActivityRow
 from guard_app.ui.sessions import (
     _ROW_ROLE,
     APPROVAL_BAND_TITLE,
@@ -77,6 +79,24 @@ def session_view(window, **kwargs):
     shell, panel, bridge = window
     bridge.task_changed.emit(snapshot(**kwargs))
     return shell, panel, bridge, shell.sessions.current
+
+
+def activity_row(shell):
+    listing = shell.sessions.list
+    return next(
+        listing.item(i)
+        for i in range(listing.count())
+        if isinstance(listing.item(i).data(_ROW_ROLE), _ActivityRow)
+    )
+
+
+def click_activity_row(shell):
+    listing = shell.sessions.list
+    QTest.mouseClick(
+        listing.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=listing.visualItemRect(activity_row(shell)).center(),
+    )
 
 
 def snapshot(**kwargs):
@@ -322,7 +342,7 @@ def test_header_pill_states_the_confirmed_status_in_words(app):
 
 def test_sidebar_results_open_a_full_page_with_the_selected_session_in_scope(window, app):
     shell, panel, bridge, view = session_view(window, can_accept_message=True)
-    shell._nav_buttons["results"].click()
+    click_activity_row(shell)
     app.processEvents()
     assert shell._page == "results"
     assert shell.stack.currentWidget() is shell.results_page
@@ -368,7 +388,7 @@ def test_activity_button_docks_results_beside_the_conversation(window, app):
     assert not shell.results_scope.isVisible()
     assert not shell._results_scroll.isAncestorOf(panel.cancel_button)
     assert panel.cancel_button.isVisible()
-    shell._nav_buttons["results"].click()
+    click_activity_row(shell)
     app.processEvents()
     assert shell.results_page.isAncestorOf(panel)
     assert shell.results_scope.isVisible()
@@ -489,7 +509,8 @@ def test_existing_feature_pages_and_preparation_forms_remain_reachable(window):
     assert "모델 새 세션" not in shell.windowTitle()
     assert shell.windowTitle().startswith("MCP Runtime Guard")
     assert shell._page == "runs"
-    assert set(shell._page_indices) == set(PAGES) == set(shell._nav_buttons)
+    assert set(shell._page_indices) == set(PAGES) == set(shell._nav_buttons) | {"results"}
+    assert "results" not in shell._nav_buttons
     for page in PAGES:
         shell.navigate(page)
         assert shell.stack.currentIndex() == shell._page_indices[page]
