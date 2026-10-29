@@ -63,7 +63,7 @@
 - [ ] B3.13 DESC-01 A 검토 입력·C Registry 원본 분리/저장·설명 변경 적용 의미 합의 — 막힘: 3인 합의·A/C 연결
 - [x] B3.14 EXE-01 실행 파일 고정 설정 필드 B 구현 · A 등록 화면·launcher 연결 대기 · [기록](archive/b/B3.14-exe01-settings-fields.md)
 - [x] B3.15 URL-01 HTTP 서버 URL을 서버별 검사 · #86 병합 · A 연결·표시 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
-- [x] B3.16 설정과 Registry가 다르면 해당 서버만 숨김 · #86 병합 · A 재확인 화면 연결 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
+- [x] B3.16 설정과 Registry가 다르면 해당 서버를 숨기고 시작에서 제외 · [기록](archive/b/B3.15-B3.16-server-settings.md) · [시작 제외](archive/b/B3.17-startable-settings-mismatch.md)
 
 ## B4 · Guard와 응답 게이트
 

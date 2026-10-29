@@ -285,13 +285,33 @@ def test_startable_servers_filter_urls_but_keep_selection_order_and_policy():
     assert loaded.server_issue("healthy-two") is None
     assert [server.id for server in selected] == ["docs", "remote", "healthy-one", "healthy-two"]
     assert [server.id for server in loaded.startable_servers] == [
-        "docs",
         "healthy-one",
         "healthy-two",
     ]
     assert loaded.selected_servers == selected
     assert loaded.policy_version == before_version
     assert document == before_document
+
+
+def test_startable_servers_excludes_only_url_and_exact_settings_mismatch(monkeypatch):
+    document = _document()
+    for server_id in ("other", "similar"):
+        server = deepcopy(document["servers"][0])
+        server["id"] = server_id
+        document["servers"].append(server)
+        document["profile"]["servers"].append(server_id)
+    loaded = load_profile_settings(document, _Registry())
+    issues = {
+        "docs": "REG_SETTINGS_MISMATCH",
+        "remote": "URL_NOT_CANONICAL",
+        "other": "OTHER_ISSUE",
+        "similar": "REG_SETTINGS_MISMATCH_EXTRA",
+    }
+    monkeypatch.setattr(
+        type(loaded), "server_issue", lambda _self, server_id: issues.get(server_id)
+    )
+
+    assert [server.id for server in loaded.startable_servers] == ["other", "similar"]
 
 
 def test_unconfigured_discovered_tools_are_hidden():

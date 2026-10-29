@@ -800,13 +800,15 @@ class LoadedProfile:
         """실행 시작(조립·목록 수집)에 쓸 선택 서버를 반환한다.
 
         selected_servers는 설정에서 고른 서버 그대로이며 실행 허가가 아니다.
-        현재는 URL_* 이슈만 제외한다. A155 record_settings_change 순서 이관과
-        C apply_settings 연결 후 REG_SETTINGS_MISMATCH도 제외할 계획이다.
+        URL_* 이슈와 REG_SETTINGS_MISMATCH 서버를 제외한다. A에서 같은 편집을
+        다시 저장해 record_settings_change로 등록을 맞추면 서버를 띄우지 않아도
+        이슈가 없어지고 다음 시작에 다시 포함된다.
         """
         return tuple(
             server
             for server in self.selected_servers
-            if not (self.server_issue(server.id) or "").startswith("URL_")
+            if (issue := self.server_issue(server.id)) != "REG_SETTINGS_MISMATCH"
+            and not (issue or "").startswith("URL_")
         )
 
     def server_issue(self, server_id: str) -> str | None:
