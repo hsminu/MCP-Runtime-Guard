@@ -171,6 +171,7 @@ class SessionWorkspace(QWidget):
         self._active_key: str | None = None
         self._ready = False
         self._session_blocker = ""
+        self._startup_notice = ""
         self._busy_scopes: frozenset[tuple[str, int]] = frozenset()
         self._seen_events: set[tuple[str, int, str, str]] = set()
         self._terminal_keys: set[str] = set()
@@ -460,6 +461,13 @@ class SessionWorkspace(QWidget):
         for view in self.sessions.values():
             self._refresh_view(view)
 
+    def set_startup_notice(self, text: str) -> None:
+        """Fixed startup progress text while the backend starts, or ""."""
+
+        self._startup_notice = text if type(text) is str else ""
+        for view in self.sessions.values():
+            self._refresh_view(view)
+
     def set_busy_scopes(self, scopes: frozenset[tuple[str, int]]) -> None:
         self._busy_scopes = scopes
         for view in self.sessions.values():
@@ -507,6 +515,7 @@ class SessionWorkspace(QWidget):
             pending_command=view.pending_command,
             command_notice=view.command_notice,
             session_blocker=self._session_blocker,
+            startup_notice=self._startup_notice,
         )
         writable, active = display.writable, display.active
         view.send.setEnabled(writable and bool(view.draft.toPlainText().strip()))

@@ -84,7 +84,7 @@ def test_call_stages_stop_where_the_status_stops() -> None:
     calls = {row.current_status: row for row in ui_demo.calls(datetime.now(UTC))}
     released = ui_demo.call_stages(calls["SUCCEEDED"])
     assert all(stage.state == "OCCURRED" for stage in released)
-    assert released[-1].stage_code == "RELEASED"
+    assert released[-1].stage_code == "COMMITTED"
     assert "WAITING_APPROVAL" not in {stage.stage_code for stage in released}
     waiting = ui_demo.call_stages(calls["WAITING_APPROVAL"])
     assert [stage.state for stage in waiting[:3]] == ["OCCURRED", "OCCURRED", "NOT_RUN"]

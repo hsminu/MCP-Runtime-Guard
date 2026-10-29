@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -107,6 +108,44 @@ _MAX_BODY_BYTES = 16 << 20
 
 class L2Error(RuntimeError):
     """시험을 끝까지 하지 못한 고정 사유. `run_l2`는 이것을 실패 코드로 바꿔 담는다."""
+
+
+# 이 모듈이 `L2Report.failures`와 `L2Error`에 싣는 고정 코드 전체(28개). A 시작 화면은 이 집합에
+# 있는 코드만 그대로 알리고, 나머지(실행 입구 `LaunchError`·앱 폴더 `AppPathError`의 코드 등)는
+# 묶어서 알린다. 테스트가 이 모듈 안에서 쓰는 코드와 대조한다(#83 C 리뷰 참고 4).
+L2_FAILURE_CODES = frozenset(
+    {
+        "L2_CODEX_EXITED",
+        "L2_CONFIG_LAYERS_UNEXPECTED",
+        "L2_CONFIG_MISMATCH",
+        "L2_CONFIG_UNREADABLE",
+        "L2_DEADLINE_EXCEEDED",
+        "L2_DEADLINE_INVALID",
+        "L2_EXIT_UNCONFIRMED",
+        "L2_FEATURE_ENABLED",
+        "L2_FOLDER_NOT_REMOVED",
+        "L2_FORBIDDEN_NOT_REFUSED",
+        "L2_ITEM_UNEXPECTED",
+        "L2_MODEL_REQUEST_MISSING",
+        "L2_MODEL_TRAFFIC_UNEXPECTED",
+        "L2_PROBE_CALLS_OVERLAP",
+        "L2_PROBE_CALLS_UNEXPECTED",
+        "L2_PROMPT_UNEXPECTED",
+        "L2_PROTOCOL_INVALID",
+        "L2_READER_STUCK",
+        "L2_REMOTE_CONTROL_ENABLED",
+        "L2_REQUEST_REJECTED",
+        "L2_REQUEST_TIMEOUT",
+        "L2_REQUIREMENTS_PRESENT",
+        "L2_SERVER_REQUEST_UNEXPECTED",
+        "L2_SESSION_FLAGS_UNEXPECTED",
+        "L2_THREAD_PARAMS_UNSAFE",
+        "L2_THREAD_START_INVALID",
+        "L2_TOOLS_UNEXPECTED",
+        "L2_TURN_NOT_COMPLETED",
+        "L2_TURN_TIMEOUT",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,7 +744,11 @@ def evaluate(
     if any(method != "item/tool/call" for method in observation.server_requests):
         fail("L2_SERVER_REQUEST_UNEXPECTED")
     expected_probes = [(PROBE_NAMESPACE, PROBE_TOOL, f"l2_probe_{n}") for n in (1, 2)]
-    if observation.probe_calls != expected_probes or observation.probe_overlap:
+    if observation.probe_overlap:
+        fail("L2_PROBE_CALLS_OVERLAP")
+    # Codex 0.162.1은 한 응답의 도구 호출 둘을 겹치지 않게 보내지만 가끔 순서를 바꾼다(실측 40회 중
+    # 1회, #21). 순서는 판정하지 않는다. 같은 응답의 호출 인자는 서로의 결과를 담을 수 없다.
+    if sorted(observation.probe_calls) != expected_probes:
         fail("L2_PROBE_CALLS_UNEXPECTED")
     if observation.turn_status != "completed":
         fail("L2_TURN_NOT_COMPLETED")
@@ -726,6 +769,23 @@ def _check_requirements(observation: L2Observation, fail: Callable[[str], None])
     value = observation.requirements
     if type(value) is not dict or value.get("requirements") is not None:
         fail("L2_REQUIREMENTS_PRESENT")
+
+
+def _same_file(reported: object, expected: Path) -> bool:
+    """Codex가 보고한 경로가 기대한 그 파일인지 본다.
+
+    같은 파일을 다르게 적은 경로는 받는다. Windows 앱 패키지 안에서 실행하면 `%LOCALAPPDATA%`가
+    가상화되어, Codex는 물리 경로를 보고하고 C는 논리 경로를 쥔다(A161). 다른 파일은 내용이
+    같아도 받지 않는다(파일 ID 비교). 경로를 읽지 못하면 다른 파일로 본다.
+    """
+    if type(reported) is not str:
+        return False
+    if Path(reported) == expected:
+        return True
+    try:
+        return os.path.samefile(reported, expected)
+    except (OSError, ValueError):
+        return False
 
 
 def _check_config(
@@ -755,8 +815,7 @@ def _check_config(
             source = name.get("file") if type(name) is dict else None
             if (
                 type(name) is not dict
-                or type(source) is not str
-                or Path(source) != codex_home / "config.toml"
+                or not _same_file(source, codex_home / "config.toml")
                 or set(values) != set(l1)
                 or name.get("profile") is not None
             ):
@@ -773,11 +832,7 @@ def _check_config(
         actual = config.get(key)
         if key == "model_catalog_json":
             # Codex는 이 상대 경로를 CODEX_HOME 기준 절대 경로로 풀어 돌려준다.
-            applied = (
-                type(actual) is str
-                and type(expected) is str
-                and Path(actual) == codex_home / expected
-            )
+            applied = type(expected) is str and _same_file(actual, codex_home / expected)
         else:
             applied = _applied(actual, expected)
         if not applied:

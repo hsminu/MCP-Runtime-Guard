@@ -269,6 +269,7 @@ def test_browser_open_failure_offers_device_and_api_key_without_url(app, caplog)
         form.api_key_input.setText("sk-test-fallback")
         assert form.api_key_button.isEnabled()
         assert "API 키 또는 기기 코드로 로그인하세요." in form.status.text()
+        assert "잠시 뒤 다시" not in form.status.text()  # no contradicting retry line
         assert not form.cancel_button.isEnabled()
         assert AUTH_URL not in repr(views)
         assert "private-login-state" not in repr(views)
@@ -611,6 +612,8 @@ def test_an_unconfirmed_account_command_names_what_was_not_confirmed(app):
         assert form.view.browser_available
         assert notice in form.status.text()
         assert ("로그인 요청" in form.status.text()) == action.startswith("account_login_")
+        # Only the read notice lacks its own next step and keeps the generic line.
+        assert ("잠시 뒤 다시" in form.status.text()) == (action == "account_read")
         form.close()
 
 

@@ -521,6 +521,80 @@ async def test_close_reports_teardown_failure_after_initialize_failure():
     assert [name for name, _ in session.events] == ["enter", "initialize", "exit"]
 
 
+def _connection_closed() -> McpError:
+    return McpError(ErrorData(code=CONNECTION_CLOSED, message="Connection closed"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["stream ended", "error reply", "another error", "a copy"])
+async def test_a_session_ended_in_initialize_closes_only_if_its_exit_added_nothing(case):
+    """A158: the SDK and pipe task groups wrap initialize's own error once they finish."""
+
+    class EndedSession(_Session):
+        async def __aexit__(self, exc_type, exc, tb):
+            await super().__aexit__(exc_type, exc, tb)
+            leaves = [_connection_closed()] if case == "a copy" else [exc]
+            if case == "another error":
+                leaves.append(RuntimeError("SECRET pump failure"))
+            raise ExceptionGroup("session", [ExceptionGroup("pipes", leaves)])
+
+    session = EndedSession()
+    session.initialize_error = (
+        McpError(ErrorData(code=-32603, message="SECRET refusal"))
+        if case == "error reply"
+        else _connection_closed()
+    )
+    worker = _worker(lambda: session)
+    with _dispatch_error("SessionStartFailed") as start:
+        await worker.start()
+    assert "SECRET" not in str(start.value)
+    if case in ("stream ended", "error reply"):
+        await worker.close()
+        assert worker._session_exited
+    else:
+        with _dispatch_error("SessionCloseFailed") as shutdown:
+            await worker.close()
+        assert "SECRET" not in str(shutdown.value)
+        assert not worker._session_exited
+    assert [name for name, _ in session.events] == ["enter", "initialize", "exit"]
+
+
+def test_only_a_group_of_the_body_error_itself_counts_as_a_completed_exit():
+    body = _connection_closed()
+    cancelled = asyncio.CancelledError()
+    only_the_body = mcp_transport.worker._only_the_body_error
+    assert only_the_body(ExceptionGroup("outer", [ExceptionGroup("inner", [body])]), body)
+    assert not only_the_body(ExceptionGroup("outer", [body, OSError("other")]), body)
+    assert not only_the_body(BaseExceptionGroup("outer", [cancelled]), cancelled)
+    assert not only_the_body(ExceptionGroup("outer", [body]), None)
+
+
+@pytest.mark.asyncio
+async def test_an_owner_being_cancelled_keeps_the_ended_session_exit_unconfirmed():
+    error = _connection_closed()
+
+    class Context:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *exc_info):
+            asyncio.current_task().cancel()
+            raise ExceptionGroup("session", [error])
+
+    seen = []
+
+    async def owner():
+        tracker = mcp_transport.worker._SessionExitTracker(Context())
+        await tracker.__aenter__()
+        try:
+            await tracker.__aexit__(McpError, error, None)
+        except ExceptionGroup:
+            seen.append(("raised", tracker.exited))
+
+    await asyncio.gather(asyncio.create_task(owner()), return_exceptions=True)
+    assert seen == [("raised", False)]
+
+
 @pytest.mark.asyncio
 async def test_close_reports_owner_exit_failure_that_preceded_close(monkeypatch):
     class ExitFailureSession(_Session):

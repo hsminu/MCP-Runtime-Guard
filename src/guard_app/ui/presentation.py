@@ -77,7 +77,7 @@ REASONS = {
     "TOOL_UNSUPPORTED": "등록되지 않은 도구",
     "INVALID_ARGUMENTS": "도구 인자 형식 오류",
     "REG_NOT_ACTIVE": "서버 등록 상태가 ACTIVE가 아님",
-    "TOOL_FINGERPRINT_CHANGED": "도구 정의 지문 변경",
+    "TOOL_FINGERPRINT_CHANGED": "도구 정의·설정 변경",
     "TASK_UNCLASSIFIED": "자료 등급을 분류할 수 없음",
     "TASK_NOT_RUNNING": "Task 실행 상태가 아님",
     "POLICY_CHANGED": "정책 변경으로 재평가 필요",
@@ -92,6 +92,7 @@ REASONS = {
     "APPROVAL_CONTEXT_LOST": "승인 요청 맥락 손실",
     "APPROVAL_STALE": "승인 요청 상태 변경",
     "APPROVAL_RACE": "승인 요청 중복 처리",
+    "GUARD_CLOSED": "Guard 정상 종료로 실행하지 않음",
 }
 DECISIONS = {"ALLOW": "허용", "ASK": "승인 필요", "DENY": "차단"}
 

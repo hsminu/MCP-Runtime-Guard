@@ -30,10 +30,18 @@ from .approval_presentation import (
     _STATUS_TEXT as _STATUS_TEXT,
 )
 from .approval_presentation import (
-    DEFAULT_APPROVAL_TTL_SECONDS as DEFAULT_APPROVAL_TTL_SECONDS,
+    PAGE_SIZE as PAGE_SIZE,
 )
 from .approval_presentation import (
-    PAGE_SIZE as PAGE_SIZE,
+    QUERY_TEXT_INVALID,
+    QUERY_UNKNOWN,
+    SERVER_FILTER_INVALID,
+    selected_detail_text,
+    status_display,
+    summary_columns,
+    valid_page,
+    valid_query_text,
+    valid_server_filter,
 )
 from .approval_presentation import (
     SOURCE_NOT_CONNECTED as SOURCE_NOT_CONNECTED,
@@ -55,12 +63,6 @@ from .approval_presentation import (
 )
 from .approval_presentation import (
     _bounded_request_age as _bounded_request_age,
-)
-from .approval_presentation import (
-    selected_detail_text,
-    status_display,
-    summary_columns,
-    valid_page,
 )
 from .approval_rows import ApprovalTable
 from .models import LoadState
@@ -92,9 +94,6 @@ class ApprovalListPage(QWidget):
         self._column_mode: str | None = None
         self._display_now: datetime | None = None
         self._source_connected = True
-        # Profile approval TTL (GuardSettings); a PENDING row older than this
-        # should already be expiring, so it is flagged for a fresh read.
-        self._approval_ttl_seconds = DEFAULT_APPROVAL_TTL_SECONDS
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 40)
@@ -171,8 +170,8 @@ class ApprovalListPage(QWidget):
 
         self.pager = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.count_label = plain_label("총건수 미제공 · 현재 페이지 0건", name="secondary")
-        self.pager.addWidget(self.count_label)
-        self.pager.addStretch(1)
+        # The count takes the free width (see call_logs: it broke mid-phrase).
+        self.pager.addWidget(self.count_label, 1)
         self.previous_button = KeyboardActionButton("이전")
         self.previous_button.clicked.connect(self.previous_page)
         self.pager.addWidget(self.previous_button)
@@ -268,7 +267,6 @@ class ApprovalListPage(QWidget):
                     row,
                     self._query,
                     self._display_now,
-                    self._approval_ttl_seconds,
                     narrow=self._column_mode == "narrow",
                 ),
             )
@@ -287,11 +285,6 @@ class ApprovalListPage(QWidget):
             (row for row in self._rows if row.approval_id == self._selected_id),
             None,
         )
-
-    def set_approval_ttl_seconds(self, seconds: int) -> None:
-        if type(seconds) is not int or seconds < 1:
-            raise ValueError("positive approval TTL required")
-        self._approval_ttl_seconds = seconds
 
     @property
     def source_connected(self) -> bool:
@@ -349,13 +342,29 @@ class ApprovalListPage(QWidget):
         if not self._source_connected:
             return
         self._sequence += 1
+        search = self.search.text().strip()
+        server_id = self.server_filter.text()
+        error = None
+        if not valid_query_text(search):
+            error = QUERY_TEXT_INVALID
+        elif not valid_server_filter(server_id):
+            error = SERVER_FILTER_INVALID
+        if error is not None:
+            # Invalid input is not sent or interpolated into the fixed message.
+            self._query = None
+            self._clear_rows()
+            self._state = LoadState.ERROR
+            self.state_message.set_message(error)
+            self.state_message.setVisible(True)
+            self._update_pager()
+            return
         self._query = ApprovalQuery(
             token=self._sequence,
             lane=(
                 ApprovalLane.PENDING if self.lane_tabs.currentIndex() == 0 else ApprovalLane.HISTORY
             ),
-            search=self.search.text().strip(),
-            server_id=self.server_filter.text().strip(),
+            search=search,
+            server_id=server_id,
             sort=ApprovalSort(self.sort.currentData()),
             page=page,
         )
@@ -412,7 +421,7 @@ class ApprovalListPage(QWidget):
             return False
         self._clear_rows()
         self._state = LoadState.ERROR
-        self.state_message.set_state(self._state)
+        self.state_message.set_message(QUERY_UNKNOWN)
         self.state_message.setVisible(True)
         self._update_pager()
         return True

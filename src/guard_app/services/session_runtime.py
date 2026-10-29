@@ -18,7 +18,7 @@ from guard_app.domain.contracts import TaskIdentity
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import DispatchError, StoreError
 from guard_app.domain.models import TaskState
-from guard_app.ports import RegistryStore, SessionAudit, Store, StoreLifecycle
+from guard_app.ports import RegistryStore, SessionAudit, Store, StoreLifecycle, StoreQueries
 from guard_app.security.ids import new_id
 from guard_app.services.account_runtime import AccountAccess, ProductAccount
 from guard_app.services.bridge_registration import RegistrationCommands
@@ -174,6 +174,14 @@ def _task_source(store: Store) -> PolicyTaskSource | None:
     # Every Task this Guard governs, for apply_policy_change (SQLiteStore.list_tasks).
     list_tasks = getattr(store, "list_tasks", None)
     return cast(PolicyTaskSource, list_tasks) if callable(list_tasks) else None
+
+
+def _store_queries(store: Store) -> StoreQueries | None:
+    # B6-05: the approval list and call log read the Store (SQLiteStore implements it).
+    names = ("list_approvals", "list_calls", "get_call")
+    if all(callable(getattr(store, name, None)) for name in names):
+        return cast(StoreQueries, store)
+    return None
 
 
 class SessionRuntime:
@@ -695,4 +703,5 @@ class SessionRuntime:
             policy_destinations=self.destinations if assembled is not None else None,
             settings_status=self._settings_status,
             account=self._account,
+            queries=_store_queries(self.store),
         )

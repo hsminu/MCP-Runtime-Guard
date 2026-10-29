@@ -63,6 +63,29 @@ def _pin_status(server: ServerSummary) -> str:
     return "저장 지문과 일치" if server.executable_pinned else "지문 재확인 필요"
 
 
+def _needs_restore(server: ServerSummary) -> bool:
+    return server.in_settings is False and server.registry_status == "pending"
+
+
+def _settings_issue(server: ServerSummary) -> str:
+    if server.in_settings is False:
+        return (
+            "설정 파일에 이 서버가 없음. 등록만 저장되고 설정 저장은 끝나지 않았음. "
+            "서버 목록에서 설정 다시 저장을 누르세요."
+            if _needs_restore(server)
+            else "설정 파일에 이 서버가 없음."
+        )
+    # B's fixed issue codes only; an unknown one is never echoed (#86).
+    issue = server.settings_issue
+    if issue is None:
+        return "확인된 문제 없음 · Profile에서 고른 서버만 확인함"
+    if issue.startswith("URL_"):
+        return "저장된 URL을 쓸 수 없음. 이 서버는 연결하지 않음."
+    if issue == "REG_SETTINGS_MISMATCH":
+        return "설정 파일과 등록 내용이 다름. 이 서버의 도구는 숨겨짐."
+    return "설정 확인 필요"
+
+
 def _detail_field(title: str, value: str) -> tuple[QWidget, QLabel]:
     field = QWidget()
     field.setObjectName("infoField")
@@ -128,6 +151,8 @@ class ServerDetailDialog(QDialog):
         layout.addWidget(transport_field)
         pin_field, self._pin_value = _detail_field("실행 파일 지문", _pin_status(server))
         layout.addWidget(pin_field)
+        issue_field, self._issue_value = _detail_field("설정 확인", _settings_issue(server))
+        layout.addWidget(issue_field)
         self.scan_status_card = ScanStatusCard()
         self.scan_status_card.setMinimumWidth(0)
         self.scan_status_card.setSizePolicy(
@@ -154,6 +179,7 @@ class ServerDetailDialog(QDialog):
         self._server_id_value.setText(public_display_text(server.server_id))
         self._transport_value.setText(fixed(TRANSPORTS, server.transport))
         self._pin_value.setText(_pin_status(server))
+        self._issue_value.setText(_settings_issue(server))
         self.scan_status_card.set_snapshot(Surface(LoadState.LOADING))
 
 
@@ -161,6 +187,8 @@ class ServerListPage(QWidget):
     """Filters only rows in the supplied Registry query result."""
 
     scan_snapshot_requested = Signal(str, int)
+    # The ServerSummary of a registration whose settings record is to be written back.
+    restore_requested = Signal(object)
     _FULL_TABLE_WIDTH = 970
     _TINY_TABLE_WIDTH = 440
     _STACK_FILTER_WIDTH = 480
@@ -270,6 +298,16 @@ class ServerListPage(QWidget):
         self.tools_button = KeyboardActionButton("선택한 서버 도구 설정")
         self.tools_button.clicked.connect(self._preview_tools)
         layout.addWidget(self.tools_button)
+        # A128·A105: a PENDING registration whose settings save did not finish.
+        self.restore_button = KeyboardActionButton("선택한 서버 설정 다시 저장")
+        self.restore_button.clicked.connect(self._restore_selected)
+        layout.addWidget(self.restore_button)
+        self.restore_hint = plain_label(
+            "설정 파일에 없는 등록임. 같은 서버를 다시 입력하면 도구 목록이 등록과 같을 때만 "
+            "설정 파일에 저장함. 등록 상태는 바뀌지 않음.",
+            name="secondary",
+        )
+        layout.addWidget(self.restore_hint)
         layout.addWidget(self.activation_notice)
         self._selection_changed()
         self._set_filters_enabled(False)
@@ -372,7 +410,14 @@ class ServerListPage(QWidget):
                 (fixed(TIER_NAMES, server.tier), fixed_code(TIERS, server.tier)),
                 (self._label_text(server.max_label), fixed_code(LABELS, server.max_label)),
                 (
-                    fixed(REGISTRY_NAMES, server.registry_status),
+                    fixed(REGISTRY_NAMES, server.registry_status)
+                    + (
+                        " · 설정 없음"
+                        if server.in_settings is False
+                        else " · 설정 확인 필요"
+                        if server.settings_issue is not None
+                        else ""
+                    ),
                     fixed_code(REGISTRY_STATUSES, server.registry_status).upper(),
                 ),
                 (fixed(SESSION_STATUSES, server.session_status), ""),
@@ -411,15 +456,29 @@ class ServerListPage(QWidget):
         self.detail_button.setEnabled(self._selected_id() is not None)
         selected = next((s for s in self._servers if s.server_id == self._selected_id()), None)
         ready = self._activation_bridge is not None and not self._activation_command
+        # Activation and tool settings read the server's settings record.
+        configured = selected is not None and selected.in_settings is not False
         self.activate_button.setEnabled(
-            ready and selected is not None and selected.registry_status == "pending"
+            ready and configured and selected is not None and selected.registry_status == "pending"
         )
         self.block_button.setEnabled(
             ready and selected is not None and selected.registry_status in ("pending", "active")
         )
         self.tools_button.setEnabled(
-            ready and selected is not None and selected.registry_status in ("pending", "active")
+            ready
+            and configured
+            and selected is not None
+            and selected.registry_status in ("pending", "active")
         )
+        restorable = ready and selected is not None and _needs_restore(selected)
+        self.restore_button.setEnabled(restorable)
+        self.restore_button.setVisible(restorable)
+        self.restore_hint.setVisible(restorable)
+
+    def _restore_selected(self) -> None:
+        selected = next((s for s in self._servers if s.server_id == self._selected_id()), None)
+        if selected is not None and _needs_restore(selected):
+            self.restore_requested.emit(selected)
 
     def attach_activation(self, bridge: BackendBridge) -> None:
         self._activation_bridge = bridge

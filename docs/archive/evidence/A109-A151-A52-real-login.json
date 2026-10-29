@@ -1,0 +1,960 @@
+{
+  "date": "2026-10-29",
+  "scope": [
+    "A109 browser completion and restart persistence",
+    "A151 logged-in startup and cleanup timing",
+    "A52 actual API-key and ChatGPT logout cleanup"
+  ],
+  "execution": "Actual visible Windows product main and pinned Codex 0.162.1; existing root injection resolves the same MSIX-virtualized physical app folder. L2 evaluator and model/account responses are not replaced.",
+  "timing": "perf_counter deltas between named events; main_begin is after imports/observer initialization. JSON observation overhead included. Single samples, no percentile or performance guarantee.",
+  "ui_observations": {
+    "first_browser_attempt_user_report": "invalid_auth_step",
+    "cancel_confirmed_before_fresh_browser_request": true,
+    "fresh_browser_authentication_completed_by_user": true,
+    "chatgpt_signed_in_after_restart": true,
+    "signed_out_after_logout_and_new_account_read": true,
+    "scanner_saved_tail_still_displayed": true
+  },
+  "metrics": {
+    "canonical-api-key-1": {
+      "main_begin_to_ready_seconds": 7.094353,
+      "l2_seconds": 5.409826,
+      "closing_to_main_end_seconds": 0.215173,
+      "all_observed_codex_processes_confirmed_closed": true,
+      "first_logout_to_cleanup_end_seconds": 8.99054,
+      "first_credential_cleanup_seconds": 0.008911
+    },
+    "canonical-invalid-key-fixed": {
+      "main_begin_to_ready_seconds": 7.962457,
+      "l2_seconds": 5.689271,
+      "closing_to_main_end_seconds": 0.151266,
+      "all_observed_codex_processes_confirmed_closed": true,
+      "first_logout_to_cleanup_end_seconds": 6.287254,
+      "first_credential_cleanup_seconds": 0.004698
+    },
+    "canonical-chatgpt-startup-1": {
+      "main_begin_to_ready_seconds": 4.068275,
+      "l2_seconds": 3.019705,
+      "closing_to_main_end_seconds": 0.232217,
+      "all_observed_codex_processes_confirmed_closed": true
+    },
+    "canonical-chatgpt-logout-2": {
+      "main_begin_to_ready_seconds": 4.084284,
+      "l2_seconds": 3.129931,
+      "closing_to_main_end_seconds": 0.240598,
+      "all_observed_codex_processes_confirmed_closed": true,
+      "first_logout_to_cleanup_end_seconds": 6.06434,
+      "first_credential_cleanup_seconds": 0.006042
+    }
+  },
+  "runs": {
+    "canonical-api-key-1": {
+      "events": [
+        {
+          "s": 1.268233,
+          "kind": "main_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 2.874765,
+          "kind": "bridge_state",
+          "state": "starting",
+          "code": "STARTING"
+        },
+        {
+          "s": 2.948663,
+          "kind": "l2_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 3.641592,
+          "kind": "process_started",
+          "pid": 13588,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 8.344805,
+          "kind": "process_closed",
+          "pid": 13588,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.054024
+        },
+        {
+          "s": 8.354573,
+          "kind": "l2_config_diagnostics",
+          "layers": [
+            {
+              "kind": "sessionFlags",
+              "is_dict": true,
+              "keys": [
+                "model_provider",
+                "model_providers",
+                "sqlite_home"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "user",
+              "is_dict": true,
+              "keys": [
+                "analytics",
+                "check_for_update_on_startup",
+                "cli_auth_credentials_store",
+                "features",
+                "feedback",
+                "history",
+                "include_environment_context",
+                "include_permissions_instructions",
+                "model",
+                "model_catalog_json",
+                "project_doc_max_bytes",
+                "project_root_markers",
+                "skills",
+                "web_search"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "system",
+              "is_dict": true,
+              "keys": [],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            }
+          ],
+          "mismatches": [],
+          "mcp_empty": true,
+          "profile_none": true,
+          "instruction_nonempty_keys": []
+        },
+        {
+          "s": 8.356024,
+          "kind": "l2_end",
+          "seconds": 5.409826,
+          "passed": true,
+          "failures": []
+        },
+        {
+          "s": 8.362586,
+          "kind": "bridge_state",
+          "state": "ready",
+          "code": "READY"
+        },
+        {
+          "s": 42.226669,
+          "kind": "process_started",
+          "pid": 27900,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 153.515936,
+          "kind": "process_closed",
+          "pid": 27900,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.06022
+        },
+        {
+          "s": 171.690414,
+          "kind": "process_started",
+          "pid": 30776,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 175.535548,
+          "kind": "account_read",
+          "state": "API_KEY"
+        },
+        {
+          "s": 197.657509,
+          "kind": "logout_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [
+              "account-57f3da55645b7126ef9f8c8f0aa3935d"
+            ],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 204.870749,
+          "kind": "logout_rpc_succeeded"
+        },
+        {
+          "s": 206.62949,
+          "kind": "process_closed",
+          "pid": 30776,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 1.757414
+        },
+        {
+          "s": 206.639138,
+          "kind": "credential_cleanup_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 206.648049,
+          "kind": "credential_cleanup_end",
+          "credentials": {
+            "sealed_names": [],
+            "primary_present": false,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 239.5227,
+          "kind": "process_started",
+          "pid": 30656,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 242.623999,
+          "kind": "account_read",
+          "state": "API_KEY"
+        },
+        {
+          "s": 266.334536,
+          "kind": "process_started",
+          "pid": 1168,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 303.448759,
+          "kind": "process_closed",
+          "pid": 1168,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.058799
+        },
+        {
+          "s": 380.331266,
+          "kind": "bridge_state",
+          "state": "closing",
+          "code": "CLOSING"
+        },
+        {
+          "s": 380.46481,
+          "kind": "process_closed",
+          "pid": 30656,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.130854
+        },
+        {
+          "s": 380.494517,
+          "kind": "bridge_state",
+          "state": "closed",
+          "code": "CLOSED"
+        },
+        {
+          "s": 380.546439,
+          "kind": "main_end",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        }
+      ],
+      "main_return": 0,
+      "canonical_root_injected": true
+    },
+    "canonical-invalid-key-fixed": {
+      "events": [
+        {
+          "s": 1.533516,
+          "kind": "main_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 3.671667,
+          "kind": "bridge_state",
+          "state": "starting",
+          "code": "STARTING"
+        },
+        {
+          "s": 3.780038,
+          "kind": "l2_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 4.494429,
+          "kind": "process_started",
+          "pid": 25232,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 9.452982,
+          "kind": "process_closed",
+          "pid": 25232,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.043157
+        },
+        {
+          "s": 9.463847,
+          "kind": "l2_config_diagnostics",
+          "layers": [
+            {
+              "kind": "sessionFlags",
+              "is_dict": true,
+              "keys": [
+                "model_provider",
+                "model_providers",
+                "sqlite_home"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "user",
+              "is_dict": true,
+              "keys": [
+                "analytics",
+                "check_for_update_on_startup",
+                "cli_auth_credentials_store",
+                "features",
+                "feedback",
+                "history",
+                "include_environment_context",
+                "include_permissions_instructions",
+                "model",
+                "model_catalog_json",
+                "project_doc_max_bytes",
+                "project_root_markers",
+                "skills",
+                "web_search"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "system",
+              "is_dict": true,
+              "keys": [],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            }
+          ],
+          "mismatches": [],
+          "mcp_empty": true,
+          "profile_none": true,
+          "instruction_nonempty_keys": []
+        },
+        {
+          "s": 9.465485,
+          "kind": "l2_end",
+          "seconds": 5.689271,
+          "passed": true,
+          "failures": []
+        },
+        {
+          "s": 9.495973,
+          "kind": "bridge_state",
+          "state": "ready",
+          "code": "READY"
+        },
+        {
+          "s": 45.89652,
+          "kind": "process_started",
+          "pid": 35252,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 82.704749,
+          "kind": "turn_completion",
+          "status": "failed",
+          "info_type": "dict",
+          "info": null,
+          "info_shape": {
+            "httpConnectionFailed": {
+              "httpStatusCode": 401
+            }
+          }
+        },
+        {
+          "s": 82.848942,
+          "kind": "process_closed",
+          "pid": 35252,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.141249
+        },
+        {
+          "s": 528.209191,
+          "kind": "process_started",
+          "pid": 26764,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 530.793731,
+          "kind": "account_read",
+          "state": "API_KEY"
+        },
+        {
+          "s": 543.868785,
+          "kind": "logout_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [
+              "account-b3593008645ed75a56e848d51f920702"
+            ],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 548.890576,
+          "kind": "logout_rpc_succeeded"
+        },
+        {
+          "s": 550.144291,
+          "kind": "process_closed",
+          "pid": 26764,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 1.252997
+        },
+        {
+          "s": 550.151341,
+          "kind": "credential_cleanup_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 550.156039,
+          "kind": "credential_cleanup_end",
+          "credentials": {
+            "sealed_names": [],
+            "primary_present": false,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 581.904707,
+          "kind": "process_started",
+          "pid": 23900,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 582.08306,
+          "kind": "account_read",
+          "state": "SIGNED_OUT"
+        },
+        {
+          "s": 899.72814,
+          "kind": "account_read",
+          "state": "SIGNED_OUT"
+        },
+        {
+          "s": 1031.877626,
+          "kind": "account_read",
+          "state": "CHATGPT"
+        },
+        {
+          "s": 1062.356075,
+          "kind": "bridge_state",
+          "state": "closing",
+          "code": "CLOSING"
+        },
+        {
+          "s": 1062.396818,
+          "kind": "process_closed",
+          "pid": 23900,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.039609
+        },
+        {
+          "s": 1062.42723,
+          "kind": "bridge_state",
+          "state": "closed",
+          "code": "CLOSED"
+        },
+        {
+          "s": 1062.507341,
+          "kind": "main_end",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        }
+      ],
+      "main_return": 0,
+      "canonical_root_injected": true
+    },
+    "canonical-chatgpt-startup-1": {
+      "events": [
+        {
+          "s": 0.923435,
+          "kind": "main_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 1.908777,
+          "kind": "bridge_state",
+          "state": "starting",
+          "code": "STARTING"
+        },
+        {
+          "s": 1.969966,
+          "kind": "l2_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 2.442293,
+          "kind": "process_started",
+          "pid": 33436,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 4.976397,
+          "kind": "process_closed",
+          "pid": 33436,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.051422
+        },
+        {
+          "s": 4.985989,
+          "kind": "l2_config_diagnostics",
+          "layers": [
+            {
+              "kind": "sessionFlags",
+              "is_dict": true,
+              "keys": [
+                "model_provider",
+                "model_providers",
+                "sqlite_home"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "user",
+              "is_dict": true,
+              "keys": [
+                "analytics",
+                "check_for_update_on_startup",
+                "cli_auth_credentials_store",
+                "features",
+                "feedback",
+                "history",
+                "include_environment_context",
+                "include_permissions_instructions",
+                "model",
+                "model_catalog_json",
+                "project_doc_max_bytes",
+                "project_root_markers",
+                "skills",
+                "web_search"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "system",
+              "is_dict": true,
+              "keys": [],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            }
+          ],
+          "mismatches": [],
+          "mcp_empty": true,
+          "profile_none": true,
+          "instruction_nonempty_keys": []
+        },
+        {
+          "s": 4.987121,
+          "kind": "l2_end",
+          "seconds": 3.019705,
+          "passed": true,
+          "failures": []
+        },
+        {
+          "s": 4.99171,
+          "kind": "bridge_state",
+          "state": "ready",
+          "code": "READY"
+        },
+        {
+          "s": 239.876662,
+          "kind": "process_started",
+          "pid": 15524,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 242.064935,
+          "kind": "account_read",
+          "state": "CHATGPT"
+        },
+        {
+          "s": 269.614212,
+          "kind": "bridge_state",
+          "state": "closing",
+          "code": "CLOSING"
+        },
+        {
+          "s": 269.65823,
+          "kind": "process_closed",
+          "pid": 15524,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.041281
+        },
+        {
+          "s": 269.691659,
+          "kind": "bridge_state",
+          "state": "closed",
+          "code": "CLOSED"
+        },
+        {
+          "s": 269.846429,
+          "kind": "main_end",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        }
+      ],
+      "main_return": 0,
+      "canonical_root_injected": true
+    },
+    "canonical-chatgpt-logout-2": {
+      "events": [
+        {
+          "s": 0.88655,
+          "kind": "main_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 1.772853,
+          "kind": "bridge_state",
+          "state": "starting",
+          "code": "STARTING"
+        },
+        {
+          "s": 1.834891,
+          "kind": "l2_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 2.36532,
+          "kind": "process_started",
+          "pid": 21196,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 4.942463,
+          "kind": "process_closed",
+          "pid": 21196,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.06753
+        },
+        {
+          "s": 4.960584,
+          "kind": "l2_config_diagnostics",
+          "layers": [
+            {
+              "kind": "sessionFlags",
+              "is_dict": true,
+              "keys": [
+                "model_provider",
+                "model_providers",
+                "sqlite_home"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "user",
+              "is_dict": true,
+              "keys": [
+                "analytics",
+                "check_for_update_on_startup",
+                "cli_auth_credentials_store",
+                "features",
+                "feedback",
+                "history",
+                "include_environment_context",
+                "include_permissions_instructions",
+                "model",
+                "model_catalog_json",
+                "project_doc_max_bytes",
+                "project_root_markers",
+                "skills",
+                "web_search"
+              ],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            },
+            {
+              "kind": "system",
+              "is_dict": true,
+              "keys": [],
+              "user_file_matches": true,
+              "user_resolved_matches": true,
+              "profile_is_none": true
+            }
+          ],
+          "mismatches": [],
+          "mcp_empty": true,
+          "profile_none": true,
+          "instruction_nonempty_keys": []
+        },
+        {
+          "s": 4.962708,
+          "kind": "l2_end",
+          "seconds": 3.129931,
+          "passed": true,
+          "failures": []
+        },
+        {
+          "s": 4.970834,
+          "kind": "bridge_state",
+          "state": "ready",
+          "code": "READY"
+        },
+        {
+          "s": 62.082295,
+          "kind": "process_started",
+          "pid": 21028,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 64.415814,
+          "kind": "account_read",
+          "state": "CHATGPT"
+        },
+        {
+          "s": 83.131909,
+          "kind": "logout_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [
+              "account-b8c74eb556783242253f0bf77ce0b58b"
+            ],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 89.071001,
+          "kind": "logout_rpc_succeeded"
+        },
+        {
+          "s": 89.180999,
+          "kind": "process_closed",
+          "pid": 21028,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.108496
+        },
+        {
+          "s": 89.190207,
+          "kind": "credential_cleanup_begin",
+          "credentials": {
+            "sealed_names": [
+              "codex_auth.age"
+            ],
+            "primary_present": true,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 89.196249,
+          "kind": "credential_cleanup_end",
+          "credentials": {
+            "sealed_names": [],
+            "primary_present": false,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        },
+        {
+          "s": 117.113334,
+          "kind": "process_started",
+          "pid": 6636,
+          "executable": "codex.exe"
+        },
+        {
+          "s": 117.347404,
+          "kind": "account_read",
+          "state": "SIGNED_OUT"
+        },
+        {
+          "s": 141.657599,
+          "kind": "bridge_state",
+          "state": "closing",
+          "code": "CLOSING"
+        },
+        {
+          "s": 141.705554,
+          "kind": "process_closed",
+          "pid": 6636,
+          "confirmed": true,
+          "returncode": 0,
+          "seconds": 0.045429
+        },
+        {
+          "s": 141.727874,
+          "kind": "bridge_state",
+          "state": "closed",
+          "code": "CLOSED"
+        },
+        {
+          "s": 141.898197,
+          "kind": "main_end",
+          "credentials": {
+            "sealed_names": [],
+            "primary_present": false,
+            "gateway_present": false,
+            "task_entries": [],
+            "scanner_present": true
+          }
+        }
+      ],
+      "main_return": 0,
+      "canonical_root_injected": true
+    }
+  },
+  "receiver_counts_final": {
+    "receiver_calls": 0,
+    "receiver_effect": 0
+  },
+  "review": "Independent read-only subagent review found no inconsistency in the observed cleanup ordering. This is not acceptance by the C module owner.",
+  "limitations": [
+    "Default product MSIX logical/physical path mismatch remains deferred to C by user decision.",
+    "T43 marker tool-result injection and whole-app-folder residual-marker audit were not executed.",
+    "Gateway credential absent throughout; deletion of a present gateway credential is untested.",
+    "No managed MCP tool dispatch in these model/login scenarios; zero receiver counters do not establish independent wire enforcement.",
+    "Earlier browser-open failure fallback was user-confirmed, not rerun here."
+  ]
+}

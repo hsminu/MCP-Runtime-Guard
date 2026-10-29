@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 
 from guard_app.security.codex_home import load_codex_pins
-from guard_app.security.codex_l2 import L2Report, probe_tools
+from guard_app.security.codex_l2 import L2_FAILURE_CODES, L2Report, probe_tools
 from guard_app.services import codex_preparation as module
 from guard_app.services.bridge import BackendBridge, BridgeState, SessionOptions, _ProcessStartGate
 from guard_app.services.bridge_types import BackendCleanupError
@@ -301,3 +301,49 @@ def test_startup_budget_covers_one_window_of_server_starts():
         + module.L2_CANCEL_TIMEOUT_S
         + 10.0
     )
+
+
+def test_startup_progress_shows_on_the_default_session_screen(app):
+    """Real-run follow-up: the L2 check was visible only in the activity panel."""
+    from guard_app.services.bridge import LifecycleEvent
+    from guard_app.ui.runtime import RuntimePanel
+    from guard_app.ui.window import GuardWindow
+
+    bridge = BackendBridge(lambda: None)
+    window = GuardWindow()
+    window.attach_runtime(RuntimePanel(bridge))
+    notice = window.sessions.current.notice
+    try:
+        idle = notice.text()
+        for code in ("STORE_CHECK", "CODEX_L2_CHECK"):
+            bridge.lifecycle_changed.emit(LifecycleEvent(BridgeState.STARTING, code))
+            assert notice.text() == LIFECYCLE_MESSAGES[code]
+            assert notice.isVisibleTo(window)
+        bridge.lifecycle_changed.emit(LifecycleEvent(BridgeState.READY, "READY"))
+        assert notice.text() == idle
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_l2_codes_reexport_the_c_constant():
+    """A174 / I6,I11 / T22: preparation, startup and UI share C's exact object."""
+    from guard_app.services import bridge, session_preparation, session_startup
+    from guard_app.ui import presentation
+
+    assert session_preparation.L2_FAILURE_CODES is L2_FAILURE_CODES
+    assert bridge.L2_FAILURE_CODES is L2_FAILURE_CODES
+    assert session_startup.L2_FAILURE_CODES is L2_FAILURE_CODES
+    assert presentation.L2_FAILURE_CODES is L2_FAILURE_CODES
+
+
+@pytest.mark.parametrize("code", sorted(L2_FAILURE_CODES))
+def test_every_c_l2_failure_refuses_startup_and_has_fixed_ui_text(code):
+    """A174 / I6,I9,I11 / T22: every C diagnostic keeps the generic UI text."""
+    from guard_app.services.session_preparation import ConfigurationReceipt, StartupReceipt
+
+    configuration = ConfigurationReceipt("a" * 64, "b" * 64, "c" * 64)
+    receipt = StartupReceipt(configuration, configuration, False, (code,))
+    assert startup_refusal(receipt) == code
+    assert "Codex 시작 검사를 통과하지 못함." in session_blocker_notice(code)
+    assert code not in session_blocker_notice(code)

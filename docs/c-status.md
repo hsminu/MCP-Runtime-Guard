@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-29 · main `fa36962` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-29 · main `b14c181` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -10,6 +10,7 @@
 | 경고 표시 화면(A28–A32·승인 창) | A | C4.13 |
 | API 키 입력 화면 | A | C2.10 |
 | 설치판 리소스 위치(패키징) | A | C6.20 |
+| 호출·승인 조회 화면 연결(B6.16) | A | C3.8 |
 
 ## C1 · 계약과 관측 기반
 
@@ -57,7 +58,7 @@
 - [ ] C3.5 승인 생성·종결·소비 원자성과 중복 소비 — 막힘: B6-01
 - [ ] C3.6 쓰기·감사·잠금·COMMIT/ROLLBACK 실패와 중단 결함 주입
 - [ ] C3.7 원문 비기록·재시작 승인 미복원·SEND 재전송 0
-- [ ] C3.8 A 연결 후 요청별 계수 대조 — 막힘: C5
+- [ ] C3.8 (Store 조회 `list_calls`·`get_call`·`list_approvals`와 요청별 계수 대조는 정식 시험으로 완료(stdio·HTTP, T01·T02·T03·응답 유실), [C3.8-1](archive/c/C3.8-1-query-counts.md)) A 화면 연결 뒤 화면 쪽 대조 — 막힘: A 화면 연결
 - [ ] C3.9 DB를 직접 고친 비정상 행(관계 깨짐·모르는 상태값·등급 하향)을 시작 점검이 잡고 멈추는지 검증 · [결정](contracts.md#사용자-결정)
 - [ ] C3.10 시작 복구가 감사 기록과 맞지 않는 등급·미분류 표시를 복구하지 않는지 검증 — 막힘: B6.8
 
@@ -83,6 +84,7 @@
 - [x] C4.18 등록 때 서버 ID의 `__`·끝 `_` 거부: B `valid_server_id`를 그대로 쓰고 등록 화면은 bridge가 넘기는 같은 검사 결과를 씀. Registry `register`·`observe`가 설정 검증과 별도로 다시 검사 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C4.10-server-registry.md)
 - [x] C4.19 Registry 쓰기 결과를 모를 때 닫기(#46 B 리뷰): 제어 쓰기가 실패하거나 커밋 뒤 취소되면 그 서버의 ACTIVE를 PENDING으로 보고, 다음 제어 연산·`refresh`가 DB 행을 다시 읽어 맞춤. `observe` 취소는 기록 실패와 같이 이번 실행 PENDING. 실제 writer 재현은 C4.20 · [기록](archive/c/C4.19-registry-unknown-write.md)
 - [x] C4.20 C4.19 실제 writer 재현: B6.13 writer가 COMMIT을 실행한 직후 취소해도 `register`·`activate`·`record_scan`·`request_review`·`save_reviewed_descriptions`는 다시 읽기 전까지 ACTIVE로 보이지 않고 `refresh`가 DB와 맞춤, `observe`는 이번 실행 PENDING·활성화 거부. `block`·시작 전 취소·COMMIT 실패는 #58 B 시험 · [기록](archive/c/C4.20-registry-real-writer.md)
+- [x] C4.21 설정에서 바꾼 도구 종류·인자를 등록에 반영(`ServerRegistry.apply_settings`, #46 B·C 합의): 저장된 정의·지문에 새 설정의 종류·인자만 얹어 B `record_settings_change`(revision CAS)로 넘기고, 반환 사본으로 캐시 교체 뒤 바뀐 도구마다 `invalidate_tool`. 경계 변경은 쓰기 전 `REG_SETTINGS_MISMATCH`, 결과 불명은 C4.19처럼 다시 읽기 전까지 PENDING. 실제 Guard·서버로 승인 대기 중 종류 변경 → 승인 닫힘·계수 0(T10 변형). A155 이관·B 시작 목록 제외는 각 담당 · [기록](archive/c/C4.21-registry-apply-settings.md)
 
 ## C5 · fixture와 계수
 
@@ -105,13 +107,13 @@
 - [ ] C6.5 실험 스크립트 Windows 수정(socket 차단·`PYTHONPATH`·인코딩)과 MCP 정의 수집기 저장소 반영
 - [ ] C6.6 Windows Cisco 실험(2026-10-14~15) 완료 기록 작성
 - [ ] C6.7 Fake·실제 Transport·Store·AccessChecker·Scanner에 같은 계약 테스트
-- [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05. 41개 중 완료 27·부분 4·미실행 10([현황](archive/c/C6.25-verification-summary.md), 그 뒤 C6.8-2로 T21·T41·T43·T45·T46 완료, T42 부분). Guard 경로 T01·T09·T10·T11(재시작)·T26·T30 계수와 T28 지연 측정 완료 · [기록](archive/c/C6.8-1-guard-path-counts.md). 실제 codex.exe(대본 가짜 모델)를 거친 T01–T03·T21·T41·T42·T43·T45·T46 완료 · [기록](archive/c/C6.8-2-codex-flow.md)
+- [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05. 41개 중 완료 33·부분 3·미실행 5([현황](archive/c/C6.25-2-verification-summary.md)). Guard 경로 T01·T09·T10·T11(재시작)·T26·T30 계수와 T28 지연 측정 완료 · [기록](archive/c/C6.8-1-guard-path-counts.md). 실제 codex.exe(대본 가짜 모델)를 거친 T01–T03·T21·T41·T42·T43·T45·T46 완료 · [기록](archive/c/C6.8-2-codex-flow.md). Guard 경로 T04·T29·T33·T34·T35·S05 완료 · [기록](archive/c/C6.8-3-guard-path-more.md)
 - [x] C6.9 자체 접근 규칙의 거절·오류·누락(활성화 때 사용자가 끈 도구)에서 전송 0: 제품 조립의 실제 `AccessRulesChecker`·C `ServerRegistry`와 실제 stdio(C2.6)·HTTP 서버로 승인 소비·host_dispatch·wire `tools/call`·수신 효과 4개 계수 확인, 대조군 포함 28개 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C6.9-access-rule-counts.md)
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
 - [x] C6.12 공격 fixture를 제품 스캔에서 제외하고 예외를 대장에 기록: Bandit·Semgrep은 `src`만 봐서 빠지고 배포물에도 없음(AF-01), Semgrep 제외 경로를 루트 기준 `/src/...`로 고정 · [기록](archive/c/C6.12-attack-fixture-scan-scope.md)
 - [x] C6.13 Codex 0.162.1 L1 설정·모델 정보 파일·고정값(`config/codex/`)·설치 스크립트, CODEX_HOME에 쓰고 해시를 돌려주는 함수(#21 4번) · [기록](archive/c/C6.13-codex-l1.md)
-- [x] C6.14 L2 시작 시험(T22·T39·T40, `security/codex_l2.py`): 같은 codex.exe·CODEX_HOME·환경에 가짜 모델만 바꿔 requirements·설정 층·적용 값·원격 제어·도구 목록·프롬프트 블록·금지 호출 30종 거부·Guard 호출 순차·종료를 판정, `run_l2`가 A 입구에 줄 결과를 돌려줌. 진행 중 종료 0.05–0.11초 측정 · [기록](archive/c/C6.14-codex-l2.md)
+- [x] C6.14 L2 시작 시험(T22·T39·T40, `security/codex_l2.py`): 같은 codex.exe·CODEX_HOME·환경에 가짜 모델만 바꿔 requirements·설정 층·적용 값·원격 제어·도구 목록·프롬프트 블록·금지 호출 30종 거부·Guard 호출 순차·종료를 판정, `run_l2`가 A 입구에 줄 결과를 돌려줌. 진행 중 종료 0.05–0.11초 측정 · [기록](archive/c/C6.14-codex-l2.md). 실제 실행 후속: 같은 파일을 다른 경로로 보고해도 통과(A161), 검사 호출 순서는 보지 않고 겹침은 `L2_PROBE_CALLS_OVERLAP`(#21) · [기록](archive/c/C6.14-2-l2-real-runs.md)
 - [ ] C6.15 (허용 밖 항목 정지는 실제 codex.exe로 확인, [C6.8-2](archive/c/C6.8-2-codex-flow.md)) L3 허용 항목 밖 항목·승인 요청에서 interrupt·Task 정지, Runner 감시 상한 초과 interrupt, `request_user_input` 빈 응답, 원격 제어 상태가 `disabled`가 아닐 때 정지(C-CODEX-07) 검증 · [결정](contracts.md#사용자-결정)
 - [ ] C6.16 (DB 다섯 개의 Task 폴더 위치·CODEX_HOME 남는 항목·동시 실행 정리는 확인, [C6.8-2](archive/c/C6.8-2-codex-flow.md). TEMP 쓰기·stderr 크기 상한 남음) Codex `sqlite_home` Task별 정리 검증(C-CODEX-01): logs·state·goals·memories·queue DB가 모두 Task 폴더로 가는지, CODEX_HOME에 남는 것(`installation_id`·`.sandbox_migration`·`tmp\arg0` 보조 파일·인증 파일(`secrets/*.age`는 C6.21에서 확인), T43·#21 8번)과 동시 실행 때 경합(T46) 확인. Codex가 TEMP에 쓰는 것을 보고 TEMP·TMP를 Task 폴더 아래로 둘지, `codex-stderr.log` 크기 상한(#35 B launcher 2·3번) · [대장](weakness_register.md#발견-항목과-조치)
 - [ ] C6.17 (후속·선택) codex.exe AppContainer 실행 실험(C-CODEX-04)
@@ -122,7 +124,8 @@
 - [ ] C6.22 CI에서 실제 L2: 워크플로에서 `tools/install_codex.py`로 codex.exe를 받고 `GUARD_TEST_CODEX_EXE`로 `test_real_codex_passes_l2`를 켬(C6.14 후속, 공용 CI 파일 변경이라 따로 제안)
 - [x] C6.23 #41 A 리뷰 후속(L2): 전체 시간 상한 `deadline_s`(기본 30초)와 `L2_DEADLINE_EXCEEDED`, 최악 시간·취소·예외 경로 설명, 가짜 모델 서버 밖 통신은 관찰하지 않는다는 범위 명시, L2·L3 허용 항목 같음 테스트 · [기록](archive/c/C6.23-l2-a-review-followup.md)
 - [ ] C6.24 의존성 취약점 정리(pip-audit 16건, C-DEP-01–03): certifi·cryptography·filelock lock 갱신 완료(C-DEP-03), litellm 1.93.2 두 ID는 예외 PA-01(Scanner 고정, 2026-10-29 사용자 결정). 남은 것: mcp 1.30.0(C-DEP-01, A·B 합의·A transport 재검증) 뒤 pip-audit을 실패로 막는 단계로 · [기록](archive/c/C2.9-ci-static-checks.md)
-- [x] C6.25 C 독립 검증 현황 요약(인수 기준 5 일부): C 담당 T/S 41개의 완료·부분·미실행, 완료 근거, 다른 담당 작업의 C 리뷰 프로브, 미실행·검증 불가 항목, 측정 원자료와 재현 명령 · [기록](archive/c/C6.25-verification-summary.md)
+- [x] C6.25 C 독립 검증 현황 요약(인수 기준 5 일부): C 담당 T/S 41개의 완료·부분·미실행, 완료 근거, 다른 담당 작업의 C 리뷰 프로브, 미실행·검증 불가 항목, 측정 원자료와 재현 명령 · [기록](archive/c/C6.25-verification-summary.md) · [갱신(main `b14c181`)](archive/c/C6.25-2-verification-summary.md)
+- [x] C6.26 L2 실패 코드 상수 `codex_l2.L2_FAILURE_CODES`(28개): 모듈이 실제로 쓰는 코드와 AST로 대조하는 시험, A151 사본과 같음 확인. A 사본 교체는 A · [기록](archive/c/C6.26-l2-failure-codes.md). C6.14-2에서 `L2_PROBE_CALLS_OVERLAP`을 더해 29개, A 사본은 이 상수 import로 바꿈(A 확인 요청) · [기록](archive/c/C6.14-2-l2-real-runs.md)
 
 ## 인수 기준
 
@@ -130,4 +133,4 @@
 - [x] 승인 1회와 더블클릭에서 consumed·dispatch·wire·부작용이 각각 1: 연속 2회·동시 2·5회 승인 모두 각 1(C5.4). 화면 쪽 Enter 반복은 A `test_runtime` · [기록](archive/c/C5.4-approval-counts.md)
 - [x] 쓰기 응답 유실 후 UNKNOWN_OUTCOME, 새 호출 ID·재연결로도 추가 전송 0: stdio·HTTP 응답 없음·늦은 응답·종료·500, HTTP 307/308 미추적. Guard 입구·실제 서버 기준(Codex 경유는 C6.8) · [기록](archive/c/C5.6-write-loss-counts.md)
 - [ ] READ 커밋 실패·미분류·원시 로그 공격에서 결과·기밀 표지 미공개
-- [ ] 측정 원자료·미실행·검증 불가 항목·약점 조치와 재현 방법 기록. 2026-10-29 현황 요약 · [C6.25](archive/c/C6.25-verification-summary.md)
+- [ ] 측정 원자료·미실행·검증 불가 항목·약점 조치와 재현 방법 기록. 2026-10-29 현황 요약 · [C6.25-2](archive/c/C6.25-2-verification-summary.md)
