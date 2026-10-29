@@ -5,17 +5,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import (
+    QAbstractItemModel,
+    QEvent,
     QModelIndex,
     QPersistentModelIndex,
     QPointF,
+    QRect,
     QRectF,
     QSize,
     Qt,
+    Signal,
 )
 from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QMouseEvent,
     QPainter,
     QPen,
 )
@@ -25,6 +30,7 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
 )
 
+from .icons import line_icon
 from .style import TOKENS, ui_font
 
 _ROW_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -36,6 +42,7 @@ class _SessionRow:
     time: str
     status: str
     tone: str
+    approval: bool = False
 
 
 class _SessionRowDelegate(QStyledItemDelegate):
@@ -46,6 +53,32 @@ class _SessionRowDelegate(QStyledItemDelegate):
     row is a bordered card, as in Orca's worktree list."""
 
     _HEIGHT = 52
+    menu_requested = Signal(str, object)
+
+    @staticmethod
+    def menu_rect(rect: QRect) -> QRect:
+        """Shared paint/hit target in viewport coordinates."""
+        return QRect(rect.right() - 31, rect.top() + 3, 28, 23)
+
+    def editorEvent(
+        self,
+        event: QEvent,
+        model: QAbstractItemModel,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> bool:
+        if (
+            isinstance(event, QMouseEvent)
+            and event.button() == Qt.MouseButton.LeftButton
+            and self.menu_rect(option.rect).contains(event.position().toPoint())
+            and event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease)
+        ):
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                self.menu_requested.emit(
+                    index.data(Qt.ItemDataRole.UserRole), event.globalPosition().toPoint()
+                )
+            return True
+        return super().editorEvent(event, model, option, index)
 
     def sizeHint(
         self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
@@ -91,11 +124,16 @@ class _SessionRowDelegate(QStyledItemDelegate):
         time_width = QFontMetrics(time_font).horizontalAdvance(row.time)
         painter.setFont(time_font)
         painter.setPen(QColor(TOKENS["mute"]))
-        painter.drawText(
-            QRectF(right - time_width, rect.top() + 4, time_width, 18),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            row.time,
-        )
+        if selected or state & QStyle.StateFlag.State_MouseOver:
+            target = self.menu_rect(option.rect)
+            time_width = target.width()
+            line_icon("more", "mute").paint(painter, target.adjusted(5, 3, -5, -3))
+        else:
+            painter.drawText(
+                QRectF(right - time_width, rect.top() + 4, time_width, 18),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                row.time,
+            )
         title_font = ui_font(14, QFont.Weight.DemiBold if selected else QFont.Weight.Medium)
         title_width = max(0, int(right - time_width - 8 - left))
         painter.setFont(title_font)
@@ -110,6 +148,15 @@ class _SessionRowDelegate(QStyledItemDelegate):
         status_font = ui_font(12)
         status_width = max(0, int(right - left))
         painter.setFont(status_font)
+        if row.approval:
+            tag_width = QFontMetrics(status_font).horizontalAdvance("승인 필요") + 12
+            tag = QRectF(right - tag_width, rect.top() + 26, tag_width, 18)
+            painter.setPen(QPen(QColor(TOKENS["warn_line"]), 1))
+            painter.setBrush(QColor(TOKENS["warn_soft"]))
+            painter.drawRoundedRect(tag, 4, 4)
+            painter.setPen(QColor(TOKENS["warn"]))
+            painter.drawText(tag, Qt.AlignmentFlag.AlignCenter, "승인 필요")
+            status_width = max(0, status_width - tag_width - 6)
         role = (
             "warn"
             if row.tone in ("approval", "attention")

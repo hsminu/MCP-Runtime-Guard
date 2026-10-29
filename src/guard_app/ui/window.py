@@ -218,6 +218,8 @@ class GuardWindow(QMainWindow):
         self._nav_menu.addAction("새 세션", self._new_session)
         self._session_menu = self._nav_menu.addMenu("세션 선택")
         self._session_menu.aboutToShow.connect(self._populate_session_menu)
+        self._session_actions: list[QAction] = []
+        self._nav_menu.aboutToShow.connect(self._populate_session_menu)
         self._nav_menu.addSeparator()
         for page in PAGES:
             action = self._nav_menu.addAction(PAGES[page])
@@ -395,6 +397,7 @@ class GuardWindow(QMainWindow):
         self.sessions.results_requested.connect(self._toggle_activity)
         self.sessions.approval_review_requested.connect(self._open_approval_review)
         self.sessions.selection_changed.connect(self._session_selected)
+        self.sessions.titles_changed.connect(self._session_titles_changed)
         self.navigate("runs", "")
         # Open on the message box, as messengers do.
         self.sessions.current.draft.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -430,8 +433,20 @@ class GuardWindow(QMainWindow):
     def _populate_session_menu(self) -> None:
         self._session_menu.clear()
         for key, view in self.sessions.sessions.items():
-            action = self._session_menu.addAction(view.title)
+            action = self._session_menu.addAction(
+                self.sessions.display_title(view).replace("&", "&&")
+            )
             action.triggered.connect(lambda checked=False, target=key: self.sessions.select(target))
+        for action in self._session_actions:
+            self._nav_menu.removeAction(action)
+            action.deleteLater()
+        before = len(self._nav_menu.actions())
+        self.sessions.add_session_actions(self._nav_menu, self.sessions.current_key, current=True)
+        self._session_actions = self._nav_menu.actions()[before:]
+
+    def _session_titles_changed(self) -> None:
+        self.results_scope.setText(self.sessions.current.heading.text())
+        self._populate_session_menu()
 
     def _session_selected(self, _key: str) -> None:
         panel = self._runtime_panel
@@ -518,6 +533,7 @@ class GuardWindow(QMainWindow):
         self._connect_runtime(panel)
 
     def _connect_runtime(self, panel: RuntimePanel) -> None:
+        self.sessions.set_stopper(panel.stop_task)
         panel.state_changed.connect(lambda: self.sessions.set_busy_scopes(panel.busy_scopes))
         panel.selected_snapshot_changed.connect(self._sync_selected_task)
         bridge = panel.bridge
@@ -802,7 +818,7 @@ class GuardWindow(QMainWindow):
             self.approval_page.select_approval(target_id)
         self.breadcrumb.setText(PAGES[page])
         if page == "results":
-            self.results_scope.setText(self.sessions.current.title)
+            self.results_scope.setText(self.sessions.current.heading.text())
         self._update_back_row()
         self._place_activity()
         if page == "runs":

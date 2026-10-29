@@ -2,26 +2,33 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from PySide6.QtCore import (
+    QPoint,
     QSize,
     Qt,
     Signal,
 )
 from PySide6.QtGui import (
+    QKeySequence,
     QResizeEvent,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QBoxLayout,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPlainTextEdit,
+    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -58,6 +65,7 @@ from .session_model import (
 )
 from .session_projection import _STATUS_TONES as _STATUS_TONES
 from .session_projection import session_display, session_row_status
+from .session_title import auto_title, clean_title
 from .session_transcript import (
     ANSWER_LABEL as ANSWER_LABEL,
 )
@@ -82,9 +90,18 @@ from .session_transcript import (
 from .session_transcript import (
     _Turn as _Turn,
 )
-from .task_status import status_code, status_title
+from .task_status import FINAL_STATUSES, status_code, status_title
 from .untrusted_text import untrusted_display_text
-from .widgets import IconMark, KeyboardActionButton, LabelPill, StatusPill, plain_label
+from .widgets import (
+    ConfirmDialog,
+    ElidedLabel,
+    IconMark,
+    KeyboardActionButton,
+    LabelPill,
+    StatusPill,
+    plain_label,
+    plain_tooltip,
+)
 
 MEMORY_NOTICE = "대화·초안은 메모리에만 있음. Task 종료나 앱 종료 시 원문을 지움."
 APPROVAL_BAND_TITLE = "승인이 필요한 도구 호출이 있음"
@@ -142,6 +159,10 @@ class SessionView:
     focus_draft: bool = False
     command_notice: str = ""
     partial: _PartialAnswer | None = None
+    title_source: str = "auto"
+    auto_title_set: bool = False
+    pending_delete: str | None = None
+    delete_notice: str = ""
 
 
 class _SessionStack(QStackedWidget):
@@ -159,6 +180,7 @@ class SessionWorkspace(QWidget):
     results_requested = Signal()
     approval_review_requested = Signal()
     selection_changed = Signal(str)
+    titles_changed = Signal()
     new_session_requested = Signal(str, object, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -173,6 +195,10 @@ class SessionWorkspace(QWidget):
         self._busy_scopes: frozenset[tuple[str, int]] = frozenset()
         self._seen_events: set[tuple[str, int, str, str]] = set()
         self._terminal_keys: set[str] = set()
+        self._removed_keys: set[str] = set()
+        self._stopper: Callable[[str, int], str | None] | None = None
+        self._stop_results: dict[str, str] | None = None
+        self._dialogs: dict[str, QDialog] = {}
         self._centering = 0
         self._activity_open = False
         self.search = QLineEdit()
@@ -188,8 +214,30 @@ class SessionWorkspace(QWidget):
         self.list.setUniformItemSizes(True)
         self.list.setMouseTracking(True)
         self.list.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover)
-        self.list.setItemDelegate(_SessionRowDelegate(self.list))
-        self.list.itemClicked.connect(lambda item: self.select(item.data(Qt.ItemDataRole.UserRole)))
+        delegate = _SessionRowDelegate(self.list)
+        delegate.menu_requested.connect(self.open_menu)
+        self.list.setItemDelegate(delegate)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._context_menu)
+        self._menu = QMenu(self.list)
+        self._menu.setToolTipsVisible(True)
+        for sequence, callback in (
+            ("F2", self._rename_current_row),
+            ("Delete", self._delete_current_row),
+            ("Shift+F10", self._menu_current_row),
+            ("Menu", self._menu_current_row),
+        ):
+            shortcut = QShortcut(QKeySequence(sequence), self.list)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.setAutoRepeat(False)
+            shortcut.activated.connect(callback)
+        self.list.itemClicked.connect(
+            lambda item: (
+                self.select(item.data(Qt.ItemDataRole.UserRole))
+                if not self._menu.isVisible()
+                else None
+            )
+        )
         self.list.itemActivated.connect(
             lambda item: self.select(item.data(Qt.ItemDataRole.UserRole))
         )
@@ -212,6 +260,211 @@ class SessionWorkspace(QWidget):
         self._create(key, f"새 세션 {number}")
         self.select(key)
 
+    def set_stopper(self, stopper: Callable[[str, int], str | None] | None) -> None:
+        self._stopper = stopper
+
+    def _rename_current_row(self) -> None:
+        item = self.list.currentItem()
+        if item is not None:
+            self.rename_session(item.data(Qt.ItemDataRole.UserRole))
+
+    def _delete_current_row(self) -> None:
+        item = self.list.currentItem()
+        if item is not None:
+            self.delete_session(item.data(Qt.ItemDataRole.UserRole))
+
+    def _menu_current_row(self) -> None:
+        item = self.list.currentItem()
+        if item is not None:
+            self.open_menu(
+                item.data(Qt.ItemDataRole.UserRole),
+                self.list.viewport().mapToGlobal(self.list.visualItemRect(item).center()),
+            )
+
+    def _context_menu(self, point: QPoint) -> None:
+        item = self.list.itemAt(point)
+        if item is not None:
+            self.open_menu(
+                item.data(Qt.ItemDataRole.UserRole), self.list.viewport().mapToGlobal(point)
+            )
+
+    def add_session_actions(self, menu: QMenu, key: str, *, current: bool = False) -> None:
+        """The sidebar and compact shell share the same actions and availability."""
+        prefix = "현재 세션 " if current else ""
+        rename = menu.addAction(line_icon("edit", "ink"), prefix + "이름 변경…\tF2")
+        remove = menu.addAction(line_icon("trash", "danger"), prefix + "삭제…\tDelete")
+        rename.setEnabled(key in self.sessions)
+        reason = self.delete_disabled_reason(key)
+        remove.setEnabled(not reason)
+        remove.setToolTip(reason)
+        remove.setStatusTip(reason)
+        rename.triggered.connect(lambda: self.rename_session(key))
+        remove.triggered.connect(lambda: self.delete_session(key))
+        menu.setToolTipsVisible(True)
+
+    def open_menu(self, key: str, point: QPoint) -> None:
+        if key not in self.sessions:
+            return
+        self._menu.clear()
+        self.add_session_actions(self._menu, key)
+        self._menu.popup(point)
+
+    def _track_dialog(self, key: str, dialog: QDialog) -> None:
+        self._dialogs[key] = dialog
+        dialog.finished.connect(lambda: self._dialogs.pop(key, None))
+        dialog.open()
+
+    def rename_session(self, key: str) -> None:
+        view = self.sessions.get(key)
+        if view is None or key in self._dialogs:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("세션 이름 변경")
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        layout = QVBoxLayout(dialog)
+        edit = QLineEdit(view.title)
+        edit.setAccessibleName("세션 이름")
+        layout.addWidget(edit)
+        buttons = QHBoxLayout()
+        layout.addLayout(buttons)
+        buttons.addStretch()
+        cancel = QPushButton("취소")
+        save = QPushButton("저장")
+        save.setProperty("variant", "primary")
+        buttons.addWidget(cancel)
+        buttons.addWidget(save)
+        save.setEnabled(bool(clean_title(edit.text())))
+        edit.textChanged.connect(lambda text: save.setEnabled(bool(clean_title(text))))
+        cancel.clicked.connect(dialog.reject)
+
+        def store_title() -> None:
+            title = clean_title(edit.text())
+            if title and self.sessions.get(view.key) is view:
+                view.title_source = "manual"
+                self._set_title(view, title)
+                dialog.accept()
+
+        save.clicked.connect(store_title)
+        dialog.finished.connect(lambda: edit.setText(""))
+        self._track_dialog(key, dialog)
+        edit.setFocus()
+        edit.selectAll()
+
+    def _set_title(self, view: SessionView, title: str) -> None:
+        view.title = title
+        view.heading.setText(self.display_title(view))
+        view.heading.setToolTip(plain_tooltip(untrusted_display_text(title)[0]))
+        self._refresh_list()
+        self.titles_changed.emit()
+
+    @staticmethod
+    def display_title(view: SessionView) -> str:
+        # The automatic truncation mark is UI punctuation, not message content.
+        if view.title_source == "auto" and view.auto_title_set and view.title.endswith("…"):
+            return untrusted_display_text(view.title[:-1])[0] + "…"
+        return untrusted_display_text(view.title)[0]
+
+    def delete_disabled_reason(self, key: str) -> str:
+        view = self.sessions.get(key)
+        if view is None:
+            return "목록에 없는 세션임."
+        if view.pending_delete is not None:
+            return "중지 요청됨 · 확인 뒤 삭제"
+        if view.snapshot is None:
+            return (
+                "세션 시작 결과를 기다리는 중이라 지금은 삭제할 수 없음."
+                if view.pending_command is not None
+                else ""
+            )
+        if view.snapshot.status not in FINAL_STATUSES | {
+            TaskStatus.RUNNING,
+            TaskStatus.WAITING_APPROVAL,
+        }:
+            return "실행 대기 중인 Task는 목록에서 지울 수 없음."
+        return ""
+
+    def delete_session(self, key: str) -> None:
+        if self.delete_disabled_reason(key) or key in self._dialogs:
+            return
+        view = self.sessions[key]
+        snapshot = view.snapshot
+        if snapshot is None and not view.draft.toPlainText():
+            self._remove_session(view)
+            return
+        stopping = snapshot is not None and snapshot.status in (
+            TaskStatus.RUNNING,
+            TaskStatus.WAITING_APPROVAL,
+        )
+        title, button = (
+            ("작업 중지 후 삭제", "작업 중지 후 삭제") if stopping else ("세션 삭제", "삭제")
+        )
+        if snapshot is None:
+            body = "작성 중인 초안이 지워짐. 이 세션을 삭제할까요?"
+        elif stopping:
+            state = (
+                "승인 대기 중임" if snapshot.status is TaskStatus.WAITING_APPROVAL else "진행 중임"
+            )
+            body = (
+                f"{state}\n삭제하려면 먼저 작업을 중지해야 함. 중지는 되돌릴 수 없음.\n"
+                "이미 전송된 쓰기는 취소되지 않음.\n"
+                "중지가 확인되면 목록에서 지움. 감사 기록과 호출 로그는 그대로 남음."
+            )
+        else:
+            body = "목록에서 이 세션을 지움. 감사 기록과 호출 로그는 그대로 남음."
+            if snapshot.status is TaskStatus.UNKNOWN_OUTCOME:
+                body += "\n결과 불명 호출이 있음. 호출 로그에서 수신측 확인이 필요한지 확인하세요."
+        dialog = ConfirmDialog(title, body, button, dangerous=True, parent=self)
+        # Recheck the view after the nonblocking dialog: its state may have changed.
+        dialog.accepted.connect(lambda: self._confirm_delete(view))
+        self._track_dialog(key, dialog)
+
+    def _confirm_delete(self, view: SessionView) -> None:
+        if self.sessions.get(view.key) is not view or self.delete_disabled_reason(view.key):
+            return
+        snapshot = view.snapshot
+        if snapshot is None or snapshot.status in FINAL_STATUSES:
+            self._remove_session(view)
+            return
+        # A local bridge refusal can arrive synchronously before stop_task returns its ID.
+        self._stop_results = {}
+        command = None if self._stopper is None else self._stopper(snapshot.task_id, snapshot.epoch)
+        results = self._stop_results
+        self._stop_results = None
+        if command is None:
+            view.delete_notice = (
+                "작업 중지를 요청하지 못해 삭제하지 않음. 결과 · 실행 활동에서 상태를 확인하세요."
+            )
+        else:
+            view.delete_notice = ""
+            view.pending_delete = command
+        self._refresh_view(view)
+        self._refresh_list()
+        if command in results:
+            self.settle_command(command, results[command])
+
+    def _remove_session(self, view: SessionView) -> None:
+        key = view.key
+        self._removed_keys.add(key)
+        self._clear_content(view)
+        view.title = ""
+        view.heading.clear()
+        view.heading.setToolTip("")
+        view.notice.clear()
+        view.command_notice = view.delete_notice = ""
+        view.pending_delete = None
+        self.sessions.pop(key)
+        self.stack.removeWidget(view.widget)
+        view.widget.deleteLater()
+        if self.current_key == key:
+            self.current_key = ""
+            if self.sessions:
+                self.select(max(self.sessions.values(), key=lambda item: item.updated).key)
+            else:
+                self.new_session()
+        else:
+            self._refresh_list()
+        self.titles_changed.emit()
+
     def _create(self, key: str, title: str) -> SessionView:
         page = QWidget()
         page.setObjectName("conversationPage")
@@ -228,7 +481,9 @@ class SessionWorkspace(QWidget):
         titles = QVBoxLayout()
         header.addLayout(titles, 1)
         titles.setSpacing(4)
-        heading = plain_label(title, name="sessionTitle")
+        heading = ElidedLabel(untrusted_display_text(title)[0])
+        heading.setObjectName("sessionTitle")
+        heading.setToolTip(plain_tooltip(untrusted_display_text(title)[0]))
         titles.addWidget(heading)
         facts = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         titles.addLayout(facts)
@@ -468,6 +723,8 @@ class SessionWorkspace(QWidget):
 
     def set_snapshot(self, snapshot: TaskProjection) -> None:
         key = f"task:{snapshot.task_id}:{snapshot.epoch}"
+        if key in self._removed_keys:
+            return
         if key in self._terminal_keys and snapshot.status in (
             TaskStatus.RUNNING,
             TaskStatus.WAITING_APPROVAL,
@@ -545,11 +802,13 @@ class SessionWorkspace(QWidget):
                 snapshot.label.name if snapshot.label is not None else None,
                 text=task_label_text(snapshot.label, snapshot.unclassified),
             )
-        view.notice.setText(display.note)
+        view.notice.setText(view.delete_notice or display.note)
         waiting = display.waiting
         view.approval.setVisible(waiting)
         # The band says it; a failure notice still shows above it.
-        view.notice.setVisible(not waiting or bool(display.failure_notice))
+        view.notice.setVisible(
+            not waiting or bool(display.failure_notice) or bool(view.delete_notice)
+        )
 
     def _send(self, view: SessionView) -> None:
         if not view.send.isEnabled() or view.snapshot is None or view is not self.current:
@@ -584,8 +843,10 @@ class SessionWorkspace(QWidget):
         key = f"task:{event.snapshot.task_id}:{event.snapshot.epoch}"
         was_selected = self.current_key == view.key
         view.key = key
-        view.title = view.title.replace("새 세션", "세션", 1)
-        view.heading.setText(view.title)
+        if view.title_source != "manual":
+            view.title = view.title.replace("새 세션", "세션", 1)
+        view.heading.setText(self.display_title(view))
+        view.heading.setToolTip(plain_tooltip(untrusted_display_text(view.title)[0]))
         view.pending_command = None
         view.command_notice = ""
         self.sessions[key] = view
@@ -594,6 +855,7 @@ class SessionWorkspace(QWidget):
         self.set_snapshot(event.snapshot)
         if was_selected:
             self.select(key)
+        self.titles_changed.emit()
 
     def _conversation_view(self, event: ConversationEvent) -> SessionView | None:
         view = self.sessions.get(f"task:{event.task_id}:{event.epoch}")
@@ -612,6 +874,9 @@ class SessionWorkspace(QWidget):
         if view is None or marker in self._seen_events or event.role not in ("user", "assistant"):
             return
         self._seen_events.add(marker)
+        if event.role == "user" and view.title_source == "auto" and not view.auto_title_set:
+            view.auto_title_set = True
+            self._set_title(view, auto_title(event.text, datetime.now()))
         partial = view.partial
         if partial is not None and (event.role == "user" or partial.command_id != event.command_id):
             self._stop_partial(view)
@@ -657,7 +922,19 @@ class SessionWorkspace(QWidget):
         return view.transcript.write_turn(label, text, start)
 
     def settle_command(self, command_id: str, code: str) -> None:
-        for view in self.sessions.values():
+        if self._stop_results is not None:
+            self._stop_results[command_id] = code
+        for view in tuple(self.sessions.values()):
+            if view.pending_delete == command_id:
+                if view.snapshot is not None and view.snapshot.status in FINAL_STATUSES:
+                    self._remove_session(view)
+                    continue
+                view.pending_delete = None
+                view.delete_notice = (
+                    "작업 중지를 확인하지 못해 삭제하지 않음. 상태를 확인한 뒤 다시 시도하세요."
+                )
+                self._refresh_view(view)
+                self._refresh_list()
             if view.partial is not None and view.partial.command_id == command_id:
                 self._stop_partial(view)
             if view.pending_command == command_id:
@@ -700,17 +977,38 @@ class SessionWorkspace(QWidget):
         self.list.clear()
         for view in sorted(self.sessions.values(), key=lambda item: item.updated, reverse=True):
             status, tone = session_row_status(view.snapshot)
-            shown, _ = untrusted_display_text(view.title)
-            time = f"{view.updated:%H:%M}"
+            if view.pending_delete is not None:
+                status = "중지 요청됨 · 확인 뒤 삭제"
+            shown = self.display_title(view)
+            time = (
+                f"{view.updated:%H:%M}"
+                if view.updated.date() == datetime.now().date()
+                else f"{view.updated.month}/{view.updated.day}"
+            )
             text = f"{shown}\n{time} · {status}"
             code = "" if view.snapshot is None else status_code(view.snapshot.status)
             identity = "" if view.snapshot is None else f"{view.snapshot.task_id} {code}"
             if needle and needle not in f"{text} {identity}".casefold():
                 continue
             item = QListWidgetItem(text)
-            item.setToolTip(code)
+            item.setToolTip(
+                plain_tooltip(
+                    f"{untrusted_display_text(view.title)[0]}\n{status}"
+                    + (f" ({code})" if code else "")
+                )
+            )
             item.setData(Qt.ItemDataRole.UserRole, view.key)
-            item.setData(_ROW_ROLE, _SessionRow(shown, time, status, tone))
+            item.setData(
+                _ROW_ROLE,
+                _SessionRow(
+                    shown,
+                    time,
+                    status,
+                    tone,
+                    view.snapshot is not None
+                    and view.snapshot.status is TaskStatus.WAITING_APPROVAL,
+                ),
+            )
             self.list.addItem(item)
             if view.key == self.current_key:
                 self.list.setCurrentItem(item)
@@ -725,6 +1023,8 @@ class SessionWorkspace(QWidget):
         view.content_present = False
 
     def clear_content(self) -> None:
+        for dialog in tuple(self._dialogs.values()):
+            dialog.reject()
         for view in self.sessions.values():
             self._clear_content(view)
         self._seen_events.clear()

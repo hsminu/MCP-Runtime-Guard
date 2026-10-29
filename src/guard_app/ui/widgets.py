@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from html import escape
 from typing import ClassVar
 
 import shiboken6
@@ -53,6 +54,11 @@ def plain_label(text: str = "", *, name: str | None = None, wrap: bool = True) -
     return label
 
 
+def plain_tooltip(text: str) -> str:
+    """Qt auto-detects rich tooltips; quote markup while keeping its visible text."""
+    return "<qt>" + escape(text).replace("\n", "<br>") + "</qt>" if "<" in text else text
+
+
 def table_row_height(table: QTableWidget, lines: int) -> int:
     """A row fits its lines of text plus the item padding, and no more."""
     table.ensurePolished()
@@ -73,6 +79,72 @@ def size_detail_for_viewport(dialog: QDialog, width: int, height: int) -> None:
         width = min(width, max(240, window.width() - 24))
         height = min(height, max(200, window.height() - 24))
     dialog.resize(width, height)
+
+
+class ElidedLabel(QLabel):
+    """Keep full plain text for accessibility while painting a single elided line."""
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        painter.setFont(self.font())
+        painter.setPen(self.palette().windowText().color())
+        text = self.fontMetrics().elidedText(
+            self.text(), Qt.TextElideMode.ElideRight, self.contentsRect().width()
+        )
+        painter.drawText(self.contentsRect(), self.alignment(), text)
+        painter.end()
+
+
+class ConfirmDialog(QDialog):
+    """Nonblocking confirmation with plain text and a safe default focus."""
+
+    def __init__(
+        self,
+        title: str,
+        body: str,
+        confirm_text: str,
+        *,
+        dangerous: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        layout = QVBoxLayout(self)
+        layout.addWidget(plain_label(title, name="cardTitle"))
+        self.body = plain_label(body)
+        layout.addWidget(self.body)
+        buttons = QHBoxLayout()
+        layout.addLayout(buttons)
+        buttons.addStretch()
+        self.cancel = QPushButton("취소")
+        self.confirm = QPushButton(confirm_text)
+        self.confirm.setProperty("variant", "danger" if dangerous else "primary")
+        for button in (self.cancel, self.confirm):
+            button.setAutoDefault(False)
+            button.setDefault(False)
+            buttons.addWidget(button)
+        self.cancel.clicked.connect(self.reject)
+        self.confirm.clicked.connect(self._confirm_once)
+        self.cancel.setFocus()
+        size_detail_for_viewport(self, 420, 200)
+
+    def _confirm_once(self) -> None:
+        self.confirm.setEnabled(False)
+        self.accept()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # Enter repeats from the action that opened this dialog cannot confirm it.
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class SelectionBox(QComboBox):

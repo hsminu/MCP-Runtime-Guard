@@ -434,6 +434,30 @@ class RuntimePanel(QWidget):
         self._refresh()
         self.bridge.request_run(self.current.task_id, command_id=command_id)
 
+    def stop_task(self, task_id: str, epoch: int) -> str | None:
+        """Request cancellation in an explicit confirmed scope, including background Tasks."""
+        scope = (task_id, epoch)
+        snapshot = self._snapshots.get(scope)
+        if (
+            not self._ready
+            or snapshot is None
+            or snapshot.status not in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL)
+        ):
+            return None
+        command_id = new_command_id()
+        self._commands[command_id] = ControlAction.CANCEL
+        self._command_scopes[command_id] = scope
+        message = "제어 요청됨 · 적용 여부 확인 중"
+        self._messages[scope] = (message, None)
+        if self.current is not None and (self.current.task_id, self.current.epoch) == scope:
+            self._clear_review()
+            self._show_message(message)
+        self._refresh()
+        self.bridge.request_control(
+            ControlAction.CANCEL, task_id, command_id=command_id, epoch=epoch
+        )
+        return command_id
+
     def _control(self, action: ControlAction) -> None:
         if self.current is None:
             return
