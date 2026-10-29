@@ -54,7 +54,6 @@ from guard_app.adapters.mcp_transport import (
 from guard_app.domain.enums import TaskStatus
 from guard_app.domain.errors import DispatchError
 from guard_app.domain.models import ProposedCall, RecoveryReport, TaskState
-from guard_app.domain.reasons import Reason
 from guard_app.security.ids import new_id
 from guard_app.security.launcher import ExecutablePin, LaunchedProcess, launch_mcp_server
 from guard_app.security.paths import AppFolders, prepare_app_folders
@@ -66,8 +65,6 @@ from guard_app.storage import SQLiteStore
 
 PYTHON = Path(sys.base_prefix) / "python.exe"
 KINDS = ("stdio", "http")
-DENY_REASONS = {getattr(Reason, n) for n in ("AGT_DENY", "ACCESS_DENY") if hasattr(Reason, n)}
-ERROR_REASONS = {getattr(Reason, n) for n in ("AGT_ERROR", "ACCESS_ERROR") if hasattr(Reason, n)}
 ZERO = {"approval_consumed": 0, "host_dispatch": 0, "wire": 0, "effect": 0}
 ONCE = {"approval_consumed": 1, "host_dispatch": 1, "wire": 1, "effect": 1}
 
@@ -557,7 +554,8 @@ async def harness(
         counters.wire_file = tmp_path / "wire.jsonl"
         counters.effect_file = tmp_path / "effect.jsonl"
     folders = prepare_app_folders(tmp_path / "app")
-    db = tmp_path / "guard.db"
+    # 제품과 같은 앱 폴더의 DB(C2.19). Codex 경유 하니스가 이 파일을 `bootstrap_product`로 연다.
+    db = folders.db_path()
     audits = iter(range(1_000_000))
     store = SQLiteStore(db, audit_id_factory=lambda: f"audit-{next(audits)}")
     launched: list[LaunchedProcess] = []
