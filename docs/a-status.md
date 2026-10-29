@@ -14,8 +14,6 @@
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
 | mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
-| Windows MSIX 가상 경로의 L2 config·model catalog 비교 실패(사용자 결정으로 C가 경로 비교 수정을 맡음 · C PR 대기, MSIX 앱 아래에서만 실패) | C | A151·A161·A168 |
-| 실제 L2 간헐 실패(`L2_PROBE_CALLS_UNEXPECTED`) 원인 확인([#21 알림](https://github.com/hsminu/MCP-Runtime-Guard/issues/21#issuecomment-6496456303)) | C | A151 |
 
 **A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
 
@@ -284,6 +282,7 @@
 - [x] A152 개요·승인 행과 화면 투영 분리 · [기록](archive/a/A152-overview-approvals-render.md)
 - [x] A153 `SessionRuntime`에서 제품 시작 조립 분리(공개 초기화·등록 경계, 기존 `bootstrap_product` 재수출) · [기록](archive/a/A153-session-runtime-boundary.md)
 - [x] A154 `BackendBridge`를 Qt 경계·생명주기 host·명령 접수 문맥·action 처리로 분리 · [기록](archive/a/A154-backend-bridge-commands.md)
-- [ ] A116·A152–A154 독립 리뷰 — C: 화면 격리·signal·로그 설치 순서, bridge 생명주기·replay·종료 순서. B: Store 활성화·종료 확인(#101 보류, A179 뒤 B 재확인)
+- [x] A116·A152–A154 B 인수(Store 활성화·종료 확인): [#107 B 재확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/107#issuecomment-6505436086) A179로 B-ACCEPT-01 해소
+- [ ] A116·A152–A154 C 독립 리뷰 — 화면 격리·signal·로그 설치 순서, bridge 생명주기·replay·종료 순서(예외 경로·창 정리 순서는 [#107 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/107#issuecomment-6505410334)에서 확인)
 - [x] A139 A 모듈 ID 생성을 `security/ids.py`로 통합([#65 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/65#issuecomment-6472889394)), B6.8 복구에 `new_id("run")` 연결(A138) · [기록](archive/a/A139-ids-module.md)
 - [x] A150 A 단위 시험 압축: 1차 같은 모양 시험 묶기([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)), 2차 줄 수 줄이기(목표 30% 미달) · [기록](archive/a/A150-a-test-compression.md)
