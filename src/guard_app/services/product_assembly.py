@@ -35,7 +35,10 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
+from functools import partial
+from typing import Any
 
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.mcp_transport import McpTransport, StreamFactory, ToolListLimits
@@ -48,7 +51,7 @@ from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ToolSpec
 from guard_app.ports import Registry, Store
 from guard_app.security.digest import JcsCanonicalizationError, tool_fingerprint
-from guard_app.security.endpoints import normalize_endpoint
+from guard_app.security.endpoints import EndpointError, normalize_endpoint
 from guard_app.security.ids import new_id
 from guard_app.security.launcher import ExecutablePin
 from guard_app.security.paths import AppFolders
@@ -336,11 +339,33 @@ def _server_streams(loaded: LoadedProfile, inputs: ProductInputs) -> Mapping[str
         else:
             if server.url is None:
                 raise ProductAssemblyError("PROFILE_SERVER_UNAVAILABLE")
+            try:
+                endpoint = normalize_endpoint(server.url).url
+            except EndpointError as error:
+                code = error.args[0] if error.args else "URL_INVALID"
+                streams[server.id] = partial(_RefusedStream, code)
+                continue
             streams[server.id] = http_stream_factory(
-                normalize_endpoint(server.url).url,
-                read_timeout_s=max(60.0, inputs.call_timeout_s),
+                endpoint, read_timeout_s=max(60.0, inputs.call_timeout_s)
             )
     return streams
+
+
+class _RefusedStream(AbstractAsyncContextManager[tuple[Any, ...]]):
+    """A stored URL that C2.5 refuses (a hand-edited settings file, #83 C review 3.2).
+
+    The connection fails on entry, so the product transport isolates this server
+    like a stdio start failure instead of failing the whole assembly.
+    """
+
+    def __init__(self, code: str) -> None:
+        self._code = code
+
+    async def __aenter__(self) -> tuple[Any, ...]:
+        raise EndpointError(self._code)
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
 
 
 async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:

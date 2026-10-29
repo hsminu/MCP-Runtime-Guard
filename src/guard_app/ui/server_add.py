@@ -965,6 +965,13 @@ class ServerAddForm(QWidget):
             "REG_EXECUTABLE_INVALID": (
                 "실행 파일·인자·환경변수 검증 거부. 파일과 입력을 확인하세요."
             ),
+            "REG_SERVER_UNREACHABLE": (
+                "서버에 연결하지 못해 등록하지 않음. 서버를 확인한 뒤 다시 등록하세요."
+            ),
+            "REG_LISTING_INVALID": (
+                "도구 목록을 끝까지 받지 못했거나 등록 조건에 맞지 않아 등록하지 않음. "
+                "서버를 확인한 뒤 다시 등록하세요."
+            ),
             "REG_UNAVAILABLE": "등록 서비스가 연결되지 않음.",
             "REG_RECHECK_UNAVAILABLE": ("설정과 Registry에 있는 stdio 서버 ID를 입력하세요."),
             "REG_CONFIRM_EXPIRED": "확인 내용이 만료됨. 등록 내용을 다시 확인하세요.",

@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from pydantic import ValidationError
 
 from guard_app.domain.enums import RegStatus, ToolKind
-from guard_app.domain.errors import StoreError
+from guard_app.domain.errors import DispatchError, StoreError
 from guard_app.ports import RegistryStore
 from guard_app.security.endpoints import ENDPOINT_REJECT_CODES, EndpointError, normalize_endpoint
 from guard_app.security.ids import new_id
@@ -25,6 +25,11 @@ from guard_app.services.policy_view import PolicyServer, PolicyTool, PolicyView
 from guard_app.services.registry import RegistryError, ServerRegistry, ToolListingView
 from guard_app.services.session_admission import SessionRuntimeError
 from guard_app.services.session_policy import TaskPolicy
+
+# The server never became ready and its teardown was confirmed (#83 C review 3.1).
+# A teardown that could not be confirmed raises another DispatchError and stays
+# unconfirmed.
+_SERVER_START_FAILURES = frozenset({"SessionStartFailed", "SessionStartTimeout"})
 
 
 def endpoint_input(value: str) -> tuple[str | None, str | None]:
@@ -259,7 +264,12 @@ class RegistrationCommands:
                 if not written:
                     self._unknown = True
         if not updating:
-            listing = await self.collect(server)
+            try:
+                listing = await self.collect(server)
+            except DispatchError as error:
+                if error.exception_type not in _SERVER_START_FAILURES:
+                    raise
+                return RegistrationView("REG_SERVER_UNREACHABLE")  # nothing written
             written = False
             try:
                 await self.registry.register(server, listing)

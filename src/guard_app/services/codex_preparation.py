@@ -65,8 +65,17 @@ from guard_app.services.session_preparation import (
 # C's 30 s drive plus about 15 s cleanup; also bound setup.
 L2_TOTAL_TIMEOUT_S = L2_DEADLINE_S + 20.0
 L2_CANCEL_TIMEOUT_S = 20.0
-# Store 60 + L2 50 + cancellation 20 + assembly/activation margin 10.
-PRODUCT_STARTUP_TIMEOUT_S = 140.0
+# bootstrap_product's deadline for Store preparation and recovery.
+STORE_STARTUP_S = 60.0
+# One window of up to four server starts: listing bound 30 s (over the 10 s
+# start) + 1, then C's close of a server that failed to start (grace 5 + kill 5).
+# A fifth server starts in a later window that this budget does not cover
+# (#83 C review 3.3).
+SERVER_ASSEMBLY_S = 41.0
+# Store + server assembly + L2 50 + cancellation 20 + activation margin 10.
+PRODUCT_STARTUP_TIMEOUT_S = (
+    STORE_STARTUP_S + SERVER_ASSEMBLY_S + L2_TOTAL_TIMEOUT_S + L2_CANCEL_TIMEOUT_S + 10.0
+)
 # L2 cancellation 20 + runtime/Store cleanup 5 + margin.
 PRODUCT_SHUTDOWN_TIMEOUT_S = 30.0
 
