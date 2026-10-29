@@ -24,6 +24,7 @@ from guard_app.services.bridge import (
     BridgeState,
     CommandStage,
     LifecycleEvent,
+    QueryReply,
     RegistrationView,
     TaskProjection,
 )
@@ -117,6 +118,7 @@ class GuardWindow(QMainWindow):
             min(820, usable_height),
         )
         self._page = "overview"
+        self._navigation_target = ""
         self._nav_buttons: dict[str, QPushButton] = {}
         self._menu_actions: dict[str, QAction] = {}
         self._page_indices: dict[str, int] = {}
@@ -552,6 +554,8 @@ class GuardWindow(QMainWindow):
         self.server_add_form.attach_registration(bridge)
         self.server_page.attach_activation(bridge)
         self.store_queries = StoreQueryLink(bridge, self.approval_page, self.log_page, self)
+        # Run after StoreQueryLink has applied the current response.
+        bridge.query_answered.connect(self._select_navigation_target)
         self.sessions.approval_lookup_requested.connect(self.store_queries.lookup_session_approval)
         self.store_queries.session_approval_ready.connect(self.sessions.set_session_approval)
         self.store_queries.session_approval_source_changed.connect(
@@ -811,19 +815,44 @@ class GuardWindow(QMainWindow):
 
         self.task_status_card.set_status(status)
 
+    def _select_navigation_target(self, reply: object) -> None:
+        if not self._navigation_target or type(reply) is not QueryReply:
+            return
+        if self._page == "logs" and reply.kind == "calls":
+            query = self.log_page.current_query
+            token = None if query is None else query.token
+        elif self._page == "approvals" and reply.kind == "approvals":
+            approval_query = self.approval_page.current_query
+            token = None if approval_query is None else approval_query.token
+        else:
+            return
+        if token == reply.token:
+            target = self._navigation_target
+            self._navigation_target = ""
+            if not reply.failed:
+                if self._page == "logs":
+                    self.log_page.select_call(target)
+                else:
+                    self.approval_page.select_approval(target)
+
     def navigate(self, page: str, target_id: str = "") -> None:
         if page not in self._page_indices:
             return
         if self._page == "runs" and page != "runs":
             self.sessions.leaving_conversation()
         self._page = page
+        self._navigation_target = target_id if page in ("logs", "approvals") else ""
         self.stack.setCurrentIndex(self._page_indices[page])
         if page == "servers" and target_id:
             self.server_page.select_server(target_id)
-        elif page == "logs" and target_id:
-            self.log_page.select_call(target_id)
-        elif page == "approvals" and target_id:
-            self.approval_page.select_approval(target_id)
+        elif page == "logs":
+            self.log_page.refresh()
+            if target_id:
+                self.log_page.select_call(target_id)
+        elif page == "approvals":
+            self.approval_page.refresh()
+            if target_id:
+                self.approval_page.select_approval(target_id)
         self.breadcrumb.setText(PAGES[page])
         if page == "results":
             self.results_scope.setText(self.sessions.current.heading.text())
