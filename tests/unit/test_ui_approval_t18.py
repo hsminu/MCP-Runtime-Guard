@@ -33,6 +33,8 @@ class DisplayBridge(QObject):
     command_changed = Signal(object)
     task_changed = Signal(object)
     review_ready = Signal(object)
+    recovery_changed = Signal(object)
+    recovery_page_changed = Signal(object)
 
 
 class UrlProbe(QObject):
@@ -187,6 +189,11 @@ def test_all_approval_fields_are_literal_and_never_open_links(app, monkeypatch):
                     QTest.mouseMove(label, label.rect().center())
                     QTest.mouseClick(label, Qt.MouseButton.LeftButton)
                 for body in widget.findChildren(QPlainTextEdit):
+                    if widget is panel and body is panel.recovery.items:
+                        # REC-04 has no approval payload; this fixture sends no report.
+                        assert body.toPlainText() == ""
+                        assert panel.recovery.isHidden()
+                        continue
                     text = body.toPlainText()
                     where = (type(widget).__name__, body.accessibleName())
                     assert "<b>" in text, where
