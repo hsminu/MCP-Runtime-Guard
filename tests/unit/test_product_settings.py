@@ -514,12 +514,14 @@ def test_settings_that_differ_from_the_registration_hide_only_that_server(tmp_pa
                     assembled.offered_tool_views(),
                     assembled.registry.blocked_servers,
                     registry.registration("docs"),
+                    "docs" in assembled.transport._workers,
                 )
             finally:
                 await assembled.aclose()
 
-    issue, views, blocked, stored = run(scenario())
+    issue, views, blocked, stored, started = run(scenario())
     assert issue == "REG_SETTINGS_MISMATCH"
+    assert not started
     assert views == ()
     # B14(51번): REG_SETTINGS_MISMATCH 서버는 시작하지 않아 목록 대조가 없다.
     # 숨김은 server_issue와 빈 tool views로 확인한다.

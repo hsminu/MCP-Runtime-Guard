@@ -243,6 +243,7 @@
 - [x] A180 #101 제안: 정책·목적지 저장 성공 뒤 B 적용 중 취소에도 재시작 요구·Guard 닫기, 일곱 저장 경로 취소 시험 · [기록](archive/a/A180-cancel-during-apply.md)
 - [x] A183 #107 C 리뷰 1번: UI 색 리터럴 검사가 주석의 이슈 번호(`#101`)를 색으로 읽지 않게 함 · [기록](archive/a/A183-color-check-skips-comments.md)
 - [x] A184 설정 파일이 없는 첫 실행도 기본 정책(서버·도구 없음)으로 바로 Task 시작, 파일은 첫 저장 때 만듦(사용자 결정 2026-10-30, CFG-01 문구 반영 필요) · [기록](archive/a/A184-first-run-default-profile.md)
+- [x] A198 #109 A 리뷰 후속: 등록과 다른 설정 서버를 띄우지 않음을 두 시험에 단언, 시험 이름·서버 상세 문구(연결하지 않음) 정리, Codex 스트림 기한 시험 간헐 실패(30ms→0.3s) · [기록](archive/a/A198-pr109-followups.md)
 
 ## 통합·패키징
 

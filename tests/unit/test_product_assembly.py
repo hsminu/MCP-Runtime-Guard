@@ -673,11 +673,11 @@ async def test_unsupported_tool_schema_is_a_fixed_code_and_closes_the_transport(
 
 
 @pytest.mark.asyncio
-async def test_a_blocked_server_whose_settings_are_ahead_of_its_registration_is_left_out(
+async def test_a_server_whose_settings_are_ahead_of_its_registration_is_not_started(
     tmp_path,
 ) -> None:
-    """A155: blocked OTHER registration versus READ settings offers no tools."""
-    peer = Peer([READ_DEFINITION, READ_DEFINITION])  # a repeated name blocks the server
+    """A155: OTHER registration versus READ settings starts nothing and offers no tools."""
+    peer = Peer([READ_DEFINITION])
     registry = Registry(tool_fingerprint(READ_DEFINITION))
     other = registry.record.tools[0].model_copy(
         update={"kind": ToolKind.OTHER, "resource_arg": None}
@@ -692,6 +692,7 @@ async def test_a_blocked_server_whose_settings_are_ahead_of_its_registration_is_
             # 숨김은 server_issue와 빈 tool views로 확인한다.
             assert assembled.registry.blocked_servers == frozenset()
             assert assembled.loaded.server_issue("docs") == "REG_SETTINGS_MISMATCH"
+            assert "docs" not in assembled.transport._workers
             assert assembled.tool_views == ()
         finally:
             await assembled.aclose()

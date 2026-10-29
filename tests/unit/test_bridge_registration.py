@@ -528,7 +528,11 @@ def test_server_screen_shows_a_settings_issue_without_echoing_the_code():
     cases = [
         (None, "", "확인된 문제 없음"),
         ("URL_HTTP_NOT_LOOPBACK", " · 설정 확인 필요", "저장된 URL을 쓸 수 없음"),
-        ("REG_SETTINGS_MISMATCH", " · 설정 확인 필요", "설정 파일과 등록 내용이 다름"),
+        (
+            "REG_SETTINGS_MISMATCH",
+            " · 설정 확인 필요",
+            "설정 파일과 등록 내용이 다름. 이 서버는 연결하지 않고",
+        ),
         ("NEW_B_CODE", " · 설정 확인 필요", "설정 확인 필요"),
     ]
     page = ServerListPage()

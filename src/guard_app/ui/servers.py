@@ -82,7 +82,7 @@ def _settings_issue(server: ServerSummary) -> str:
     if issue.startswith("URL_"):
         return "저장된 URL을 쓸 수 없음. 이 서버는 연결하지 않음."
     if issue == "REG_SETTINGS_MISMATCH":
-        return "설정 파일과 등록 내용이 다름. 이 서버의 도구는 숨겨짐."
+        return "설정 파일과 등록 내용이 다름. 이 서버는 연결하지 않고 도구를 숨김."
     return "설정 확인 필요"
 
 
