@@ -63,13 +63,12 @@
 - [x] A140 수신 순서·서버 격리 리뷰: [B](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6473893617)·[C](https://github.com/hsminu/MCP-Runtime-Guard/pull/70#issuecomment-6474250735) 모두 막는 문제 없음, 콜백 설명 제안은 반영
 - [x] A140 결정 문서 제안 [#71](https://github.com/hsminu/MCP-Runtime-Guard/pull/71)에 [B 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/71#issuecomment-6474704011) 반영: 약점 대장 리뷰 칸, "첫 성공 응답", 10.1절 SDK 업그레이드 확인 구절(`16fe9cd`), main 병합됨
 - [ ] A140 실제 알림 시점 관찰 — 막힘: C5.9
-- [ ] A144 mcp 고정 버전을 올릴 때 SDK 내부에 기대는 세 곳(요청 ID 배정 순서, `_handle_response`, `_DeliveryCheckedStream`) 재검증 — 막힘: C mcp 1.30.0 고정 PR([#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 빼고 병합됨). 1.30.0 파일 비교와 A transport·계수 시험 1,114개는 통과([#73 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/73#issuecomment-6488073230)), A145 main 병합 먼저
+- [ ] A144 mcp 고정 버전을 올릴 때 SDK 내부에 기대는 네 곳(요청 ID 배정 순서, `_handle_response`, `_DeliveryCheckedStream`, A158 종료 판정의 세션 정리) 재검증 — 막힘: C mcp 1.30.0 고정 PR([#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 빼고 병합됨). 1.30.0 파일 비교와 A transport·계수 시험 1,114개는 통과([#73 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/73#issuecomment-6488073230)), A145 main 병합 먼저
 - [x] A145 HTTP 클라이언트 `max_redirects=0`과 같은 URL 307/308 시험(mcp 1.30.0은 `follow_redirects`를 보지 않음). [#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82) B·C 리뷰 막는 문제 없음, B 의견대로 `max_redirects` 단언 추가 · [기록](archive/a/A145-http-no-redirects.md)
 - [x] A132 HTTP 세션이 요청 오류(`httpx.HTTPError`)만으로 끝나면 종료를 완료로 봄(#61 A 후속 2) · [기록](archive/a/A132-http-teardown-completed.md)
 - [x] A141 A132의 HTTP 종료 기대값 C 수정(#68)을 A 브랜치에 통합·전체 재검사 · [기록](archive/a/A141-c68-integration-check.md)
 - [x] A133 세션이 끊긴 서버를 이번 실행 동안 PENDING으로 보고 다음 호출을 예약 전 `REG_NOT_ACTIVE`로 거부(#61 A 후속 3) · [기록](archive/a/A133-failed-server-pending.md)
-- [ ] A158 initialize 중 끝나는 stdio 서버: SDK 세션 종료가 `McpError('Connection closed')`로 끝나 C launcher가 종료를 확인해도 `SessionCloseFailed`가 됨. 제품 시작에서 그 서버만 격리되지 않고 transport 시작 전체가 실패, 등록은 "확인하지 못함" — A 차례(A132의 stdio 판, [A157](archive/a/A157-pr83-c-review-followups.md)에서 발견)
-- [x] A15·A16 연결 직후 목록을 C `ServerRegistry.observe`로 기록(정의 변경은 PENDING으로 저장, 기록 실패는 이번 실행 차단) · [기록](archive/a/A129-settings-file-registry-connection.md)
+- [x] A158 initialize에서 끝나거나 오류로 답하는 stdio 서버: 세션 종료가 본문 오류만 다시 올리고 C가 종료를 확인하면 종료 완료로 봄. 제품 시작은 그 서버만 빼고, 등록은 `REG_SERVER_UNREACHABLE` · [기록](archive/a/A164-stdio-initialize-failure-isolation.md)- [x] A15·A16 연결 직후 목록을 C `ServerRegistry.observe`로 기록(정의 변경은 PENDING으로 저장, 기록 실패는 이번 실행 차단) · [기록](archive/a/A129-settings-file-registry-connection.md)
 - [x] A15·A16 실제 launcher 연결(EXE-01 지문 고정 실행) · [기록](archive/a/A09-launcher-pipes.md)
 
 ## 접근 규칙·모델·Runner

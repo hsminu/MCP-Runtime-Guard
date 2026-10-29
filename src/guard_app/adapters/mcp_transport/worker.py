@@ -49,10 +49,11 @@ class _SessionExitTracker:
     """Observe successful context exit even when the owner was cancelled.
 
     An HTTP session that died of a request error still tears down completely
-    (`http_teardown_completed`). That exit counts as done and is not raised to
-    the owner; the worker is then FAILED for the rest of the run like any
-    session that ended while serving. It is never applied while the owner
-    itself is being cancelled.
+    (`http_teardown_completed`), and so does a session whose start failed and
+    whose exit re-raised only that failure (`_only_the_body_error`, A158). Those
+    exits count as done and are not raised to the owner; the worker is then
+    FAILED for the rest of the run like any session that ended on its own. They
+    are never applied while the owner itself is being cancelled.
     """
 
     def __init__(self, context: AbstractAsyncContextManager[ToolSession]) -> None:
@@ -77,10 +78,13 @@ class _SessionExitTracker:
             suppressed = await self._context.__aexit__(exc_type, exc, tb)
         except BaseExceptionGroup as group:
             owner = asyncio.current_task()
-            if not http_teardown_completed(group) or (owner is not None and owner.cancelling()):
+            if owner is not None and owner.cancelling():
                 raise
-            # The body was cancelled by the SDK's own task group, which has
-            # already taken that cancellation back; nothing outside asked for it.
+            if not http_teardown_completed(group) and not _only_the_body_error(group, exc):
+                raise
+            # HTTP: the body was cancelled by the SDK's own task group, which
+            # has already taken that cancellation back. stdio: the group only
+            # carries the body's own error. Nothing outside asked for either.
             self.exited = True
             return True
         self.exited = True
@@ -119,6 +123,30 @@ def _consume_command_failure(future: asyncio.Future[RawResult]) -> None:
     # sanitized exception. Do not let asyncio log even that abandoned item.
     if not future.cancelled():
         future.exception()
+
+
+def _leaves_are(group: BaseExceptionGroup, error: BaseException) -> bool:
+    return all(
+        _leaves_are(item, error) if isinstance(item, BaseExceptionGroup) else item is error
+        for item in group.exceptions
+    )
+
+
+def _only_the_body_error(group: BaseExceptionGroup, body: BaseException | None) -> bool:
+    """A session context that ended re-raising only the body's own error (A158).
+
+    A stdio server that exits during initialize ends the SDK's read stream, so
+    initialize raises the fixed connection-closed error (`_session_broken`);
+    one that answers initialize with an error raises that `McpError`. mcp
+    1.29.0's session and the pipe adapter's task groups wrap that same object
+    once all their tasks have finished, and both clean up in `finally`. The C
+    launcher's shielded close runs in that exit and raises
+    `LAUNCH_EXIT_UNCONFIRMED` in place of the group when it cannot confirm the
+    process ended. A group whose every leaf is the body's error therefore means
+    the exit added no failure of its own: the teardown is complete. A
+    cancellation is never such an error.
+    """
+    return isinstance(body, Exception) and _leaves_are(group, body)
 
 
 def _session_broken(exc: Exception) -> bool:
