@@ -262,6 +262,7 @@
 - [x] A210 codex.exe 없음·버전 다름을 `CODEX_EXECUTABLE_MISSING`·`MISMATCH`로 화면까지 전달: 로그인 화면은 설치 안내·명령·복사 버튼, 채팅 새 세션 안내는 안내와 명령(`.venv\Scripts\python.exe tools\install_codex.py`) · [기록](archive/a/A210-codex-install-notice.md)
 - [x] A211 로컬 파일 서버 등록을 공유 폴더·등급 선택으로 줄임: ID `local-files` 자동, 경계 내부·최대 민감 고정·숨김, 루트 목록 칸 제거, 하위 폴더는 같거나 높은 등급·겹침 금지, 용어 공유 폴더·공개·개인·민감, 복원은 Registry 경계 유지(리뷰 수정) · [기록](archive/a/A211-file-server-form.md)
 - [x] A212 채팅에서 로그·승인 화면으로 이동할 때마다 Store를 다시 읽음(같은 화면 재이동 포함, 조회만), 이동 대상은 현재 조회 응답 뒤 다시 선택, 늦은 응답·다른 목록 응답은 무시 · [기록](archive/a/A212-page-refresh.md)
+- [x] A213 채팅 답변 머리글에서 "(검증되지 않은 내용)" 제거("Guard · 모델 답변"·"… 작성 중"), 중단 머리글·일반 텍스트 렌더링은 유지 · [기록](archive/a/A213-answer-label.md)
 
 ## 통합·패키징
 
