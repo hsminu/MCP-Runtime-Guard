@@ -417,6 +417,8 @@ async def test_http_factory_blocks_same_url_post_when_sdk_forces_redirects(monke
     @asynccontextmanager
     async def fake_stream(endpoint, *, http_client, terminate_on_close):
         assert http_client.follow_redirects is False
+        # mcp 1.30.0 stops on client.max_redirects, not follow_redirects (#82 B review).
+        assert http_client.max_redirects == 0
         try:
             await asyncio.wait_for(
                 http_client.post(
