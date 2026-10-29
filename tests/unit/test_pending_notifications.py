@@ -611,14 +611,15 @@ def test_termination_waits_for_approval_creation_before_finalizing(action):
             monotonic=lambda: clock.mono,
         )
         entered, release = asyncio.Event(), asyncio.Event()
-        original = h.store.create_approval
+        original = h.store.open_approval
 
-        async def blocked(record):
-            await original(record)
+        async def blocked(record, *, expected_task):
+            committed = await original(record, expected_task=expected_task)
             entered.set()
             await release.wait()
+            return committed
 
-        h.store.create_approval = blocked
+        h.store.open_approval = blocked
         submit = asyncio.create_task(h.guard.submit("task", _call("send")))
         await entered.wait()
         assert h.guard._approvals._opening

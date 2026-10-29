@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import math
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal, Protocol
 
@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from guard_app.core.approval_time import approval_event_time
 from guard_app.core.snapshot import ApprovalSnapshot, make_snapshot
 from guard_app.domain.contracts import (
+    ApprovalCommit,
     ApprovalRecord,
     Denied,
     Outcome,
@@ -27,8 +28,15 @@ from guard_app.domain.contracts import (
     Released,
     Withheld,
 )
-from guard_app.domain.enums import ApprovalStatus, Decision, Label, SystemStopReason, TaskStatus
-from guard_app.domain.errors import ResolutionError, StoreError
+from guard_app.domain.enums import (
+    ApprovalStatus,
+    Decision,
+    Label,
+    RequestStatus,
+    SystemStopReason,
+    TaskStatus,
+)
+from guard_app.domain.errors import ResolutionError, StoreError, StoreIntegrityError
 from guard_app.domain.models import PolicyDecision, ProposedCall, ResolvedRequest, TaskState
 from guard_app.domain.reasons import Reason
 from guard_app.ports import Store
@@ -36,7 +44,11 @@ from guard_app.security.digest import canonical_json, json_digest
 from guard_app.security.failclosed import fail_closed
 from guard_app.services.catalog import Catalog
 from guard_app.services.catalog_sources import SourceRule
-from guard_app.services.state_checks import checked_status_change
+from guard_app.services.state_checks import (
+    checked_status_change,
+    checked_task,
+    preserve_task_context,
+)
 
 
 class ApprovalConfigError(ValueError):
@@ -49,6 +61,14 @@ class _ApprovalTaskMismatchError(StoreError):
 
 class _ApprovalRecordMismatchError(StoreError):
     """조회·전이 대상과 연결되지 않은 승인 행을 소비하거나 변경하지 않는다."""
+
+
+class _ApprovalConflictError(Exception):
+    """원자 종결 연산의 충돌을 다른 Store 오류와 구별한다."""
+
+    def __init__(self, reason: Reason) -> None:
+        self.reason = reason
+        super().__init__(reason.value)
 
 
 class ApprovalHost(Protocol):
@@ -298,6 +318,21 @@ class ApprovalService:
                     "failed",
                 )
 
+    def _fail_locked_task_pending(self, task_id: str) -> None:
+        """해당 Task lock에서 정책 정지 실패를 확정하고 대기자를 깨운다."""
+        for approval_id, owner in tuple(self._pending.items()):
+            if (
+                owner.task_id == task_id
+                and not owner.handle._completed
+                and approval_id not in self._inflight_tasks
+            ):
+                self._discard_snapshot(approval_id)
+                self._complete(
+                    approval_id,
+                    Denied(request_id=owner.request_id, reasons=(Reason.INTERNAL_ERROR,)),
+                    "failed",
+                )
+
     def human_channel(self, operator_id: str) -> HumanControl:
         """A의 신뢰 UI 제어 큐에만 전달할 capability. 모델 제안으로 만들지 않는다."""
         if type(operator_id) is not str or operator_id != self._approver_id:
@@ -339,11 +374,7 @@ class ApprovalService:
     async def _open(
         self, req: ResolvedRequest, state: TaskState, decision: PolicyDecision
     ) -> ApprovalRecord:
-        """WAITING 반환 버전을 사본에 고정한다. 중간 저장 실패는 예약 전 정지다.
-
-        B1의 Task 전이·승인 생성은 별도 Store 메서드다. B6 구현에서 둘의
-        원자 묶음은 합의 대상이며, 여기서는 실패를 정상 Pending으로 숨기지 않는다.
-        """
+        """사본을 먼저 만들고 Store의 원자 대기 전이 ACK 뒤에 발행한다."""
         req = ResolvedRequest.model_validate(req)
         state = TaskState.model_validate(state)
         decision = PolicyDecision.model_validate(decision)
@@ -361,28 +392,11 @@ class ApprovalService:
         ):
             raise StoreError(Reason.APPROVAL_STALE)
         now, mono = self._times()
-        waiting = await self._store.set_task_status(
-            state.task_id,
-            TaskStatus.WAITING_APPROVAL,
-            expected_row_revision=state.row_revision,
-            at_utc=now,
-            reason=Reason.INTERNAL_TO_EXTERNAL,
-        )
-        if (
-            waiting.status is not TaskStatus.WAITING_APPROVAL
-            or self._security_context(waiting) != self._security_context(state)
-            or self._host.effective_task_label(waiting) != self._host.effective_task_label(state)
-            or waiting.security_version < state.security_version
-        ):
-            raise StoreError(Reason.APPROVAL_STALE)
-        waiting_decision = decision.model_copy(
-            update={"security_version": waiting.security_version}
-        )
         snapshot = make_snapshot(
             req,
-            waiting,
-            waiting_decision,
-            effective_label=self._host.effective_task_label(waiting),
+            state,
+            decision,
+            effective_label=self._host.effective_task_label(state),
             approver_id=self._approver_id,
             expires_at_utc=now + timedelta(seconds=self._ttl_seconds),
             monotonic_deadline=mono + self._ttl_seconds,
@@ -400,7 +414,20 @@ class ApprovalService:
         )
         if self._approval_task_id(approval.approval_id) is not None:
             raise StoreError(Reason.APPROVAL_RACE)
-        await self._store.create_approval(approval)
+        committed = await self._store.open_approval(approval, expected_task=state)
+        try:
+            committed = ApprovalCommit.model_validate(committed)
+            waiting = checked_status_change(committed.task, state, TaskStatus.WAITING_APPROVAL)
+        except (ValidationError, StoreError):
+            raise _ApprovalRecordMismatchError() from None
+        if (
+            committed.approval != approval
+            or committed.request_status is not RequestStatus.WAITING_APPROVAL
+            or waiting.security_version != state.security_version
+            or self._host.effective_task_label(waiting) != self._host.effective_task_label(state)
+        ):
+            raise _ApprovalRecordMismatchError()
+        snapshot = replace(snapshot, state=waiting)
         self._memory_snapshots[approval.approval_id] = snapshot
         self._register_pending(approval, snapshot)
         self._expiry_tasks[approval.approval_id] = asyncio.create_task(
@@ -415,6 +442,7 @@ class ApprovalService:
         *,
         cause: PendingFinalCause | None = None,
         notify: bool = True,
+        policy_mismatch: bool = False,
     ) -> None:
         """호출자가 이미 잡은 lock 안에서 원문 사본과 살아 있는 승인을 폐기한다."""
         approval_ids = tuple(
@@ -431,13 +459,47 @@ class ApprovalService:
                 ]
             )
         )
+        snapshots = {
+            approval_id: snapshot
+            for approval_id in approval_ids
+            if (snapshot := self._memory_snapshots.get(approval_id)) is not None
+        }
         for approval_id in approval_ids:
             self._discard_snapshot(approval_id)
+        completed: set[str] = set()
         for approval_id in approval_ids:
             record = await self._load_approval(approval_id)
             if record is not None and record.status in _LIVE:
-                await self._transition(record, self._invalid_status(record), reason)
+                owner = self._closing_approvals.get(approval_id)
+                if owner is None or owner.task_id != task_id:
+                    raise _ApprovalTaskMismatchError()
+                state = await self._checked_owner_task(owner.task_id, owner.epoch)
+                try:
+                    await self._finish_record(
+                        record,
+                        state,
+                        ApprovalStatus.INVALIDATED
+                        if policy_mismatch
+                        else self._invalid_status(record),
+                        reason,
+                        TaskStatus.HALTED,
+                        reason,
+                    )
+                except _ApprovalConflictError:
+                    if policy_mismatch:
+                        await self._finish_policy_conflict(record, owner.task_id, owner.epoch)
+                        self._closing_approvals.pop(approval_id, None)
+                        completed.add(approval_id)
+                        self._causes[approval_id] = cause or self._invalidation_cause(reason)
+                        if notify:
+                            self._complete(approval_id, self._denied(record, reason))
+                        continue
+                    for pending_id, snapshot in snapshots.items():
+                        if pending_id not in completed:
+                            self._restore_snapshot_after_conflict(pending_id, snapshot)
+                    raise
             self._closing_approvals.pop(approval_id, None)
+            completed.add(approval_id)
             self._causes[approval_id] = cause or self._invalidation_cause(reason)
             if notify:
                 self._complete(approval_id, self._denied(record, reason))
@@ -535,11 +597,15 @@ class ApprovalService:
             (snapshot.expires_at_utc - now).total_seconds(), snapshot.monotonic_deadline - mono
         )
 
-    async def _run_expiry(self, approval_id: str) -> None:
+    async def _run_expiry(self, approval_id: str, *, initial_backoff: bool = False) -> None:
         async def operation() -> None:
+            if initial_backoff:
+                await self._sleep(1.0)
             while (delay := self._expiry_delay(approval_id)) is not None:
                 if delay <= 0:
                     await self._expire_system(approval_id)
+                    if self._expiry_tasks.get(approval_id) is not asyncio.current_task():
+                        return
                     # lock 대기 중 UTC가 돌아오면 미확정 승인 감시를 계속한다.
                     continue
                 # UTC 순방향 변경도 최대 1초 안에 재검사한다. monotonic은 연장하지 않는다.
@@ -888,8 +954,13 @@ class ApprovalService:
         state = await self._load_snapshot_task(snapshot)
         if not self._host.policy_matches(state):
             reason = self._host.policy_mismatch_reason()
+            status = (
+                ApprovalStatus.INVALIDATED
+                if reason is Reason.POLICY_CHANGED
+                else self._invalid_status(record)
+            )
+            await self._finish(record, snapshot, status, reason)
             await self._halt_snapshot_task(snapshot, reason)
-            await self._finish(record, snapshot, self._invalid_status(record), reason)
             return self._denied(record, reason)
         if not self._task_matches(snapshot, state):
             await self._finish(
@@ -1147,8 +1218,31 @@ class ApprovalService:
         *,
         resume: bool = False,
     ) -> None:
+        state = await self._load_snapshot_task(snapshot)
+        task_after = TaskStatus.HALTED
+        halt_reason: Reason | None = reason
+        if resume:
+            if not self._host.policy_matches(state):
+                halt_reason = self._host.policy_mismatch_reason()
+            elif self._task_matches(snapshot, state):
+                task_after = TaskStatus.RUNNING
+                halt_reason = None
+            else:
+                halt_reason = Reason.APPROVAL_STALE
         self._discard_snapshot(record.approval_id)
-        await self._transition(record, status, reason)
+        try:
+            await self._finish_record(record, state, status, reason, task_after, halt_reason)
+        except _ApprovalConflictError:
+            if halt_reason is Reason.POLICY_CHANGED:
+                await self._finish_policy_conflict(record, snapshot.task_id, snapshot.request.epoch)
+                await self._halt_snapshot_task(snapshot, halt_reason)
+                self._causes[record.approval_id] = "invalidated"
+                self._closing_approvals.pop(record.approval_id, None)
+                return
+            # 종결 쓰기 대기 중에는 원문 없는 소유자만 유지한다. 충돌은 커밋되지
+            # 않았으므로 사본·타이머를 복원해 사람이 다시 결정할 수 있다.
+            self._restore_snapshot_after_conflict(record.approval_id, snapshot)
+            raise
         self._causes[record.approval_id] = (
             "expired"
             if status is ApprovalStatus.EXPIRED
@@ -1156,23 +1250,129 @@ class ApprovalService:
             if status is ApprovalStatus.REJECTED
             else self._invalidation_cause(reason)
         )
-        if resume:
-            state = await self._load_snapshot_task(snapshot)
-            if not self._host.policy_matches(state):
-                await self._halt_snapshot_task(snapshot, self._host.policy_mismatch_reason())
-            elif self._task_matches(snapshot, state):
-                returned = await self._store.set_task_status(
-                    state.task_id,
-                    TaskStatus.RUNNING,
-                    expected_row_revision=state.row_revision,
-                    at_utc=self._times()[0],
-                    reason=reason,
-                )
-                try:
-                    checked_status_change(returned, state, TaskStatus.RUNNING)
-                except StoreError:
-                    raise _ApprovalTaskMismatchError() from None
         self._closing_approvals.pop(record.approval_id, None)
+
+    async def _finish_policy_conflict(
+        self, previous: ApprovalRecord, task_id: str, epoch: int
+    ) -> None:
+        """정책 정지 충돌은 관계 확인 후 종결을 확인하거나 최신 revision으로 재시도한다."""
+        refreshed = await self._load_approval(previous.approval_id)
+        if refreshed is None:
+            raise StoreIntegrityError() from None
+        if (
+            refreshed.request_id != previous.request_id
+            or refreshed.snapshot_hash != previous.snapshot_hash
+            or refreshed.approver_id != previous.approver_id
+            or refreshed.created_at_utc != previous.created_at_utc
+            or refreshed.expires_at_utc != previous.expires_at_utc
+            or refreshed.row_revision < previous.row_revision
+        ):
+            raise StoreIntegrityError() from None
+        if refreshed.status not in _LIVE:
+            if refreshed.row_revision == previous.row_revision:
+                raise StoreIntegrityError() from None
+            # 호출 경계에서 예외가 나도 이미 종료된 승인과 실행 중 Task가 남지 않도록
+            # 이 Task lock 안에서 정지 ACK까지 확인하고 반환한다.
+            await self._host.halt_task(task_id, Reason.POLICY_CHANGED, expected_epoch=epoch)
+            return
+        state = await self._checked_owner_task(task_id, epoch)
+        try:
+            await self._finish_record(
+                refreshed,
+                state,
+                ApprovalStatus.INVALIDATED,
+                Reason.POLICY_CHANGED,
+                TaskStatus.HALTED,
+                Reason.POLICY_CHANGED,
+            )
+        except _ApprovalConflictError:
+            # 재시도도 충돌하면 Task 단독 정지로 부분 상태를 만들지 않는다.
+            self._host.global_halt()
+            raise StoreError(Reason.INTERNAL_ERROR) from None
+
+    def _restore_snapshot_after_conflict(
+        self, approval_id: str, snapshot: ApprovalSnapshot
+    ) -> None:
+        self._closing_approvals.pop(approval_id, None)
+        self._memory_snapshots[approval_id] = snapshot
+        delay = self._expiry_delay(approval_id)
+        # 만료된 타이머가 충돌을 반복하더라도 대기 없이 바쁘게 재시도하지 않는다.
+        self._expiry_tasks[approval_id] = asyncio.create_task(
+            self._run_expiry(approval_id, initial_backoff=delay is not None and delay <= 0)
+        )
+
+    async def _finish_record(
+        self,
+        record: ApprovalRecord,
+        state: TaskState,
+        status: ApprovalStatus,
+        reason: Reason,
+        task_after: TaskStatus,
+        halt_reason: Reason | None,
+    ) -> None:
+        event_time = approval_event_time(record, self._times()[0])
+        try:
+            committed = await self._store.finish_approval(
+                record.approval_id,
+                status,
+                expected_approval_revision=record.row_revision,
+                task_after=task_after,
+                expected_task_revision=state.row_revision,
+                reason=reason,
+                halt_reason=halt_reason,
+                now_utc=event_time,
+            )
+        except StoreError as error:
+            if type(error) is StoreError and error.reason in (
+                Reason.APPROVAL_RACE,
+                Reason.APPROVAL_STALE,
+            ):
+                raise _ApprovalConflictError(error.reason) from None
+            raise
+        try:
+            committed = ApprovalCommit.model_validate(committed)
+            result = self._checked_approval(committed.approval, record.approval_id)
+            if (
+                committed.task.status
+                in (
+                    TaskStatus.HALTED,
+                    TaskStatus.UNKNOWN_OUTCOME,
+                    TaskStatus.CLOSED,
+                )
+                and committed.task != state
+            ):
+                checked = checked_task(committed.task, task_id=state.task_id, epoch=state.epoch)
+                preserve_task_context(checked, state)
+                if (
+                    checked.row_revision <= state.row_revision
+                    or checked.security_version <= state.security_version
+                ):
+                    raise _ApprovalTaskMismatchError()
+            elif state.status in (TaskStatus.HALTED, TaskStatus.UNKNOWN_OUTCOME, TaskStatus.CLOSED):
+                if committed.task != state:
+                    raise _ApprovalTaskMismatchError()
+            else:
+                checked = checked_status_change(committed.task, state, task_after)
+                if checked.security_version != state.security_version + int(
+                    task_after is TaskStatus.HALTED
+                ):
+                    raise _ApprovalTaskMismatchError()
+        except (ValidationError, StoreError):
+            raise _ApprovalRecordMismatchError() from None
+        if (
+            committed.request_status is not RequestStatus.DENIED
+            or result.request_id != record.request_id
+            or result.snapshot_hash != record.snapshot_hash
+            or result.approver_id != record.approver_id
+            or result.created_at_utc != record.created_at_utc
+            or result.expires_at_utc != record.expires_at_utc
+            or result.consumed_at_utc != record.consumed_at_utc
+            or result.status is not status
+            or result.row_revision != record.row_revision + 1
+            or result.decided_at_utc is None
+            or result.decided_at_utc < event_time
+        ):
+            raise _ApprovalRecordMismatchError()
 
     async def _transition(
         self, record: ApprovalRecord, status: ApprovalStatus, reason: Reason
@@ -1212,6 +1412,18 @@ class ApprovalService:
         snapshot = None if approval_id is None else self._memory_snapshots.get(approval_id)
 
         async def on_error(exc: BaseException) -> Denied:
+            if isinstance(exc, StoreIntegrityError):
+                self._host.global_halt()
+                if approval_id is not None:
+                    self._discard_snapshot(approval_id)
+                    self._causes[approval_id] = "failed"
+                return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
+            if isinstance(exc, _ApprovalConflictError):
+                owner = None if approval_id is None else self._pending.get(approval_id)
+                return Denied(
+                    request_id=None if owner is None else owner.request_id,
+                    reasons=(exc.reason,),
+                )
             if (
                 isinstance(exc, ResolutionError)
                 and exc.reason
@@ -1228,9 +1440,8 @@ class ApprovalService:
             for known_id, owner in self._pending.items():
                 if owner.task_id == task_id:
                     self._causes[known_id] = "failed"
-            if isinstance(exc, _ApprovalRecordMismatchError):
-                # Store가 오연결된 행을 반환했다. 같은 getter로 정리를 재시도하면
-                # 다른 Task lock 없이 관계없는 승인을 변경할 수 있으므로 쓰지 않는다.
+            if isinstance(exc, (_ApprovalRecordMismatchError, _ApprovalTaskMismatchError)):
+                # 관계가 틀린 행은 다시 읽어 수정하지 않는다. 후속 복구가 정리한다.
                 self._host.global_halt()
                 for known_id, snap in tuple(self._memory_snapshots.items()):
                     if known_id == approval_id or (task_id is not None and snap.task_id == task_id):
@@ -1253,8 +1464,19 @@ class ApprovalService:
                 # _finish가 사본을 지운 직후 실패한 레코드도 종착 상태로 정리한다.
                 record = await self._load_approval(approval_id)
                 if record is not None and record.status in _LIVE:
-                    await self._transition(
-                        record, self._invalid_status(record), Reason.INTERNAL_ERROR
+                    closing_owner = self._closing_approvals.get(approval_id)
+                    if closing_owner is None:
+                        raise _ApprovalTaskMismatchError()
+                    state = await self._checked_owner_task(
+                        closing_owner.task_id, closing_owner.epoch
+                    )
+                    await self._finish_record(
+                        record,
+                        state,
+                        self._invalid_status(record),
+                        Reason.INTERNAL_ERROR,
+                        TaskStatus.HALTED,
+                        Reason.INTERNAL_ERROR,
                     )
             if not identity_mismatch:
                 if snapshot is None:
@@ -1313,11 +1535,14 @@ class ApprovalService:
         return await fail_closed(acquire, on_error=on_error, on_containment_error=fallback)
 
     async def _load_snapshot_task(self, snapshot: ApprovalSnapshot) -> TaskState:
+        return await self._checked_owner_task(snapshot.task_id, snapshot.request.epoch)
+
+    async def _checked_owner_task(self, task_id: str, epoch: int) -> TaskState:
         try:
-            state = TaskState.model_validate(await self._store.load_task(snapshot.task_id))
+            state = TaskState.model_validate(await self._store.load_task(task_id))
         except ValidationError:
             raise _ApprovalTaskMismatchError() from None
-        if state.task_id != snapshot.task_id or state.epoch != snapshot.request.epoch:
+        if state.task_id != task_id or state.epoch != epoch:
             raise _ApprovalTaskMismatchError()
         return state
 

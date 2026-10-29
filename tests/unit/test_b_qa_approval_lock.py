@@ -29,7 +29,7 @@ def test_control_waits_for_terminal_write_after_raw_snapshot_is_removed(
         approval = await _open(setup)
         control = service.human_channel("operator-1")
         entered, release = asyncio.Event(), asyncio.Event()
-        transition = store.transition_approval
+        transition = store.finish_approval
         getter = store.get_approval
         transitions, gets = [], []
 
@@ -44,7 +44,7 @@ def test_control_waits_for_terminal_write_after_raw_snapshot_is_removed(
             gets.append(approval_id)
             return await getter(approval_id)
 
-        store.transition_approval = yielding_transition
+        store.finish_approval = yielding_transition
         store.get_approval = counted_get
         if first_command == "expire":
             clock.mono += 300
@@ -88,22 +88,22 @@ def test_closing_owner_is_held_until_waiting_task_resume_ack(first_command, next
         approval = await _open(setup)
         control = service.human_channel("operator-1")
         entered, release = asyncio.Event(), asyncio.Event()
-        set_status = store.set_task_status
+        finish = store.finish_approval
         getter = store.get_approval
         gets = []
 
         async def yielding_resume(*args, **kwargs):
-            assert args[1] is TaskStatus.RUNNING
+            assert kwargs["task_after"] is TaskStatus.RUNNING
             assert host.lock.locked()
             entered.set()
             await release.wait()
-            return await set_status(*args, **kwargs)
+            return await finish(*args, **kwargs)
 
         async def counted_get(approval_id):
             gets.append(approval_id)
             return await getter(approval_id)
 
-        store.set_task_status = yielding_resume
+        store.finish_approval = yielding_resume
         store.get_approval = counted_get
         if first_command == "expire":
             clock.mono += 300
@@ -112,10 +112,7 @@ def test_closing_owner_is_held_until_waiting_task_resume_ack(first_command, next
         assert not service._memory_snapshots
         assert service._closing_approvals[approval.approval_id].epoch == state.epoch
         assert store.state.status is TaskStatus.WAITING_APPROVAL
-        assert store.approvals[approval.approval_id].status not in (
-            ApprovalStatus.PENDING,
-            ApprovalStatus.APPROVED,
-        )
+        assert store.approvals[approval.approval_id].status is ApprovalStatus.PENDING
         reads_before = len(gets)
         second = asyncio.create_task(getattr(control, next_command)(approval.approval_id))
         await asyncio.sleep(0)
@@ -164,6 +161,7 @@ def test_unknown_task_owner_cannot_write_live_approval_without_a_lock(command, s
             raise AssertionError("승인 메타데이터로 Task lock을 추측할 수 없다")
 
         store.transition_approval = forbidden_transition
+        store.finish_approval = forbidden_transition
         host.task_lock = forbidden_lock
         result = await getattr(restarted.human_channel("operator-1"), command)(approval.approval_id)
         assert result.reasons == (Reason.APPROVAL_CONTEXT_LOST,)
@@ -193,7 +191,7 @@ def test_terminal_storage_failure_keeps_raw_free_owner_and_future_control_lock(n
             transitions.append(args[1])
             raise StoreError()
 
-        store.transition_approval = failed_transition
+        store.finish_approval = failed_transition
         control = service.human_channel("operator-1")
         failed = await control.reject(approval.approval_id)
         assert failed.reasons == (Reason.INTERNAL_ERROR,)
@@ -272,6 +270,7 @@ def test_unknown_owner_read_cannot_acquire_authority_from_a_snapshot_published_d
 
         store.get_approval = yielding_get
         store.transition_approval = forbidden_transition
+        store.finish_approval = forbidden_transition
         clock.mono += 300
         lookup = asyncio.create_task(
             getattr(service.human_channel("operator-1"), command)(approval.approval_id)

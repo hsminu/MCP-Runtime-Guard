@@ -311,16 +311,16 @@ def test_reject_resume_rejects_store_returning_changed_task_context(field, value
         setup = _history_setup()
         service, store, host, _, _, _, _, _ = setup
         approval = await _open(setup)
-        original = store.set_task_status
+        original = store.finish_approval
 
-        async def changed_status(*args, **kwargs):
+        async def changed_finish(*args, **kwargs):
             returned = await original(*args, **kwargs)
-            if args[1] is TaskStatus.RUNNING:
-                store.set_task_status = original
-                return returned.model_copy(update={field: value})
-            return returned
+            store.finish_approval = original
+            return returned.model_copy(
+                update={"task": returned.task.model_copy(update={field: value})}
+            )
 
-        store.set_task_status = changed_status
+        store.finish_approval = changed_finish
         result = await service.human_channel("operator-1").reject(approval.approval_id)
         assert isinstance(result, Denied)
         assert result.reasons != (Reason.OK,)
@@ -391,7 +391,7 @@ def test_approval_transition_changed_return_is_contained_before_consume(field, v
 
 
 @pytest.mark.parametrize("bump_status_version", [False, True])
-def test_valid_resume_preserves_task_context_and_accepts_supported_version_bump(
+def test_valid_resume_preserves_task_context_and_keeps_security_version(
     bump_status_version,
 ):
     async def scenario():
@@ -406,7 +406,7 @@ def test_valid_resume_preserves_task_context_and_accepts_supported_version_bump(
             update={
                 "status": TaskStatus.RUNNING,
                 "row_revision": waiting.row_revision + 1,
-                "security_version": waiting.security_version + int(bump_status_version),
+                "security_version": waiting.security_version,
             }
         )
         assert not host.globally_halted
