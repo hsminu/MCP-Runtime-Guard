@@ -357,6 +357,9 @@ class ServerAddForm(QWidget):
         self._registration_token = ""
         # The server ID whose executable pin is being rechecked, or "".
         self._recheck_id = ""
+        # The registered server ID whose missing settings record is being
+        # written back (A128·A105), or "".
+        self._restore_id = ""
         self._known_ids: frozenset[str] = frozenset()
         self._validated_draft: LocalServerDraft | None = None
         self._prepared = False
@@ -712,6 +715,8 @@ class ServerAddForm(QWidget):
         errors: dict[str, str] = {}
         server_id = self.server_id.text().strip()
         display_name = self.display_name.text().strip()
+        # The listed ID of the registration being restored is not a new one.
+        known = self._known_ids - {self._restore_id}
         if not server_id:
             errors["server_id"] = "서버 ID를 입력하세요."
         elif len(server_id) > _MAX_SERVER_ID_CHARS:
@@ -720,9 +725,9 @@ class ServerAddForm(QWidget):
             errors["server_id"] = (
                 "서버 ID에 보이지 않는 문자나 제어 문자(NUL·방향 전환·zero-width 등)를 넣지 마세요."
             )
-        elif server_id in self._known_ids:
+        elif server_id in known:
             errors["server_id"] = _DUPLICATE_ID
-        elif any(_id_key(server_id) == _id_key(known) for known in self._known_ids):
+        elif any(_id_key(server_id) == _id_key(other) for other in known):
             errors["server_id"] = (
                 "현재 목록에 대소문자·전각 여부만 다른 같은 ID가 있음. 다른 ID를 입력하세요."
             )
@@ -824,14 +829,36 @@ class ServerAddForm(QWidget):
             text=json.dumps(shown, ensure_ascii=False, indent=2),
         )
 
+    def start_restore(self, server_id: str, tier: str | None, max_label: str | None) -> None:
+        """Write back the settings record of a registered server; the human re-enters it.
+
+        Only the ID and the boundary the Registry row shows are filled in. The
+        connection details come from the human, and the backend saves them
+        only if the server lists the registered tools (A128·A105).
+        """
+        self._recheck_id = ""
+        self._restore_id = server_id
+        self.server_id.setText(server_id)
+        self._id_from_name = False
+        self.tier.setCurrentIndex(max(0, self.tier.findData(tier)))
+        self.max_label.setCurrentIndex(max(0, self.max_label.findData(max_label)))
+        self._input_changed()
+
     def _rechecking(self) -> bool:
         return bool(self._recheck_id) and self.server_id.text().strip() == self._recheck_id
+
+    def _restoring(self) -> bool:
+        return bool(self._restore_id) and self.server_id.text().strip() == self._restore_id
 
     def _refresh(self) -> None:
         draft, errors = self._build_draft()
         rechecking = self._rechecking()
+        restoring = self._restoring()
         if self._recheck_id and not rechecking:
             self._recheck_id = ""  # editing the ID ends the recheck
+        if self._restore_id and not restoring:
+            self._restore_id = ""  # and the restore
+            draft, errors = self._build_draft()
         if rechecking and errors.get("server_id") == _DUPLICATE_ID:
             # The listed ID is the server being rechecked, not a new registration.
             del errors["server_id"]
@@ -853,16 +880,27 @@ class ServerAddForm(QWidget):
                 notice += " CONFIDENTIAL 선택을 INTERNAL로 조정함."
             self.boundary_notice.setText(notice)
         self.prepare_button.setEnabled(draft is not None and not self._prepared)
-        self.confirm_button.setText("확인한 지문 저장" if rechecking else "확인한 내용으로 등록")
+        self.confirm_button.setText(
+            "확인한 지문 저장"
+            if rechecking
+            else "확인한 설정 저장"
+            if restoring
+            else "확인한 내용으로 등록"
+        )
         self.preview.setPlainText(
             self._preview_for(draft).text
             if draft is not None
             else "기존 서버의 실행 파일 지문만 다시 확인함. 다른 등록 내용은 바뀌지 않음."
             if rechecking
+            else "등록된 서버의 연결 정보를 다시 입력하세요. 설정 파일에만 저장함."
+            if restoring
             else "입력 오류를 고치면 등록할 내용이 표시됨."
         )
         self.status.setText(
-            "등록 전 내용을 확인하세요. 등록 후에도 검사·활성화 전에는 실행되지 않음."
+            "설정 다시 저장 · 도구 목록이 등록과 같을 때만 설정 파일에 저장함. "
+            "등록 상태는 PENDING으로 남음."
+            if self._registration_bridge is not None and restoring
+            else "등록 전 내용을 확인하세요. 등록 후에도 검사·활성화 전에는 실행되지 않음."
             if self._registration_bridge is not None
             else STATUS_CHECKED
             if self._prepared
@@ -896,6 +934,7 @@ class ServerAddForm(QWidget):
                     root_label=str(self.file_folders.root.label.currentData()),
                     list_root_label=str(self.file_folders.list_root.label.currentData()),
                     folder_labels=self.file_folders.folder_labels(),
+                    restore=self._restoring(),
                 )
             )
         else:
@@ -918,6 +957,7 @@ class ServerAddForm(QWidget):
             self._registration_id = ""
             self._registration_token = ""
             self._recheck_id = ""
+            self._restore_id = ""
             self.confirm_button.setEnabled(False)
             self.prepare_button.setEnabled(False)
             self.recheck_button.setEnabled(False)
@@ -933,6 +973,8 @@ class ServerAddForm(QWidget):
         self.status.setText(
             "확인 중 · 아직 지문 저장 결과가 아님."
             if self._rechecking()
+            else "확인 중 · 아직 설정 저장 결과가 아님."
+            if self._restoring()
             else "확인 중 · 아직 등록 결과가 아님."
         )
         bridge.request_registration(request, command_id=self._registration_id)
@@ -945,6 +987,7 @@ class ServerAddForm(QWidget):
 
     def _recheck_registration(self) -> None:
         self._registration_token = ""
+        self._restore_id = ""
         self._recheck_id = self.server_id.text().strip()
         self._refresh()
         self._send_registration(RegistrationRequest("recheck", server_id=self._recheck_id))
@@ -987,6 +1030,8 @@ class ServerAddForm(QWidget):
                 if view.code == "REG_PIN_CHANGED"
                 else "표시된 지문을 확인한 뒤 지문 저장 버튼을 누르세요."
                 if self._rechecking()
+                else "표시된 내용을 확인한 뒤 설정 저장 버튼을 누르세요."
+                if self._restoring()
                 else "표시된 내용을 확인한 뒤 등록 버튼을 누르세요."
             )
             return
@@ -994,6 +1039,10 @@ class ServerAddForm(QWidget):
         if view.code == "REG_RECHECK_UNAVAILABLE":
             # Not a recheck target, so the duplicate hint applies again.
             self._recheck_id = ""
+            self._refresh()
+        elif view.code in ("REG_SETTINGS_RESTORED", "REG_RESTORE_UNAVAILABLE"):
+            # Restored, or nothing left to restore: the ID is a duplicate again.
+            self._restore_id = ""
             self._refresh()
         messages = {
             "REG_FOLDER_INVALID": (
@@ -1023,6 +1072,18 @@ class ServerAddForm(QWidget):
             "REG_UNAVAILABLE": "등록 서비스가 연결되지 않음.",
             "REG_RECHECK_UNAVAILABLE": ("설정과 Registry에 있는 stdio 서버 ID를 입력하세요."),
             "REG_CONFIRM_EXPIRED": "확인 내용이 만료됨. 등록 내용을 다시 확인하세요.",
+            "REG_SETTINGS_RESTORED": (
+                "설정 다시 저장 완료 · PENDING. 검사·활성화 전에는 실행되지 않음."
+            ),
+            "REG_RESTORE_UNAVAILABLE": (
+                "설정을 다시 저장할 등록이 아님. 설정 파일에 없는 PENDING 등록만 복구함."
+            ),
+            "REG_RESTORE_BOUNDARY_DIFFERS": (
+                "등록된 신뢰 경계·최대 수신 등급과 다름. 서버 목록에 보이는 값으로 고르세요."
+            ),
+            "REG_RESTORE_TOOLS_DIFFER": (
+                "도구 목록이 등록 내용과 달라 저장하지 않음. 같은 서버를 입력했는지 확인하세요."
+            ),
         }
         self.status.setText(
             messages.get(

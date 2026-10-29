@@ -68,7 +68,8 @@
 - [x] A132 HTTP 세션이 요청 오류(`httpx.HTTPError`)만으로 끝나면 종료를 완료로 봄(#61 A 후속 2) · [기록](archive/a/A132-http-teardown-completed.md)
 - [x] A141 A132의 HTTP 종료 기대값 C 수정(#68)을 A 브랜치에 통합·전체 재검사 · [기록](archive/a/A141-c68-integration-check.md)
 - [x] A133 세션이 끊긴 서버를 이번 실행 동안 PENDING으로 보고 다음 호출을 예약 전 `REG_NOT_ACTIVE`로 거부(#61 A 후속 3) · [기록](archive/a/A133-failed-server-pending.md)
-- [x] A158 initialize에서 끝나거나 오류로 답하는 stdio 서버: 세션 종료가 본문 오류만 다시 올리고 C가 종료를 확인하면 종료 완료로 봄. 제품 시작은 그 서버만 빼고, 등록은 `REG_SERVER_UNREACHABLE` · [기록](archive/a/A164-stdio-initialize-failure-isolation.md)- [x] A15·A16 연결 직후 목록을 C `ServerRegistry.observe`로 기록(정의 변경은 PENDING으로 저장, 기록 실패는 이번 실행 차단) · [기록](archive/a/A129-settings-file-registry-connection.md)
+- [x] A158 initialize에서 끝나거나 오류로 답하는 stdio 서버: 세션 종료가 본문 오류만 다시 올리고 C가 종료를 확인하면 종료 완료로 봄. 제품 시작은 그 서버만 빼고, 등록은 `REG_SERVER_UNREACHABLE` · [기록](archive/a/A164-stdio-initialize-failure-isolation.md)
+- [x] A15·A16 연결 직후 목록을 C `ServerRegistry.observe`로 기록(정의 변경은 PENDING으로 저장, 기록 실패는 이번 실행 차단) · [기록](archive/a/A129-settings-file-registry-connection.md)
 - [x] A15·A16 실제 launcher 연결(EXE-01 지문 고정 실행) · [기록](archive/a/A09-launcher-pipes.md)
 
 ## 접근 규칙·모델·Runner
@@ -216,7 +217,7 @@
 - [ ] A128 등록 뒤 Scanner 검사·경고 표시 — 막힘: A47·SCAN-01
   - 검사 서비스: `ScanService(registry, cisco_connector())`를 백엔드 루프 안에서 하나 만들고 그 루프에서만 부름. 앱 종료 때 진행 중 검사 Task를 먼저 취소한 뒤 `close()`([#59 A 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/59#issuecomment-6468803889))
   - 흐름: `register` → `scan(on_started=)` → 경고(LLM 검사 빠짐 포함) → `activate(expected_row_revision=검사 뒤 row_revision, reviewed_scan_id=)`. `SCAN_RECORD_UNKNOWN`은 `refresh` 뒤 다시 검사 안내, revision 거부도 다시 검사 안내
-- [ ] A128·A105 등록과 설정 저장 중 하나만 성공해 남은 PENDING 행의 복구 화면 — A 차례
+- [x] A128·A105 등록만 저장되고 설정 저장이 끝나지 않은 PENDING 행: 목록·상세에 "설정 없음" 표시, 같은 서버를 다시 입력해 도구 지문·경계가 등록과 같을 때만 설정 파일에 저장(Registry는 그대로) · [기록](archive/a/A165-registration-settings-restore.md)
 - [x] A128 실제 MCP 서버 PENDING 등록·EXE-01 화면 확인 · [기록](archive/a/A128-real-desktop-registration.md)
 - [x] A157 #83 C 리뷰 후속: 시작하지 못한 서버의 등록 거부 문구, 설정 파일 URL 거부를 그 서버만 격리, 시작 예산에 서버 조립, `main()` 시험의 로그 상태 복원 · [기록](archive/a/A157-pr83-c-review-followups.md)
 - [x] A159 #83 B 리뷰 참고: 제품 조립은 Store 전역 정지(`halt_execution`) 없이 시작하지 않음, 주입 조립만 허용 · [기록](archive/a/A159-product-global-halt-required.md)

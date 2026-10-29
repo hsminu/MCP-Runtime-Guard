@@ -274,6 +274,10 @@ class RegistrationRequest:
     root_label: str = ""
     list_root_label: str = ""
     tool_settings: tuple[ToolSettingsEdit, ...] = ()
+    # prepare/prepare_file only: write the missing settings record of a PENDING
+    # registration whose settings save did not finish (A128·A105). Nothing is
+    # written to the Registry.
+    restore: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +291,8 @@ class RegistrationRow:
     # B's LoadedProfile.server_issue (URL_* or REG_SETTINGS_MISMATCH); checked
     # only for servers the Profile selects. Never an execution permit (#86).
     settings_issue: str | None = None
+    # False: the Registry row has no record in the settings file.
+    in_settings: bool = True
 
 
 @dataclass(frozen=True, slots=True, repr=False)

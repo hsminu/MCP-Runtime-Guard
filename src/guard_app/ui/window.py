@@ -254,6 +254,7 @@ class GuardWindow(QMainWindow):
         self._page_indices["overview"] = self.stack.addWidget(_scroll_page(self.overview))
         self.server_page = ServerListPage()
         self.server_page.scan_snapshot_requested.connect(self.scan_snapshot_requested.emit)
+        self.server_page.restore_requested.connect(self._start_settings_restore)
         self._page_indices["servers"] = self.stack.addWidget(_scroll_page(self.server_page))
         self.log_page = CallLogPage()
         self.log_page.detail_requested.connect(self.call_log_detail_requested.emit)
@@ -694,7 +695,7 @@ class GuardWindow(QMainWindow):
         self.overview.set_snapshot(snapshot)
 
     def _registration_rows(self, view: RegistrationView) -> None:
-        if view.code in ("REG_REGISTERED", "REG_PIN_SAVED"):
+        if view.code in ("REG_REGISTERED", "REG_PIN_SAVED", "REG_SETTINGS_RESTORED"):
             self.set_settings_status("SETTINGS_REGISTRATION_SAVED")
         if view.rows is None:
             return
@@ -711,12 +712,17 @@ class GuardWindow(QMainWindow):
                         transport=row.transport,
                         executable_pinned=row.pinned if row.transport == "stdio" else None,
                         settings_issue=row.settings_issue,
+                        in_settings=row.in_settings,
                     )
                     for row in view.rows
                 ),
             )
         )
         self.server_add_form.set_known_ids({row.server_id for row in view.rows})
+
+    def _start_settings_restore(self, server: ServerSummary) -> None:
+        self.server_add_form.start_restore(server.server_id, server.tier, server.max_label)
+        self.navigate("server_add")
 
     def set_server_snapshot(self, snapshot: Surface[tuple[ServerSummary, ...]]) -> None:
         """Update Registry rows from their own query, never overview rows."""

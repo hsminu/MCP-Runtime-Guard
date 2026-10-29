@@ -255,6 +255,247 @@ async def test_settings_failure_leaves_pending_and_requires_restart(tmp_path):
         assert h.admission.restart_code == "POLICY_SAVE_UNKNOWN"
 
 
+async def left_without_settings(h, request=HTTP):
+    """A128·A105: register, fail the settings save, then start again on the same files."""
+
+    async def fail(change):
+        return False
+
+    saver = h.policy._saver
+    h.policy._saver = fail
+    assert (await confirm(h, await h.commands(request))).code == "REG_SETTINGS_SAVE_FAILED"
+    assert read_settings(h.folders).document is None
+    registry = ServerRegistry(h.store)
+    await registry.load()
+    policy = TaskPolicy(None, SessionAdmission(), saver=saver)
+    commands = module.RegistrationCommands(
+        registry, h.store, policy, h.commands.collect, h.commands.stop_sessions
+    )
+    return SimpleNamespace(**{**vars(h), "commands": commands, "registry": registry})
+
+
+@pytest.mark.asyncio
+async def test_a_registration_left_without_settings_gets_them_back(tmp_path):
+    """A128·A105: after a restart the row says so, and the same server restores it."""
+    async with harness(tmp_path) as first:
+        h = await left_without_settings(first)
+        [row] = (await h.commands(RegistrationRequest("list"))).rows
+        assert (row.server_id, row.status, row.in_settings) == ("remote", "pending", False)
+        before = await h.store.load_registration("remote")
+        assert (await h.commands(HTTP)).code == "REG_SERVER_EXISTS"
+        preview = await h.commands(replace(HTTP, restore=True))
+        assert preview.code == "REG_CONFIRM_REQUIRED"
+        assert preview.url == "https://example.com/mcp"
+        assert len(h.collected) == 1  # nothing listed before the human confirms
+        result = await confirm(h, preview)
+        assert result.code == "REG_SETTINGS_RESTORED"
+        assert [(r.status, r.in_settings) for r in result.rows] == [("pending", True)]
+        assert len(h.collected) == 2
+        saved = read_settings(h.folders).document
+        assert saved["servers"][0]["id"] == "remote"
+        assert saved["servers"][0]["url"] == preview.url
+        assert saved["profile"]["servers"] == []
+        after = await h.store.load_registration("remote")
+        assert after.registration == before.registration  # the Registry is not written
+        assert (await h.commands(replace(HTTP, restore=True))).code == "REG_RESTORE_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_restore_refuses_another_boundary_other_tools_and_rows_it_cannot_fix(tmp_path):
+    async with harness(tmp_path) as first:
+        h = await left_without_settings(first)
+        collect = h.commands.collect
+        restore = replace(HTTP, restore=True)
+        changed_boundary = replace(restore, tier="approved_external")
+        assert (await h.commands(changed_boundary)).code == "REG_RESTORE_BOUNDARY_DIFFERS"
+        unknown = replace(restore, server_id="other")
+        assert (await h.commands(unknown)).code == "REG_RESTORE_UNAVAILABLE"
+        assert len(h.collected) == 1
+
+        async def other_tools(server):
+            return SimpleNamespace(
+                complete=True,
+                tools=(FrozenJsonObject({"name": "send", "inputSchema": {"type": "object"}}),),
+            )
+
+        async def unreachable(server):
+            raise DispatchError("SessionStartFailed")
+
+        for collector, code in [
+            (other_tools, "REG_RESTORE_TOOLS_DIFFER"),
+            (unreachable, "REG_SERVER_UNREACHABLE"),
+        ]:
+            h.commands.collect = collector
+            assert (await confirm(h, await h.commands(restore))).code == code
+            assert read_settings(h.folders).document is None
+        h.commands.collect = collect
+        # The row changes between the preview and the confirmation.
+        preview = await h.commands(restore)
+        entry = h.registry.entry("remote")
+        await h.registry.block("remote", expected_row_revision=entry.registration.row_revision)
+        assert (await confirm(h, preview)).code == "REG_RESTORE_UNAVAILABLE"
+        assert (await h.commands(restore)).code == "REG_RESTORE_UNAVAILABLE"
+        assert len(h.collected) == 1
+        assert read_settings(h.folders).document is None
+        assert h.registry.status("remote") is RegStatus.BLOCKED
+
+
+def test_restore_screens_offer_it_only_for_a_pending_row_without_settings(monkeypatch):
+    from guard_app.ui.models import LoadState, ServerSummary, Surface
+    from guard_app.ui.servers import ServerDetailDialog, ServerListPage
+
+    app = QApplication.instance() or QApplication([])
+    bridge = BackendBridge(lambda: None)
+    monkeypatch.setattr(bridge, "request_registration", lambda *_args, **_kw: "unit")
+    missing = ServerSummary(
+        "remote", "remote", "PUBLIC", "general_external", "pending", in_settings=False
+    )
+    page = ServerListPage()
+    page.attach_activation(bridge)
+    asked = []
+    page.restore_requested.connect(asked.append)
+    dialog = ServerDetailDialog(missing)
+    try:
+        for server, restorable, suffix in [
+            (missing, True, " · 설정 없음"),
+            (replace(missing, registry_status="blocked"), False, " · 설정 없음"),
+            (replace(missing, in_settings=True), False, ""),
+            (replace(missing, in_settings=None), False, ""),
+        ]:
+            page.set_servers(Surface(LoadState.READY, (server,)))
+            page.select_server("remote")
+            assert page.table.item(0, 4).text().endswith(suffix or "검토 중") or not suffix
+            assert page.restore_button.isEnabled() is restorable
+            assert page.restore_button.isVisibleTo(page) is restorable
+            assert page.restore_hint.isVisibleTo(page) is restorable
+            dialog.set_server(server)
+            shown = dialog._issue_value.text()
+            assert shown.startswith("설정 파일에 이 서버가 없음") is (server.in_settings is False)
+            assert ("설정 다시 저장을 누르세요" in shown) is restorable
+            if server.registry_status == "pending":
+                # Activation and tool settings need the settings record.
+                assert page.activate_button.isEnabled() is not restorable
+                assert page.tools_button.isEnabled() is not restorable
+            assert page.block_button.isEnabled() is (server.registry_status == "pending")
+        page.set_servers(Surface(LoadState.READY, (missing,)))
+        page.select_server("remote")
+        assert page.table.item(0, 4).text() == "등록 검토 중 · 설정 없음"
+        page.restore_button.click()
+        assert asked == [missing]
+    finally:
+        dialog.close()
+        page.close()
+        app.processEvents()
+
+
+def test_restore_form_sends_the_restore_and_names_what_it_saves(monkeypatch):
+    sent = []
+    with registration_form() as form:
+        bridge = BackendBridge(lambda: None)
+        monkeypatch.setattr(
+            bridge, "request_registration", lambda req, **kw: sent.append((req, kw))
+        )
+        form.attach_registration(bridge)
+        form.set_known_ids({"remote"})
+        error = form._errors["server_id"]
+        form.start_restore("remote", "general_external", "PUBLIC")
+        assert form.server_id.text() == "remote"
+        assert form.tier.currentData() == "general_external"
+        assert form.max_label.currentData() == "PUBLIC"
+        assert error.isHidden()  # the listed ID is the server being restored
+        assert form.confirm_button.text() == "확인한 설정 저장"
+        assert form.status.text().startswith("설정 다시 저장 · 도구 목록이 등록과 같을 때만")
+        form.transport.setCurrentIndex(form.transport.findData("streamable_http"))
+        form.url.setText(HTTP.url)
+        form.prepare_button.click()
+        request, kw = sent[-1]
+        assert (request.action, request.server_id, request.restore) == ("prepare", "remote", True)
+        assert (request.tier, request.max_label) == ("general_external", "PUBLIC")
+        assert form.status.text() == "확인 중 · 아직 설정 저장 결과가 아님."
+        form._registration_result(
+            RegistrationView(
+                "REG_CONFIRM_REQUIRED",
+                command_id=kw["command_id"],
+                token=new_id("preview"),
+                url="https://example.com/mcp",
+            )
+        )
+        assert form.status.text() == "표시된 내용을 확인한 뒤 설정 저장 버튼을 누르세요."
+        form.confirm_button.click()
+        request, kw = sent[-1]
+        assert request.action == "confirm"
+        for code, shown in [
+            ("REG_RESTORE_TOOLS_DIFFER", "도구 목록이 등록 내용과 달라 저장하지 않음."),
+            ("REG_RESTORE_BOUNDARY_DIFFERS", "등록된 신뢰 경계·최대 수신 등급과 다름."),
+        ]:
+            form._registration_id = code
+            form._registration_result(RegistrationView(code, command_id=code))
+            assert form.status.text().startswith(shown)
+            assert error.isHidden()  # still restoring
+        form._registration_id = "done"
+        form._registration_result(RegistrationView("REG_SETTINGS_RESTORED", command_id="done"))
+        assert form.status.text().startswith("설정 다시 저장 완료 · PENDING.")
+        # Restored: the same ID is a duplicate for a new registration again.
+        assert not error.isHidden()
+        assert form.confirm_button.text() == "확인한 내용으로 등록"
+        form.start_restore("remote", "general_external", "PUBLIC")
+        form.server_id.setText("other")
+        form.server_id.setText("remote")
+        assert not error.isHidden()  # editing the ID ends the restore
+        form.start_restore("remote", "general_external", "PUBLIC")
+        form._registration_id = "gone"
+        form._registration_result(RegistrationView("REG_RESTORE_UNAVAILABLE", command_id="gone"))
+        assert form.status.text().startswith("설정을 다시 저장할 등록이 아님.")
+        assert not error.isHidden()
+        form.start_restore("remote", "general_external", "PUBLIC")
+        form.prepare_button.click()
+        request, kw = sent[-1]
+        assert request.restore is True
+        form._registration_result(RegistrationView("REG_CONFIRM_EXPIRED", **kw))
+        form.recheck_button.click()
+        assert (sent[-1][0].action, sent[-1][0].restore) == ("recheck", False)
+        assert form._restore_id == ""
+
+
+def test_window_opens_the_add_form_in_restore_mode():
+    from guard_app.ui.models import ServerSummary
+    from guard_app.ui.window import GuardWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = GuardWindow()
+    try:
+        window._registration_rows(
+            RegistrationView(
+                "REG_LIST",
+                rows=(
+                    module.RegistrationRow(
+                        "remote", "pending", "general_external", "PUBLIC", None, False, None, False
+                    ),
+                ),
+            )
+        )
+        page = window.server_page
+        assert page._servers[0] == ServerSummary(
+            "remote",
+            "remote",
+            max_label="PUBLIC",
+            tier="general_external",
+            registry_status="pending",
+            in_settings=False,
+        )
+        page.restore_requested.emit(page._servers[0])
+        assert window._page == "server_add"
+        form = window.server_add_form
+        assert form._restore_id == "remote"
+        assert (form.tier.currentData(), form.max_label.currentData()) == (
+            "general_external",
+            "PUBLIC",
+        )
+    finally:
+        window.close()
+        app.processEvents()
+
+
 @pytest.mark.asyncio
 async def test_list_rows_carry_the_profile_settings_issue(tmp_path):
     """#86: rows show B's server_issue for selected servers; it is display only."""

@@ -91,7 +91,14 @@ def test_attention_calculated_once_and_current_values_replace_old(app, monkeypat
 
 def test_approval_calculations_keep_status_time_and_literal_summary():
     row = ApprovalSummary(
-        "id", "task", "request", "server", "<b>target</b>\nstatus", ApprovalStatus.PENDING, NOW
+        "id",
+        "task",
+        "request",
+        "server",
+        "<b>target</b>\nstatus",
+        ApprovalStatus.PENDING,
+        NOW,
+        expires_at=NOW + timedelta(minutes=5),
     )
     query = ApprovalQuery(1, ApprovalLane.PENDING, "", "", ApprovalSort.OLDEST, 1)
     assert summary_columns(row)[:5] == (
@@ -104,11 +111,11 @@ def test_approval_calculations_keep_status_time_and_literal_summary():
     detail = selected_detail_text(row)
     assert len(detail.splitlines()) == 6
     assert "<b>target</b>\\u000Astatus" in detail
-    display = status_display(row, query, NOW + timedelta(minutes=6), 300, narrow=True)
+    display = status_display(row, query, NOW + timedelta(minutes=6), narrow=True)
     assert display[:2] == ("승인 대기\n6분 대기", 42)
     assert "승인 유효 시간 지남" in display[2]
     assert "요청 시각:" in display[3]
-    assert status_display(row, query, NOW, 300, narrow=False)[:2] == ("승인 대기", 64)
+    assert status_display(row, query, NOW, narrow=False)[:2] == ("승인 대기", 64)
     assert valid_page(ApprovalPage(query, (row,), 1))
     assert not valid_page(ApprovalPage(query, (replace(row, status=ApprovalStatus.APPROVED),), 1))
     second = replace(row, approval_id="zz")
