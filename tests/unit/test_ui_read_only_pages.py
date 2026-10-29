@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QDialog
 
@@ -18,11 +17,8 @@ from guard_app.ui.models import LoadState, ServerSummary, Surface
 from guard_app.ui.scan_status import ScanStatusProjection
 from guard_app.ui.window import GuardWindow
 
-
-@pytest.fixture(scope="module")
-def app() -> QApplication:
-    instance = QApplication.instance()
-    return instance if instance is not None else QApplication([])
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import resize_widget
 
 
 def test_window_routes_public_approval_and_log_queries(app: QApplication) -> None:
@@ -52,10 +48,7 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
     log_requests = []
     window.call_log_detail_requested.connect(log_requests.append)
     call = PublicCallSummary(
-        call_id="call-1",
-        server_id="server-1",
-        tool_name="search",
-        current_status="UNKNOWN_OUTCOME",
+        call_id="call-1", server_id="server-1", tool_name="search", current_status="UNKNOWN_OUTCOME"
     )
     window.set_call_log_snapshot(Surface(LoadState.READY, (call,)))
     window.navigate("logs", "call-1")
@@ -71,9 +64,7 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
     window.close()
 
 
-def test_server_scan_reply_is_bound_to_current_detail_opening(
-    app: QApplication,
-) -> None:
+def test_server_scan_reply_is_bound_to_current_detail_opening(app: QApplication) -> None:
     window = GuardWindow()
     window.set_server_snapshot(Surface(LoadState.READY, (ServerSummary("server-1", "합성 서버"),)))
     requested = []
@@ -87,8 +78,7 @@ def test_server_scan_reply_is_bound_to_current_detail_opening(
     server_id, token = requested[-1]
     assert server_id == "server-1"
     snapshot = Surface(
-        LoadState.READY,
-        ScanStatusProjection(registry_status="pending", scan_state="completed"),
+        LoadState.READY, ScanStatusProjection(registry_status="pending", scan_state="completed")
     )
     assert not window.set_scan_snapshot(server_id, token + 1, snapshot)
     assert window.set_scan_snapshot(server_id, token, snapshot)
@@ -157,8 +147,7 @@ def test_repeated_server_details_release_dialogs_and_reject_old_scan_reply(
     assert reused.scan_status_card.scan_state.text() == "미제공"
     assert not window.set_scan_snapshot("server-1", requested[-2][1], snapshot)
     reused.close()
-    window.resize(360, 360)
-    app.processEvents()
+    resize_widget(app, window, 360, 360)
     window.server_page.detail_button.click()
     assert window.server_page._detail_dialog is reused
     assert reused.width() <= max(240, window.width() - 24)

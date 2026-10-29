@@ -6,22 +6,11 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import (
-    QApplication,
-    QBoxLayout,
-    QFormLayout,
-    QLabel,
-    QScrollArea,
-    QWidget,
-)
+from PySide6.QtWidgets import QApplication, QBoxLayout, QFormLayout, QLabel, QScrollArea, QWidget
 
-from guard_app.ui.approval_detail import (
-    ApprovalDetailDialog,
-    ApprovalDetailValue,
-)
+from guard_app.ui.approval_detail import ApprovalDetailDialog, ApprovalDetailValue
 from guard_app.ui.models import (
     AttentionItem,
     LoadState,
@@ -35,18 +24,13 @@ from guard_app.ui.servers import ServerDetailDialog, ServerListPage
 from guard_app.ui.widgets import PlainDetailDialog
 from guard_app.ui.window import GuardWindow
 
-
-@pytest.fixture(scope="module")
-def app() -> QApplication:
-    instance = QApplication.instance()
-    return instance if instance is not None else QApplication([])
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import closing_widgets, resize_widget, show_widget
 
 
 def test_server_form_reflows_without_horizontal_page_scroll(app: QApplication) -> None:
     form = ServerAddForm()
-    form.resize(320, 420)
-    form.show()
-    app.processEvents()
+    show_widget(app, form, 320, 420)
     assert form.width() == 320
     scroll = form.findChild(QScrollArea, "serverAddScroll")
     assert scroll is not None
@@ -64,27 +48,22 @@ def test_server_form_reflows_without_horizontal_page_scroll(app: QApplication) -
     form.prepare_button.setFocus()
     app.processEvents()
     assert form.prepare_button.hasFocus()
-    form.resize(980, 760)
-    app.processEvents()
+    resize_widget(app, form, 980, 760)
     assert all(
         layout.rowWrapPolicy() == QFormLayout.RowWrapPolicy.DontWrapRows for layout in form._forms
     )
-    form.resize(320, 420)
-    app.processEvents()
+    resize_widget(app, form, 320, 420)
     assert scroll.horizontalScrollBar().maximum() == 0
     form.close()
 
 
-def test_server_list_keeps_identity_and_status_at_small_width(
-    app: QApplication,
-) -> None:
+def test_server_list_keeps_identity_and_status_at_small_width(app: QApplication) -> None:
     page = ServerListPage()
     page.resize(320, 480)
     page.show()
     page.set_servers(
         Surface(
-            LoadState.READY,
-            (ServerSummary("long-server-id-with-identifying-suffix", "Synthetic"),),
+            LoadState.READY, (ServerSummary("long-server-id-with-identifying-suffix", "Synthetic"),)
         )
     )
     app.processEvents()
@@ -115,20 +94,15 @@ def test_server_list_keeps_identity_and_status_at_small_width(
     app.processEvents()
     QTest.keyClick(page.table, Qt.Key.Key_Tab)
     assert page.detail_button.hasFocus()
-    page.resize(1100, 740)
-    app.processEvents()
+    resize_widget(app, page, 1100, 740)
     assert page._choices.direction() == QBoxLayout.Direction.LeftToRight
     assert all(not page.table.isColumnHidden(column) for column in range(6))
     page.close()
 
 
-def test_detail_dialogs_fit_small_owner_and_keep_complete_values(
-    app: QApplication,
-) -> None:
+def test_detail_dialogs_fit_small_owner_and_keep_complete_values(app: QApplication) -> None:
     owner = QWidget()
-    owner.resize(320, 360)
-    owner.show()
-    app.processEvents()
+    show_widget(app, owner, 320, 360)
     text = "synthetic-start\n" + ("synthetic-line\n" * 80) + "synthetic-end"
     plain = PlainDetailDialog(owner)
     plain.show_detail(title="합성 상세", text=text)
@@ -161,9 +135,7 @@ def test_detail_dialogs_fit_small_owner_and_keep_complete_values(
     owner.close()
 
 
-def test_server_detail_keeps_security_summary_above_scan_on_short_owner(
-    app: QApplication,
-) -> None:
+def test_server_detail_keeps_security_summary_above_scan_on_short_owner(app: QApplication) -> None:
     owner = QWidget()
     owner.resize(320, 360)
     owner.show()
@@ -178,7 +150,7 @@ def test_server_detail_keeps_security_summary_above_scan_on_short_owner(
         ),
         owner,
     )
-    try:
+    with closing_widgets(detail, owner):
         detail.open()
         app.processEvents()
         scroll = detail.findChild(QScrollArea)
@@ -204,9 +176,6 @@ def test_server_detail_keeps_security_summary_above_scan_on_short_owner(
         scan_top = detail.scan_status_card.mapTo(scroll.viewport(), QPoint(0, 0)).y()
         assert scan_top <= 0
         assert scan_top + detail.scan_status_card.height() > 0
-    finally:
-        detail.close()
-        owner.close()
 
 
 def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None:
@@ -217,8 +186,7 @@ def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None
     window.set_overview_snapshot(
         OverviewSnapshot(
             servers=Surface(
-                LoadState.READY,
-                (ServerSummary(long_id, long_id, session_status="connected"),),
+                LoadState.READY, (ServerSummary(long_id, long_id, session_status="connected"),)
             ),
             attention=Surface(
                 LoadState.READY,
@@ -238,11 +206,9 @@ def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None
     )
     window.show()
     app.processEvents()
-    try:
+    with closing_widgets(window):
         scroll = window.stack.currentWidget()
         assert isinstance(scroll, QScrollArea)
         assert window.width() == 320
         assert scroll.horizontalScrollBar().maximum() == 0
         assert any(long_id in label.text() for label in window.overview.findChildren(QLabel))
-    finally:
-        window.close()

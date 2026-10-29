@@ -9,11 +9,9 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel
 
-from guard_app.domain.contracts import Denied
 from guard_app.domain.enums import RegStatus, TaskStatus, ToolKind
 from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
-from guard_app.domain.models import ProposedCall
 from guard_app.services.bridge import (
     BackendBridge,
     RegistrationRequest,
@@ -36,7 +34,7 @@ from guard_app.ui.models import LoadState, ServerSummary, Surface
 from guard_app.ui.presentation import session_blocker_notice
 from guard_app.ui.servers import ServerListPage
 
-from .test_a105_activation import harness
+from .test_a105_activation import assert_guard_closed, harness, loop_barrier
 
 
 @asynccontextmanager
@@ -158,8 +156,7 @@ async def test_document_and_restart_observe_enables_activation(tmp_path):
         ]
         assert saved["servers"][0]["tools"][-1] == {"name": "unknown", "kind": "read"}
         assert (await h.store.load_task("task")).status is TaskStatus.HALTED
-        assert h.stopped == ["task"]
-        assert h.admission.restart_code == "REG_TOOLS_RESTART_REQUIRED"
+        assert (h.stopped, h.admission.restart_code) == (["task"], "REG_TOOLS_RESTART_REQUIRED")
         registry = ServerRegistry(h.store)
         await registry.load()
         policy = TaskPolicy(None, SessionAdmission(), document=saved, saver=h.saver)
@@ -324,13 +321,7 @@ async def test_active_review_precedes_save_and_failures_close_guard(tmp_path, mo
         assert closes
         assert (await h.commands(h.request)).code == h.admission.restart_code
         assert len(calls) == (1 if failure.startswith("review") else 2)
-        result = await h.assembled.guard.submit(
-            "task",
-            ProposedCall(tool_ref="docs__read", arguments={}, model_call_id="c"),
-            expected_epoch=1,
-        )
-        assert isinstance(result, Denied)
-        assert h.peer.calls == []
+        await assert_guard_closed(h)
 
 
 @pytest.mark.asyncio
@@ -369,9 +360,7 @@ async def test_waits_for_policy_lock_and_uses_latest_document(tmp_path):
         h.policy._saver = save
         async with h.policy.lock:
             operation = asyncio.create_task(h.commands(h.request))
-            barrier = asyncio.Event()
-            asyncio.get_running_loop().call_soon(barrier.set)
-            await asyncio.wait_for(barrier.wait(), 3)
+            await loop_barrier()
             assert not operation.done()
             assert writes == []
             h.policy._document = {**h.doc, "policy": {"approval_ttl_seconds": 170}}

@@ -64,18 +64,9 @@ async def test_assembly_does_not_install_process_logging(monkeypatch, tmp_path):
 
     from guard_app.services.session_runtime import bootstrap_product
 
-    from .test_product_assembly import (
-        READ_DEFINITION,
-        Peer,
-        Registry,
-        document,
-        inputs,
-        tool_fingerprint,
-    )
+    from .test_a138_product_startup import read_product
 
-    product = inputs(
-        Peer([READ_DEFINITION]), Registry(tool_fingerprint(READ_DEFINITION)), document()
-    )
+    product = read_product()
     # Also catches an install bound before the patch (e.g. a module-level import).
     process_state = (logging.getLogRecordFactory(), sys.excepthook, redact._active)
     for assemble in (

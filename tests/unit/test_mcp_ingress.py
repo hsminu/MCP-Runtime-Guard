@@ -6,7 +6,7 @@ import asyncio
 import gzip
 import json
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
@@ -30,25 +30,7 @@ from guard_app.adapters.mcp_transport.sdk_session import (
 )
 from guard_app.domain.errors import DispatchError
 
-from .test_mcp_transport import _request
-
-
-@contextmanager
-def _dispatch_error(code):
-    with pytest.raises(DispatchError) as caught:
-        yield caught
-    assert caught.value.exception_type == code
-
-
-def _check_cases(cases, check):
-    """Keep checking cheap table rows after an assertion/expected-error mismatch."""
-    failures = []
-    for case in cases:
-        try:
-            check(*case)
-        except (AssertionError, pytest.fail.Exception) as error:
-            failures.append((case, str(error)))
-    assert not failures, failures
+from .test_mcp_transport import _dispatch_error, _request, _running
 
 
 def _page(request_id: int, *, cursor: str | None = None, extra: str = "") -> bytes:
@@ -103,7 +85,7 @@ async def test_oversize_pipe_stops_before_any_json_parse(monkeypatch):
         monkeypatch.setattr(mcp_ingress.json, "loads", lambda value: parsed.append(value))
         gate = _gate(20, 100)
         source = _Source(payload + b"\n", fragment=7)
-        with pytest.raises(IngressError, match="TOOLS_LIST_PAGE_TOO_LARGE"):
+        with pytest.raises(IngressError, match=r"TOOLS_LIST_PAGE_TOO_LARGE"):
             await PipeFrameReader(source.read, gate).receive()
         assert parsed == []
         assert len(payload + b"\n") - len(source.data) == 21
@@ -134,11 +116,11 @@ def test_total_budget_checks_candidates_before_parse_and_resets_only_new_listing
     gate.expect(2)
     parsed: list[object] = []
     monkeypatch.setattr(mcp_ingress.json, "loads", lambda value: parsed.append(value))
-    with pytest.raises(IngressError, match="TOOLS_LIST_TOTAL_TOO_LARGE"):
+    with pytest.raises(IngressError, match=r"TOOLS_LIST_TOTAL_TOO_LARGE"):
         gate.accept(_page(2))
     assert parsed == []
     gate.end()
-    with pytest.raises(IngressError, match="TOOLS_LIST_TOTAL_TOO_LARGE"):
+    with pytest.raises(IngressError, match=r"TOOLS_LIST_TOTAL_TOO_LARGE"):
         gate.begin(1000, 1000)
 
 
@@ -155,51 +137,43 @@ def test_successful_independent_listings_reset_budget_but_ignore_late_old_ids():
     assert gate.candidate_limit == len(first)
     gate.end()
     gate.begin(1000, 1000)
-    with pytest.raises(IngressError, match="REQUEST_ID_INVALID"):
+    with pytest.raises(IngressError, match=r"REQUEST_ID_INVALID"):
         gate.expect(1)
 
 
-def test_response_id_sdk_coercions_cannot_bypass_total():
-    def check(response_id):
-        gate = _gate(1000)
-        payload = json.dumps({"jsonrpc": "2.0", "id": response_id, "result": {"tools": []}})
-        with pytest.raises(IngressError, match="RESPONSE_ID_INVALID"):
-            gate.accept(payload.encode())
-
-    _check_cases(((response_id,) for response_id in [True, 1.0, "1", "01"]), check)
+@pytest.mark.parametrize("response_id", [True, 1.0, "1", "01"])
+def test_response_id_sdk_coercions_cannot_bypass_total(response_id):
+    gate = _gate(1000)
+    payload = json.dumps({"jsonrpc": "2.0", "id": response_id, "result": {"tools": []}})
+    with pytest.raises(IngressError, match=r"RESPONSE_ID_INVALID"):
+        gate.accept(payload.encode())
 
 
-def test_delivery_of_still_pending_id_was_never_admitted():
-    def check(response_id):
-        gate = IngressGate()
-        gate.accept(_page(1))  # inactive: no association, no debit
-        gate.begin(1000, 1000)
-        gate.expect(1)
-        with pytest.raises(IngressError, match="TOOLS_LIST_RESPONSE_UNADMITTED"):
-            gate.check_delivery(response_id)
-        assert gate.failed.is_set()
-
-    _check_cases(((response_id,) for response_id in [1, "1", "01"]), check)
-
-
-def test_delivery_after_admitted_association_or_of_unknown_id_passes():
-    def check(response_id):
-        gate = _gate(1000)
-        assert gate.accept(_page(1))
+@pytest.mark.parametrize("response_id", [1, "1", "01"])
+def test_delivery_of_still_pending_id_was_never_admitted(response_id):
+    gate = IngressGate()
+    gate.accept(_page(1))  # inactive: no association, no debit
+    gate.begin(1000, 1000)
+    gate.expect(1)
+    with pytest.raises(IngressError, match=r"TOOLS_LIST_RESPONSE_UNADMITTED"):
         gate.check_delivery(response_id)
-        assert gate.reason is None
-
-    _check_cases(((response_id,) for response_id in [1, 2, "x", None]), check)
+    assert gate.failed.is_set()
 
 
-def test_ambiguous_response_envelopes_are_rejected():
-    def check(extra):
-        gate = _gate(1000)
-        payload = {"jsonrpc": "2.0", "id": 1, "result": {"tools": []}, **extra}
-        with pytest.raises(IngressError, match="TOOLS_LIST_MALFORMED"):
-            gate.accept(json.dumps(payload).encode())
+@pytest.mark.parametrize("response_id", [1, 2, "x", None])
+def test_delivery_after_admitted_association_or_of_unknown_id_passes(response_id):
+    gate = _gate(1000)
+    assert gate.accept(_page(1))
+    gate.check_delivery(response_id)
+    assert gate.reason is None
 
-    _check_cases(((extra,) for extra in [{"method": "x"}, {"method": None}, {"error": {}}]), check)
+
+@pytest.mark.parametrize("extra", [{"method": "x"}, {"method": None}, {"error": {}}])
+def test_ambiguous_response_envelopes_are_rejected(extra):
+    gate = _gate(1000)
+    payload = {"jsonrpc": "2.0", "id": 1, "result": {"tools": []}, **extra}
+    with pytest.raises(IngressError, match=r"TOOLS_LIST_MALFORMED"):
+        gate.accept(json.dumps(payload).encode())
 
 
 def test_notifications_are_candidate_bounded_and_do_not_debit_total():
@@ -207,7 +181,7 @@ def test_notifications_are_candidate_bounded_and_do_not_debit_total():
     payload = b'{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}'
     gate.accept(payload)
     assert gate.candidate_limit == 1000
-    with pytest.raises(IngressError, match="PAGE_TOO_LARGE"):
+    with pytest.raises(IngressError, match=r"PAGE_TOO_LARGE"):
         gate.accept(payload + b" " * 1000)
 
 
@@ -224,7 +198,7 @@ async def test_eof_during_listing_is_sticky_and_payload_free():
     for data in [b"", b'{"jsonrpc":']:
         gate = _gate(1000)
         reader = PipeFrameReader(_Source(data).read, gate)
-        with pytest.raises(IngressError, match="TOOLS_LIST_INGRESS_EOF"):
+        with pytest.raises(IngressError, match=r"TOOLS_LIST_INGRESS_EOF"):
             await reader.receive()
         assert gate.failed.is_set()
         assert gate.reason == "TOOLS_LIST_INGRESS_EOF"
@@ -247,6 +221,33 @@ async def test_cancellation_discards_partial_pipe_frame():
     with pytest.raises(asyncio.CancelledError):
         await task
     assert await reader.receive() is None
+
+
+def _pipe_transport(peer, **limits):
+    return McpTransport(
+        {"unit": validated_stdio_stream_factory(peer.read, peer.write, peer.drain)},
+        tool_list_limits=ToolListLimits(**limits),
+    )
+
+
+def _http_transport(monkeypatch, peer, **limits):
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kwargs: peer)
+    return McpTransport(
+        {"unit": http_stream_factory("http://127.0.0.1:9999/mcp")},
+        tool_list_limits=ToolListLimits(**limits),
+    )
+
+
+def _record_json(monkeypatch):
+    parsed = []
+    original = JSONRPCMessage.model_validate_json
+
+    def parse(_cls, value, **kwargs):
+        parsed.append(value)
+        return original(value, **kwargs)
+
+    monkeypatch.setattr(JSONRPCMessage, "model_validate_json", classmethod(parse))
+    return parsed
 
 
 class _Peer:
@@ -308,20 +309,14 @@ async def test_sdk_pipe_listing_exact_and_two_pages_share_total():
     first = _page(1, cursor="x", extra="  ")
     second = _page(2, extra=" \r")
     peer = _Peer(lambda request_id, _number: first if request_id == 1 else second)
-    transport = McpTransport(
-        {"unit": validated_stdio_stream_factory(peer.read, peer.write, peer.drain)},
-        tool_list_limits=ToolListLimits(
-            max_page_bytes=max(len(first), len(second)), max_total_bytes=len(first) + len(second)
-        ),
+    transport = _pipe_transport(
+        peer, max_page_bytes=max(len(first), len(second)), max_total_bytes=len(first) + len(second)
     )
-    await transport.start()
-    try:
+    async with _running(transport):
         listing = transport.tool_listing("unit")
         assert listing is not None
         assert listing.complete
         assert peer.list_requests == 2
-    finally:
-        await transport.close()
     assert peer.drains == peer.writes
 
 
@@ -330,18 +325,8 @@ async def test_sdk_oversize_never_parses_or_retries_and_worker_is_not_ready(monk
     async def check(malformed, monkeypatch):
         payload = b"private" * 20 if malformed else _page(1, extra=" " * 140)
         peer = _Peer(lambda _request_id, _number: payload)
-        parsed: list[bytes] = []
-        original = JSONRPCMessage.model_validate_json
-
-        def parse(_cls: object, value: bytes, **kwargs: Any) -> JSONRPCMessage:
-            parsed.append(value)
-            return original(value, **kwargs)
-
-        monkeypatch.setattr(JSONRPCMessage, "model_validate_json", classmethod(parse))
-        transport = McpTransport(
-            {"unit": validated_stdio_stream_factory(peer.read, peer.write, peer.drain)},
-            tool_list_limits=ToolListLimits(max_page_bytes=80),
-        )
+        parsed = _record_json(monkeypatch)
+        transport = _pipe_transport(peer, max_page_bytes=80)
         with _dispatch_error("SessionStartFailed"):
             await transport.start()
         listing = transport.tool_listing("unit")
@@ -364,19 +349,9 @@ async def test_sdk_oversize_never_parses_or_retries_and_worker_is_not_ready(monk
 async def test_sdk_page_two_over_remaining_never_reaches_parser(monkeypatch):
     first, second = _page(1, cursor="x"), _page(2)
     peer = _Peer(lambda request_id, _number: first if request_id == 1 else second)
-    parsed: list[bytes] = []
-    original = JSONRPCMessage.model_validate_json
-
-    def parse(_cls: object, value: bytes, **kwargs: Any) -> JSONRPCMessage:
-        parsed.append(value)
-        return original(value, **kwargs)
-
-    monkeypatch.setattr(JSONRPCMessage, "model_validate_json", classmethod(parse))
-    transport = McpTransport(
-        {"unit": validated_stdio_stream_factory(peer.read, peer.write, peer.drain)},
-        tool_list_limits=ToolListLimits(
-            max_page_bytes=1000, max_total_bytes=len(first) + len(second) - 1
-        ),
+    parsed = _record_json(monkeypatch)
+    transport = _pipe_transport(
+        peer, max_page_bytes=1000, max_total_bytes=len(first) + len(second) - 1
     )
     with pytest.raises(DispatchError):
         await transport.start()
@@ -408,11 +383,7 @@ async def test_actual_sdk_session_without_ingress_refuses_list_without_dispatch(
 
 @pytest.mark.asyncio
 async def test_real_sdk_session_without_a_gate_is_never_ready_for_calls():
-    """Legacy SDK-spawned stdio has no raw ingress gate, so it cannot collect.
-
-    The listing reports that, and the worker must not advertise the session
-    READY either: Registry gets the fixed reason and the Guard gets no server.
-    """
+    """Legacy SDK-spawned stdio has no raw ingress gate, so it cannot collect."""
     peer = _Peer(lambda request_id, _number: _page(request_id))
     gated = validated_stdio_stream_factory(peer.read, peer.write, peer.drain)
 
@@ -528,16 +499,12 @@ async def test_real_sdk_session_reports_only_that_the_tool_list_changed():
 
 
 def test_transport_rejects_a_tools_changed_callback_that_is_not_callable():
-    with pytest.raises(TypeError, match="tools changed callback must be callable"):
+    with pytest.raises(TypeError, match=r"tools changed callback must be callable"):
         McpTransport({}, on_tools_changed="not callable")  # type: ignore[arg-type]
 
 
 class _PredictingPeer(_Peer):
-    """Pre-sends an oversized answer to the predicted first tools/list ID.
-
-    The first drain stalls, so the SDK receive loop blocks answering the ping
-    while the predicted page is admitted with the gate still inactive.
-    """
+    """Pre-sends an oversized answer to the predicted first tools/list ID."""
 
     def __init__(self, page_bytes: int) -> None:
         super().__init__(lambda request_id, _number: _page(request_id), fragment=4096)
@@ -560,10 +527,7 @@ class _PredictingPeer(_Peer):
 async def test_predicted_response_held_behind_backpressure_cannot_complete_listing():
     limit = 300
     peer = _PredictingPeer(limit)
-    transport = McpTransport(
-        {"unit": validated_stdio_stream_factory(peer.read, peer.write, peer.drain)},
-        tool_list_limits=ToolListLimits(max_page_bytes=limit, max_total_bytes=limit),
-    )
+    transport = _pipe_transport(peer, max_page_bytes=limit, max_total_bytes=limit)
     with _dispatch_error("SessionStartFailed"):
         await transport.start()
     listing = transport.tool_listing("unit")
@@ -649,9 +613,9 @@ def test_configured_byte_limits_are_strict_positive_integers():
     assert ToolListLimits().max_page_bytes == 1024 * 1024
     assert ToolListLimits().max_total_bytes == 8 * 1024 * 1024
     for value in (0, -1, True, 1.5):
-        with pytest.raises(ValueError, match="positive"):
+        with pytest.raises(ValueError, match=r"positive"):
             ToolListLimits(max_page_bytes=value)  # type: ignore[arg-type]
-        with pytest.raises(ValueError, match="positive"):
+        with pytest.raises(ValueError, match=r"positive"):
             ToolListLimits(max_total_bytes=value)  # type: ignore[arg-type]
 
 
@@ -708,19 +672,8 @@ class _HttpPeer(httpx.AsyncBaseTransport):
 async def test_actual_http_sdk_rejects_oversize_before_its_parser_without_retry(monkeypatch):
     async def check(sse, compressed, malformed, monkeypatch):
         peer = _HttpPeer(sse=sse, compressed=compressed, malformed=malformed)
-        monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kwargs: peer)
-        parsed: list[object] = []
-        original = JSONRPCMessage.model_validate_json
-
-        def parse(_cls: object, value: bytes | str, **kwargs: Any) -> JSONRPCMessage:
-            parsed.append(value)
-            return original(value, **kwargs)
-
-        monkeypatch.setattr(JSONRPCMessage, "model_validate_json", classmethod(parse))
-        transport = McpTransport(
-            {"unit": http_stream_factory("http://127.0.0.1:9999/mcp")},
-            tool_list_limits=ToolListLimits(max_page_bytes=80),
-        )
+        parsed = _record_json(monkeypatch)
+        transport = _http_transport(monkeypatch, peer, max_page_bytes=80)
         with _dispatch_error("SessionStartFailed"):
             await transport.start()
         listing = transport.tool_listing("unit")
@@ -762,12 +715,8 @@ async def test_http_post_source_close_precedes_listing_success_and_worker_ready(
                 return response
 
         peer = Peer(sse=sse, compressed=False, malformed=False)
-        monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kwargs: peer)
         monkeypatch.setattr(mcp_http_ingress, "_CLOSE_TIMEOUT_S", 0.02)
-        transport = McpTransport(
-            {"unit": http_stream_factory("http://127.0.0.1:9999/mcp")},
-            tool_list_limits=ToolListLimits(),
-        )
+        transport = _http_transport(monkeypatch, peer)
         with _dispatch_error("SessionCloseFailed"):
             await transport.start()
         listing = transport.tool_listing("unit")
@@ -819,11 +768,7 @@ async def test_late_get_source_close_failure_quiesces_ready_worker(monkeypatch, 
             return response
 
     peer = Peer(sse=False, compressed=False, malformed=False)
-    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kwargs: peer)
-    transport = McpTransport(
-        {"unit": http_stream_factory("http://127.0.0.1:9999/mcp")},
-        tool_list_limits=ToolListLimits(),
-    )
+    transport = _http_transport(monkeypatch, peer)
     await transport.start()
     async with asyncio.timeout(1):
         await get_source.entered.wait()

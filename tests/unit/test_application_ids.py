@@ -21,6 +21,7 @@ from guard_app.services.bridge import ControlAction, SessionOptions
 from guard_app.services.session_preparation import TaskResources
 
 from .product_folders import product_folders
+from .test_a138_product_startup import running_product, runtime_context
 from .test_product_assembly import (
     READ_DEFINITION,
     Peer,
@@ -30,7 +31,6 @@ from .test_product_assembly import (
     tool_fingerprint,
 )
 from .test_session_preparation import CONFIGURATION, Harness
-from .test_session_runtime import make_runtime
 from .test_ui_sessions import app, snapshot, window  # noqa: F401 - Qt fixtures
 
 
@@ -61,15 +61,11 @@ async def test_guard_id_factories_keep_storage_format(tmp_path):
 
 @pytest.mark.asyncio
 async def test_session_ids_are_distinct_persisted_task_keys(tmp_path):
-    runtime, _ = make_runtime(tmp_path)
-    async with asyncio.timeout(10):
-        try:
-            states = [await runtime.create_session(SessionOptions()) for _ in range(4)]
-            assert_ids([state.task_id for state in states], "session-")
-            for state in states:
-                assert (await runtime.store.load_task(state.task_id)).task_id == state.task_id
-        finally:
-            await runtime.close()
+    async with runtime_context(tmp_path) as (runtime, _):
+        states = [await runtime.create_session(SessionOptions()) for _ in range(4)]
+        assert_ids([state.task_id for state in states], "session-")
+        for state in states:
+            assert (await runtime.store.load_task(state.task_id)).task_id == state.task_id
 
 
 @pytest.mark.asyncio
@@ -83,14 +79,9 @@ async def test_product_store_receives_distinct_audit_factory(tmp_path, monkeypat
 
     monkeypatch.setattr(product_startup, "SQLiteStore", record)
     async with asyncio.timeout(10):
-        bindings = await session_runtime.bootstrap_product(
-            product_folders(str(tmp_path / "product.db"))
-        )
-        try:
+        async with running_product(product_folders(str(tmp_path / "product.db"))):
             assert len(factories) == 1
             assert_ids([factories[0]() for _ in range(32)], "audit-")
-        finally:
-            await bindings.close()
 
 
 @pytest.mark.asyncio
@@ -145,12 +136,10 @@ def test_resource_claim_uses_token_comparator(monkeypatch):
 def test_ui_allocates_distinct_bridge_identifiers(window, monkeypatch, action):  # noqa: F811
     shell, panel, backend = window
     captured = []
-    monkeypatch.setattr(backend, "request_run", lambda *a, **kw: captured.append(kw["command_id"]))
-    monkeypatch.setattr(
-        backend, "request_control", lambda *a, **kw: captured.append(kw["command_id"])
-    )
-    monkeypatch.setattr(backend, "request_message", lambda *a, **kw: None)
-    monkeypatch.setattr(backend, "request_new_session", lambda *a, **kw: None)
+    for method in ("request_run", "request_control"):
+        monkeypatch.setattr(backend, method, lambda *args, **kw: captured.append(kw["command_id"]))
+    for method in ("request_message", "request_new_session"):
+        monkeypatch.setattr(backend, method, lambda *args, **kw: None)
     shell.sessions.message_requested.connect(lambda *args: captured.append(args[3]))
     shell.sessions.new_session_requested.connect(lambda *args: captured.append(args[2]))
     if action not in ("start", "draft"):

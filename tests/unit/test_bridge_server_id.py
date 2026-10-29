@@ -1,8 +1,4 @@
-"""A54: bridge forwards B's namespace check unchanged (I7, T32 support).
-
-No backend instance is required: the check is a local syntax hint and cannot
-create a Registry record or authorize a tool call.
-"""
+"""A54: local syntax hint delegates to B; no Registry authorization (I7, T32 support)."""
 
 from __future__ import annotations
 

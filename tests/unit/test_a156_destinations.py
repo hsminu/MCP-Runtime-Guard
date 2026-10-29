@@ -194,8 +194,7 @@ async def test_add_update_selection_delete_and_noop(tmp_path):
         unused = await h.change(replace(ADD, action="update", selected=False))
         assert not unused.destinations[0].selected
         saved = read_settings(h.folders).document
-        assert saved["profile"]["destinations"] == []
-        assert saved["destinations"][0]["id"] == "vault"
+        assert (saved["profile"]["destinations"], saved["destinations"][0]["id"]) == ([], "vault")
         assert Reason.UNKNOWN_DESTINATION in (await h.send()).reasons
         await h.change(replace(ADD, action="update"))
         assert isinstance(await h.send(), Released)
@@ -419,8 +418,7 @@ def test_ui_plain_id_choices_commands_and_fixed_results(app):
     page = PolicyPage()
     page.set_view(replace(view(change=True), destinations=(row,)))
     label = page.destinations.cellWidget(0, 0)
-    assert label.textFormat() == Qt.TextFormat.PlainText
-    assert label.text() == row.destination_id
+    assert (label.textFormat(), label.text()) == (Qt.TextFormat.PlainText, row.destination_id)
     assert page.destinations.item(0, 1).text() == "내부"
     assert page.destinations.item(0, 3).text() == "사용"
     edits = []

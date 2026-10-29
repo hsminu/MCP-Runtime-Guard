@@ -107,7 +107,7 @@ async def test_oversize_json_never_reaches_json_parser_or_yields(monkeypatch):
         async for block in response.aiter_bytes():
             admitted.append(block)
 
-    with pytest.raises(IngressError, match="^TOOLS_LIST_PAGE_TOO_LARGE$"):
+    with pytest.raises(IngressError, match=r"^TOOLS_LIST_PAGE_TOO_LARGE$"):
         await receive()
     assert parsed == []
     assert admitted == []
@@ -165,7 +165,7 @@ async def test_rejected_response_closes_source_without_retry():
         source = Source(chunks, error)
         response, inner = await response_for(source, gate, media, encoding)
         assert gate.reason is None
-        with pytest.raises(IngressError, match=f"^{reason}$"):
+        with pytest.raises(IngressError, match=rf"^{reason}$"):
             await response.aread()
         assert source.closed == inner.requests == 1
         assert gate.failed.is_set()
@@ -251,7 +251,7 @@ async def test_existing_get_event_started_before_scope_cannot_bypass_gate():
 
     source = ActivatingSource([])
     response, _ = await response_for(source, gate, "text/event-stream")
-    with pytest.raises(IngressError, match="^TOOLS_LIST_PAGE_TOO_LARGE$"):
+    with pytest.raises(IngressError, match=r"^TOOLS_LIST_PAGE_TOO_LARGE$"):
         await response.aread()
     assert source.closed == 1
 
@@ -321,7 +321,7 @@ async def test_gzip_bomb_uses_bounded_zlib_outputs_before_gate_rejection(monkeyp
     monkeypatch.setattr(mcp_http_ingress.zlib, "decompressobj", Decoder)
     source = Source([compressed])
     response, _ = await response_for(source, gate, encoding="gzip")
-    with pytest.raises(IngressError, match="^TOOLS_LIST_PAGE_TOO_LARGE$"):
+    with pytest.raises(IngressError, match=r"^TOOLS_LIST_PAGE_TOO_LARGE$"):
         await response.aread()
     assert limits == [101]
     assert source.closed == 1
@@ -332,7 +332,7 @@ async def test_get_sse_substring_media_is_rejected_before_eventsource_parses():
     for media in ["x-text/event-stream", "application/x-text/event-stream"]:
         source = Source([b"data: " + payload() + b"\n\n"])
         response, _ = await response_for(source, listing(1), media)
-        with pytest.raises(IngressError, match="^TOOLS_LIST_INGRESS_INVALID$"):
+        with pytest.raises(IngressError, match=r"^TOOLS_LIST_INGRESS_INVALID$"):
             _events = [event async for event in EventSource(response).aiter_sse()]
         assert source.reads == 0
 
@@ -404,6 +404,6 @@ async def test_source_close_timeout_is_bounded_and_marks_connection_failed(monke
     source = StalledClose([payload()])
     gate = listing(100)
     response, _ = await response_for(source, gate)
-    with pytest.raises(IngressError, match="^TOOLS_LIST_INGRESS_CLOSE_FAILED$"):
+    with pytest.raises(IngressError, match=r"^TOOLS_LIST_INGRESS_CLOSE_FAILED$"):
         await asyncio.wait_for(response.aread(), 1)
     assert gate.failed.is_set()

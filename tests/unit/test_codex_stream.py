@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import contextmanager
 
 import pytest
 
 from guard_app.adapters.codex_stream import CodexStreamChannel, CodexStreamError
 from guard_app.adapters.jsonrpc_client import FrameChannel, JsonRpcClient, JsonRpcError
+
+from .test_jsonrpc_client import check_case
 
 MARKER = "PRIVATE_SOURCE_PAYLOAD"
 
@@ -54,8 +55,7 @@ def _channel(pipe: BytePipe, *, limit: int = 512, chunk: int = 8) -> CodexStream
 
 @pytest.mark.asyncio
 async def test_split_utf8_and_multiple_frames_keep_bytes_and_order() -> None:
-    pipe = BytePipe()
-    channel = _channel(pipe, chunk=1)
+    pipe, channel = stream_pair(chunk=1)
     first = '{"method":"가"}'.encode()
     second = b'{"id":1,"result":null}'
     pipe.push(first + b"\n" + second + b"\r\n")
@@ -72,8 +72,7 @@ async def test_split_utf8_and_multiple_frames_keep_bytes_and_order() -> None:
 
 @pytest.mark.asyncio
 async def test_exact_frame_limit_and_preparse_buffer_bound() -> None:
-    pipe = BytePipe()
-    channel = _channel(pipe, limit=16, chunk=1000)
+    pipe, channel = stream_pair(limit=16, chunk=1000)
     pipe.push(b"x" * 16 + b"\n" + b"y" * 17 + b"\n")
     assert await channel.receive() == b"x" * 16
     with pytest.raises(CodexStreamError, match="FRAME_TOO_LARGE"):
@@ -86,8 +85,7 @@ async def test_exact_frame_limit_and_preparse_buffer_bound() -> None:
 @pytest.mark.asyncio
 async def test_empty_lines_and_partial_eof_fail_closed() -> None:
     for data in [b"\n", b"\r\n", b" \t\n", b"unfinished"]:
-        pipe = BytePipe()
-        channel = _channel(pipe)
+        pipe, channel = stream_pair()
         pipe.push(data)
         pipe.push(b"")
         reason = "EMPTY_FRAME" if data.endswith(b"\n") else "PARTIAL_EOF"
@@ -178,8 +176,7 @@ async def test_io_failure_hides_raw_error_and_never_retries(
 @pytest.mark.asyncio
 async def test_invalid_outgoing_frame_is_rejected_before_writing() -> None:
     for frame in [b"", b" \t", b"{}\n{}", b"x" * 17]:
-        pipe = BytePipe()
-        channel = _channel(pipe, limit=16)
+        pipe, channel = stream_pair(limit=16)
         with pytest.raises(CodexStreamError):
             await channel.send(frame)
         assert pipe.write_count == 0
@@ -224,8 +221,7 @@ async def test_cancel_and_local_close_release_waiters_without_source_close() -> 
 
 @pytest.mark.asyncio
 async def test_jsonrpc_round_trip_over_synthetic_codex_bytes() -> None:
-    pipe = BytePipe()
-    channel = _channel(pipe, chunk=3)
+    pipe, channel = stream_pair(chunk=3)
     frames: FrameChannel = channel  # Structural compatibility, no client API change.
     notes: list[tuple[str, object]] = []
     calls: list[tuple[str, object]] = []
@@ -282,8 +278,7 @@ async def test_jsonrpc_round_trip_over_synthetic_codex_bytes() -> None:
 @pytest.mark.asyncio
 async def test_malformed_json_is_fail_closed_by_existing_client_codec() -> None:
     for line in [b"not-json\n", b"\xff\n", b"[]\n", b"{\n"]:
-        pipe = BytePipe()
-        channel = _channel(pipe)
+        pipe, channel = stream_pair()
         client = JsonRpcClient(
             channel, request_timeout_s=1, max_frame_bytes=512, max_pending=1, version_field=False
         )
@@ -311,8 +306,7 @@ def test_invalid_limits_are_rejected() -> None:
 @pytest.mark.asyncio
 async def test_crlf_retains_cr_and_counts_it_toward_frame_limit() -> None:
     for limit, accepted in [(16, False), (17, True)]:
-        pipe = BytePipe()
-        channel = _channel(pipe, limit=limit)
+        pipe, channel = stream_pair(limit=limit)
         pipe.push(b"x" * 16 + b"\r\n")
         if accepted:
             assert await channel.receive() == b"x" * 16 + b"\r"
@@ -396,8 +390,7 @@ async def test_cancel_ignoring_source_late_error_is_retrieved_without_logging(
 @pytest.mark.asyncio
 async def test_jsonrpc_pending_request_fails_on_clean_or_partial_eof() -> None:
     for data, reason in [(b"", "EOF"), (b"partial", "PARTIAL_EOF")]:
-        pipe = BytePipe()
-        channel = _channel(pipe)
+        pipe, channel = stream_pair()
         client = JsonRpcClient(
             channel, request_timeout_s=1, max_frame_bytes=512, max_pending=1, version_field=False
         )
@@ -439,9 +432,6 @@ async def test_jsonrpc_deadline_cancels_stuck_drain_without_retrying_write() -> 
     assert pipe.write_count == 1
 
 
-@contextmanager
-def check_case(failures, case):
-    try:
-        yield
-    except (AssertionError, pytest.fail.Exception) as error:
-        failures.append((case, str(error)))
+def stream_pair(**options):
+    pipe = BytePipe()
+    return pipe, _channel(pipe, **options)

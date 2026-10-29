@@ -2,26 +2,24 @@
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-import pytest
-from PySide6.QtWidgets import QApplication
+from contextlib import contextmanager
 
 from guard_app.domain.contracts import ModelTurn
 from guard_app.domain.enums import TaskStatus
 from guard_app.services.bridge import BackendBindings, BackendBridge, BridgeState, TaskProjection
 
-from .test_bridge import FakeControl, attach, close_bridge, pump_until
+from .test_bridge import (
+    FakeControl,
+    attach,
+    bridge_cleanup,
+    launch_bridge,
+    pump_until,
+)
+from .test_bridge import app as app
 from .test_runner import FakeGuard, FakeModel, FakeStore, _runner, _state
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
+@contextmanager
 def start_bridge(app, status=TaskStatus.RUNNING, snapshot_epoch=1):
     model = FakeModel(ModelTurn(text="<b>model answer</b>", calls=()))
     state = _state()
@@ -55,7 +53,8 @@ def start_bridge(app, status=TaskStatus.RUNNING, snapshot_epoch=1):
     bridge.task_changed.connect(projections.append)
     bridge.start()
     pump_until(app, lambda: bridge.state is BridgeState.READY and bool(projections))
-    return bridge, receiver, events, projections, model, holder, store
+    with bridge_cleanup(app, bridge):
+        yield bridge, receiver, events, projections, model, holder, store
 
 
 def finished(receiver, command):
@@ -66,8 +65,7 @@ def finished(receiver, command):
 
 
 def test_user_turn_and_model_answer_are_ephemeral_not_command_metadata(app):
-    bridge, receiver, events, projections, model, holder, store = start_bridge(app)
-    try:
+    with start_bridge(app) as (bridge, receiver, events, projections, model, holder, store):
         assert projections[-1].can_accept_message
         command = bridge.request_message("task-1", 1, "private-user-marker")
         pump_until(app, lambda: finished(receiver, command))
@@ -85,20 +83,15 @@ def test_user_turn_and_model_answer_are_ephemeral_not_command_metadata(app):
         assert not holder["runner"]._conversation
         assert not holder["runner"].can_accept_message
         assert len(model.seen) == 1
-    finally:
-        close_bridge(app, bridge)
 
 
 def test_user_turn_cannot_resume_approval_unknown_or_wrong_task_epoch(app):
     def check(status, task_id, epoch):
-        bridge, receiver, events, _, model, _, _ = start_bridge(app, status)
-        try:
+        with start_bridge(app, status) as (bridge, receiver, events, _, model, _, _):
             command = bridge.request_message(task_id, epoch, "must-not-call-model")
             pump_until(app, lambda: finished(receiver, command))
             assert not model.seen
             assert not events
-        finally:
-            close_bridge(app, bridge)
 
     for status, task_id, epoch in [
         (TaskStatus.WAITING_APPROVAL, "task-1", 1),
@@ -112,21 +105,25 @@ def test_user_turn_cannot_resume_approval_unknown_or_wrong_task_epoch(app):
 
 
 def test_user_turn_rejected_while_runner_has_a_model_step_to_advance(app):
-    bridge, receiver, events, _, model, holder, _ = start_bridge(app)
-    try:
+    with start_bridge(app) as (bridge, receiver, events, _, model, holder, _):
         # Backend-only setup models the state between tool dispatch and next model step.
         holder["runner"]._awaiting_user = False
         command = bridge.request_message("task-1", 1, "must-not-overwrite-turn")
         pump_until(app, lambda: finished(receiver, command))
         assert not model.seen
         assert not events
-    finally:
-        close_bridge(app, bridge)
 
 
 def test_new_snapshot_epoch_cannot_accept_input_into_an_old_runner(app):
-    bridge, receiver, events, projections, model, holder, _ = start_bridge(app, snapshot_epoch=2)
-    try:
+    with start_bridge(app, snapshot_epoch=2) as (
+        bridge,
+        receiver,
+        events,
+        projections,
+        model,
+        holder,
+        _,
+    ):
         assert holder["runner"].epoch == 1
         assert projections[-1].epoch == 2
         assert not projections[-1].can_accept_message
@@ -135,8 +132,6 @@ def test_new_snapshot_epoch_cannot_accept_input_into_an_old_runner(app):
         assert not events
         assert not model.seen
         assert len(holder["runner"]._conversation) == 1  # system message only
-    finally:
-        close_bridge(app, bridge)
 
 
 def test_bridge_publishes_session_capability_before_ready(app):
@@ -158,11 +153,9 @@ def test_bridge_publishes_session_capability_before_ready(app):
         bridge.session_capability_changed.connect(lambda code: seen.append(code))
         bridge.lifecycle_changed.connect(lambda event: states.append(event.state))
         bridge.start()
-        try:
+        with bridge_cleanup(app, bridge):
             pump_until(app, lambda: bridge.state is BridgeState.READY and bool(seen))
             assert seen == [expected]
-        finally:
-            close_bridge(app, bridge)
 
     for blocker, create, expected in [
         (None, False, "SESSION_CREATION_UNAVAILABLE"),
@@ -206,7 +199,7 @@ def test_backend_task_event_republishes_the_task_without_a_command(app):
     bridge.task_changed.connect(projections.append)
     bridge.session_capability_changed.connect(capabilities.append)
     bridge.start()
-    try:
+    with bridge_cleanup(app, bridge):
         pump_until(app, lambda: bridge.state is BridgeState.READY and bool(registered))
         assert len(registered) == 1
         assert projections == []
@@ -223,10 +216,9 @@ def test_backend_task_event_republishes_the_task_without_a_command(app):
         pump_until(app, lambda: len(projections) == 2)
         assert projections[-1].status is TaskStatus.WAITING_APPROVAL
         assert receiver.commands == []  # no command was invented for it
-    finally:
-        close_bridge(app, bridge)
 
 
+@contextmanager
 def _guarded_codex_bridge(app, stops, resolved):
     from guard_app.services.runner import CodexTaskRunner
 
@@ -262,11 +254,10 @@ def _guarded_codex_bridge(app, stops, resolved):
             stop_session=stop_session,
         )
 
-    bridge = BackendBridge(bootstrap)
-    receiver = attach(bridge)
-    bridge.start()
+    bridge, receiver = launch_bridge(bootstrap)
     pump_until(app, lambda: bridge.state is BridgeState.READY)
-    return bridge, receiver, control
+    with bridge_cleanup(app, bridge):
+        yield bridge, receiver, control
 
 
 def test_human_approval_goes_to_guard_only_never_to_the_model_call(app):
@@ -275,15 +266,12 @@ def test_human_approval_goes_to_guard_only_never_to_the_model_call(app):
         from guard_app.services.bridge import ControlAction
 
         stops, resolved = [], []
-        bridge, receiver, control = _guarded_codex_bridge(app, stops, resolved)
-        try:
+        with _guarded_codex_bridge(app, stops, resolved) as (bridge, receiver, control):
             command = bridge.request_control(ControlAction(action), "approval-7")
             pump_until(app, lambda: finished(receiver, command))
             assert [(call[0], call[1]) for call in control.calls] == [(action, "approval-7")]
             assert resolved == []
             assert stops == []
-        finally:
-            close_bridge(app, bridge)
 
     for action in ["approve", "reject"]:
         check(action)
@@ -294,14 +282,11 @@ def test_task_stop_with_guard_also_stops_the_model_session(app):
         from guard_app.services.bridge import ControlAction
 
         stops, resolved = [], []
-        bridge, receiver, control = _guarded_codex_bridge(app, stops, resolved)
-        try:
+        with _guarded_codex_bridge(app, stops, resolved) as (bridge, receiver, control):
             command = bridge.request_control(ControlAction(action), "task-1", epoch=1)
             pump_until(app, lambda: finished(receiver, command))
             assert [call[0] for call in control.calls] == [action]
             assert stops == [("task-1", 1, action)]
-        finally:
-            close_bridge(app, bridge)
 
     for action in ["cancel", "emergency_halt"]:
         check(action)

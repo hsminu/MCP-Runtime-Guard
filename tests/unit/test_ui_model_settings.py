@@ -14,6 +14,8 @@ from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QLineEdit
 from guard_app.ui.model_settings import CodexLoginInfo
 from guard_app.ui.window import GuardWindow
 
+from .test_ui_icons_style import closing_widgets
+
 
 def test_api_key_precedes_chatgpt_controls_and_is_the_default_guidance():
     """A148, I9/I11, T19/T43 UI support: layout never changes login ownership."""
@@ -27,7 +29,7 @@ def test_api_key_precedes_chatgpt_controls_and_is_the_default_guidance():
     form.set_view(AccountView("SIGNED_OUT", browser_available=True))
     form.show()
     app.processEvents()
-    try:
+    with closing_widgets(form):
         key_bottom = form.api_key_input.mapTo(form, QPoint(0, form.api_key_input.height())).y()
         for button in (form.login_button, form.browser_button):
             assert key_bottom <= button.mapTo(form, QPoint(0, 0)).y()
@@ -37,8 +39,6 @@ def test_api_key_precedes_chatgpt_controls_and_is_the_default_guidance():
         assert "기본 로그인은 API 키임. 아래에 API 키를 입력하세요." in text
         assert "보조 방법 · ChatGPT 로그인" in text
         assert "Codex가 처리함" in text
-    finally:
-        form.close()
 
 
 def test_both_chatgpt_buttons_still_route_account_commands():
@@ -56,7 +56,7 @@ def test_both_chatgpt_buttons_still_route_account_commands():
     bridge.request_account = lambda action, **kwargs: calls.append((action, kwargs)) or "c"
     window = GuardWindow()
     window.attach_runtime(RuntimePanel(bridge))
-    try:
+    with closing_widgets(window, bridge):
         form = window.codex_login_info
         for button in (form.login_button, form.browser_button):
             form.set_view(AccountView("SIGNED_OUT", browser_available=True))
@@ -65,9 +65,6 @@ def test_both_chatgpt_buttons_still_route_account_commands():
         assert calls == [("account_login_device", {}), ("account_login_browser", {})]
         assert window.windowTitle().startswith("MCP Runtime Guard")
         app.processEvents()
-    finally:
-        window.close()
-        bridge.close()
 
 
 def test_saved_api_key_notice_does_not_claim_validation():
@@ -78,7 +75,7 @@ def test_saved_api_key_notice_does_not_claim_validation():
     form = CodexLoginInfo()
     sent = []
     form.set_api_key_sender(sent.append)
-    try:
+    with closing_widgets(form):
         form.set_view(AccountView("API_KEY"))
         expected = "API 키를 저장함. 첫 요청에서 키를 확인함."
         assert form.status.text() == expected
@@ -91,8 +88,6 @@ def test_saved_api_key_notice_does_not_claim_validation():
         assert form.api_key_input.text() == ""
         assert "sk-invalid" not in form.status.text()
         app.processEvents()
-    finally:
-        form.close()
 
 
 def test_new_session_has_fixed_codex_model_and_settings_keep_only_scanner_key():

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -22,25 +22,14 @@ from guard_app.adapters.mcp_transport import (
 )
 from guard_app.domain.errors import DispatchError
 
-from .test_mcp_transport import _request, _Session, _streams
-
-
-@contextmanager
-def _dispatch_error(code):
-    with pytest.raises(DispatchError) as caught:
-        yield caught
-    assert caught.value.exception_type == code
-
-
-def _check_cases(cases, check):
-    """Keep checking cheap table rows after an assertion/expected-error mismatch."""
-    failures = []
-    for case in cases:
-        try:
-            check(*case)
-        except (AssertionError, pytest.fail.Exception) as error:
-            failures.append((case, str(error)))
-    assert not failures, failures
+from .test_mcp_transport import (
+    _dispatch_error,
+    _request,
+    _running,
+    _Session,
+    _transport,
+    _worker,
+)
 
 
 def _tool(name: str, **extra: Any) -> Tool:
@@ -203,26 +192,21 @@ async def test_server_error_and_malformed_pages_are_fixed_codes():
     )
 
 
-def test_invalid_limits_are_rejected():
-    def check(kwargs):
-        with pytest.raises(ValueError, match="tools/list"):
-            ToolListLimits(**kwargs)  # type: ignore[arg-type]
-
-    _check_cases(
-        (
-            (kwargs,)
-            for kwargs in [
-                {"max_tools": 0},
-                {"max_pages": -1},
-                {"max_json_depth": 1.5},
-                {"max_json_depth": 65},
-                {"page_timeout_s": 0},
-                {"collection_timeout_s": float("inf")},
-                {"max_tools": True},
-            ]
-        ),
-        check,
-    )
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_tools": 0},
+        {"max_pages": -1},
+        {"max_json_depth": 1.5},
+        {"max_json_depth": 65},
+        {"page_timeout_s": 0},
+        {"collection_timeout_s": float("inf")},
+        {"max_tools": True},
+    ],
+)
+def test_invalid_limits_are_rejected(kwargs):
+    with pytest.raises(ValueError, match=r"tools/list"):
+        ToolListLimits(**kwargs)  # type: ignore[arg-type]
 
 
 class _ListingSession(_Session):
@@ -238,10 +222,8 @@ class _ListingSession(_Session):
 @pytest.mark.asyncio
 async def test_worker_lists_after_initialize_and_before_ready(monkeypatch):
     session = _ListingSession([ListToolsResult(tools=[_tool("tool")])])
-    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
-    transport = McpTransport({"one": _streams([])}, tool_list_limits=ToolListLimits())
-    await transport.start()
-    try:
+    transport = _transport(monkeypatch, session, server_id="one", tool_list_limits=ToolListLimits())
+    async with _running(transport):
         listing = transport.tool_listing("one")
         assert listing is not None
         assert listing.complete
@@ -249,35 +231,25 @@ async def test_worker_lists_after_initialize_and_before_ready(monkeypatch):
         assert (await transport.call(_request("one", seq=1))).payload is not None
         assert [name for name, _ in session.events] == ["enter", "initialize", "list", "call"]
         assert transport.tool_listing("unknown") is None
-    finally:
-        await transport.close()
 
 
 @pytest.mark.asyncio
 async def test_incomplete_listing_is_reported_and_worker_still_serves_calls(monkeypatch):
     session = _ListingSession([McpError(ErrorData(code=-32601, message="no tools"))])
-    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
-    transport = McpTransport({"one": _streams([])}, tool_list_limits=ToolListLimits())
-    await transport.start()
-    try:
+    transport = _transport(monkeypatch, session, server_id="one", tool_list_limits=ToolListLimits())
+    async with _running(transport):
         listing = transport.tool_listing("one")
         assert listing == ToolListing(complete=False, tools=(), reason="TOOLS_LIST_FAILED")
         assert (await transport.call(_request("one", seq=1))).payload is not None
-    finally:
-        await transport.close()
 
 
 @pytest.mark.asyncio
 async def test_collection_is_off_by_default_and_never_lists(monkeypatch):
     session = _ListingSession([])
-    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
-    transport = McpTransport({"one": _streams([])})
-    await transport.start()
-    try:
+    transport = _transport(monkeypatch, session, server_id="one")
+    async with _running(transport):
         assert transport.tool_listing("one") is None
         assert "list" not in [name for name, _ in session.events]
-    finally:
-        await transport.close()
 
 
 @pytest.mark.asyncio
@@ -285,16 +257,9 @@ async def test_initialize_keeps_its_own_bound_when_listing_is_enabled():
     session = _ListingSession([ListToolsResult(tools=[])])
     session.initialize_release = asyncio.Event()
 
-    @asynccontextmanager
-    async def open_session():
-        async with session as entered:
-            yield entered
-
-    worker = ServerWorker(
-        open_session,
-        call_timeout_s=1.0,
+    worker = _worker(
+        lambda: session,
         startup_timeout_s=0.05,
-        close_timeout_s=1.0,
         max_result_copy_bytes=1024,
         tool_list_limits=ToolListLimits(collection_timeout_s=5.0),
     )
@@ -306,7 +271,7 @@ async def test_initialize_keeps_its_own_bound_when_listing_is_enabled():
 
 
 def test_worker_rejects_wrong_limit_type():
-    with pytest.raises(TypeError, match="tools/list"):
+    with pytest.raises(TypeError, match=r"tools/list"):
         ServerWorker(
             lambda: None,  # type: ignore[arg-type,return-value]
             call_timeout_s=1.0,
@@ -324,11 +289,8 @@ async def test_real_synthetic_http_server_listing_is_complete():
             {"spike": http_stream_factory(spike.endpoint, read_timeout_s=30.0)},
             tool_list_limits=ToolListLimits(),
         )
-        await transport.start()
-        try:
+        async with _running(transport):
             listing = transport.tool_listing("spike")
-        finally:
-            await transport.close()
     assert listing is not None
     assert listing.complete
     assert sorted(tool["name"] for tool in listing.tools) == ["read", "send"]
@@ -372,16 +334,9 @@ async def test_collection_deadline_counts_from_initialization_start():
     session.pages.delay = 0.1
     session.initialize_release = asyncio.Event()
 
-    @asynccontextmanager
-    async def open_session():
-        async with session as entered:
-            yield entered
-
-    worker = ServerWorker(
-        open_session,
-        call_timeout_s=1.0,
+    worker = _worker(
+        lambda: session,
         startup_timeout_s=1.0,
-        close_timeout_s=1.0,
         max_result_copy_bytes=1024,
         tool_list_limits=ToolListLimits(page_timeout_s=1.0, collection_timeout_s=0.3),
     )
@@ -398,8 +353,7 @@ async def test_collection_deadline_counts_from_initialization_start():
 async def test_close_during_collection_is_a_clean_close(monkeypatch):
     session = _ListingSession([ListToolsResult(tools=[])])
     session.pages.delay = 5.0
-    monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
-    transport = McpTransport({"one": _streams([])}, tool_list_limits=ToolListLimits())
+    transport = _transport(monkeypatch, session, server_id="one", tool_list_limits=ToolListLimits())
     starting = asyncio.create_task(transport.start())
     for _ in range(50):
         if "list" in [name for name, _ in session.events]:

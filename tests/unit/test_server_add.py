@@ -70,9 +70,7 @@ def _valid_http(form: ServerAddForm, tier: str = "general_external") -> None:
     form.transport.setCurrentIndex(form.transport.findData("streamable_http"))
 
 
-def test_trust_boundary_and_max_label_require_explicit_choices(
-    form: ServerAddForm,
-) -> None:
+def test_trust_boundary_and_max_label_require_explicit_choices(form: ServerAddForm) -> None:
     command = str(Path.cwd() / "private-executable.exe")
     form.server_id.setText("local_docs")
     form.display_name.setText("Local Docs")
@@ -123,8 +121,7 @@ def test_transport_switch_preserves_inputs_but_preview_has_only_active_fields(
     form.prepare_button.click()
     restored = form.validated_draft
     assert restored is not None
-    assert restored.command == command
-    assert restored.args == ("--secret=unshown-value", "serve")
+    assert (restored.command, restored.args) == (command, ("--secret=unshown-value", "serve"))
     assert restored.env_allow == ("LANG", "PATH")
     assert restored.url is None
 
@@ -400,9 +397,7 @@ def test_form_uses_same_b_result_through_bridge_with_trimmed_input(
     assert form.prepare_button.isEnabled()
 
 
-def test_product_window_uses_bridge_validation_without_backend_startup(
-    app: QApplication,
-) -> None:
+def test_product_window_uses_bridge_validation_without_backend_startup(app: QApplication) -> None:
     window = GuardWindow()
     try:
         window.navigate("server_add")
@@ -445,10 +440,8 @@ def test_pasted_config_fills_the_fields_and_keeps_no_values(form: ServerAddForm)
     )
     form.fill_button.click()
 
-    assert form.quick_input.toPlainText() == ""
-    assert form.server_id.text() == "docs"
-    assert form.transport.currentData() == "stdio"
-    assert form.command.text() == command
+    assert (form.quick_input.toPlainText(), form.server_id.text()) == ("", "docs")
+    assert (form.transport.currentData(), form.command.text()) == ("stdio", command)
     assert form.args_json.toPlainText() == 'serve --root "C:\\My Docs"'
     assert form.env_allow.toPlainText() == "DOCS_TOKEN\nLANG"
     assert "2개는 가져오지 않음" in form.paste_status.text()
@@ -460,8 +453,7 @@ def test_pasted_config_fills_the_fields_and_keeps_no_values(form: ServerAddForm)
     draft = form.validated_draft
     assert draft is not None
     assert draft.args == ("serve", "--root", "C:\\My Docs")
-    assert draft.env_allow == ("DOCS_TOKEN", "LANG")
-    assert draft.display_name == "docs"
+    assert (draft.env_allow, draft.display_name) == (("DOCS_TOKEN", "LANG"), "docs")
 
 
 def test_paste_reader_understands_common_forms(subtests) -> None:
@@ -516,8 +508,7 @@ def test_unreadable_paste_stays_in_the_box_with_a_fixed_reason(
             form.quick_input.setPlainText(text)
             form.fill_button.click()
             assert message in form.paste_status.text()
-            assert form.quick_input.toPlainText() == text
-            assert form.server_id.text() == ""
+            assert (form.quick_input.toPlainText(), form.server_id.text()) == (text, "")
             with pytest.raises(PasteError):
                 read_pasted_server(text)
 
@@ -537,8 +528,7 @@ def test_arguments_read_like_a_command_line(form: ServerAddForm) -> None:
     form.prepare_button.click()
     draft = form.validated_draft
     assert draft is not None
-    assert draft.args == ()
-    assert draft.env_allow == ("LANG", "PATH")
+    assert (draft.args, draft.env_allow) == ((), ("LANG", "PATH"))
 
 
 def test_display_name_is_optional_and_suggests_an_ascii_id(form: ServerAddForm) -> None:
@@ -745,10 +735,8 @@ def test_scan_card_state_transitions_and_safe_projection(app) -> None:
 
     card.set_snapshot(Surface(LoadState.ERROR))
     assert "불러오지 못함" in card.state_message.message.text()
-    assert card.scan_state.text() == "미제공"
-    assert card.registry_status.text() == "미제공"
-    assert card.session_status.text() == "미제공"
-    assert card.required.text() == "미제공"
+    assert (card.scan_state.text(), card.registry_status.text()) == ("미제공", "미제공")
+    assert (card.session_status.text(), card.required.text()) == ("미제공", "미제공")
 
     card.set_snapshot(Surface(LoadState.READY))
     assert "조회 결과 미제공" in card.state_message.message.text()
@@ -773,8 +761,7 @@ def test_scan_card_state_transitions_and_safe_projection(app) -> None:
     card.set_snapshot(Surface(LoadState.READY, projection))
 
     assert card.required.text() == "2개 · offline-rules, schema"
-    assert card.completed.text() == "1개 · offline-rules"
-    assert card.skipped.text() == "1개 · schema"
+    assert (card.completed.text(), card.skipped.text()) == ("1개 · offline-rules", "1개 · schema")
     assert card.failed.text() == "1개 · network-check"
     assert card.scan_state.text() == "검사 실행 완료 · 사용자 활성화 별도"
     assert "지문과 불일치" in card.fingerprint.text()
@@ -821,12 +808,9 @@ def test_scan_card_state_transitions_and_safe_projection(app) -> None:
             ),
         )
     )
-    assert card.scan_state.text() == "미확인"
-    assert card.registry_status.text() == "미확인"
-    assert card.session_status.text() == "미확인"
-    assert card.max_severity.text() == "미확인"
-    assert card.required.text() == "0개 · backend 제공"
-    assert card.completed.text() == "미제공"
+    assert (card.scan_state.text(), card.registry_status.text()) == ("미확인", "미확인")
+    assert (card.session_status.text(), card.max_severity.text()) == ("미확인", "미확인")
+    assert (card.required.text(), card.completed.text()) == ("0개 · backend 제공", "미제공")
     assert card.skipped.text() == "0개 · backend 제공"
     assert "미확인" in card.fingerprint.text()
 
@@ -834,7 +818,6 @@ def test_scan_card_state_transitions_and_safe_projection(app) -> None:
     summary = '<img src="https://example.invalid/pixel"> <b>finding</b>'
     projection = ScanStatusProjection(safe_finding_summary=summary)
     card.set_snapshot(Surface(LoadState.READY, projection))
-    assert card.findings.text() == summary
-    assert card.findings.textFormat() == Qt.TextFormat.PlainText
+    assert (card.findings.text(), card.findings.textFormat()) == (summary, Qt.TextFormat.PlainText)
     with pytest.raises(FrozenInstanceError):
         projection.scan_state = "completed"  # type: ignore[misc]

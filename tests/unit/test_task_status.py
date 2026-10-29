@@ -2,23 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from typing import cast
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.ui.task_status import TaskStatusCard
 
-
-@pytest.fixture(scope="module")
-def app() -> QApplication:
-    instance = QApplication.instance()
-    return instance if isinstance(instance, QApplication) else QApplication([])
+from .test_bridge import app as app
 
 
 def test_each_backend_status_has_distinct_guidance(app):

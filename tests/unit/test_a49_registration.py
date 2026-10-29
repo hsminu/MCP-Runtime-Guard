@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtWidgets import QApplication
 
 from guard_app.domain.contracts import Denied, Released
 from guard_app.domain.enums import Label, RegStatus, TaskStatus
@@ -22,9 +20,8 @@ from guard_app.services.product_assembly import assemble_guard
 from guard_app.services.product_settings import SaveOutcomeUnknownError, read_settings
 from guard_app.services.registry import ServerRegistry
 from guard_app.ui import server_add_folders
-from guard_app.ui.server_add import ServerAddForm
 
-from .test_bridge_registration import confirm, harness
+from .test_bridge_registration import confirm, harness, registration_form
 from .test_product_assembly import Peer, inputs
 
 
@@ -46,13 +43,11 @@ async def file_collect(server):
 
 
 def test_picker_preserves_case_and_invalidates_confirmation(tmp_path, monkeypatch):
-    app = QApplication.instance() or QApplication([])
     bridge = BackendBridge(lambda: None)
     sent = []
     monkeypatch.setattr(bridge, "request_registration", lambda req, **kw: sent.append((req, kw)))
-    form = ServerAddForm()
-    form.attach_registration(bridge)
-    try:
+    with registration_form() as form:
+        form.attach_registration(bridge)
         form.server_id.setText("docs")
         form.transport.setCurrentIndex(form.transport.findData("local_file"))
         form.tier.setCurrentIndex(form.tier.findData("internal"))
@@ -95,122 +90,101 @@ def test_picker_preserves_case_and_invalidates_confirmation(tmp_path, monkeypatc
         monkeypatch.setattr(server_add_folders.QFileDialog, "getExistingDirectory", lambda *a: "")
         folders.root.browse.click()
         assert folders.root.path.text() == before
-    finally:
-        form.close()
-        app.processEvents()
 
 
-def test_registration_activation_and_guard_use_registered_root(tmp_path):
+@pytest.mark.asyncio
+async def test_registration_activation_and_guard_use_registered_root(tmp_path):
     root = tmp_path / "MixedRoot"
     sub = root / "SecretCase"
     sub.mkdir(parents=True)
     (sub / "Doc.txt").write_text("synthetic", encoding="utf-8")
 
-    async def scenario():
-        async with harness(tmp_path) as h:
-            h.commands.collect = file_collect
-            req = request(root, folder_labels=((str(sub), "CONFIDENTIAL"),))
-            preview = await h.commands(req)
-            assert preview.code == "REG_CONFIRM_REQUIRED"
-            assert preview.command == sys.executable
-            assert preview.sha256
-            assert preview.size > 0
-            assert (await confirm(h, preview)).code == "REG_REGISTERED"
-            assert h.registry.status("docs") is RegStatus.PENDING
-            doc = read_settings(h.folders).document
-            server = doc["servers"][0]
-            assert server["command"] == sys.executable
-            assert server["args"] == list(file_server_args(root))
-            assert server["tools"] == list(FILE_SERVER_TOOL_SETTINGS)
-            assert doc["profile"]["servers"] == ["docs"]
-            assert doc.get("access_rules", {}).get("allow", []) == []
-            sources = doc["profile"]["sources"]
-            assert {tuple(s["prefix"]) for s in sources} == {(), ("SecretCase",)}
-            assert next(s["label"] for s in sources if s["tool"] == "list_root") == "INTERNAL"
-            activation = await h.commands(RegistrationRequest("activation_preview", "docs"))
-            assert all(
-                t.kind == "read" and t.kind_fixed for t in activation.activation.servers[0].tools
+    async with harness(tmp_path) as h:
+        h.commands.collect = file_collect
+        req = request(root, folder_labels=((str(sub), "CONFIDENTIAL"),))
+        preview = await h.commands(req)
+        assert preview.code == "REG_CONFIRM_REQUIRED"
+        assert preview.command == sys.executable
+        assert preview.sha256
+        assert preview.size > 0
+        assert (await confirm(h, preview)).code == "REG_REGISTERED"
+        assert h.registry.status("docs") is RegStatus.PENDING
+        doc = read_settings(h.folders).document
+        server = doc["servers"][0]
+        assert server["command"] == sys.executable
+        assert server["args"] == list(file_server_args(root))
+        assert server["tools"] == list(FILE_SERVER_TOOL_SETTINGS)
+        assert doc["profile"]["servers"] == ["docs"]
+        assert doc.get("access_rules", {}).get("allow", []) == []
+        sources = doc["profile"]["sources"]
+        assert {tuple(s["prefix"]) for s in sources} == {(), ("SecretCase",)}
+        assert next(s["label"] for s in sources if s["tool"] == "list_root") == "INTERNAL"
+        activation = await h.commands(RegistrationRequest("activation_preview", "docs"))
+        assert all(
+            t.kind == "read" and t.kind_fixed for t in activation.activation.servers[0].tools
+        )
+        result = await h.commands(
+            RegistrationRequest(
+                "activate",
+                "docs",
+                expected_row_revision=activation.row_revision,
+                allowed=("list_root", "read_file"),
+                denied=("list_folder",),
             )
-            result = await h.commands(
-                RegistrationRequest(
-                    "activate",
-                    "docs",
-                    expected_row_revision=activation.row_revision,
-                    allowed=("list_root", "read_file"),
-                    denied=("list_folder",),
-                )
+        )
+        assert result.code == "REG_ACTIVATION_RESTART_REQUIRED"
+        assert h.registry.status("docs") is RegStatus.ACTIVE
+        doc = read_settings(h.folders).document
+        # Reload C Registry from actual B SQLite, compose a fresh transport.
+        registry = ServerRegistry(h.store)
+        await registry.load()
+        peer = Peer(list(TOOLS))
+        assembled = await assemble_guard(h.store, inputs(peer, registry, doc))
+        try:
+            settings = assembled.settings
+            await h.store.create_task(
+                TaskState(
+                    task_id="task-a49",
+                    epoch=1,
+                    profile_id=settings.profile_id,
+                    policy_version=settings.policy_version,
+                    status=TaskStatus.RUNNING,
+                ),
+                created_at_utc=datetime.now(UTC),
             )
-            assert result.code == "REG_ACTIVATION_RESTART_REQUIRED"
-            assert h.registry.status("docs") is RegStatus.ACTIVE
-            doc = read_settings(h.folders).document
-            # Reload C Registry from actual B SQLite, compose a fresh transport.
-            registry = ServerRegistry(h.store)
-            await registry.load()
-            peer = Peer(list(TOOLS))
-            assembled = await assemble_guard(h.store, inputs(peer, registry, doc))
-            try:
-                settings = assembled.settings
-                await h.store.create_task(
-                    TaskState(
-                        task_id="task-a49",
-                        epoch=1,
-                        profile_id=settings.profile_id,
-                        policy_version=settings.policy_version,
-                        status=TaskStatus.RUNNING,
-                    ),
-                    created_at_utc=datetime.now(UTC),
-                )
-                listed = await assembled.guard.submit(
-                    "task-a49",
-                    ProposedCall(tool_ref="docs__list_root", arguments={}, model_call_id="list"),
-                    expected_epoch=1,
-                )
-                assert isinstance(listed, Released)
-                assert (await h.store.load_task("task-a49")).high_watermark is Label.INTERNAL
+            # Missing paths must not dispatch even if a fabricated resolver would accept them.
+            for call_id, tool, arguments, expected, label, count in (
+                ("list", "list_root", {}, Released, Label.INTERNAL, 1),
+                (
+                    "read",
+                    "read_file",
+                    {"path": "SecretCase/Doc.txt"},
+                    Released,
+                    Label.CONFIDENTIAL,
+                    2,
+                ),
+                ("missing", "read_file", {"path": "SecretCase/Missing.txt"}, Denied, None, 2),
+                ("denied", "list_folder", {"path": "SecretCase"}, Denied, None, 2),
+            ):
                 outcome = await assembled.guard.submit(
                     "task-a49",
                     ProposedCall(
-                        tool_ref="docs__read_file",
-                        arguments={"path": "SecretCase/Doc.txt"},
-                        model_call_id="read",
+                        tool_ref=f"docs__{tool}", arguments=arguments, model_call_id=call_id
                     ),
                     expected_epoch=1,
                 )
-                assert isinstance(outcome, Released)
-                assert (await h.store.load_task("task-a49")).high_watermark is Label.CONFIDENTIAL
-                assert len(peer.calls) == 2
-                # A fabricated resolver that returns the request string would dispatch this.
-                absent = await assembled.guard.submit(
-                    "task-a49",
-                    ProposedCall(
-                        tool_ref="docs__read_file",
-                        arguments={"path": "SecretCase/Missing.txt"},
-                        model_call_id="missing",
-                    ),
-                    expected_epoch=1,
-                )
-                assert isinstance(absent, Denied)
-                denied = await assembled.guard.submit(
-                    "task-a49",
-                    ProposedCall(
-                        tool_ref="docs__list_folder",
-                        arguments={"path": "SecretCase"},
-                        model_call_id="denied",
-                    ),
-                    expected_epoch=1,
-                )
-                assert isinstance(denied, Denied)
-
-                assert len(peer.calls) == 2
-                assert assembled.resource_resolver is not None
-            finally:
-                await assembled.aclose()
-
-    asyncio.run(scenario())
+                assert isinstance(outcome, expected), call_id
+                if label is not None:
+                    assert (await h.store.load_task("task-a49")).high_watermark is label
+                assert len(peer.calls) == count, call_id
+            assert assembled.resource_resolver is not None
+        finally:
+            await assembled.aclose()
 
 
 @pytest.mark.parametrize("kind", ["overlap", "duplicate", "missing", "outside", "file", "label"])
-def test_invalid_folders_are_rejected_before_collection(tmp_path, kind):
+@pytest.mark.asyncio
+async def test_invalid_folders_are_rejected_before_collection(tmp_path, kind):
     root = tmp_path / "Root"
     sub = root / "Child"
     nested = sub / "Nested"
@@ -226,72 +200,67 @@ def test_invalid_folders_are_rejected_before_collection(tmp_path, kind):
         "label": ((str(sub), "untrusted"),),
     }
 
-    async def scenario():
-        async with harness(tmp_path) as h:
-            result = await h.commands(request(root, folder_labels=rules[kind]))
-            assert result.code == "REG_FOLDER_INVALID"
-            assert not h.collected
-            assert await h.store.list_registrations() == ()
-
-    asyncio.run(scenario())
+    async with harness(tmp_path) as h:
+        result = await h.commands(request(root, folder_labels=rules[kind]))
+        assert result.code == "REG_FOLDER_INVALID"
+        assert not h.collected
+        assert await h.store.list_registrations() == ()
 
 
 @pytest.mark.parametrize("failure", ["registry", "settings", "unknown"])
-def test_file_registration_failure_never_reports_success_or_retries(tmp_path, monkeypatch, failure):
+@pytest.mark.asyncio
+async def test_file_registration_failure_never_reports_success_or_retries(
+    tmp_path, monkeypatch, failure
+):
     root = tmp_path / "Root"
     root.mkdir()
 
-    async def scenario():
-        async with harness(tmp_path) as h:
-            h.commands.collect = file_collect
-            writes = []
-            if failure == "registry":
+    async with harness(tmp_path) as h:
+        h.commands.collect = file_collect
+        writes = []
+        if failure == "registry":
 
-                async def fail(*a, **kw):
-                    writes.append(1)
-                    raise StoreError()
+            async def fail(*a, **kw):
+                writes.append(1)
+                raise StoreError()
 
-                monkeypatch.setattr(h.store, "register_server", fail)
-            else:
+            monkeypatch.setattr(h.store, "register_server", fail)
+        else:
 
-                async def save(change):
-                    writes.append(1)
-                    if failure == "unknown":
-                        raise SaveOutcomeUnknownError()
-                    return False
+            async def save(change):
+                writes.append(1)
+                if failure == "unknown":
+                    raise SaveOutcomeUnknownError()
+                return False
 
-                h.policy._saver = save
-            preview = await h.commands(request(root))
-            result = await confirm(h, preview)
-            assert (
-                result.code
-                == {
-                    "registry": "REG_STORE_UNKNOWN",
-                    "settings": "REG_SETTINGS_SAVE_FAILED",
-                    "unknown": "POLICY_SAVE_UNKNOWN",
-                }[failure]
-            )
-            assert (await h.commands(request(root))).code != "REG_CONFIRM_REQUIRED"
-            if failure != "registry":
-                assert h.admission.restart_code == "POLICY_SAVE_UNKNOWN"
-            assert writes == [1]
-            assert read_settings(h.folders).document is None
-
-    asyncio.run(scenario())
+            h.policy._saver = save
+        preview = await h.commands(request(root))
+        result = await confirm(h, preview)
+        assert (
+            result.code
+            == {
+                "registry": "REG_STORE_UNKNOWN",
+                "settings": "REG_SETTINGS_SAVE_FAILED",
+                "unknown": "POLICY_SAVE_UNKNOWN",
+            }[failure]
+        )
+        assert (await h.commands(request(root))).code != "REG_CONFIRM_REQUIRED"
+        if failure != "registry":
+            assert h.admission.restart_code == "POLICY_SAVE_UNKNOWN"
+        assert writes == [1]
+        assert read_settings(h.folders).document is None
 
 
-def test_folder_removed_after_confirmation_is_rechecked(tmp_path):
+@pytest.mark.asyncio
+async def test_folder_removed_after_confirmation_is_rechecked(tmp_path):
     root = tmp_path / "Root"
     sub = root / "Child"
     sub.mkdir(parents=True)
 
-    async def scenario():
-        async with harness(tmp_path) as h:
-            preview = await h.commands(request(root, folder_labels=((str(sub), "PUBLIC"),)))
-            assert preview.token
-            sub.rmdir()
-            assert (await confirm(h, preview)).code == "REG_FOLDER_INVALID"
-            assert (await confirm(h, preview)).code == "REG_CONFIRM_EXPIRED"
-            assert not h.collected
-
-    asyncio.run(scenario())
+    async with harness(tmp_path) as h:
+        preview = await h.commands(request(root, folder_labels=((str(sub), "PUBLIC"),)))
+        assert preview.token
+        sub.rmdir()
+        assert (await confirm(h, preview)).code == "REG_FOLDER_INVALID"
+        assert (await confirm(h, preview)).code == "REG_CONFIRM_EXPIRED"
+        assert not h.collected

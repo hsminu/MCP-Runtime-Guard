@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -19,6 +18,8 @@ from guard_app.adapters.codex_protocol import (
     turn_start_params,
 )
 from guard_app.domain.contracts import ReleasedResult, ToolView
+
+from .test_jsonrpc_client import check_case
 
 SCHEMA = {"type": "object"}
 
@@ -159,11 +160,3 @@ def test_offered_levels_come_from_the_pinned_model_catalog_without_delegation() 
     assert set(REASONING_EFFORTS) <= set(advertised)
     assert "ultra" not in REASONING_EFFORTS  # delegates to sub-agents, off in L1
     assert model["default_reasoning_level"] in REASONING_EFFORTS
-
-
-@contextmanager
-def check_case(failures, case):
-    try:
-        yield
-    except (AssertionError, pytest.fail.Exception) as error:
-        failures.append((case, str(error)))

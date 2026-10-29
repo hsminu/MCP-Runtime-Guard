@@ -3,9 +3,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
 
 from guard_app.domain.enums import ApprovalStatus
 from guard_app.ui.approval_presentation import (
@@ -30,12 +28,10 @@ from guard_app.ui.overview_presentation import (
     unresolved_attention,
 )
 
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import closing_widgets
+
 NOW = datetime(2026, 10, 29, tzinfo=UTC)
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def test_attention_selection_and_server_priority_preserve_backend_order():
@@ -73,7 +69,7 @@ def test_attention_calculated_once_and_current_values_replace_old(app, monkeypat
     monkeypatch.setattr(page, "_unresolved_attention", counted)
     items = tuple(AttentionItem(str(i), "approval", task_id="old") for i in range(7))
     initial = OverviewSnapshot(attention=Surface(LoadState.READY, items))
-    try:
+    with closing_widgets(page):
         page.set_snapshot(initial)
         assert len(calls) == 1
         page._change_page("attention", 1)
@@ -91,8 +87,6 @@ def test_attention_calculated_once_and_current_values_replace_old(app, monkeypat
         assert len(calls) == 2
         page.set_snapshot(replace(changed, attention=Surface(LoadState.ERROR, items)))
         assert page.attention_layout.count() == 0
-    finally:
-        page.close()
 
 
 def test_approval_calculations_keep_status_time_and_literal_summary():
@@ -128,7 +122,7 @@ def test_same_approval_id_refreshes_cells_and_selection_detail(app):
     query = page.current_query
     assert query is not None
     row = ApprovalSummary("id", "task", "request", "server", "old", ApprovalStatus.PENDING, NOW)
-    try:
+    with closing_widgets(page):
         assert page.set_page(ApprovalPage(query, (row,), 1), display_now=NOW)
         page.select_approval("id")
         updated = replace(row, destination_summary="<b>new</b>", row_revision=2)
@@ -136,8 +130,6 @@ def test_same_approval_id_refreshes_cells_and_selection_detail(app):
         assert page.table.item(0, 3).text() == "<b>new</b>"
         assert page.selected_summary == updated
         assert "<b>new</b>" in page.selection_detail.toPlainText()
-    finally:
-        page.close()
 
 
 def test_extracted_server_row_keeps_untrusted_text_plain(app):

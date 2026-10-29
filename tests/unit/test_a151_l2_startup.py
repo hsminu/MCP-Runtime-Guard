@@ -16,6 +16,7 @@ from guard_app.services.session_runtime import SessionRuntimeError, bootstrap_pr
 from guard_app.services.session_startup import startup_refusal
 from guard_app.ui.presentation import LIFECYCLE_MESSAGES, session_blocker_notice
 
+from .test_a138_product_startup import runtime_context
 from .test_bridge import app as app
 from .test_bridge import pump_until
 from .test_codex_preparation import pin as pin
@@ -68,30 +69,28 @@ async def test_receipt_and_runtime_gate(tmp_path, pin, monkeypatch, mode, code):
     callbacks = replace(
         synthetic_preparation(), prepare_startup=owner.preparation().prepare_startup
     )
-    runtime, sessions = make_runtime(tmp_path, preparation=callbacks)
-    try:
-        async with asyncio.timeout(5):
-            await runtime.prepare_startup()
-            await runtime.prepare_startup()
-            assert runtime.creation_blocker() == code
-            if code is None:
-                await runtime.create_session(SessionOptions())
-                assert len(sessions) == 1
-            else:
-                for _ in range(2):
-                    with pytest.raises(SessionRuntimeError, match=f"^{code}$"):
-                        await runtime.create_session(SessionOptions())
-                assert sessions == []
-                assert (
-                    "시작 검사" in session_blocker_notice(code) or code == "CODEX_CONFIG_MISMATCH"
-                )
-            assert len(calls) == 1
-            assert calls[0][0] is owner._launcher
-            assert calls[0][1] is owner.folders
-            assert calls[0][2]["deadline_s"] == module.L2_DEADLINE_S
-    finally:
-        await runtime.close()
-        owner.close()
+    with closing(owner):
+        async with runtime_context(tmp_path, preparation=callbacks) as (runtime, sessions):
+            async with asyncio.timeout(5):
+                await runtime.prepare_startup()
+                await runtime.prepare_startup()
+                assert runtime.creation_blocker() == code
+                if code is None:
+                    await runtime.create_session(SessionOptions())
+                    assert len(sessions) == 1
+                else:
+                    for _ in range(2):
+                        with pytest.raises(SessionRuntimeError, match=f"^{code}$"):
+                            await runtime.create_session(SessionOptions())
+                    assert sessions == []
+                    assert (
+                        "시작 검사" in session_blocker_notice(code)
+                        or code == "CODEX_CONFIG_MISMATCH"
+                    )
+                assert len(calls) == 1
+                assert calls[0][0] is owner._launcher
+                assert calls[0][1] is owner.folders
+                assert calls[0][2]["deadline_s"] == module.L2_DEADLINE_S
 
 
 @pytest.mark.asyncio
@@ -230,8 +229,7 @@ def test_bridge_progress_activation_and_shutdown(tmp_path, pin, monkeypatch, app
 
         bridge = BackendBridge(
             lambda: bootstrap_product(
-                owner.folders,
-                preparation=replace(callbacks, prepare_startup=observed_startup),
+                owner.folders, preparation=replace(callbacks, prepare_startup=observed_startup)
             ),
             startup_timeout=module.PRODUCT_STARTUP_TIMEOUT_S,
             shutdown_timeout=module.PRODUCT_SHUTDOWN_TIMEOUT_S,

@@ -29,20 +29,36 @@ from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.models import Boundary, ProposedCall, ToolSpec
 from guard_app.services.catalog import Catalog
 
+from .test_task_tool_calls import bounded_test
 
-def _view(server: str) -> ToolView:
+
+def _view(server: str, *, field="path", schema=None, tool="read") -> ToolView:
     return ToolView(
-        tool_ref=f"{server}__read",
+        tool_ref=f"{server}__{tool}",
         input_schema=FrozenJsonObject(
             {
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
-                "required": ["path"],
+                "properties": {field: schema or {"type": "string"}},
+                "required": [field],
                 "additionalProperties": False,
             }
         ),
         description="",
     )
+
+
+def _array_view():
+    return _view("alpha", schema={"type": "array", "items": {"type": "integer"}})
+
+
+def recording_client():
+    observed = []
+
+    async def complete(conversation, tools):
+        observed.append(conversation)
+        return {"text": "ok", "calls": []}
+
+    return ProviderNeutralModelClient(complete), observed
 
 
 def _call(name: str = "alpha__read", arguments: object = '{"path":"item"}') -> dict:
@@ -52,10 +68,7 @@ def _call(name: str = "alpha__read", arguments: object = '{"path":"item"}') -> d
 def test_namespaced_calls_and_distinct_servers() -> None:
     response = {
         "text": None,
-        "calls": [
-            _call("alpha__read"),
-            {**_call("beta__read"), "model_call_id": "call-2"},
-        ],
+        "calls": [_call("alpha__read"), {**_call("beta__read"), "model_call_id": "call-2"}],
     }
     turn = parse_model_turn(response, (_view("alpha"), _view("beta")))
     assert tuple(call.tool_ref for call in turn.calls) == ("alpha__read", "beta__read")
@@ -84,70 +97,67 @@ def test_invalid_or_unadvertised_output_is_rejected(subtests):
             parse_model_turn(response, (_view("alpha"),))
 
 
-@pytest.mark.asyncio
+@bounded_test
 async def test_provider_boundary_does_not_execute_tools() -> None:
-    async with asyncio.timeout(30):
-        observed = []
+    observed = []
 
-        async def complete(conversation, tools):
-            observed.append((conversation, tools))
-            return {"text": "ok", "calls": [_call(arguments={"path": "item"})]}
+    async def complete(conversation, tools):
+        observed.append((conversation, tools))
+        return {"text": "ok", "calls": [_call(arguments={"path": "item"})]}
 
-        client = ProviderNeutralModelClient(complete)
+    client = ProviderNeutralModelClient(complete)
 
-        turn = await client.step(
-            (ConversationMessage(role="user", content="read item"),), (_view("alpha"),)
-        )
-        assert turn.text == "ok"
-        assert len(observed) == 1
-        assert observed[0][1][0].tool_ref == "alpha__read"
+    turn = await client.step(
+        (ConversationMessage(role="user", content="read item"),), (_view("alpha"),)
+    )
+    assert turn.text == "ok"
+    assert len(observed) == 1
+    assert observed[0][1][0].tool_ref == "alpha__read"
 
 
 def test_completion_deadline_must_be_finite_and_positive(subtests):
-    def check(timeout_s):
-        async def complete(conversation, tools):
-            return {"text": "ok", "calls": []}
-
-        with pytest.raises(ValueError, match="유효한 모델 응답 제한 시간"):
-            ProviderNeutralModelClient(complete, timeout_s=timeout_s)
+    async def complete(conversation, tools):
+        return {"text": "ok", "calls": []}
 
     for timeout_s in [0, -1, 301, 10**1000, float("nan"), float("inf"), True, "1"]:
-        with subtests.test(timeout_s=timeout_s):
-            check(timeout_s)
-
-
-@pytest.mark.asyncio
-async def test_provider_failures_and_timeout_have_fixed_content_free_errors(subtests):
-    async with asyncio.timeout(30):
-
-        async def check(failure, expected, message):
-            async def complete(conversation, tools):
-                raise failure
-
-            client = ProviderNeutralModelClient(complete)
-            with pytest.raises(expected) as captured:
-                await client.step((ConversationMessage(role="user", content="read"),), ())
-            assert str(captured.value) == message
-            assert "synthetic-private-marker" not in str(captured.value)
-
-        # R07: plain provider errors and provider cancellation retain fixed text.
-        for failure in (
-            OSError,
-            asyncio.CancelledError,
-            ValueError,
-            TypeError,
-            KeyError,
-            RuntimeError,
-            OverflowError,
-            TimeoutError,
+        with (
+            subtests.test(timeout_s=timeout_s),
+            pytest.raises(ValueError, match="유효한 모델 응답 제한 시간"),
         ):
-            with subtests.test(failure=failure.__name__):
-                timeout = failure is TimeoutError
-                await check(
-                    failure("synthetic-private-marker"),
-                    ModelDeadlineError if timeout else ModelCompletionError,
-                    "모델 응답 대기 시간이 초과됐다" if timeout else "모델 요청을 완료할 수 없다",
-                )
+            ProviderNeutralModelClient(complete, timeout_s=timeout_s)
+
+
+@bounded_test
+async def test_provider_failures_and_timeout_have_fixed_content_free_errors(subtests):
+
+    async def check(failure, expected, message):
+        async def complete(conversation, tools):
+            raise failure
+
+        client = ProviderNeutralModelClient(complete)
+        with pytest.raises(expected) as captured:
+            await client.step((ConversationMessage(role="user", content="read"),), ())
+        assert str(captured.value) == message
+        assert "synthetic-private-marker" not in str(captured.value)
+
+    # R07: plain provider errors and provider cancellation retain fixed text.
+    for failure in (
+        OSError,
+        asyncio.CancelledError,
+        ValueError,
+        TypeError,
+        KeyError,
+        RuntimeError,
+        OverflowError,
+        TimeoutError,
+    ):
+        with subtests.test(failure=failure.__name__):
+            timeout = failure is TimeoutError
+            await check(
+                failure("synthetic-private-marker"),
+                ModelDeadlineError if timeout else ModelCompletionError,
+                "모델 응답 대기 시간이 초과됐다" if timeout else "모델 요청을 완료할 수 없다",
+            )
 
 
 def test_regex_format_failure_is_classified_without_content(subtests):
@@ -155,17 +165,11 @@ def test_regex_format_failure_is_classified_without_content(subtests):
     for pattern in ["a{4294967296}", "(" * 600 + ")" * 600, "[z-a]"]:
         with subtests.test(pattern=pattern):
             """R07/I7: a model-chosen regex cannot escape as an unclassified error."""
-            view = ToolView(
-                tool_ref="alpha__search",
-                input_schema=FrozenJsonObject(
-                    {
-                        "type": "object",
-                        "properties": {"pattern": {"type": "string", "format": "regex"}},
-                        "required": ["pattern"],
-                        "additionalProperties": False,
-                    }
-                ),
-                description="",
+            view = _view(
+                "alpha",
+                field="pattern",
+                schema={"type": "string", "format": "regex"},
+                tool="search",
             )
             response = {
                 "text": None,
@@ -176,152 +180,130 @@ def test_regex_format_failure_is_classified_without_content(subtests):
             assert str(captured.value) == "모델 응답 형식이 유효하지 않다"
 
 
-@pytest.mark.asyncio
+@bounded_test
 async def test_completion_deadline_discards_late_result_after_ignored_cancellation() -> None:
-    async with asyncio.timeout(30):
-        release = asyncio.Event()
-        cancelled = asyncio.Event()
-        finished = asyncio.Event()
+    release = asyncio.Event()
+    cancelled = asyncio.Event()
+    finished = asyncio.Event()
 
-        async def complete(conversation, tools):
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                cancelled.set()
-                try:
-                    await release.wait()
-                    return {"text": "late", "calls": [_call()]}
-                finally:
-                    finished.set()
-
-        client = ProviderNeutralModelClient(complete, timeout_s=0.01)
-
-        attempt = asyncio.create_task(
-            client.step((ConversationMessage(role="user", content="read"),), (_view("alpha"),))
-        )
-        done, _ = await asyncio.wait({attempt}, timeout=1)
+    async def complete(conversation, tools):
         try:
-            assert done == {attempt}
-            with pytest.raises(ModelDeadlineError, match="모델 응답 대기 시간이 초과됐다"):
-                await attempt
-            await asyncio.wait_for(cancelled.wait(), timeout=1)
-        finally:
-            release.set()
-        await asyncio.wait_for(finished.wait(), timeout=1)
-        await asyncio.sleep(0)
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            try:
+                await release.wait()
+                return {"text": "late", "calls": [_call()]}
+            finally:
+                finished.set()
+
+    client = ProviderNeutralModelClient(complete, timeout_s=0.01)
+
+    attempt = asyncio.create_task(
+        client.step((ConversationMessage(role="user", content="read"),), (_view("alpha"),))
+    )
+    done, _ = await asyncio.wait({attempt}, timeout=1)
+    try:
+        assert done == {attempt}
+        with pytest.raises(ModelDeadlineError, match="모델 응답 대기 시간이 초과됐다"):
+            await attempt
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+    finally:
+        release.set()
+    await asyncio.wait_for(finished.wait(), timeout=1)
+    await asyncio.sleep(0)
 
 
-@pytest.mark.asyncio
+@bounded_test
 async def test_caller_cancellation_propagates_and_discards_late_completion() -> None:
-    async with asyncio.timeout(30):
-        entered = asyncio.Event()
-        release = asyncio.Event()
-        finished = asyncio.Event()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
 
-        async def complete(conversation, tools):
-            entered.set()
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                try:
-                    await release.wait()
-                    return {"text": "late", "calls": [_call()]}
-                finally:
-                    finished.set()
-
-        client = ProviderNeutralModelClient(complete, timeout_s=1)
-
-        attempt = asyncio.create_task(
-            client.step((ConversationMessage(role="user", content="read"),), (_view("alpha"),))
-        )
-        await entered.wait()
-        attempt.cancel()
+    async def complete(conversation, tools):
+        entered.set()
         try:
-            with pytest.raises(asyncio.CancelledError):
-                await attempt
-        finally:
-            release.set()
-        await asyncio.wait_for(finished.wait(), timeout=1)
-        await asyncio.sleep(0)
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            try:
+                await release.wait()
+                return {"text": "late", "calls": [_call()]}
+            finally:
+                finished.set()
+
+    client = ProviderNeutralModelClient(complete, timeout_s=1)
+
+    attempt = asyncio.create_task(
+        client.step((ConversationMessage(role="user", content="read"),), (_view("alpha"),))
+    )
+    await entered.wait()
+    attempt.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await attempt
+    finally:
+        release.set()
+    await asyncio.wait_for(finished.wait(), timeout=1)
+    await asyncio.sleep(0)
 
 
-@pytest.mark.asyncio
+@bounded_test
 async def test_conversation_utf8_boundary_is_checked_before_provider_egress() -> None:
 
-    async with asyncio.timeout(30):
-        observed = []
-
-        async def complete(conversation, tools):
-            observed.append(conversation)
-            return {"text": "ok", "calls": []}
-
-        client = ProviderNeutralModelClient(complete)
-        empty_message = ConversationMessage(role="user", content="")
-        fixed_size = len(
-            json.dumps(
-                [empty_message.model_dump(mode="json")],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        )
-        padding = MAX_MODEL_CONVERSATION_UTF8_BYTES - fixed_size
-        content = "한" * (padding // 3) + "x" * (padding % 3)
-        accepted = ConversationMessage(role="user", content=content)
-        assert (await client.step((accepted,), ())).text == "ok"
-        with pytest.raises(ModelFormatError, match="모델 응답 형식"):
-            await client.step((ConversationMessage(role="user", content=content + "x"),), ())
-        assert len(observed) == 1
-        assert observed[0][0].content == content
+    client, observed = recording_client()
+    empty_message = ConversationMessage(role="user", content="")
+    fixed_size = len(
+        json.dumps(
+            [empty_message.model_dump(mode="json")], ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+    )
+    padding = MAX_MODEL_CONVERSATION_UTF8_BYTES - fixed_size
+    content = "한" * (padding // 3) + "x" * (padding % 3)
+    accepted = ConversationMessage(role="user", content=content)
+    assert (await client.step((accepted,), ())).text == "ok"
+    with pytest.raises(ModelFormatError, match="모델 응답 형식"):
+        await client.step((ConversationMessage(role="user", content=content + "x"),), ())
+    assert len(observed) == 1
+    assert observed[0][0].content == content
 
 
-@pytest.mark.asyncio
+@bounded_test
 async def test_conversation_message_count_is_checked_before_provider_egress() -> None:
 
-    async with asyncio.timeout(30):
-        observed = []
+    observed = []
 
-        async def complete(conversation, tools):
-            observed.append(len(conversation))
-            return {"text": "ok", "calls": []}
+    async def complete(conversation, tools):
+        observed.append(len(conversation))
+        return {"text": "ok", "calls": []}
 
-        client = ProviderNeutralModelClient(complete)
-        message = ConversationMessage(role="user", content="x")
-        assert (await client.step((message,) * MAX_MODEL_CONVERSATION_MESSAGES, ())).text == "ok"
-        with pytest.raises(ModelFormatError):
-            await client.step((message,) * (MAX_MODEL_CONVERSATION_MESSAGES + 1), ())
-        assert observed == [MAX_MODEL_CONVERSATION_MESSAGES]
+    client = ProviderNeutralModelClient(complete)
+    message = ConversationMessage(role="user", content="x")
+    assert (await client.step((message,) * MAX_MODEL_CONVERSATION_MESSAGES, ())).text == "ok"
+    with pytest.raises(ModelFormatError):
+        await client.step((message,) * (MAX_MODEL_CONVERSATION_MESSAGES + 1), ())
+    assert observed == [MAX_MODEL_CONVERSATION_MESSAGES]
 
 
-@pytest.mark.asyncio
+@bounded_test
 async def test_conversation_budget_includes_prior_call_arguments() -> None:
 
-    async with asyncio.timeout(30):
-        observed = []
-
-        async def complete(conversation, tools):
-            observed.append(conversation)
-            return {"text": "ok", "calls": []}
-
-        client = ProviderNeutralModelClient(complete)
-        call = ProposedCall(
-            tool_ref="alpha__read",
-            arguments=Arguments({"path": "한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3)}),
-            model_call_id="call-1",
-        )
-        message = ConversationMessage(role="assistant", calls=(call,))
-        with pytest.raises(ModelFormatError):
-            await client.step((message,), (_view("alpha"),))
-        assert observed == []
+    client, observed = recording_client()
+    call = ProposedCall(
+        tool_ref="alpha__read",
+        arguments=Arguments({"path": "한" * (MAX_MODEL_CONVERSATION_UTF8_BYTES // 3)}),
+        model_call_id="call-1",
+    )
+    message = ConversationMessage(role="assistant", calls=(call,))
+    with pytest.raises(ModelFormatError):
+        await client.step((message,), (_view("alpha"),))
+    assert observed == []
 
 
 def test_raw_content_is_not_in_format_error() -> None:
     secret = "synthetic-private-marker"
     with pytest.raises(ModelFormatError) as captured:
         parse_model_turn(
-            {
-                "text": None,
-                "calls": [_call(arguments=f'{{"path":"{secret}","path":"x"}}')],
-            },
+            {"text": None, "calls": [_call(arguments=f'{{"path":"{secret}","path":"x"}}')]},
             (_view("alpha"),),
         )
     assert secret not in str(captured.value)
@@ -348,18 +330,7 @@ def test_text_call_argument_and_node_boundaries(subtests):
         )
         assert len(turn.calls[0].arguments["path"]) == MAX_MODEL_ARGUMENT_CHARS - 11
     with subtests.test(boundary="test_raw_argument_node_boundary_remains_accepted"):
-        view = ToolView(
-            tool_ref="alpha__read",
-            input_schema=FrozenJsonObject(
-                {
-                    "type": "object",
-                    "properties": {"path": {"type": "array", "items": {"type": "integer"}}},
-                    "required": ["path"],
-                    "additionalProperties": False,
-                }
-            ),
-            description="",
-        )
+        view = _array_view()
         values = [0] * (MAX_MODEL_ARGUMENT_NODES - 2)
         turn = parse_model_turn(
             {"text": None, "calls": [_call(arguments={"path": values})]}, (view,)
@@ -419,18 +390,7 @@ def test_argument_and_completion_limits_precede_expensive_processing(monkeypatch
 def test_mutating_provider_response_after_budget_check_cannot_change_validated_turn(
     monkeypatch,
 ) -> None:
-    view = ToolView(
-        tool_ref="alpha__read",
-        input_schema=FrozenJsonObject(
-            {
-                "type": "object",
-                "properties": {"path": {"type": "array", "items": {"type": "integer"}}},
-                "required": ["path"],
-                "additionalProperties": False,
-            }
-        ),
-        description="",
-    )
+    view = _array_view()
     values = [1]
     calls = [_call(arguments={"path": values})]
     original_check = model_client_module._check_completion_budget

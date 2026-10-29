@@ -2,17 +2,14 @@
 
 import os
 from datetime import UTC, datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 from PySide6.QtCore import QObject, Qt, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QPlainTextEdit
+from PySide6.QtWidgets import QLabel, QPlainTextEdit
 
 from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus, ToolKind
 from guard_app.services.bridge import ApprovalReview, TaskProjection
@@ -26,6 +23,10 @@ from guard_app.ui.approvals import ApprovalListPage, ApprovalPage, ApprovalSumma
 from guard_app.ui.models import AttentionItem
 from guard_app.ui.overview import AttentionRow
 from guard_app.ui.runtime import RuntimePanel
+
+from .test_approval_detail import start_http_probe
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import closing_widgets
 
 
 class DisplayBridge(QObject):
@@ -47,27 +48,11 @@ class UrlProbe(QObject):
         self.opened.append(url.toString())
 
 
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
-
-
 def test_all_approval_fields_are_literal_and_never_open_links(app, monkeypatch):
     """T18: 모든 승인 표시 위젯의 일반 텍스트·링크 신호/열기/loopback 요청 0."""
     requests = []
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            requests.append(self.path)
-            self.send_response(204)
-            self.end_headers()
-
-        def log_message(self, _format, *args):
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
-    thread.start()
+    server, thread = start_http_probe(requests)
     probe = UrlProbe()
     schemes = ("http", "https", "file", "javascript")
     widgets = []
@@ -254,7 +239,7 @@ def test_approval_status_and_times_use_typed_fixed_presentation(app):
 
     for status in list(ApprovalStatus):
         page = ApprovalListPage()
-        try:
+        with closing_widgets(page):
             if status is ApprovalStatus.PENDING:
                 page.refresh()
             else:
@@ -274,5 +259,3 @@ def test_approval_status_and_times_use_typed_fixed_presentation(app):
                 )
                 assert page.table.rowCount() == 0
                 assert page.selection_detail.toPlainText() == ""
-        finally:
-            page.close()

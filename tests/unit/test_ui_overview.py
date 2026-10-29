@@ -7,10 +7,9 @@ from datetime import UTC, datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea
+from PySide6.QtWidgets import QLabel, QPushButton, QScrollArea
 
 from guard_app.domain.enums import TaskStatus
 from guard_app.ui import (
@@ -29,11 +28,8 @@ from guard_app.ui import (
 from guard_app.ui.presentation import format_kst
 from guard_app.ui.widgets import PlainDetailDialog
 
-
-@pytest.fixture(scope="module")
-def app():
-    instance = QApplication.instance()
-    return instance if instance is not None else QApplication([])
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import closing_widgets, resize_widget, show_widget
 
 
 def test_missing_counts_and_failed_query_never_look_like_zero(app) -> None:
@@ -62,9 +58,7 @@ def test_overview_puts_attention_first_and_previews_five_servers_at_any_width(ap
                 LoadState.READY,
                 tuple(
                     ServerSummary(
-                        f"server-{index:02d}",
-                        f"Server {index}",
-                        session_status="connected",
+                        f"server-{index:02d}", f"Server {index}", session_status="connected"
                     )
                     for index in range(12)
                 ),
@@ -74,7 +68,7 @@ def test_overview_puts_attention_first_and_previews_five_servers_at_any_width(ap
     )
     window.show()
     app.processEvents()
-    try:
+    with closing_widgets(window):
         page = window.overview
         layout = page.layout()
         # Counts, then what needs a person, then servers, calls and the flow.
@@ -88,25 +82,19 @@ def test_overview_puts_attention_first_and_previews_five_servers_at_any_width(ap
         assert all(row.isVisibleTo(page) for row in page.metric_rows)
         assert page.attention_state.isVisibleTo(page)
         for width, height in ((320, 400), (540, 580), (900, 700), (1100, 750)):
-            window.resize(width, height)
-            app.processEvents()
+            resize_widget(app, window, width, height)
             # Rows, not a card grid: the preview no longer depends on the width.
             assert len(page._server_rows) == 5
             assert "12개 중 5개" in page.server_preview_note.text()
             assert page.server_preview_note.isVisibleTo(page)
             assert page.all_servers_button.isVisibleTo(page)
             assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
-        window.resize(320, 400)
-        app.processEvents()
+        resize_widget(app, window, 320, 400)
         page.all_servers_button.click()
         assert window._page == "servers"
-    finally:
-        window.close()
 
 
-def test_small_overview_shows_attention_before_servers_and_prioritizes_related_server(
-    app,
-) -> None:
+def test_small_overview_shows_attention_before_servers_and_prioritizes_related_server(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
     window.resize(320, 360)
@@ -127,7 +115,7 @@ def test_small_overview_shows_attention_before_servers_and_prioritizes_related_s
     )
     window.show()
     app.processEvents()
-    try:
+    with closing_widgets(window):
         scroll = window.stack.currentWidget()
         assert isinstance(scroll, QScrollArea)
         page = window.overview
@@ -136,8 +124,6 @@ def test_small_overview_shows_attention_before_servers_and_prioritizes_related_s
         assert scroll.horizontalScrollBar().maximum() == 0
         first_row = page.attention_layout.itemAt(0).widget()
         assert first_row.mapTo(page, QPoint(0, 0)).y() < page.servers_section.y()
-    finally:
-        window.close()
 
 
 def test_server_row_keeps_keyboard_focus_when_the_window_narrows(app) -> None:
@@ -158,23 +144,18 @@ def test_server_row_keeps_keyboard_focus_when_the_window_narrows(app) -> None:
     window.show()
     window.activateWindow()
     app.processEvents()
-    try:
+    with closing_widgets(window):
         before = window.overview._server_rows[0]
         before.link.setFocus()
         assert before.link.hasFocus()
-        window.resize(320, 400)
-        app.processEvents()
+        resize_widget(app, window, 320, 400)
         after = window.overview._server_rows[0]
         assert after is before
         assert after.link.hasFocus()
         assert window.stack.currentWidget().horizontalScrollBar().maximum() == 0
-    finally:
-        window.close()
 
 
-def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(
-    app,
-) -> None:
+def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
     window.resize(320, 400)
@@ -190,13 +171,12 @@ def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(
     )
     calls = tuple(RecentCall(f"call-{index}", "server", "tool") for index in range(11))
     snapshot = OverviewSnapshot(
-        attention=Surface(LoadState.READY, attention),
-        recent_calls=Surface(LoadState.READY, calls),
+        attention=Surface(LoadState.READY, attention), recent_calls=Surface(LoadState.READY, calls)
     )
     window.set_overview_snapshot(snapshot)
     window.show()
     app.processEvents()
-    try:
+    with closing_widgets(window):
         page = window.overview
         assert page.attention_layout.count() == 5
         assert page.calls_layout.count() == 5
@@ -235,8 +215,6 @@ def test_overview_pages_large_results_and_preserves_card_focus_on_refresh(
         assert refreshed is not card
         assert refreshed.link.hasFocus()
         assert page.attention_layout.count() == 5
-    finally:
-        window.close()
 
 
 def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
@@ -244,19 +222,14 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
     window.navigate("overview")
     window.resize(320, 400)
     old_items = tuple(
-        AttentionItem(
-            f"old-{index}",
-            "approval",
-            target_page="approvals",
-            action_available=True,
-        )
+        AttentionItem(f"old-{index}", "approval", target_page="approvals", action_available=True)
         for index in range(12)
     )
     window.set_overview_snapshot(OverviewSnapshot(attention=Surface(LoadState.READY, old_items)))
     window.show()
     window.activateWindow()
     app.processEvents()
-    try:
+    with closing_widgets(window):
         page = window.overview
         page.attention_next.click()
         page.attention_next.click()
@@ -279,8 +252,6 @@ def test_new_attention_is_not_hidden_on_an_old_preview_page(app) -> None:
         first = page.attention_layout.itemAt(0).widget()
         assert any("MCP urgent-server" in label.text() for label in first.findChildren(QLabel))
         assert first.link.isEnabled() is False
-    finally:
-        window.close()
 
 
 def test_runtime_mode_is_unconfigured_until_trusted_bootstrap_sets_it(app) -> None:
@@ -328,8 +299,7 @@ def test_connected_server_is_not_inferred_from_active_registration(app) -> None:
         OverviewSnapshot(
             totals=Surface(state=LoadState.READY, value=OverviewTotals(active_servers=1)),
             servers=Surface(
-                state=LoadState.READY,
-                value=(active_but_disconnected, connected_pending),
+                state=LoadState.READY, value=(active_but_disconnected, connected_pending)
             ),
         )
     )
@@ -387,9 +357,7 @@ def test_navigation_only_emits_a_read_only_target(app) -> None:
 def test_sidebar_navigation_accepts_return_key(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
-    window.resize(1100, 700)
-    window.show()
-    app.processEvents()
+    show_widget(app, window, 1100, 700)
     assert window.sidebar.isVisible()
     button = window._nav_buttons["servers"]
     button.setFocus()
@@ -402,13 +370,7 @@ def test_registry_list_uses_its_own_public_snapshot_and_filters(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
     public = ServerSummary(
-        "public-docs",
-        "공개 문서",
-        "PUBLIC",
-        "general_external",
-        "active",
-        "connected",
-        "stdio",
+        "public-docs", "공개 문서", "PUBLIC", "general_external", "active", "connected", "stdio"
     )
     pending = ServerSummary(
         "pending-send",
@@ -446,13 +408,7 @@ def test_registry_detail_is_plain_text_and_stale_data_is_labeled(app) -> None:
     window = GuardWindow()
     window.navigate("overview")
     server = ServerSummary(
-        "safe-id",
-        '<img src="https://example.invalid/secret">',
-        None,
-        None,
-        "active",
-        None,
-        "stdio",
+        "safe-id", '<img src="https://example.invalid/secret">', None, None, "active", None, "stdio"
     )
     window.set_server_snapshot(Surface(LoadState.STALE, (server,)))
     assert window.server_page.state_message.isVisibleTo(window.server_page)

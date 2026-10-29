@@ -14,9 +14,7 @@ from .product_folders import product_folders
 
 @pytest.mark.asyncio
 async def test_bindings_precede_single_watch_and_close_cancels_it(tmp_path, monkeypatch):
-    events = []
-    timers = []
-    runtimes = []
+    events, timers, runtimes = [], [], []
     activate = product_startup.SQLiteStore.activate_run
     bindings = SessionRuntime.bindings
     call_later = asyncio.get_running_loop().call_later

@@ -1,19 +1,7 @@
-"""A101: SessionPreparation over C2.12 launcher, C2.13 folders and C6.13 CODEX_HOME.
-
-Like C's launcher tests, this Python's python.exe stands in for codex.exe with a
-pinned copy of `codex.lock.json`. Real folders, DACLs, the app lock and a real
-child process run; L2 (C6.14) is stubbed to fail, so sessions stay refused (I11,
-T22/T43 A part). The real codex.exe is C's evidence, not exercised here.
-
-A102: the product claims the single-instance lock before its DB opens and does
-not start without it (REC-01, C2.13 part).
-
-A106: that DB is fixed in the app folder (C2.17), and the demo, which takes no
-lock, cannot open it or anything else in that folder.
-
-A52 (#21): the login screen's app-server goes through the same launcher in a
-folder of its own, and logout cleanup calls C's `clear_codex_credentials` on the
-app's CODEX_HOME. The real keyring deletion is C's test.
+"""A101: real Python child, pinned config, DACLs/lock; fake L2 (C6.14) refuses (I11, T22/T43).
+C2.12/C2.13/C6.13: real codex.exe remains C's evidence.
+A102/REC-01: claim before DB; A106/C2.17: fixed DB, demo outside app folder.
+A52 (#21): account launcher/cleanup use app CODEX_HOME; real keyring deletion is C's test.
 """
 
 from __future__ import annotations
@@ -32,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from .product_folders import product_folders
+from .test_task_tool_calls import bounded_test
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -39,22 +28,14 @@ from PySide6.QtWidgets import QApplication
 
 import guard_app.__main__ as entry
 from guard_app.security import paths
-from guard_app.security.codex_home import (
-    CODEX_CONFIG_DIR,
-    HOME_FILES,
-    LOCK_FILE,
-    CodexConfigError,
-)
+from guard_app.security.codex_home import CODEX_CONFIG_DIR, HOME_FILES, LOCK_FILE, CodexConfigError
 from guard_app.security.launcher import LaunchError
 from guard_app.security.paths import AppPathError, prepare_app_folders
 from guard_app.services import codex_preparation, session_runtime
 from guard_app.services.account_runtime import AccountAccess, AccountUnavailableError
 from guard_app.services.bridge import SessionOptions
 from guard_app.services.codex_account import AccountError
-from guard_app.services.codex_preparation import (
-    CodexPreparationError,
-    CodexProcessPreparation,
-)
+from guard_app.services.codex_preparation import CodexPreparationError, CodexProcessPreparation
 from guard_app.services.codex_session import CodexPipes
 from guard_app.services.session_preparation import valid_configuration
 from guard_app.services.session_runtime import SessionRuntimeError, bootstrap_product
@@ -168,39 +149,38 @@ def test_the_claim_comes_first_and_holds_the_lock_until_close(tmp_path, pin) -> 
     prepare_app_folders(root).close()
 
 
-@pytest.mark.asyncio
+@bounded_test
 async def test_task_folder_lifecycle_and_off_loop_cleanup(tmp_path, pin, monkeypatch):
     """A103: only confirmed exit permits cleanup; deletion runs off the loop."""
-    async with asyncio.timeout(30):
-        owner = preparation(tmp_path, pin)
-        steps = owner.preparation()
-        folder = tmp_path / "app" / "tasks" / TASK_ID
-        removed_on = []
-        remove = paths.AppFolders.remove_task_folder
+    owner = preparation(tmp_path, pin)
+    steps = owner.preparation()
+    folder = tmp_path / "app" / "tasks" / TASK_ID
+    removed_on = []
+    remove = paths.AppFolders.remove_task_folder
 
-        def recording_remove(self, task_dir):
-            removed_on.append(threading.get_ident())
-            remove(self, task_dir)
+    def recording_remove(self, task_dir):
+        removed_on.append(threading.get_ident())
+        remove(self, task_dir)
 
-        monkeypatch.setattr(paths.AppFolders, "remove_task_folder", recording_remove)
-        with closing(owner):
-            receipt = await steps.prepare_startup()
-            assert receipt.configuration == await steps.verify_configuration(receipt.configuration)
-            resources = await steps.prepare_task(TASK_ID, receipt.configuration)
-            assert resources.configuration == receipt.configuration
-            assert isinstance(resources.handle, CodexPipes)
-            assert folder.is_dir()
-            with pytest.raises(CodexPreparationError, match="^CODEX_EXIT_UNCONFIRMED$"):
-                await steps.cleanup_task(resources)
-            assert folder.is_dir()
-            assert await steps.confirm_exit(resources) is True
+    monkeypatch.setattr(paths.AppFolders, "remove_task_folder", recording_remove)
+    with closing(owner):
+        receipt = await steps.prepare_startup()
+        assert receipt.configuration == await steps.verify_configuration(receipt.configuration)
+        resources = await steps.prepare_task(TASK_ID, receipt.configuration)
+        assert resources.configuration == receipt.configuration
+        assert isinstance(resources.handle, CodexPipes)
+        assert folder.is_dir()
+        with pytest.raises(CodexPreparationError, match="^CODEX_EXIT_UNCONFIRMED$"):
             await steps.cleanup_task(resources)
-            assert not folder.exists()
-            with pytest.raises(CodexPreparationError, match="^CODEX_TASK_UNKNOWN$"):
-                await steps.cleanup_task(resources)
-        assert len(removed_on) == 1
-        assert removed_on[0] != threading.get_ident()
+        assert folder.is_dir()
+        assert await steps.confirm_exit(resources) is True
+        await steps.cleanup_task(resources)
         assert not folder.exists()
+        with pytest.raises(CodexPreparationError, match="^CODEX_TASK_UNKNOWN$"):
+            await steps.cleanup_task(resources)
+    assert len(removed_on) == 1
+    assert removed_on[0] != threading.get_ident()
+    assert not folder.exists()
 
 
 def test_a_refused_launch_removes_its_task_folder(tmp_path, pin) -> None:
@@ -330,8 +310,7 @@ def test_verification_refuses_a_codex_home_changed_after_startup(tmp_path, pin) 
 
 def test_product_start_shows_why_sessions_are_refused(tmp_path, pin, subtests):
     def check(tmp_path, pin, pinned_size, blocker):
-        """With the local codex linked, only the missing L2 refuses sessions; a
-        wrong executable is a preparation failure instead. The app starts either way."""
+        """L2 or executable failure blocks sessions while the app still starts."""
         owner = preparation(tmp_path, (pinned_size or pin[0], pin[1]))
 
         async def run():
@@ -394,9 +373,7 @@ def test_main_keeps_the_lock_until_the_process_ends_when_cleanup_is_unconfirmed(
     monkeypatch, capsys, tmp_path, subtests
 ):
     def check(monkeypatch, capsys, tmp_path, confirmed):
-        """A110 (B6.17 8.1, #37): with cleanup unconfirmed the process ends at once
-        while it still holds the lock, so a second instance cannot open the same DB
-        meanwhile. With cleanup confirmed main releases the lock and returns."""
+        """A110/B6.17 8.1 (#37): unconfirmed cleanup exits holding the lock."""
         root = tmp_path / "app"
         claimed: list[CodexProcessPreparation] = []
         claim = CodexProcessPreparation.claim
@@ -441,9 +418,7 @@ def test_main_keeps_the_lock_until_the_process_ends_when_cleanup_is_unconfirmed(
 def test_main_holds_the_lock_before_the_db_opens_and_releases_it_after(
     monkeypatch, tmp_path
 ) -> None:
-    """A102: the lock is held when the backend is built, before its bootstrap
-    opens the DB, and main releases it on the way out. A106: that bootstrap
-    opens the product DB fixed in the claimed app folder (C2.17)."""
+    """A102/A106/C2.17: lock spans bootstrap and its fixed product DB."""
     root = tmp_path / "app"
     db = root / "data" / "guard.sqlite3"
     seen: list[bool] = []
@@ -500,8 +475,7 @@ def test_db_file_is_the_product_db_in_the_claimed_folder(tmp_path, pin) -> None:
 
 
 def test_db_file_refuses_a_db_with_a_second_hard_link(tmp_path, pin) -> None:
-    """A106: the path comes from C's `db_path()` (C2.19), so a DB file that is
-    also reachable from elsewhere is refused instead of opened."""
+    """A106/C2.19: db_path() refuses a second hard link."""
     owner = preparation(tmp_path, pin)
     with closing(owner):
         db = tmp_path / "app" / "data" / "guard.sqlite3"
@@ -512,8 +486,7 @@ def test_db_file_refuses_a_db_with_a_second_hard_link(tmp_path, pin) -> None:
 
 
 def test_main_does_not_start_when_the_db_file_is_refused(monkeypatch, capsys, tmp_path) -> None:
-    """A106: a refused product DB stops the start before the backend or the
-    window, with fixed text and no path, and the lock is released."""
+    """A106: refused DB prevents startup, hides paths and releases the lock."""
     root = tmp_path / "app"
     prepared = prepare_app_folders(root)
     db = prepared.paths.db_file
@@ -538,9 +511,7 @@ def _junction(target: Path, link: Path) -> None:
 
 def test_demo_refuses_a_db_in_the_product_app_folder(monkeypatch, capsys, tmp_path, subtests):
     def check(monkeypatch, capsys, tmp_path, kind):
-        """A106 (C2.17, REC-01): the demo does not take the app lock, so it must not
-        open the product DB, by any name, or anything else in the app folder (I9:
-        no path in the message)."""
+        """A106/C2.17/REC-01/I9: demo refuses app-folder aliases without exposing paths."""
         root = tmp_path / "app"
         prepare_app_folders(root).close()
         product = root / "data" / "guard.sqlite3"
@@ -560,16 +531,7 @@ def test_demo_refuses_a_db_in_the_product_app_folder(monkeypatch, capsys, tmp_pa
         monkeypatch.setattr(paths, "app_root", lambda: root)
         monkeypatch.setattr("guard_app.services.bridge.BackendBridge", no_bridge)
         monkeypatch.setattr(
-            sys,
-            "argv",
-            [
-                "guard-app",
-                "--demo",
-                "--store",
-                "sqlite",
-                "--db-path",
-                str(target),
-            ],
+            sys, "argv", ["guard-app", "--demo", "--store", "sqlite", "--db-path", str(target)]
         )
         with pytest.raises(SystemExit) as caught:
             entry.main()

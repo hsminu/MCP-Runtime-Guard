@@ -10,17 +10,12 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
-from PySide6.QtWidgets import QApplication
 
 from guard_app.services.bridge import PolicyServer, PolicyTool, PolicyView
 from guard_app.ui.policy import NO_PROFILE, SAVE_UNAVAILABLE, STOP_WARNING, PolicyPage
 from guard_app.ui.window import GuardWindow
 
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
+from .test_ui_icons_style import app as app
 
 
 def view(*, change: bool = False) -> PolicyView:

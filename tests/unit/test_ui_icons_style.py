@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+from contextlib import contextmanager
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -12,6 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QIcon
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
 from guard_app.ui import icons, style
@@ -27,6 +29,32 @@ _UI_SOURCES = sorted(
 def app() -> QApplication:
     instance = QApplication.instance()
     return instance if isinstance(instance, QApplication) else QApplication([])
+
+
+@contextmanager
+def closing_widgets(*widgets):
+    """Close in the supplied order, including when an assertion fails."""
+    try:
+        yield
+    finally:
+        for widget in widgets:
+            widget.close()
+
+
+def show_widget(app, widget, width, height):
+    widget.resize(width, height)
+    widget.show()
+    app.processEvents()
+
+
+def resize_widget(app, widget, width, height):
+    widget.resize(width, height)
+    app.processEvents()
+
+
+def assert_key_focus(page, source, key, expected):
+    QTest.keyClick(source, key)
+    assert page.focusWidget() is expected
 
 
 def test_every_fixed_icon_renders_normal_and_disabled_pixmaps(app):

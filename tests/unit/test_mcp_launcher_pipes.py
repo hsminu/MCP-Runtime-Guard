@@ -24,6 +24,7 @@ from guard_app.security.paths import prepare_app_folders
 from guard_app.services.product_assembly import assemble_guard
 from guard_app.storage.sqlite_store import SQLiteStore
 
+from .test_a138_product_startup import read_product, tracked_launcher
 from .test_product_assembly import READ_DEFINITION, Peer, document, inputs
 from .test_product_settings import registered
 
@@ -257,12 +258,10 @@ def test_unconfirmed_startup_cleanup_is_not_a_server_local_refusal(tmp_path, mon
         transport = McpTransport(
             {"bad": factory}, tool_list_limits=ToolListLimits(), isolate_start_failures=True
         )
-        with pytest.raises(DispatchError) as failed_start:
-            await transport.start()
-        assert failed_start.value.exception_type == "SessionCloseFailed"
-        with pytest.raises(DispatchError) as failed_close:
-            await transport.close()
-        assert failed_close.value.exception_type == "SessionCloseFailed"
+        for operation in (transport.start, transport.close):
+            with pytest.raises(DispatchError) as failed:
+                await operation()
+            assert failed.value.exception_type == "SessionCloseFailed"
 
     asyncio.run(asyncio.wait_for(run(), 5))
 
@@ -272,13 +271,9 @@ async def test_product_rejects_folders_and_injected_streams(tmp_path):
     """I1/I6: reject ambiguous inputs before any server connection."""
     from guard_app.services.product_assembly import ProductAssemblyError
 
-    from .test_product_assembly import Registry, spec
-
     folders = prepare_app_folders(tmp_path / "app")
     peer = Peer([READ_DEFINITION])
-    product = replace(
-        inputs(peer, Registry(spec(READ_DEFINITION).fingerprint), document()), folders=folders
-    )
+    product = replace(read_product(peer), folders=folders)
     try:
         with pytest.raises(ProductAssemblyError, match="PRODUCT_INPUTS_INVALID"):
             await assemble_guard(None, product)
@@ -304,20 +299,7 @@ def test_main_settings_start_uses_launcher_folders(tmp_path, monkeypatch):
     )
     folders.close()
     peer = Peer([READ_DEFINITION])
-    launched, closed = [], []
-
-    class Process:
-        read_bytes = peer.read
-        write_bytes = peer.write
-        drain = peer.drain
-
-        async def close(self):
-            closed.append(True)
-            return True
-
-    async def launch(*args):
-        launched.append(args)
-        return Process()
+    launched, closed = tracked_launcher(monkeypatch, peer)
 
     class FinishedError(Exception):
         pass
@@ -334,14 +316,13 @@ def test_main_settings_start_uses_launcher_folders(tmp_path, monkeypatch):
                     assert peer.calls == []
                 finally:
                     await bindings.close()
-                assert closed == [True]
+                assert closed == [{}]
 
         asyncio.run(run())
         raise FinishedError
 
     monkeypatch.setattr(paths, "app_root", lambda: root)
     monkeypatch.setattr(CodexProcessPreparation, "preparation", lambda self: None)
-    monkeypatch.setattr(launcher_streams, "launch_mcp_server", launch)
     monkeypatch.setattr("guard_app.services.bridge.BackendBridge", bridge)
     monkeypatch.setattr(sys, "argv", ["guard-app"])
     app = QApplication.instance() or QApplication([])

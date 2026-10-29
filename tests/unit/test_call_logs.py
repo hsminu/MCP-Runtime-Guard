@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
-import os
 import unicodedata
 from datetime import UTC, datetime, timedelta, timezone
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
@@ -26,11 +23,28 @@ from guard_app.ui.call_logs import (
 )
 from guard_app.ui.models import LoadState, Surface
 
+from .test_bridge import app as app
 
-@pytest.fixture(scope="module")
-def app():
-    instance = QApplication.instance()
-    return instance if instance is not None else QApplication([])
+
+def hidden_columns(page):
+    return [page.table.isColumnHidden(column) for column in range(7)]
+
+
+def ready_calls(page, *rows):
+    page.set_calls(Surface(LoadState.READY, rows))
+
+
+def detail_page(row):
+    page = CallLogPage()
+    ready_calls(page, row)
+    page.select_call(row.call_id)
+    requests = []
+    page.detail_requested.connect(requests.append)
+    return page, requests
+
+
+def show_detail(page, request, row, *stages):
+    page.set_detail(request, Surface(LoadState.READY, PublicCallDetail(row, stages or None)))
 
 
 def test_list_distinguishes_unavailable_loading_error_and_empty(app) -> None:
@@ -66,7 +80,7 @@ def test_row_click_opens_large_plain_detail_and_ignores_late_response(app) -> No
         current_status="UNKNOWN_OUTCOME",
         occurred_at=datetime(2026, 10, 11, 16, 30, tzinfo=UTC),
     )
-    page.set_calls(Surface(LoadState.READY, (row,)))
+    ready_calls(page, row)
     requested: list[DetailRequest] = []
     page.detail_requested.connect(requested.append)
     item = page.table.item(0, 1)
@@ -83,24 +97,15 @@ def test_row_click_opens_large_plain_detail_and_ignores_late_response(app) -> No
     assert dialog.width() <= dialog.screen().availableGeometry().width()
     assert dialog.width() >= 320
     assert "불러오는 중" in dialog.body.toPlainText()
-    page.set_detail(
-        DetailRequest("different-call", requested[0].token),
-        Surface(LoadState.READY, PublicCallDetail(row)),
-    )
+    show_detail(page, DetailRequest("different-call", requested[0].token), row)
     assert "불러오는 중" in dialog.body.toPlainText()
-    page.set_detail(
+    show_detail(
+        page,
         requested[0],
-        Surface(
-            LoadState.READY,
-            PublicCallDetail(
-                row,
-                (
-                    PublicCallStage("DECIDED", "OCCURRED", row.occurred_at),
-                    PublicCallStage("DISPATCHING", "OCCURRED"),
-                    PublicCallStage("RELEASED", "NOT_RUN"),
-                ),
-            ),
-        ),
+        row,
+        PublicCallStage("DECIDED", "OCCURRED", row.occurred_at),
+        PublicCallStage("DISPATCHING", "OCCURRED"),
+        PublicCallStage("RELEASED", "NOT_RUN"),
     )
     shown = dialog.body.toPlainText()
     assert '<img src="https://example.invalid/leak">' in shown
@@ -116,12 +121,8 @@ def test_row_click_opens_large_plain_detail_and_ignores_late_response(app) -> No
 
 
 def test_reopened_same_call_ignores_previous_dialog_response(app) -> None:
-    page = CallLogPage()
     row = PublicCallSummary("same-call")
-    page.set_calls(Surface(LoadState.READY, (row,)))
-    requests: list[DetailRequest] = []
-    page.detail_requested.connect(requests.append)
-    page.select_call("same-call")
+    page, requests = detail_page(row)
     page.detail_button.click()
     first = requests[-1]
     assert page._detail_dialog is not None
@@ -132,20 +133,16 @@ def test_reopened_same_call_ignores_previous_dialog_response(app) -> None:
     assert first.token != second.token
     dialog = page._detail_dialog
     assert dialog is not None
-    page.set_detail(first, Surface(LoadState.READY, PublicCallDetail(row)))
+    show_detail(page, first, row)
     assert "불러오는 중" in dialog.body.toPlainText()
-    page.set_detail(second, Surface(LoadState.READY, PublicCallDetail(row)))
+    show_detail(page, second, row)
     assert "호출 ID: same-call" in dialog.body.toPlainText()
     dialog.close()
 
 
 def test_repeated_call_details_release_dialogs_and_keep_tokens(app) -> None:
-    page = CallLogPage()
     row = PublicCallSummary("repeat")
-    page.set_calls(Surface(LoadState.READY, (row,)))
-    page.select_call("repeat")
-    requests: list[DetailRequest] = []
-    page.detail_requested.connect(requests.append)
+    page, requests = detail_page(row)
     for _ in range(100):
         page.detail_button.click()
         dialog = page._detail_dialog
@@ -158,7 +155,7 @@ def test_repeated_call_details_release_dialogs_and_keep_tokens(app) -> None:
     page.detail_button.click()
     current = page._detail_dialog
     assert current is not None
-    page.set_detail(requests[0], Surface(LoadState.READY, PublicCallDetail(row)))
+    show_detail(page, requests[0], row)
     assert "불러오는 중" in current.body.toPlainText()
     current.close()
     page.close()
@@ -174,14 +171,14 @@ def test_public_detail_shows_control_characters_without_forged_status_lines(app)
         approval_status="PENDING",
         current_status="UNKNOWN_OUTCOME",
     )
-    page.set_calls(Surface(LoadState.READY, (row,)))
+    ready_calls(page, row)
     page.select_call(row.call_id)
     requests: list[DetailRequest] = []
     page.detail_requested.connect(requests.append)
     page.detail_button.click()
     dialog = page._detail_dialog
     assert dialog is not None
-    page.set_detail(requests[-1], Surface(LoadState.READY, PublicCallDetail(row)))
+    show_detail(page, requests[-1], row)
     shown = dialog.body.toPlainText()
     assert "[U+000A]" in shown
     assert "[U+000D]" in shown
@@ -225,7 +222,7 @@ def test_table_cells_stay_escaped_after_filter_and_every_resize(app) -> None:
     )
     other = PublicCallSummary("call-2", server_id="plain", tool_name="lookup")
     page = CallLogPage()
-    page.set_calls(Surface(LoadState.READY, (row, other)))
+    ready_calls(page, row, other)
     page.show()
 
     def check(mode: str) -> None:
@@ -292,14 +289,10 @@ def test_csv_uses_only_public_fields_and_neutralizes_formula_prefixes(app) -> No
 
 def test_csv_button_copies_only_visible_query_rows(app) -> None:
     page = CallLogPage()
-    page.set_calls(
-        Surface(
-            LoadState.READY,
-            (
-                PublicCallSummary("one", tool_name="alpha"),
-                PublicCallSummary("two", tool_name="beta"),
-            ),
-        )
+    ready_calls(
+        page,
+        PublicCallSummary("one", tool_name="alpha"),
+        PublicCallSummary("two", tool_name="beta"),
     )
     page.search.setText("beta")
     page.csv_button.click()
@@ -331,15 +324,7 @@ def test_narrow_medium_and_full_viewports_keep_important_columns(app) -> None:
     page.show()
     app.processEvents()
     assert page.width() == 320
-    assert [page.table.isColumnHidden(column) for column in range(7)] == [
-        False,
-        True,
-        False,
-        True,
-        True,
-        True,
-        False,
-    ]
+    assert hidden_columns(page) == [False, True, False, True, True, True, False]
     assert page.table.horizontalScrollBar().maximum() == 0
     assert page.table.item(0, 0).text() == "2026-10-12\n01:30:00\nKST"
     assert page.table.item(0, 2).text() == "call-id-with-a-long-suffix"
@@ -349,15 +334,7 @@ def test_narrow_medium_and_full_viewports_keep_important_columns(app) -> None:
         assert control.geometry().right() < page.width()
     page.resize(540, 580)
     app.processEvents()
-    assert [page.table.isColumnHidden(column) for column in range(7)] == [
-        False,
-        False,
-        False,
-        True,
-        True,
-        True,
-        False,
-    ]
+    assert hidden_columns(page) == [False, False, False, True, True, True, False]
     assert page.table.item(0, 0).text() == "2026-10-12\n01:30:00\nKST"
     assert "server-a" in page.table.item(0, 1).text()
     assert page.table.horizontalScrollBar().maximum() == 0
@@ -388,7 +365,7 @@ def test_narrow_keyboard_selection_detail_and_csv_remain_reachable(app) -> None:
     app.processEvents()
     try:
         row = PublicCallSummary("call-1", server_id="server-a")
-        page.set_calls(Surface(LoadState.READY, (row,)))
+        ready_calls(page, row)
         requests: list[DetailRequest] = []
         page.detail_requested.connect(requests.append)
         page.table.setFocus()

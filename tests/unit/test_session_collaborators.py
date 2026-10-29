@@ -1,7 +1,4 @@
-"""A112: the session runtime's collaborators on their own (I9, 10.4, STOP-01, B3.12).
-
-The runtime tests cover how they are composed; these pin each one's rule.
-"""
+"""A112: individual runtime collaborators (I9, 10.4, STOP-01, B3.12)."""
 
 from __future__ import annotations
 
@@ -119,42 +116,42 @@ def test_cleanup_refuses_a_shared_session_but_still_closes_an_incomplete_one():
     assert cleanup.pending == {"task-1", "task-3"}  # the factory's object is still cleaned up
 
 
-def test_background_work_consumes_failures_without_raising_them():
-    async def run():
-        reported = []
-        asyncio.get_running_loop().set_exception_handler(lambda _loop, context: reported.append(1))
-        work = BackgroundWork()
+@pytest.mark.asyncio
+async def test_background_work_consumes_failures_without_raising_them():
 
-        async def fail():
-            raise SystemControlError("private-detail")
+    reported = []
+    asyncio.get_running_loop().set_exception_handler(lambda _loop, context: reported.append(1))
+    work = BackgroundWork()
 
-        await asyncio.wait({work.start(fail())})
-        gc.collect()
-        return reported
+    async def fail():
+        raise SystemControlError("private-detail")
 
-    assert asyncio.run(run()) == []
+    await asyncio.wait({work.start(fail())})
+    gc.collect()
+    scenario_result = reported
+    assert scenario_result == []
 
 
-def test_background_work_wait_covers_work_started_meanwhile_and_is_bounded():
-    async def run():
-        work = BackgroundWork()
-        release, finished = asyncio.Event(), []
+@pytest.mark.asyncio
+async def test_background_work_wait_covers_work_started_meanwhile_and_is_bounded():
 
-        async def second():
-            finished.append("second")
+    work = BackgroundWork()
+    release, finished = asyncio.Event(), []
 
-        async def first():
-            await release.wait()
-            work.start(second())  # e.g. a session stop starting Guard's record
-            finished.append("first")
+    async def second():
+        finished.append("second")
 
-        work.start(first())
-        timed_out = await work.wait(0.01)
-        release.set()
-        ended = await work.wait(1)
-        return timed_out, ended, finished, await BackgroundWork().wait(0)
+    async def first():
+        await release.wait()
+        work.start(second())  # e.g. a session stop starting Guard's record
+        finished.append("first")
 
-    assert asyncio.run(run()) == (False, True, ["first", "second"], True)
+    work.start(first())
+    timed_out = await work.wait(0.01)
+    release.set()
+    ended = await work.wait(1)
+    scenario_result = timed_out, ended, finished, await BackgroundWork().wait(0)
+    assert scenario_result == (False, True, ["first", "second"], True)
 
 
 class _RowStore:
@@ -173,45 +170,40 @@ class _RowStore:
         return self.state
 
 
-def test_stop_channel_without_guard_halts_only_a_live_row(subtests):
-    def check(status, writes):
-        async def run():
-            store = _RowStore(status)
-            channel = StopChannel(store, None, SessionAdmission(), BackgroundWork())
-            settled = []
-            await channel.stop(
-                TaskIdentity(task_id="task-1", epoch=1), "CODEX_L3_VIOLATION", settled
-            )
-            return store.writes, settled
+@pytest.mark.parametrize(
+    ("status", "writes"),
+    [
+        (TaskStatus.RUNNING, [TaskStatus.HALTED]),
+        (TaskStatus.HALTED, []),
+        (TaskStatus.UNKNOWN_OUTCOME, []),
+        (TaskStatus.CLOSED, []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_stop_channel_without_guard_halts_only_a_live_row(status, writes):
 
-        assert asyncio.run(run()) == (writes, [])
-
-    for case_index, (status, writes) in enumerate(
-        [
-            (TaskStatus.RUNNING, [TaskStatus.HALTED]),
-            (TaskStatus.HALTED, []),
-            (TaskStatus.UNKNOWN_OUTCOME, []),  # an unknown SEND outcome is never rewritten
-            (TaskStatus.CLOSED, []),
-        ]
-    ):
-        with subtests.test(case=case_index):
-            check(status, writes)
+    store = _RowStore(status)
+    channel = StopChannel(store, None, SessionAdmission(), BackgroundWork())
+    settled = []
+    await channel.stop(TaskIdentity(task_id="task-1", epoch=1), "CODEX_L3_VIOLATION", settled)
+    scenario_result = store.writes, settled
+    assert scenario_result == (writes, [])
 
 
-def test_stop_channel_reports_a_failed_system_stop_as_unconfirmed():
-    async def run():
-        class FailingSystem:
-            async def stop_task(self, identity, reason):
-                raise SystemControlError("unconfirmed")
+@pytest.mark.asyncio
+async def test_stop_channel_reports_a_failed_system_stop_as_unconfirmed():
 
-        store = _RowStore(TaskStatus.RUNNING)
-        channel = StopChannel(store, FailingSystem(), SessionAdmission(), BackgroundWork())
-        settled = asyncio.get_running_loop().create_future()
-        identity = TaskIdentity(task_id="task-1", epoch=1)
-        await channel.stop(identity, "CODEX_L3_VIOLATION", settled.set_result)
-        return await asyncio.wait_for(settled, 1), store.writes
+    class FailingSystem:
+        async def stop_task(self, identity, reason):
+            raise SystemControlError("unconfirmed")
 
-    assert asyncio.run(run()) == (True, [])  # Guard's to write; A never writes HALTED
+    store = _RowStore(TaskStatus.RUNNING)
+    channel = StopChannel(store, FailingSystem(), SessionAdmission(), BackgroundWork())
+    settled = asyncio.get_running_loop().create_future()
+    identity = TaskIdentity(task_id="task-1", epoch=1)
+    await channel.stop(identity, "CODEX_L3_VIOLATION", settled.set_result)
+    scenario_result = await asyncio.wait_for(settled, 1), store.writes
+    assert scenario_result == (True, [])
 
 
 def test_task_policy_has_no_placeholder_profile_or_change_without_guard():

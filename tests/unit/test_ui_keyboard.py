@@ -23,14 +23,11 @@ from guard_app.ui.servers import ServerListPage
 from guard_app.ui.widgets import KeyboardActionButton, PlainDetailDialog
 from guard_app.ui.window import GuardWindow
 
+from .test_ui_icons_style import app as app
+from .test_ui_icons_style import assert_key_focus, closing_widgets, resize_widget, show_widget
+
 # Absolute on this OS and ASCII-only; the form never touches the file.
 SYNTHETIC_COMMAND = r"C:\synthetic-server.exe" if os.name == "nt" else "/synthetic-server.exe"
-
-
-@pytest.fixture(scope="module")
-def app() -> QApplication:
-    instance = QApplication.instance()
-    return instance if instance is not None else QApplication([])
 
 
 def test_default_window_frame_fits_available_screen(app: QApplication) -> None:
@@ -47,14 +44,10 @@ def test_default_window_frame_fits_available_screen(app: QApplication) -> None:
     window.close()
 
 
-def test_small_window_keeps_navigation_and_runtime_status_available(
-    app: QApplication,
-) -> None:
+def test_small_window_keeps_navigation_and_runtime_status_available(app: QApplication) -> None:
     window = GuardWindow()
-    window.resize(320, 400)
-    window.show()
-    app.processEvents()
-    try:
+    show_widget(app, window, 320, 400)
+    with closing_widgets(window):
         assert window.width() == 320
         assert not window.sidebar.isVisible()
         assert window.menu_button.isVisible()
@@ -71,21 +64,16 @@ def test_small_window_keeps_navigation_and_runtime_status_available(
         assert window._page == "approvals"
         assert window.width() == 320
         assert window.breadcrumb.text() == "승인 대기"
-        window.resize(1100, 700)
-        app.processEvents()
+        resize_widget(app, window, 1100, 700)
         assert window.sidebar.isVisible()
         assert not window.menu_button.isVisible()
         assert window._nav_buttons["approvals"].property("selected")
-        window.resize(320, 400)
-        app.processEvents()
+        resize_widget(app, window, 320, 400)
         assert window.width() == 320
         assert window.menu_button.isVisible()
-        window.resize(1100, 360)
-        app.processEvents()
+        resize_widget(app, window, 1100, 360)
         assert not window.sidebar.isVisible()
         assert window.menu_button.isVisible()
-    finally:
-        window.close()
 
 
 @pytest.fixture
@@ -94,13 +82,7 @@ def server_page(app: QApplication) -> ServerListPage:
     page.resize(800, 600)
     page.show()
     page.set_servers(
-        Surface(
-            LoadState.READY,
-            (
-                ServerSummary("alpha", "Alpha"),
-                ServerSummary("beta", "Beta"),
-            ),
-        )
+        Surface(LoadState.READY, (ServerSummary("alpha", "Alpha"), ServerSummary("beta", "Beta")))
     )
     app.processEvents()
     yield page
@@ -111,12 +93,9 @@ def server_page(app: QApplication) -> ServerListPage:
 def test_tab_and_shift_tab_reach_server_filters(server_page: ServerListPage) -> None:
     page = server_page
     page.search.setFocus()
-    QTest.keyClick(page.search, Qt.Key.Key_Tab)
-    assert page.focusWidget() is page.transport_filter
-    QTest.keyClick(page.transport_filter, Qt.Key.Key_Tab)
-    assert page.focusWidget() is page.status_filter
-    QTest.keyClick(page.status_filter, Qt.Key.Key_Backtab)
-    assert page.focusWidget() is page.transport_filter
+    assert_key_focus(page, page.search, Qt.Key.Key_Tab, page.transport_filter)
+    assert_key_focus(page, page.transport_filter, Qt.Key.Key_Tab, page.status_filter)
+    assert_key_focus(page, page.status_filter, Qt.Key.Key_Backtab, page.transport_filter)
     page.table.setFocus()
     page.table.setCurrentCell(0, 0)
     QTest.keyClick(page.table, Qt.Key.Key_Down)
@@ -159,9 +138,7 @@ def test_tab_and_shift_tab_reach_server_filters(server_page: ServerListPage) -> 
     assert "일치하는 서버가 없음" in page.state_message.message.text()
 
 
-def test_minimum_window_keeps_identity_label_and_status_visible(
-    app: QApplication,
-) -> None:
+def test_minimum_window_keeps_identity_label_and_status_visible(app: QApplication) -> None:
     window = GuardWindow()
     window.resize(780, 580)
     window.set_server_snapshot(
@@ -185,14 +162,7 @@ def test_minimum_window_keeps_identity_label_and_status_visible(
     app.processEvents()
     app.processEvents()
     table = window.server_page.table
-    assert [table.isColumnHidden(i) for i in range(6)] == [
-        False,
-        True,
-        True,
-        False,
-        False,
-        True,
-    ]
+    assert [table.isColumnHidden(i) for i in range(6)] == [False, True, True, False, False, True]
     assert table.horizontalHeaderItem(0).text() == "서버 ID"
     assert table.columnViewportPosition(4) + table.columnWidth(4) <= (table.viewport().width())
     assert table.horizontalScrollBar().maximum() == 0
@@ -205,8 +175,7 @@ def test_minimum_window_keeps_identity_label_and_status_visible(
     assert "내부 · internal" in labels
     assert "연결 안 됨" in labels
     detail.close()
-    window.resize(1260, 820)
-    app.processEvents()
+    resize_widget(app, window, 1260, 820)
     app.processEvents()
     assert not any(table.isColumnHidden(i) for i in range(6))
     assert table.horizontalHeaderItem(0).text() == "서버 ID / 표시 이름"
@@ -224,11 +193,7 @@ def test_action_button_ignores_repeated_return(app: QApplication) -> None:
     QTest.keyClick(button, Qt.Key.Key_Enter)
     assert len(clicks) == 2
     repeated_press = QKeyEvent(
-        QEvent.Type.KeyPress,
-        Qt.Key.Key_Return,
-        Qt.KeyboardModifier.NoModifier,
-        "",
-        True,
+        QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier, "", True
     )
     QApplication.sendEvent(button, repeated_press)
     assert len(clicks) == 2
@@ -265,84 +230,56 @@ def test_plain_detail_escape_returns_focus_to_opener(app: QApplication) -> None:
     assert not detail.isVisible()
 
 
-def test_add_form_keyboard_reaches_fields_and_prepares_only_local_draft(
-    app: QApplication,
-) -> None:
+def test_add_form_keyboard_reaches_fields_and_prepares_only_local_draft(app: QApplication) -> None:
     form = ServerAddForm()
-    form.resize(780, 580)
-    form.show()
-    app.processEvents()
-    try:
+    show_widget(app, form, 780, 580)
+    with closing_widgets(form):
         form.display_name.setFocus()
         QTest.keyClicks(form.display_name, "Keyboard Server")
-        QTest.keyClick(form.display_name, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.server_id
+        assert_key_focus(form, form.display_name, Qt.Key.Key_Tab, form.server_id)
         assert form.server_id.text() == "keyboard-server"
-        QTest.keyClick(form.server_id, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.transport
-        QTest.keyClick(form.transport, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.command
+        assert_key_focus(form, form.server_id, Qt.Key.Key_Tab, form.transport)
+        assert_key_focus(form, form.transport, Qt.Key.Key_Tab, form.command)
         # QTest.keyClicks aborts the process (qasciikey.cpp ASSERT) on any
         # non-ASCII character, so never type a path derived from the checkout.
         QTest.keyClicks(form.command, SYNTHETIC_COMMAND)
-        QTest.keyClick(form.command, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.browse_button
-        QTest.keyClick(form.browse_button, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.args_json
+        assert_key_focus(form, form.command, Qt.Key.Key_Tab, form.browse_button)
+        assert_key_focus(form, form.browse_button, Qt.Key.Key_Tab, form.args_json)
         before = form.args_json.toPlainText()
-        QTest.keyClick(form.args_json, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.env_allow
+        assert_key_focus(form, form.args_json, Qt.Key.Key_Tab, form.env_allow)
         assert form.args_json.toPlainText() == before
-        QTest.keyClick(form.env_allow, Qt.Key.Key_Backtab)
-        assert form.focusWidget() is form.args_json
+        assert_key_focus(form, form.env_allow, Qt.Key.Key_Backtab, form.args_json)
         QTest.keyClick(form.args_json, Qt.Key.Key_Tab)
-        QTest.keyClick(form.env_allow, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.tier
+        assert_key_focus(form, form.env_allow, Qt.Key.Key_Tab, form.tier)
         QTest.keyClick(form.tier, Qt.Key.Key_Down)
-        QTest.keyClick(form.tier, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.max_label
+        assert_key_focus(form, form.tier, Qt.Key.Key_Tab, form.max_label)
         QTest.keyClick(form.max_label, Qt.Key.Key_Down)
         assert form.prepare_button.isEnabled()
-        QTest.keyClick(form.max_label, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.preview
-        QTest.keyClick(form.preview, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.prepare_button
+        assert_key_focus(form, form.max_label, Qt.Key.Key_Tab, form.preview)
+        assert_key_focus(form, form.preview, Qt.Key.Key_Tab, form.prepare_button)
         QTest.keyClick(form.prepare_button, Qt.Key.Key_Return)
         assert form.validated_draft is not None
         assert form.validated_draft.server_id == "keyboard-server"
         assert not form.prepare_button.isEnabled()
-    finally:
-        form.close()
 
 
-def test_add_form_keyboard_switches_transport_and_reaches_http_url(
-    app: QApplication,
-) -> None:
+def test_add_form_keyboard_switches_transport_and_reaches_http_url(app: QApplication) -> None:
     form = ServerAddForm()
-    form.resize(780, 580)
-    form.show()
-    app.processEvents()
-    try:
+    show_widget(app, form, 780, 580)
+    with closing_widgets(form):
         form.transport.setFocus()
         QTest.keyClick(form.transport, Qt.Key.Key_Down)
         assert form.transport.currentData() == "streamable_http"
-        QTest.keyClick(form.transport, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.url
-        QTest.keyClick(form.url, Qt.Key.Key_Backtab)
-        assert form.focusWidget() is form.transport
+        assert_key_focus(form, form.transport, Qt.Key.Key_Tab, form.url)
+        assert_key_focus(form, form.url, Qt.Key.Key_Backtab, form.transport)
         QTest.keyClick(form.transport, Qt.Key.Key_Up)
         assert form.transport.currentData() == "stdio"
-        QTest.keyClick(form.transport, Qt.Key.Key_Tab)
-        assert form.focusWidget() is form.command
-    finally:
-        form.close()
+        assert_key_focus(form, form.transport, Qt.Key.Key_Tab, form.command)
 
 
 def test_approval_keyboard_filters_selection_and_pager(app: QApplication) -> None:
     page = ApprovalListPage()
-    page.resize(780, 580)
-    page.show()
-    app.processEvents()
+    show_widget(app, page, 780, 580)
     now = datetime(2026, 10, 12, 5, 0, tzinfo=UTC)
     rows = tuple(
         ApprovalSummary(
@@ -358,24 +295,20 @@ def test_approval_keyboard_filters_selection_and_pager(app: QApplication) -> Non
     )
     requests = []
     page.query_requested.connect(requests.append)
-    try:
+    with closing_widgets(page):
         page.refresh()
         assert page.set_page(ApprovalPage(requests[-1], rows, 7), display_now=now)
         page.lane_tabs.setFocus()
-        QTest.keyClick(page.lane_tabs, Qt.Key.Key_Tab)
-        assert page.focusWidget() is page.search
+        assert_key_focus(page, page.lane_tabs, Qt.Key.Key_Tab, page.search)
         QTest.keyClicks(page.search, "task")
-        QTest.keyClick(page.search, Qt.Key.Key_Tab)
-        assert page.focusWidget() is page.server_filter
+        assert_key_focus(page, page.search, Qt.Key.Key_Tab, page.server_filter)
         assert requests[-1].search == "task"
         assert requests[-1].page == 1
         QTest.keyClicks(page.server_filter, "server-a")
-        QTest.keyClick(page.server_filter, Qt.Key.Key_Tab)
-        assert page.focusWidget() is page.sort
+        assert_key_focus(page, page.server_filter, Qt.Key.Key_Tab, page.sort)
         assert requests[-1].server_id == "server-a"
         assert page.set_page(ApprovalPage(requests[-1], rows, 7), display_now=now)
-        QTest.keyClick(page.sort, Qt.Key.Key_Tab)
-        assert page.focusWidget() is page.table
+        assert_key_focus(page, page.sort, Qt.Key.Key_Tab, page.table)
         page.table.setCurrentCell(0, 0)
         QTest.keyClick(page.table, Qt.Key.Key_Down)
         assert page.selected_summary is rows[1]
@@ -385,20 +318,14 @@ def test_approval_keyboard_filters_selection_and_pager(app: QApplication) -> Non
         assert page.selected_summary is None
         assert page.table.rowCount() == 0
         assert not page.next_button.isEnabled()
-    finally:
-        page.close()
 
 
-def test_approval_keyboard_changes_lane_and_sort_without_action_buttons(
-    app: QApplication,
-) -> None:
+def test_approval_keyboard_changes_lane_and_sort_without_action_buttons(app: QApplication) -> None:
     page = ApprovalListPage()
-    page.resize(780, 580)
-    page.show()
-    app.processEvents()
+    show_widget(app, page, 780, 580)
     requests = []
     page.query_requested.connect(requests.append)
-    try:
+    with closing_widgets(page):
         page.lane_tabs.setFocus()
         QTest.keyClick(page.lane_tabs, Qt.Key.Key_Right)
         assert page.lane_tabs.currentIndex() == 1
@@ -411,26 +338,21 @@ def test_approval_keyboard_changes_lane_and_sort_without_action_buttons(
         button_texts = {button.text() for button in page.findChildren(KeyboardActionButton)}
         assert "승인" not in button_texts
         assert "거절" not in button_texts
-    finally:
-        page.close()
 
 
 def test_call_log_keyboard_row_detail_and_filter_focus(app: QApplication) -> None:
     page = CallLogPage()
-    page.resize(780, 580)
-    page.show()
-    app.processEvents()
+    show_widget(app, page, 780, 580)
     rows = (
         PublicCallSummary("call-a", tool_name="alpha"),
         PublicCallSummary("call-b", tool_name="beta"),
     )
     requests = []
     page.detail_requested.connect(requests.append)
-    try:
+    with closing_widgets(page):
         page.set_calls(Surface(LoadState.READY, rows))
         page.search.setFocus()
-        QTest.keyClick(page.search, Qt.Key.Key_Tab)
-        assert page.focusWidget() is page.table
+        assert_key_focus(page, page.search, Qt.Key.Key_Tab, page.table)
         page.table.setCurrentCell(0, 0)
         QTest.keyClick(page.table, Qt.Key.Key_Down)
         QTest.keyClick(page.table, Qt.Key.Key_Return)
@@ -455,13 +377,9 @@ def test_call_log_keyboard_row_detail_and_filter_focus(app: QApplication) -> Non
         assert page.table.rowCount() == 1
         assert not page.detail_button.isEnabled()
         assert page._detail_dialog is None
-    finally:
-        page.close()
 
 
-def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(
-    app: QApplication,
-) -> None:
+def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(app: QApplication) -> None:
     host = QWidget()
     layout = QVBoxLayout(host)
     opener = QPushButton("합성 승인 상세")
@@ -470,17 +388,15 @@ def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(
     app.processEvents()
     opener.setFocus()
     dialog = ApprovalDetailDialog(host)
-    try:
+    with closing_widgets(dialog, host):
         dialog.show_value(
             ApprovalDetailValue("https://example.invalid/synthetic", b'{"safe":true}'),
             return_focus=opener,
         )
         app.processEvents()
         assert dialog.destination_body.hasFocus()
-        QTest.keyClick(dialog.destination_body, Qt.Key.Key_Tab)
-        assert dialog.focusWidget() is dialog.arguments_body
-        QTest.keyClick(dialog.arguments_body, Qt.Key.Key_Backtab)
-        assert dialog.focusWidget() is dialog.destination_body
+        assert_key_focus(dialog, dialog.destination_body, Qt.Key.Key_Tab, dialog.arguments_body)
+        assert_key_focus(dialog, dialog.arguments_body, Qt.Key.Key_Backtab, dialog.destination_body)
         QTest.keyClick(dialog.destination_body, Qt.Key.Key_Tab)
         QTest.keyClick(dialog.arguments_body, Qt.Key.Key_Tab)
         close_button = dialog.focusWidget()
@@ -488,11 +404,7 @@ def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(
         assert close_button.text() == "닫기"
         assert [button.text() for button in dialog.findChildren(KeyboardActionButton)] == ["닫기"]
         repeated_press = QKeyEvent(
-            QEvent.Type.KeyPress,
-            Qt.Key.Key_Return,
-            Qt.KeyboardModifier.NoModifier,
-            "",
-            True,
+            QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier, "", True
         )
         QApplication.sendEvent(close_button, repeated_press)
         assert dialog.isVisible()
@@ -502,6 +414,3 @@ def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(
         assert host.focusWidget() is opener
         assert dialog.destination_body.toPlainText() == ""
         assert dialog.arguments_body.toPlainText() == ""
-    finally:
-        dialog.close()
-        host.close()

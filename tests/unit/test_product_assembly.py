@@ -1,8 +1,6 @@
-"""A86: Profile loading, access rules and live fingerprints composed into Guard.
+"""A86: Guard composition and synthetic tools/call counts (I1/I2/I6/I7/I10).
 
-I1 (Guard-only dispatch), I2/I6 (deny by default), I7 (trusted ids), I10
-(fingerprint change blocks the tool). Counts are the synthetic peer's tools/call
-receipts; this is A's unit composition, not C's independent T/S acceptance.
+A unit checks, not C's independent T/S acceptance.
 """
 
 from __future__ import annotations
@@ -29,14 +27,7 @@ from guard_app.domain.contracts import (
     TrustedContext,
     Withheld,
 )
-from guard_app.domain.enums import (
-    ApprovalStatus,
-    Label,
-    RegStatus,
-    TaskStatus,
-    ToolKind,
-    TrustTier,
-)
+from guard_app.domain.enums import ApprovalStatus, Label, RegStatus, TaskStatus, ToolKind, TrustTier
 from guard_app.domain.models import Boundary, ProposedCall, ResolvedRequest, TaskState, ToolSpec
 from guard_app.domain.reasons import Reason
 from guard_app.security.digest import tool_fingerprint
@@ -229,10 +220,7 @@ def document(
 
 
 def inputs(
-    peer: Peer,
-    registry: Registry,
-    doc: dict[str, object],
-    audits: list[FailureEvent] | None = None,
+    peer: Peer, registry: Registry, doc: dict[str, object], audits: list[FailureEvent] | None = None
 ) -> ProductInputs:
     sequence = iter(range(1, 1000))
 
@@ -252,6 +240,16 @@ def inputs(
         operator_id="local-operator",
         resource_resolver=lambda _tool, value: value,
     )
+
+
+@asynccontextmanager
+async def closing_backend(backend):
+    """Close an async backend on the owning loop, including assertion failures."""
+    try:
+        yield backend
+    finally:
+        assert backend.close is not None
+        await backend.close()
 
 
 async def submit_read(tmp_path, peer: Peer, registry: Registry, doc: dict[str, object]):
@@ -373,7 +371,10 @@ def test_live_definition_mismatch_hides_the_tool_and_blocks_dispatch(tmp_path, s
 LIST_SETTINGS = {"name": "list", "kind": "read", "resource_arg": "path"}
 
 
-def test_registration_rewritten_mid_run_no_longer_matches_the_live_definition(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_registration_rewritten_mid_run_no_longer_matches_the_live_definition(
+    tmp_path,
+) -> None:
     """I10: Guard compares with what this session received, not the newest record."""
     peer = Peer([READ_DEFINITION])
     registry = Registry(tool_fingerprint(READ_DEFINITION))
@@ -382,14 +383,10 @@ def test_registration_rewritten_mid_run_no_longer_matches_the_live_definition(tm
     def rewrite() -> None:
         registry.rewrite("read", "f" * 64)
 
-    async def run():
-        outcome, views, view = await submit_call(
-            tmp_path, peer, registry, document(), before_submit=rewrite
-        )
-        live.append(view.fingerprint(registry.record.tools[0]))
-        return outcome, views, view
-
-    outcome, views, view = asyncio.run(run())
+    outcome, views, view = await submit_call(
+        tmp_path, peer, registry, document(), before_submit=rewrite
+    )
+    live.append(view.fingerprint(registry.record.tools[0]))
     assert [v.tool_ref for v in views] == ["docs__read"]  # healthy at assembly
     assert type(outcome) is Denied
     assert outcome.reasons == (Reason.TOOL_FINGERPRINT_CHANGED,)
@@ -479,7 +476,8 @@ def test_tools_list_changed_before_the_first_listing_response_does_not_block(tmp
     assert len(peer.calls) == 1
 
 
-def test_tools_list_changed_invalidates_a_pending_approval(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_tools_list_changed_invalidates_a_pending_approval(tmp_path) -> None:
     """LIST-01: an approval waiting when the notice arrives is invalidated on its
     recheck with REG_NOT_ACTIVE and its Task halts; the SEND is never dispatched."""
     peer = Peer([READ_DEFINITION, SEND_DEFINITION])
@@ -491,19 +489,16 @@ def test_tools_list_changed_invalidates_a_pending_approval(tmp_path) -> None:
         tool_ref="docs__send", arguments={"to": "partner", "body": "hello"}, model_call_id="c2"
     )
 
-    async def run():
-        async with running(tmp_path, peer, registry, doc) as (assembled, store):
-            guard = assembled.guard
-            read = await guard.submit("task-1", read_call("c1", "internal/a.txt"), expected_epoch=1)
-            pending = await guard.submit("task-1", send, expected_epoch=1)
-            assert type(pending) is Pending
-            peer.notify_tools_changed()
-            await list_change_seen(assembled.registry)
-            approved = await guard.human_control("local-operator").approve(pending.approval_id)
-            record = await store.get_approval(pending.approval_id)
-            return read, approved, record, await store.load_task("task-1")
-
-    read, approved, record, state = asyncio.run(run())
+    async with running(tmp_path, peer, registry, doc) as (assembled, store):
+        guard = assembled.guard
+        read = await guard.submit("task-1", read_call("c1", "internal/a.txt"), expected_epoch=1)
+        pending = await guard.submit("task-1", send, expected_epoch=1)
+        assert type(pending) is Pending
+        peer.notify_tools_changed()
+        await list_change_seen(assembled.registry)
+        approved = await guard.human_control("local-operator").approve(pending.approval_id)
+        record = await store.get_approval(pending.approval_id)
+        state = await store.load_task("task-1")
     assert type(read) is Released
     assert type(approved) is Denied
     assert approved.reasons == (Reason.REG_NOT_ACTIVE,)
@@ -545,64 +540,51 @@ class DyingPeer(Peer):
         await super().write(frame)
 
 
-def test_a_server_that_stops_serving_is_pending_for_the_rest_of_the_run(tmp_path, subtests):
-    def check(die_on_call, tmp_path):
-        """#61: the call that finds the dead session keeps its unknown outcome and
-        halts its Task; every later call is denied with REG_NOT_ACTIVE before it is
-        reserved, so no other Task is locked. C's Registry is not written."""
-        peer = DyingPeer([READ_DEFINITION], die_on_call=die_on_call)
-        registry = Registry(tool_fingerprint(READ_DEFINITION))
-        audits: list[FailureEvent] = []
+@pytest.mark.parametrize("die_on_call", [False, True])
+@pytest.mark.asyncio
+async def test_a_server_that_stops_serving_is_pending_for_the_rest_of_the_run(
+    tmp_path, die_on_call
+):
+    """#61: the call that finds the dead session keeps its unknown outcome and
+    halts its Task; every later call is denied with REG_NOT_ACTIVE before it is
+    reserved, so no other Task is locked. C's Registry is not written."""
+    peer = DyingPeer([READ_DEFINITION], die_on_call=die_on_call)
+    registry = Registry(tool_fingerprint(READ_DEFINITION))
+    audits: list[FailureEvent] = []
 
-        async def run():
-            async with running(tmp_path, peer, registry, document(), audits) as (assembled, store):
-                guard = assembled.guard
-                base = await store.load_task("task-1")
-                for task_id in ("task-2", "task-3"):
-                    await store.create_task(
-                        base.model_copy(update={"task_id": task_id}),
-                        created_at_utc=datetime.now(UTC),
-                    )
-                first = await guard.submit("task-1", read_call("c1"), expected_epoch=1)
-                if not die_on_call:
-                    peer.die()
-                    await peer.ended.wait()
-                    # Let the SDK close the session first, so the next call finds it
-                    # closed rather than in flight; both end the same way.
-                    await asyncio.sleep(0.05)
-                found = await guard.submit("task-2", read_call("c2"), expected_epoch=1)
-                later = await guard.submit("task-3", read_call("c3"), expected_epoch=1)
-                states = [(await store.load_task(t)).status for t in ("task-2", "task-3")]
-                return (
-                    first,
-                    found,
-                    later,
-                    states,
-                    assembled.offered_tool_views(),
-                    assembled.registry,
-                )
-
-        first, found, later, states, offered, view = asyncio.run(run())
-        assert type(first) is Released
-        assert type(found) is Withheld
-        assert found.reasons == (Reason.POST_DISPATCH_ERROR,)
-        assert type(later) is Denied
-        assert later.reasons == (Reason.REG_NOT_ACTIVE,)
-        assert states == [TaskStatus.HALTED, TaskStatus.RUNNING]
-        assert len(peer.calls) == (2 if die_on_call else 1)
-        assert [(e.task_id, e.phase, e.reason) for e in audits if e.task_id == "task-3"] == [
-            ("task-3", "before_dispatch", Reason.REG_NOT_ACTIVE)
-        ]
-        assert view.status("docs") is RegStatus.PENDING
-        assert view.unavailable == frozenset({"docs"})
-        assert offered == ()
-        assert registry.record.status is RegStatus.ACTIVE
-
-    for case_index, die_on_call in enumerate([False, True]):
-        with subtests.test(case=case_index):
-            case_path = tmp_path / str(case_index)
-            case_path.mkdir()
-            check(die_on_call, case_path)
+    async with running(tmp_path, peer, registry, document(), audits) as (assembled, store):
+        guard = assembled.guard
+        base = await store.load_task("task-1")
+        for task_id in ("task-2", "task-3"):
+            await store.create_task(
+                base.model_copy(update={"task_id": task_id}), created_at_utc=datetime.now(UTC)
+            )
+        first = await guard.submit("task-1", read_call("c1"), expected_epoch=1)
+        if not die_on_call:
+            peer.die()
+            await peer.ended.wait()
+            # Let the SDK close the session first, so the next call finds it
+            # closed rather than in flight; both end the same way.
+            await asyncio.sleep(0.05)
+        found = await guard.submit("task-2", read_call("c2"), expected_epoch=1)
+        later = await guard.submit("task-3", read_call("c3"), expected_epoch=1)
+        states = [(await store.load_task(t)).status for t in ("task-2", "task-3")]
+        offered = assembled.offered_tool_views()
+        view = assembled.registry
+    assert type(first) is Released
+    assert type(found) is Withheld
+    assert found.reasons == (Reason.POST_DISPATCH_ERROR,)
+    assert type(later) is Denied
+    assert later.reasons == (Reason.REG_NOT_ACTIVE,)
+    assert states == [TaskStatus.HALTED, TaskStatus.RUNNING]
+    assert len(peer.calls) == (2 if die_on_call else 1)
+    assert [(e.task_id, e.phase, e.reason) for e in audits if e.task_id == "task-3"] == [
+        ("task-3", "before_dispatch", Reason.REG_NOT_ACTIVE)
+    ]
+    assert view.status("docs") is RegStatus.PENDING
+    assert view.unavailable == frozenset({"docs"})
+    assert offered == ()
+    assert registry.record.status is RegStatus.ACTIVE
 
 
 def test_close_settles_between_the_transport_and_guard(tmp_path, subtests):
@@ -658,7 +640,8 @@ def test_a_server_failure_is_not_superseded_by_the_comparison() -> None:
     assert view.listing_changed == frozenset()
 
 
-def test_unsupported_tool_schema_is_a_fixed_code_and_closes_the_transport(
+@pytest.mark.asyncio
+async def test_unsupported_tool_schema_is_a_fixed_code_and_closes_the_transport(
     tmp_path, monkeypatch
 ) -> None:
     """A schema Catalog cannot serve fails closed as PROFILE_TOOL_INVALID."""
@@ -677,27 +660,23 @@ def test_unsupported_tool_schema_is_a_fixed_code_and_closes_the_transport(
     registry = Registry(tool_fingerprint(READ_DEFINITION))
     registry.record = registry.record.model_copy(update={"tools": (spec(array_read),)})
 
-    async def run() -> None:
-        store = SQLiteStore(tmp_path / "schema.db", audit_id_factory=lambda: "unit-audit")
-        try:
-            with pytest.raises(ProductAssemblyError, match="PROFILE_TOOL_INVALID") as raised:
-                await assemble_guard(store, inputs(peer, registry, document()))
-            assert raised.value.code == "PROFILE_TOOL_INVALID"
-            assert raised.value.__cause__ is None
-        finally:
-            store.close()
-
-    asyncio.run(run())
+    store = SQLiteStore(tmp_path / "schema.db", audit_id_factory=lambda: "unit-audit")
+    try:
+        with pytest.raises(ProductAssemblyError, match="PROFILE_TOOL_INVALID") as raised:
+            await assemble_guard(store, inputs(peer, registry, document()))
+        assert raised.value.code == "PROFILE_TOOL_INVALID"
+        assert raised.value.__cause__ is None
+    finally:
+        store.close()
     assert closed == [True]
     assert peer.calls == []
 
 
-def test_a_blocked_server_whose_settings_are_ahead_of_its_registration_is_left_out(
+@pytest.mark.asyncio
+async def test_a_blocked_server_whose_settings_are_ahead_of_its_registration_is_left_out(
     tmp_path,
 ) -> None:
-    """A155: a kind edit is recorded by the next start's observe. When that
-    server's listing is not trusted, its Registry kinds stay OTHER while the
-    settings say READ; it offers nothing instead of failing the whole Profile."""
+    """A155: blocked OTHER registration versus READ settings offers no tools."""
     peer = Peer([READ_DEFINITION, READ_DEFINITION])  # a repeated name blocks the server
     registry = Registry(tool_fingerprint(READ_DEFINITION))
     other = registry.record.tools[0].model_copy(
@@ -705,47 +684,42 @@ def test_a_blocked_server_whose_settings_are_ahead_of_its_registration_is_left_o
     )
     registry.record = registry.record.model_copy(update={"tools": (other,)})
 
-    async def run() -> None:
-        store = SQLiteStore(tmp_path / "ahead.db", audit_id_factory=lambda: "unit-audit")
+    store = SQLiteStore(tmp_path / "ahead.db", audit_id_factory=lambda: "unit-audit")
+    try:
+        assembled = await assemble_guard(store, inputs(peer, registry, document()))
         try:
-            assembled = await assemble_guard(store, inputs(peer, registry, document()))
-            try:
-                assert assembled.registry.blocked_servers == frozenset({"docs"})
-                assert assembled.tool_views == ()
-            finally:
-                await assembled.aclose()
+            assert assembled.registry.blocked_servers == frozenset({"docs"})
+            assert assembled.tool_views == ()
         finally:
-            store.close()
-
-    asyncio.run(run())
+            await assembled.aclose()
+    finally:
+        store.close()
     assert peer.calls == []
 
 
-def test_invalid_profile_and_missing_server_stream_fail_closed(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_invalid_profile_and_missing_server_stream_fail_closed(tmp_path) -> None:
     peer = Peer([READ_DEFINITION])
     registry = Registry(tool_fingerprint(READ_DEFINITION))
 
-    async def run() -> None:
-        store = SQLiteStore(tmp_path / "fail.db", audit_id_factory=lambda: "unit-audit")
-        try:
-            broken = inputs(peer, registry, {"profile": {"id": "x"}})
-            with pytest.raises(ProductAssemblyError, match="PROFILE_INVALID"):
-                await assemble_guard(store, broken)
-            good = inputs(peer, registry, document())
-            missing = ProductInputs(
-                profile_document=good.profile_document,
-                registry=registry,
-                server_streams={},
-                next_call_seq=good.next_call_seq,
-                failure_audit=good.failure_audit,
-                operator_id="local-operator",
-            )
-            with pytest.raises(ProductAssemblyError, match="PROFILE_SERVER_UNAVAILABLE"):
-                await assemble_guard(store, missing)
-        finally:
-            store.close()
-
-    asyncio.run(run())
+    store = SQLiteStore(tmp_path / "fail.db", audit_id_factory=lambda: "unit-audit")
+    try:
+        broken = inputs(peer, registry, {"profile": {"id": "x"}})
+        with pytest.raises(ProductAssemblyError, match="PROFILE_INVALID"):
+            await assemble_guard(store, broken)
+        good = inputs(peer, registry, document())
+        missing = ProductInputs(
+            profile_document=good.profile_document,
+            registry=registry,
+            server_streams={},
+            next_call_seq=good.next_call_seq,
+            failure_audit=good.failure_audit,
+            operator_id="local-operator",
+        )
+        with pytest.raises(ProductAssemblyError, match="PROFILE_SERVER_UNAVAILABLE"):
+            await assemble_guard(store, missing)
+    finally:
+        store.close()
     assert peer.calls == []
 
 
@@ -785,48 +759,44 @@ def test_access_rules_checker_is_deny_by_default_and_binds_the_task() -> None:
         AccessRulesChecker(AccessRules(allow="not-a-list"))
 
 
-def test_product_bootstrap_with_inputs_connects_human_control_and_closes_transport(tmp_path):
+@pytest.mark.asyncio
+async def test_product_bootstrap_with_inputs_connects_human_control_and_closes_transport(tmp_path):
     from guard_app.services.session_runtime import bootstrap_product
 
     peer = Peer([READ_DEFINITION])
 
-    async def run() -> None:
-        bindings = await bootstrap_product(
-            product_folders(str(tmp_path / "product.db")),
-            product=inputs(peer, Registry(tool_fingerprint(READ_DEFINITION)), document()),
-        )
-        try:
-            assert bindings.human_control is not None
-            assert bindings.discard_queued is not None
-            assert bindings.session_blocker is not None
-            assert bindings.session_blocker() == "CODEX_CONFIG_UNAVAILABLE"
-        finally:
-            assert bindings.close is not None
-            await bindings.close()
-
-    asyncio.run(run())
+    bindings = await bootstrap_product(
+        product_folders(str(tmp_path / "product.db")),
+        product=inputs(peer, Registry(tool_fingerprint(READ_DEFINITION)), document()),
+    )
+    async with closing_backend(bindings):
+        assert bindings.human_control is not None
+        assert bindings.discard_queued is not None
+        assert bindings.session_blocker is not None
+        assert bindings.session_blocker() == "CODEX_CONFIG_UNAVAILABLE"
 
 
-def test_product_bootstrap_with_invalid_profile_closes_the_store(tmp_path):
+@pytest.mark.asyncio
+async def test_product_bootstrap_with_invalid_profile_closes_the_store(tmp_path):
     from guard_app.services.session_runtime import bootstrap_product
 
     peer = Peer([READ_DEFINITION])
     path = tmp_path / "invalid.db"
 
-    async def run() -> None:
-        with pytest.raises(ProductAssemblyError, match="PROFILE_INVALID"):
-            await bootstrap_product(
-                product_folders(str(path)),
-                product=inputs(peer, Registry("a" * 64), {"profile": {"id": "x"}}),
-            )
-
-    asyncio.run(run())
+    with pytest.raises(ProductAssemblyError, match="PROFILE_INVALID"):
+        await bootstrap_product(
+            product_folders(str(path)),
+            product=inputs(peer, Registry("a" * 64), {"profile": {"id": "x"}}),
+        )
     with SQLiteStore(path, audit_id_factory=lambda: "probe"):
         pass  # the failed start released the database
     path.unlink()  # its connection closed too: Windows refuses to delete an open database
 
 
-def test_a_failed_start_whose_store_close_is_unconfirmed_reports_cleanup(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_a_failed_start_whose_store_close_is_unconfirmed_reports_cleanup(
+    tmp_path, monkeypatch
+):
     """#58: the Store's close only starts it. Unconfirmed, the bridge sees a cleanup failure."""
     from guard_app.services import product_startup, session_runtime
     from guard_app.services.bridge_types import BackendCleanupError
@@ -839,33 +809,28 @@ def test_a_failed_start_whose_store_close_is_unconfirmed_reports_cleanup(tmp_pat
     monkeypatch.setattr(product_startup, "SQLiteStore", Late)
     peer = Peer([READ_DEFINITION])
 
-    async def run() -> None:
-        with pytest.raises(BackendCleanupError):
-            await session_runtime.bootstrap_product(
-                product_folders(str(tmp_path / "late.db")),
-                product=inputs(peer, Registry("a" * 64), {"profile": {"id": "x"}}),
-            )
-
-    asyncio.run(run())
+    with pytest.raises(BackendCleanupError):
+        await session_runtime.bootstrap_product(
+            product_folders(str(tmp_path / "late.db")),
+            product=inputs(peer, Registry("a" * 64), {"profile": {"id": "x"}}),
+        )
 
 
-def test_policy_view_is_built_from_the_profile_and_registry(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_policy_view_is_built_from_the_profile_and_registry(tmp_path) -> None:
     from guard_app.services.policy_view import policy_view
 
     peer = Peer([READ_DEFINITION])
 
-    async def run():
-        store = SQLiteStore(tmp_path / "policy.db", audit_id_factory=lambda: f"a-{uuid4().hex}")
-        assembled = await assemble_guard(
-            store, inputs(peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
-        )
-        try:
-            return policy_view(assembled), assembled.settings
-        finally:
-            await assembled.aclose()
-            store.close()
-
-    view, settings = asyncio.run(run())
+    store = SQLiteStore(tmp_path / "policy.db", audit_id_factory=lambda: f"a-{uuid4().hex}")
+    assembled = await assemble_guard(
+        store, inputs(peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
+    )
+    try:
+        (view, settings) = policy_view(assembled), assembled.settings
+    finally:
+        await assembled.aclose()
+        store.close()
     assert (view.profile_id, view.policy_version) == (settings.profile_id, settings.policy_version)
     assert view.allow == (("docs", "read"),)
     assert view.deny == ()

@@ -3,7 +3,7 @@
 import asyncio
 import os
 import threading
-import time
+from contextlib import contextmanager
 
 import pytest
 
@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QWidget
 
 from examples.synthetic_app import bootstrap
 from guard_app.domain.enums import TaskStatus
@@ -27,7 +27,8 @@ from guard_app.services.bridge import (
 )
 from guard_app.ui.runtime import RuntimePanel
 
-from .test_bridge import FakeControl
+from .test_bridge import FakeControl, isolated_cases, pump_until
+from .test_bridge import app as app
 
 
 async def _unused():
@@ -41,26 +42,39 @@ def _close_panel(app, bridge, panel):
 
 
 def wait_until(app, predicate, timeout=8):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        app.processEvents()
-        if predicate():
-            return
-        # Release the GIL so cold SDK imports can progress on the backend worker.
-        time.sleep(0.005)
-    raise AssertionError("Qt/backend condition not reached")
+    pump_until(app, predicate, timeout)
 
 
-def test_human_review_approve_and_shutdown_use_real_mcp():
+@contextmanager
+def running_panel(app, boot=bootstrap, *, show=False):
+    bridge = BackendBridge(boot)
+    panel = RuntimePanel(bridge)
+    if show:
+        panel.show()
+    try:
+        bridge.start()
+        wait_until(app, panel.run_button.isEnabled)
+        yield bridge, panel
+    finally:
+        _close_panel(app, bridge, panel)
+
+
+@pytest.fixture
+def idle_panel(app):
+    bridge = BackendBridge(_unused)
+    panel = RuntimePanel(bridge)
+    app.processEvents()
+    yield panel
+    _close_panel(app, bridge, panel)
+
+
+def test_human_review_approve_and_shutdown_use_real_mcp(app):
     def check(mcp_transport):
         """T18 표시 연결 부분, I1/I3: 실제 승인 사본 표시·승인·SEND 수명 확인."""
-        app = QApplication.instance() or QApplication([])
-        bridge = BackendBridge(lambda: bootstrap(mcp_transport=mcp_transport))
-        panel = RuntimePanel(bridge)
-        panel.show()
-        try:
-            bridge.start()
-            wait_until(app, panel.run_button.isEnabled)
+        with running_panel(app, lambda: bootstrap(mcp_transport=mcp_transport), show=True) as (
+            bridge,
+            panel,
+        ):
             assert panel.current.model_mode == "mock"
             assert "모델: mock" in panel.summary.text()
             assert "AGT" not in panel.summary.text()
@@ -85,59 +99,38 @@ def test_human_review_approve_and_shutdown_use_real_mcp():
             wait_until(app, lambda: not panel._busy)
             assert panel.current.receiver_effect == 1
             assert not panel.run_button.isEnabled()
-        finally:
-            _close_panel(app, bridge, panel)
         assert not bridge.backend_alive
 
-    for mcp_transport in ["stdio", "http"]:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
-            check(mcp_transport)
+    for mcp_transport, _patch in isolated_cases(["stdio", "http"]):
+        check(mcp_transport)
 
 
-def test_access_denial_explains_result_and_disabled_run_button():
-    # QA 2026-10-13: only RUN_DENIED_QUERY_REQUIRED was shown, with a RUNNING
-    # Task and a disabled run button left unexplained.
-    app = QApplication.instance() or QApplication([])
-    bridge = BackendBridge(lambda: bootstrap(access_policy="deny-send"))
-    panel = RuntimePanel(bridge)
-    try:
-        bridge.start()
-        wait_until(app, panel.run_button.isEnabled)
+def test_access_denial_explains_result_and_disabled_run_button(app):
+    with running_panel(app, lambda: bootstrap(access_policy="deny-send")) as (bridge, panel):
         panel.run_button.click()
         wait_until(app, lambda: not panel._busy)
         message = panel.message.text()
         assert message.startswith("호출이 차단됨")
         assert "내부 코드" not in message
         assert panel.internal_code.text() == "내부 코드: RUN_DENIED_QUERY_REQUIRED"
-        # R11: the shipped app never feeds the call log page, so do not send
-        # the operator there for the reason.
+        # R11: no call-log guidance until the shipped app feeds that page.
         assert "호출 로그에서" not in message
         assert "아직 이 화면에 연결되지 않음" in message
         assert panel.current.status is TaskStatus.RUNNING and panel.current.receiver_effect == 0
         assert not panel.run_button.isEnabled() and panel.cancel_button.isEnabled()
         assert "진행 중 (RUNNING)" in panel.summary.text()
         assert "다음 사용자 지시를 기다리는 중" in panel.summary.text()
-    finally:
-        _close_panel(app, bridge, panel)
 
 
-def test_successful_stop_reads_as_success():
+def test_successful_stop_reads_as_success(app):
     def check(button, name):
-        app = QApplication.instance() or QApplication([])
-        bridge = BackendBridge(lambda: bootstrap())
-        panel = RuntimePanel(bridge)
-        try:
-            bridge.start()
-            wait_until(app, panel.run_button.isEnabled)
+        with running_panel(app, lambda: bootstrap()) as (bridge, panel):
             getattr(panel, button).click()
             wait_until(app, lambda: not panel._busy)
             assert panel.current.status is TaskStatus.HALTED
             assert panel.message.text().startswith(f"{name} 완료")
             assert panel.internal_code.text() == "내부 코드: CONTROL_DENIED_QUERY_REQUIRED"
             assert not any(b.isEnabled() for b in panel.buttons)
-        finally:
-            _close_panel(app, bridge, panel)
 
     for button, name in [("halt_button", "긴급 차단"), ("cancel_button", "작업 취소")]:
         with pytest.MonkeyPatch.context() as patch:
@@ -145,24 +138,16 @@ def test_successful_stop_reads_as_success():
             check(button, name)
 
 
-def test_stop_without_confirmed_halt_is_not_reported_as_success():
-    app = QApplication.instance() or QApplication([])
-    app.processEvents()
-    bridge = BackendBridge(_unused)
-    panel = RuntimePanel(bridge)
+def test_stop_without_confirmed_halt_is_not_reported_as_success(idle_panel):
+    panel = idle_panel
     panel.set_snapshot(TaskProjection("task", 1, TaskStatus.RUNNING, can_advance=True))
     text = panel._result_text(ControlAction.EMERGENCY_HALT, "CONTROL_DENIED_QUERY_REQUIRED")
     assert text.startswith("긴급 차단 적용을 확인하지 못함")
     assert "다음 사용자 지시" not in panel.summary.text()  # can_advance: no idle hint
-    bridge.close()
-    panel.close()
 
 
-def test_runner_status_codes_have_korean_operator_text():
-    app = QApplication.instance() or QApplication([])
-    app.processEvents()
-    bridge = BackendBridge(_unused)
-    panel = RuntimePanel(bridge)
+def test_runner_status_codes_have_korean_operator_text(idle_panel):
+    panel = idle_panel
     failures = []
 
     def check(action, code, start, fragment):
@@ -181,39 +166,32 @@ def test_runner_status_codes_have_korean_operator_text():
         assert panel.message.text() == text
         assert panel.internal_code.text() == f"내부 코드: {code}"
 
-    try:
-        for action, code, start, fragment in [
-            ("run", "RUN_GUARD_ERROR_QUERY_REQUIRED", "Guard 내부 오류로", "이어서 실행할 수 없음"),
-            ("run", "RUN_WITHHELD_QUERY_REQUIRED", "도구 결과를 공개하지 않음", "다시 조회된 표시"),
-            ("run", "RUN_STOPPED_QUERY_REQUIRED", "실행이 정지됨", "새 Task"),
-            (
-                ControlAction.APPROVE,
-                "CONTROL_GUARD_ERROR_QUERY_REQUIRED",
-                "제어 처리 중 Guard 내부 오류",
-                "다시 조회된 표시",
-            ),
-            (
-                ControlAction.REJECT,
-                "CONTROL_GUARD_ERROR_QUERY_REQUIRED",
-                "제어 처리 중 Guard 내부 오류",
-                "다시 조회된 표시",
-            ),
-        ]:
-            try:
-                check(action, code, start, fragment)
-            except AssertionError as error:
-                failures.append((action, code, str(error)))
-        assert failures == []
-    finally:
-        bridge.close()
-        panel.close()
+    for action, code, start, fragment in [
+        ("run", "RUN_GUARD_ERROR_QUERY_REQUIRED", "Guard 내부 오류로", "이어서 실행할 수 없음"),
+        ("run", "RUN_WITHHELD_QUERY_REQUIRED", "도구 결과를 공개하지 않음", "다시 조회된 표시"),
+        ("run", "RUN_STOPPED_QUERY_REQUIRED", "실행이 정지됨", "새 Task"),
+        (
+            ControlAction.APPROVE,
+            "CONTROL_GUARD_ERROR_QUERY_REQUIRED",
+            "제어 처리 중 Guard 내부 오류",
+            "다시 조회된 표시",
+        ),
+        (
+            ControlAction.REJECT,
+            "CONTROL_GUARD_ERROR_QUERY_REQUIRED",
+            "제어 처리 중 Guard 내부 오류",
+            "다시 조회된 표시",
+        ),
+    ]:
+        try:
+            check(action, code, start, fragment)
+        except AssertionError as error:
+            failures.append((action, code, str(error)))
+    assert failures == []
 
 
-def test_immediate_rejection_does_not_leave_panel_busy():
-    app = QApplication.instance() or QApplication([])
-    app.processEvents()
-    bridge = BackendBridge(_unused)
-    panel = RuntimePanel(bridge)
+def test_immediate_rejection_does_not_leave_panel_busy(idle_panel):
+    panel = idle_panel
     panel._ready = True  # stale UI state racing backend readiness
     panel.set_snapshot(TaskProjection("task", 1, TaskStatus.RUNNING, can_advance=True))
     panel.run_button.click()
@@ -221,15 +199,11 @@ def test_immediate_rejection_does_not_leave_panel_busy():
     assert not panel._commands
     assert "NOT_READY" not in panel.message.text()
     assert panel.internal_code.text() == "내부 코드: NOT_READY"
-    bridge.close()
-    panel.close()
 
 
 @pytest.mark.parametrize("target", ["run", "review", "approve"])
-def test_double_enter_on_safe_action_never_cancels_or_halts(target):
-    # QA 2026-10-13 Q06: disabling the focused button moved focus to 작업 취소,
-    # so a second Enter irreversibly stopped the Task.
-    app = QApplication.instance() or QApplication([])
+def test_double_enter_on_safe_action_never_cancels_or_halts(target, app):
+    # Q06: repeated Enter must not move focus to 작업 취소.
     bridge = BackendBridge(lambda: bootstrap())
     sent: list[ControlAction] = []
     request_control = bridge.request_control
@@ -276,10 +250,8 @@ def test_double_enter_on_safe_action_never_cancels_or_halts(target):
         _close_panel(app, bridge, host)
 
 
-def test_lifecycle_messages_are_current_korean_with_code_secondary():
-    # QA 2026-10-13 R10: READY still read "백엔드: STARTING"; a failed start kept
-    # the "시작 중" summary.
-    app = QApplication.instance() or QApplication([])
+def test_lifecycle_messages_are_current_korean_with_code_secondary(app):
+    # R10: lifecycle messages must follow the current backend state.
     bridge = BackendBridge(lambda: bootstrap())
     panel = RuntimePanel(bridge)
     try:
@@ -313,9 +285,8 @@ def test_lifecycle_messages_are_current_korean_with_code_secondary():
     panel.close()
 
 
-def test_initial_snapshot_failure_or_stop_closes_resources():
+def test_initial_snapshot_failure_or_stop_closes_resources(app):
     def check(mode):
-        app = QApplication.instance() or QApplication([])
         entered, cleaned = threading.Event(), threading.Event()
 
         async def snapshot(task_id):
@@ -350,10 +321,8 @@ def test_initial_snapshot_failure_or_stop_closes_resources():
             bridge.close()
             wait_until(app, lambda: bridge.thread_done, timeout=2)
 
-    for mode in ["error", "timeout", "close"]:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
-            check(mode)
+    for mode, _patch in isolated_cases(["error", "timeout", "close"]):
+        check(mode)
 
 
 @pytest.fixture(autouse=True)
@@ -362,13 +331,12 @@ def isolate_process_start_gate(monkeypatch):
     monkeypatch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
 
 
-def test_restart_gate_failure_disables_every_runtime_action():
+def test_restart_gate_failure_disables_every_runtime_action(app):
     def check(code):
         """REC-01·REC-05, I1/I6: 고정 재시작 안내와 실행·제어 비활성; 대응 T/S ID 없음."""
         from guard_app.services.bridge import LifecycleEvent
         from guard_app.ui.presentation import LIFECYCLE_MESSAGES
 
-        app = QApplication.instance() or QApplication([])
         bridge = BackendBridge(lambda: bootstrap())
         panel = RuntimePanel(bridge)
         panel.set_snapshot(TaskProjection("task", 1, TaskStatus.WAITING_APPROVAL, "approval"))
@@ -385,17 +353,14 @@ def test_restart_gate_failure_disables_every_runtime_action():
         bridge.close()
         panel.close()
 
-    for code in ["PROCESS_RESTART_REQUIRED", "BACKEND_ALREADY_ACTIVE"]:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(bridge_module, "_PROCESS_START_GATE", bridge_module._ProcessStartGate())
-            check(code)
+    for code, _patch in isolated_cases(["PROCESS_RESTART_REQUIRED", "BACKEND_ALREADY_ACTIVE"]):
+        check(code)
 
 
-def test_internal_code_is_folded_under_the_message_and_follows_the_session():
+def test_internal_code_is_folded_under_the_message_and_follows_the_session(app):
     """#52 C 리뷰 UI 3: 안내 문구에는 코드가 없고, 코드는 접힌 상세에서 펼쳐 본다."""
     from guard_app.services.bridge import LifecycleEvent
 
-    app = QApplication.instance() or QApplication([])
     app.processEvents()
     bridge = BackendBridge(_unused)
     host = QWidget()
@@ -431,9 +396,7 @@ def test_internal_code_is_folded_under_the_message_and_follows_the_session():
     assert panel.internal_code.isVisible()
     assert panel.internal_code.text() == "내부 코드: NOT_READY"
 
-    # "메시지 요청됨" has no code, so the toggle hides while 작업 취소 stays
-    # enabled. Focus on the toggle goes to the read-only detail, never on to
-    # the stop button (the unstarted bridge then rejects with NOT_READY).
+    # A hidden toggle transfers focus to detail, never to the enabled stop button.
     toggle.setFocus()
     app.processEvents()
     assert app.focusWidget() is toggle
@@ -442,8 +405,7 @@ def test_internal_code_is_folded_under_the_message_and_follows_the_session():
     assert panel.cancel_button.isEnabled()
     assert app.focusWidget() is panel.detail
 
-    # A session without a message shows no toggle. Switching back restores
-    # that session's last message and code.
+    # Switching back restores the session's message and code.
     panel.set_scope(("other", 1))
     assert panel.message.text() == ""
     assert not toggle.isVisible() and not panel.internal_code.isVisible()
