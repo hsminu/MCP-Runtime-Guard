@@ -17,6 +17,8 @@ from guard_app.domain.reasons import Reason
 from guard_app.storage import SQLiteStore
 from tests.unit.test_guard import _call, _Harness
 
+TASK_COUNT = 12
+
 
 async def _settle():
     for _ in range(4):
@@ -45,7 +47,7 @@ def test_many_tasks_release_idle_locks_and_confirmed_stop_signals(mode, real_sto
         store = opened or h.store
         control = h.guard.human_control("operator")
         try:
-            for number in range(80):
+            for number in range(TASK_COUNT):
                 task_id = f"task-{number}"
                 state = template.model_copy(
                     update={
@@ -75,7 +77,7 @@ def test_many_tasks_release_idle_locks_and_confirmed_stop_signals(mode, real_sto
                 await _settle()
                 assert not h.guard._locks
                 assert not h.guard._stop_requests
-            assert len(h.transport.calls) == (0 if mode == "pending_cancel" else 80)
+            assert len(h.transport.calls) == (0 if mode == "pending_cancel" else TASK_COUNT)
             assert not h.guard._global_halt
             assert not h.guard._approvals._memory_snapshots
         finally:

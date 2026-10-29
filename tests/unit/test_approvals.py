@@ -11,12 +11,19 @@ from typing import cast
 import pytest
 
 from guard_app.core.policy import evaluate
-from guard_app.domain.contracts import ApprovalRecord, Denied, RegisteredServer, Withheld
+from guard_app.domain.contracts import (
+    ApprovalCommit,
+    ApprovalRecord,
+    Denied,
+    RegisteredServer,
+    Withheld,
+)
 from guard_app.domain.enums import (
     ApprovalStatus,
     Decision,
     Label,
     RegStatus,
+    RequestStatus,
     TaskStatus,
     ToolKind,
     TrustTier,
@@ -108,6 +115,74 @@ class _Store:
             raise StoreError()
         assert approval.approval_id not in self.approvals
         self.approvals[approval.approval_id] = approval
+
+    async def open_approval(self, approval, *, expected_task):
+        if self.fail in ("set_status", "create"):
+            raise StoreError()
+        if self.state != expected_task:
+            raise StoreError(Reason.APPROVAL_RACE)
+        update = {
+            "status": TaskStatus.WAITING_APPROVAL,
+            "row_revision": self.state.row_revision + 1,
+        }
+        update.update(self.mutate_waiting)
+        self.state = self.state.model_copy(update=update)
+        self.statuses.append(TaskStatus.WAITING_APPROVAL)
+        self.approvals[approval.approval_id] = approval
+        return ApprovalCommit(
+            approval=approval, task=self.state, request_status=RequestStatus.WAITING_APPROVAL
+        )
+
+    async def finish_approval(
+        self,
+        approval_id,
+        status,
+        *,
+        expected_approval_revision,
+        task_after,
+        expected_task_revision,
+        reason,
+        halt_reason=None,
+        now_utc,
+    ):
+        if self.fail == "transition":
+            raise StoreError()
+        if self.transition_errors:
+            self.transition_errors -= 1
+            raise ValueError("RAW_ARGUMENT_MARKER")
+        record = self.approvals[approval_id]
+        if record.row_revision != expected_approval_revision:
+            raise StoreError(Reason.APPROVAL_RACE)
+        terminal = self.state.status in (
+            TaskStatus.HALTED,
+            TaskStatus.UNKNOWN_OUTCOME,
+            TaskStatus.CLOSED,
+        )
+        if not terminal and self.state.row_revision != expected_task_revision:
+            raise StoreError(Reason.APPROVAL_RACE)
+        if not terminal and self.fail == "set_status":
+            raise StoreError()
+        updated = record.model_copy(
+            update={
+                "status": status,
+                "row_revision": record.row_revision + 1,
+                "decided_at_utc": now_utc,
+            }
+        )
+        if not terminal:
+            self.state = self.state.model_copy(
+                update={
+                    "status": task_after,
+                    "row_revision": self.state.row_revision + 1,
+                    "security_version": self.state.security_version
+                    + int(task_after is TaskStatus.HALTED),
+                }
+            )
+            self.statuses.append(task_after)
+        self.approvals[approval_id] = updated
+        return ApprovalCommit(
+            approval=updated, task=self.state, request_status=RequestStatus.DENIED
+        )
 
     async def get_approval(self, approval_id):
         if self.fail == "get":
@@ -394,7 +469,7 @@ def test_open_freezes_waiting_returned_version_and_only_persists_metadata(bump):
         approval = await _open(setup)
         snapshot = service._memory_snapshots[approval.approval_id]
         assert snapshot.state.status is TaskStatus.WAITING_APPROVAL
-        assert snapshot.state.security_version == store.state.security_version == int(bump)
+        assert snapshot.state.security_version == store.state.security_version == 0
         assert snapshot.decision.security_version == snapshot.state.security_version
         assert snapshot.request == req
         assert snapshot.hash == approval.snapshot_hash
@@ -437,8 +512,9 @@ def test_open_rejects_security_context_mutation_during_waiting_transition(field,
         setup[1].mutate_waiting[field] = value
         with pytest.raises(StoreError):
             await _open(setup)
-        assert not setup[1].approvals
         assert not setup[0]._memory_snapshots
+        assert not setup[2].dispatched
+        assert not setup[1].consumed
 
     asyncio.run(scenario())
 

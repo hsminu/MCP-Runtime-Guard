@@ -83,6 +83,7 @@ MODEL_REASON_MESSAGES = MappingProxyType(
         Reason.SESSION_USAGE_LIMIT: _DENIED_TEXT,
         Reason.SESSION_PROCESS_FAILED: _DENIED_TEXT,
         Reason.SESSION_PROTOCOL_FAILED: _DENIED_TEXT,
+        Reason.GUARD_CLOSED: _STOPPED_TEXT,
     }
 )
 
@@ -146,7 +147,8 @@ def outcome_model_message(outcome: object) -> tuple[bool, str]:
     """기존 Outcome을 본문·식별자·버전 조회 없이 고정 문구로 바꾼다.
 
     Denied의 복수 사유에 비공개 사유가 섞이면 전체를 일반 거부 문구로
-    가린다. 거절·만료·취소를 기존 APPROVAL_STALE에서 추측하지 않는다.
+    가린다. GUARD_CLOSED만 있으면 정지 문구를 쓴다. 거절·만료·취소를
+    기존 APPROVAL_STALE에서 추측하지 않는다.
     종결 알림에서 확정된 분류를 fixed_model_message에 따로 전달해야 한다.
     """
     if type(outcome) is Released:
@@ -164,6 +166,8 @@ def outcome_model_message(outcome: object) -> tuple[bool, str]:
         raise ModelMessageError("모델 반환 사유 목록이 유효하지 않다")
     for reason in reasons:
         _reason_message(reason)
+    if all(reason is Reason.GUARD_CLOSED for reason in reasons):
+        return fixed_model_message(ModelMessageKind.DENIED, Reason.GUARD_CLOSED)
     if any(reason not in MODEL_VISIBLE_REASONS for reason in reasons):
         return False, _DENIED_TEXT
     for reason in _PUBLIC_REASON_PRIORITY:
