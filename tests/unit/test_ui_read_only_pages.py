@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog
 
 from guard_app.domain.enums import ApprovalStatus
@@ -17,6 +18,7 @@ from guard_app.ui.models import LoadState, ServerSummary, Surface
 from guard_app.ui.scan_status import ScanStatusProjection
 from guard_app.ui.window import GuardWindow
 
+from .test_call_logs import panel_text
 from .test_ui_icons_style import app as app
 from .test_ui_icons_style import resize_widget
 
@@ -53,14 +55,13 @@ def test_window_routes_public_approval_and_log_queries(app: QApplication) -> Non
     window.set_call_log_snapshot(Surface(LoadState.READY, (call,)))
     window.navigate("logs", "call-1")
     assert window.log_page.isVisibleTo(window)
-    assert window.log_page.detail_button.isEnabled()
-    window.log_page.detail_button.click()
+    assert window.stack.currentWidget() is window.log_page
+    QTest.qWait(250)
     request = log_requests[-1]
     window.set_call_log_detail(request, Surface(LoadState.READY, PublicCallDetail(call)))
-    dialog = window.log_page._detail_dialog
+    dialog = window.log_page.detail_panel
     assert dialog is not None
-    assert "수신측 확인 필요" in dialog.body.toPlainText()
-    dialog.close()
+    assert "수신측 확인 필요" in panel_text(dialog)
     window.close()
 
 

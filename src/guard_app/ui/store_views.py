@@ -107,11 +107,19 @@ def approval_page(query: ApprovalQuery, page: ApprovalListPage) -> ApprovalPage:
 
 def call_list_query(query: CallLogQuery) -> CallListQuery | None:
     offset = (query.page - 1) * query.page_size
-    if not valid_query_text(query.search) or not 0 <= offset <= _MAX_OFFSET:
+    if (
+        not valid_query_text(query.search)
+        or not valid_server_filter(query.server_id)
+        or not 0 <= offset <= _MAX_OFFSET
+    ):
         return None
     try:
         return CallListQuery(
-            search=query.search, sort=ListSort.NEWEST, offset=offset, limit=query.page_size
+            search=query.search,
+            server_id=query.server_id or None,
+            sort=ListSort.NEWEST,
+            offset=offset,
+            limit=query.page_size,
         )
     except ValueError:
         return None

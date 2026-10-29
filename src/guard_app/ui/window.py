@@ -280,7 +280,7 @@ class GuardWindow(QMainWindow):
         self._page_indices["servers"] = self.stack.addWidget(_scroll_page(self.server_page))
         self.log_page = CallLogPage()
         self.log_page.detail_requested.connect(self.call_log_detail_requested.emit)
-        self._page_indices["logs"] = self.stack.addWidget(_scroll_page(self.log_page))
+        self._page_indices["logs"] = self.stack.addWidget(self.log_page)
         self.approval_page = ApprovalListPage()
         self.approval_page.query_requested.connect(self.approval_query_requested.emit)
         # Unconnected until something answers: an attached bridge whose run has
@@ -733,6 +733,7 @@ class GuardWindow(QMainWindow):
             self.set_settings_status("SETTINGS_REGISTRATION_SAVED")
         if view.rows is None:
             return
+        self.log_page.set_known_servers([row.server_id for row in view.rows])
         self.set_server_snapshot(
             Surface(
                 LoadState.READY,

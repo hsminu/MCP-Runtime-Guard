@@ -249,6 +249,7 @@
 - [x] A189 설정 화면 세 카드(정책·설정 파일 / LLM·Codex 인증 / Scanner 키), 인증 상태별 동작만 표시, 키 입력 가림·표시 전환과 입력·저장 중·저장됨·실패 구분 · [기록](archive/a/A189-settings-page.md)
 - [x] A190 정책 · 경계: 요약(모르면 "—"), 접근 규칙·목적지 탭, 거부 우선·기본 거부 표시, 서버·상태 필터, 진행·결과·"변경됨"은 성공 확인 뒤에만 · [기록](archive/a/A190-policy-tabs-and-summary.md)
 - [x] A191 대화: Enter 전송·Shift+Enter 줄바꿈·IME 조합 보호, PlainText 답변 블록·코드 복사, 최신 메시지 이동, 확인 뒤 Task 중지, 승인 대기 요약 카드, Ctrl+N/K/L(첨부·재생성·답변만 중단은 백엔드 미지원) · [기록](archive/a/A191-chat-usability.md)
+- [x] A192 호출 로그: 기본 다섯 열(ID는 선택 열), 판정·승인·현재 상태 알약 분리, 고정 헤더·열 너비 조절, 행 선택 시 옆 상세 패널, 서버 필터는 Store 질의·상태/기간은 현재 페이지(안내 표시), 실제 범위를 적은 CSV 복사 · [기록](archive/a/A192-call-log-readability.md)
 
 ## 통합·패키징
 
