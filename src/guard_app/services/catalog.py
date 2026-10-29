@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from collections.abc import Callable, Mapping
@@ -33,10 +34,24 @@ from guard_app.domain.models import (
     ToolSpec,
 )
 from guard_app.domain.reasons import Reason
-from guard_app.ports import Registry
+from guard_app.domain.schema_jobs import (
+    MAX_ARGUMENT_BYTES,
+    VALIDATE_DEADLINE_S,
+    SchemaJobRequest,
+    SchemaJobResponse,
+    SchemaToolIssue,
+    SchemaToolIssueCode,
+    _jcs_size,
+)
+from guard_app.ports import Registry, SchemaJobRunner
 from guard_app.security.digest import JcsCanonicalizationError, digest, jcs_canonicalize
 from guard_app.security.endpoints import EndpointError, canonical_endpoint
-from guard_app.services.catalog_schema import ArgumentSchema, CatalogConfigError
+from guard_app.security.ids import new_id
+from guard_app.services.catalog_schema import (
+    ArgumentSchema,
+    CatalogConfigError,
+    SchemaPreparationCache,
+)
 from guard_app.services.catalog_sources import (
     SourceClassifier,
     SourceConfigError,
@@ -44,6 +59,7 @@ from guard_app.services.catalog_sources import (
     canonical_resource_parts,
     valid_server_id,
 )
+from guard_app.services.schema_jobs import check_job_response
 
 __all__ = [
     "SETTINGS_MAX_BYTES",
@@ -295,7 +311,11 @@ class Catalog:
         destinations: tuple[Boundary, ...] = (),
         source_rules: tuple[SourceRule, ...] = (),
         resource_resolver: ResourceResolver | None = None,
+        schema_cache: SchemaPreparationCache | None = None,
+        schema_runner: SchemaJobRunner | None = None,
     ) -> None:
+        if (schema_cache is None) != (schema_runner is None):
+            raise CatalogConfigError("스키마 캐시와 runner는 함께 연결해야 한다")
         if type(profile_id) is not str or not profile_id:
             raise CatalogConfigError("Catalog Profile ID가 유효하지 않다")
         if any(0xD800 <= ord(char) <= 0xDFFF for char in profile_id):
@@ -319,6 +339,8 @@ class Catalog:
         self._destinations = MappingProxyType(destination_map)
         self._sources = sources
         self._resource_resolver = resource_resolver
+        self._schema_cache = schema_cache
+        self._schema_runner = schema_runner
 
     def resolve_tool(self, tool_ref: str) -> ToolSpec:
         """첫 구분자 뒤의 도구 이름을 그대로 보존하고 현재 등록을 확인한다."""
@@ -333,10 +355,92 @@ class Catalog:
         call_seq: int,
     ) -> ResolvedRequest:
         """Guard의 ID·순서와 Task의 신뢰 식별자로 요청을 만든다. ID를 생성하지 않는다."""
+        if self._schema_runner is not None:
+            raise ResolutionError(Reason.INTERNAL_ERROR)
+        registration, tool = self._lookup_request(state, call)
+        self._check_argument_size(call)
+        ArgumentSchema(tool.input_schema).validate(call.arguments)
+        return self._build_request(state, call, registration, tool, request_id, call_seq)
+
+    async def aresolve(
+        self,
+        state: TaskState,
+        call: ProposedCall,
+        *,
+        request_id: str,
+        call_seq: int,
+    ) -> ResolvedRequest:
+        """준비된 스키마를 worker에서 검증한 뒤 신뢰 요청을 만든다."""
+        if self._schema_runner is None:
+            return self.resolve(state, call, request_id=request_id, call_seq=call_seq)
+        registration, tool = self._lookup_request(state, call)
+        self._check_argument_size(call)
+        if self._schema_cache is None:
+            raise ResolutionError(Reason.INTERNAL_ERROR)
+        prepared = self._schema_cache.get(tool.fingerprint)
+        if not isinstance(prepared, FrozenJsonObject):
+            raise ResolutionError(Reason.TOOL_UNSUPPORTED)
+        try:
+            job = SchemaJobRequest(
+                kind="VALIDATE",
+                job_id=new_id("schema"),
+                schema_data=prepared,
+                arguments=call.arguments,
+            )
+        except (TypeError, ValueError):
+            raise ResolutionError(Reason.INTERNAL_ERROR) from None
+        runner = self._schema_runner
+        deadline = asyncio.get_running_loop().time() + VALIDATE_DEADLINE_S
+
+        async def invoke() -> SchemaJobResponse:
+            return await runner.run(job, deadline=deadline)
+
+        (response,) = await asyncio.gather(invoke(), return_exceptions=True)
+        if isinstance(response, asyncio.CancelledError):
+            raise response
+        if isinstance(response, BaseException):
+            raise ResolutionError(Reason.INTERNAL_ERROR) from None
+        try:
+            checked = check_job_response(job, response)
+        except (TypeError, ValueError, AttributeError, RecursionError):
+            raise ResolutionError(Reason.INTERNAL_ERROR) from None
+        if checked.code == "INVALID_ARGUMENTS":
+            raise ResolutionError(Reason.INVALID_ARGUMENTS)
+        if checked.code != "OK":
+            raise ResolutionError(Reason.INTERNAL_ERROR)
+        try:
+            current_registration, current_tool = self._lookup_request(state, call)
+        except (ResolutionError, CatalogConfigError):
+            raise ResolutionError(Reason.INTERNAL_ERROR) from None
+        if current_registration != registration or current_tool != tool:
+            raise ResolutionError(Reason.INTERNAL_ERROR)
+        return self._build_request(state, call, registration, tool, request_id, call_seq)
+
+    def _lookup_request(
+        self, state: TaskState, call: ProposedCall
+    ) -> tuple[RegisteredServer, ToolSpec]:
         if state.profile_id != self._profile_id:
             raise ResolutionError(Reason.POLICY_CHANGED)
-        registration, tool = self._find_tool(call.tool_ref)
-        ArgumentSchema(tool.input_schema).validate(call.arguments)
+        return self._find_tool(call.tool_ref)
+
+    @staticmethod
+    def _check_argument_size(call: ProposedCall) -> None:
+        try:
+            size = _jcs_size(call.arguments, MAX_ARGUMENT_BYTES)
+        except (ValueError, RecursionError):
+            raise ResolutionError(Reason.INVALID_ARGUMENTS) from None
+        if size > MAX_ARGUMENT_BYTES:
+            raise ResolutionError(Reason.INVALID_ARGUMENTS)
+
+    def _build_request(
+        self,
+        state: TaskState,
+        call: ProposedCall,
+        registration: RegisteredServer,
+        tool: ToolSpec,
+        request_id: str,
+        call_seq: int,
+    ) -> ResolvedRequest:
         destination = self._resolve_destination(tool, call)
         resource_id = self._resolve_resource(tool, call)
         return ResolvedRequest(
@@ -397,10 +501,17 @@ class Catalog:
                     continue
                 if self._registry.fingerprint(tool) != tool.fingerprint:
                     continue
+                if self._schema_cache is None:
+                    schema = ArgumentSchema(tool.input_schema).schema
+                else:
+                    cached = self._schema_cache.get(tool.fingerprint)
+                    if not isinstance(cached, FrozenJsonObject):
+                        continue
+                    schema = cached
                 views.append(
                     ToolView(
                         tool_ref=f"{server_id}__{tool.tool_name}",
-                        input_schema=ArgumentSchema(tool.input_schema).schema,
+                        input_schema=schema,
                         description=tool.reviewed_description,
                     )
                 )
@@ -673,6 +784,7 @@ class LoadedProfile:
     guard_settings: GuardSettings
     servers: tuple[ServerSettings, ...]
     _profile_registry: _ProfileRegistry | None = None
+    _schema_cache: SchemaPreparationCache | None = None
 
     @property
     def policy_version(self) -> str:
@@ -706,6 +818,28 @@ class LoadedProfile:
         if self._profile_registry is None:
             return None
         return self._profile_registry.server_issue(server_id)
+
+    def tool_issue(self, server_id: str, tool_name: str) -> SchemaToolIssue | None:
+        """도구 준비 진단이며 실행 허가가 아니다. 표시와 상한 재계산은 A 몫이다."""
+        if self._profile_registry is None or self._schema_cache is None:
+            return None
+        # server_issue와 같이 unhashable 입력을 형식 오류로 드러낸다.
+        hash(server_id)
+        hash(tool_name)
+        if (
+            type(server_id) is not str
+            or type(tool_name) is not str
+            or not valid_server_id(server_id)
+            or not tool_name
+        ):
+            return None
+        tool = self._profile_registry.registered_tool(server_id, tool_name)
+        if tool is None:
+            return None
+        code = self._schema_cache.get(tool.fingerprint)
+        if isinstance(code, SchemaToolIssueCode):
+            return SchemaToolIssue(server_id=server_id, tool_name=tool_name, code=code)
+        return None
 
     def __repr__(self) -> str:
         return "LoadedProfile(<redacted>)"
@@ -847,6 +981,21 @@ class _ProfileRegistry:
     def registration(self, server_id: str) -> RegisteredServer | None:
         return self._matching_registration(server_id)[0]
 
+    def registered_tool(self, server_id: str, tool_name: str) -> ToolSpec | None:
+        """선택 서버의 실제 등록을 진단한다. 실행 가능 여부를 뜻하지 않는다."""
+        if server_id not in self._servers:
+            return None
+        record = self._registry.registration(server_id)
+        if record is None:
+            return None
+        try:
+            record = RegisteredServer.model_validate(record)
+        except ValidationError:
+            raise CatalogConfigError("Registry 등록 모델이 유효하지 않다") from None
+        if record.server_id != server_id:
+            raise CatalogConfigError("Registry 조회 ID와 등록 서버 ID가 다르다")
+        return next((tool for tool in record.tools if tool.tool_name == tool_name), None)
+
     def server_issue(self, server_id: str) -> str | None:
         if server_id not in self._servers:
             return None
@@ -867,6 +1016,8 @@ def load_profile_settings(
     registry: Registry,
     *,
     resource_resolver: ResourceResolver | None = None,
+    schema_cache: SchemaPreparationCache | None = None,
+    schema_runner: SchemaJobRunner | None = None,
 ) -> LoadedProfile:
     """이미 파싱한 JSON Mapping을 검증한다. 파일·URL·프로세스에 접근하지 않는다.
 
@@ -879,6 +1030,8 @@ def load_profile_settings(
     """
     if not isinstance(document, Mapping):
         raise CatalogConfigError("Profile 설정은 JSON Mapping이어야 한다")
+    if schema_runner is not None and schema_cache is None:
+        raise CatalogConfigError("스키마 runner에는 캐시가 필요하다")
     try:
         snapshot = dict(document)
         jcs_canonicalize(snapshot)
@@ -918,6 +1071,8 @@ def load_profile_settings(
             ),
             source_rules=profile.source_rules,
             resource_resolver=resource_resolver,
+            schema_cache=schema_cache if schema_runner is not None else None,
+            schema_runner=schema_runner,
         )
         guard_settings = GuardSettings(
             profile_id=profile.profile_id,
@@ -927,7 +1082,9 @@ def load_profile_settings(
         )
     except (ValidationError, JcsCanonicalizationError, SourceConfigError):
         raise CatalogConfigError("Profile 설정이 유효하지 않다") from None
-    return LoadedProfile(profile, catalog, rules, guard_settings, config.servers, profile_registry)
+    return LoadedProfile(
+        profile, catalog, rules, guard_settings, config.servers, profile_registry, schema_cache
+    )
 
 
 def _check_configuration(config: _Configuration) -> None:
