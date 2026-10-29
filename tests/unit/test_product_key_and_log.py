@@ -1,18 +1,21 @@
 """A48/A147 composition only: fake credentials and folders (I9, S04)."""
 
 import argparse
+import gc
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
 from types import SimpleNamespace
 
 import pytest
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QLabel
 
 from guard_app import __main__ as entry
 from guard_app.security import secrets
 from guard_app.security.paths import AppPathError, AppPaths
 from guard_app.services import codex_preparation, product_settings
+from guard_app.services.bridge import BackendCleanupUnconfirmedError
 from guard_app.ui.scanner_key import NO_SAVED_KEY, NOT_CONNECTED, SAVE_FAILED
 from guard_app.ui.window import GuardWindow
 
@@ -43,11 +46,11 @@ def owner(monkeypatch, tmp_path):
     return owner
 
 
-@pytest.mark.parametrize("outcome", ["normal", "exception", "unconfirmed"])
+@pytest.mark.parametrize("outcome", ["normal", "exception", "unconfirmed", "cleanup_exception"])
 def test_product_log_settings_redaction_and_cleanup(monkeypatch, owner, outcome):
     root = logging.getLogger()
     before = root.handlers[:], root.level
-    captured = []
+    captured, ended = [], []
 
     def run(*args):
         assert owner.events == ["claim"]
@@ -62,23 +65,31 @@ def test_product_log_settings_redaction_and_cleanup(monkeypatch, owner, outcome)
         logging.getLogger("guard_app.unit").info("KEY_SAVED TEST_SECRET_PRODUCT")
         logging.getLogger("library").warning("TEST_SECRET_LIBRARY")
         if outcome == "exception":
+            # Before backend start or after confirmed cleanup: releasing is safe.
             raise ValueError("synthetic")
+        if outcome == "cleanup_exception":
+            # #101 B-ACCEPT-01 / REC-01, REC-05: retain ownership on unknown end.
+            raise BackendCleanupUnconfirmedError
         return 0, outcome != "unconfirmed"
 
     monkeypatch.setattr(entry, "_run", run)
-    monkeypatch.setattr(entry, "_end_unconfirmed", lambda: None)
+    monkeypatch.setattr(entry, "_end_unconfirmed", lambda: ended.append(True))
     if outcome == "exception":
         with pytest.raises(ValueError, match="^synthetic$"):
             entry.main()
     else:
-        assert entry.main() == 0
+        assert entry.main() == (
+            entry.EXIT_CLEANUP_UNCONFIRMED if outcome == "cleanup_exception" else 0
+        )
     assert (root.handlers, root.level) == before
     assert captured[0].stream is None
     text = (owner.folders.paths.data / "guard.log").read_text(encoding="utf-8")
     assert "KEY_SAVED" in text
     assert "LOG_WITHHELD" in text
     assert "TEST_SECRET_" not in text
-    assert owner.events == (["claim"] if outcome == "unconfirmed" else ["claim", "close"])
+    unconfirmed = outcome in ("unconfirmed", "cleanup_exception")
+    assert owner.events == (["claim"] if unconfirmed else ["claim", "close"])
+    assert ended == ([True] if unconfirmed else [])
 
 
 @pytest.mark.parametrize("mode", ["demo", "locked", "arguments"])
@@ -174,5 +185,7 @@ def test_run_wires_real_window_without_keeping_key(monkeypatch, owner, mode, cap
         for window in windows:
             window.hide()
             window.deleteLater()
-        app.sendPostedEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+        gc.collect()
         app.setQuitOnLastWindowClosed(previous)

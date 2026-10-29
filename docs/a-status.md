@@ -241,6 +241,7 @@
 - [x] A176 #99 B 리뷰 제안: 저장기 없음은 Registry 쓰기 전에 거부됨을 시험으로 고정 · [기록](archive/a/A176-missing-saver-order.md)
 - [x] A177 #94 F-02: 도구 설정 화면에 도구 단위 READ 등급 안내 추가 · [기록](archive/a/A177-tool-read-grade-hint.md)
 - [x] A178 #92 중단 원인: 부모 없는 하위 레이아웃이 남긴 Qt 위젯 이중 소유 제거·소유 회귀 시험 · [기록](archive/a/A178-qt-double-ownership.md)
+- [x] A179 #101 B-ACCEPT-01: READY 뒤 예외에도 backend 종료 확인 전에는 앱 잠금 유지, 미확인이면 잠금을 쥔 채 종료 · [기록](archive/a/A179-ready-exception-lock-order.md)
 - [x] A180 #101 제안: 정책·목적지 저장 성공 뒤 B 적용 중 취소에도 재시작 요구·Guard 닫기, 일곱 저장 경로 취소 시험 · [기록](archive/a/A180-cancel-during-apply.md)
 
 ## 통합·패키징
@@ -282,6 +283,6 @@
 - [x] A152 개요·승인 행과 화면 투영 분리 · [기록](archive/a/A152-overview-approvals-render.md)
 - [x] A153 `SessionRuntime`에서 제품 시작 조립 분리(공개 초기화·등록 경계, 기존 `bootstrap_product` 재수출) · [기록](archive/a/A153-session-runtime-boundary.md)
 - [x] A154 `BackendBridge`를 Qt 경계·생명주기 host·명령 접수 문맥·action 처리로 분리 · [기록](archive/a/A154-backend-bridge-commands.md)
-- [ ] A116·A152–A154 독립 리뷰 — C: 화면 격리·signal·로그 설치 순서, bridge 생명주기·replay·종료 순서. B: Store 활성화·종료 확인
+- [ ] A116·A152–A154 독립 리뷰 — C: 화면 격리·signal·로그 설치 순서, bridge 생명주기·replay·종료 순서. B: Store 활성화·종료 확인(#101 보류, A179 뒤 B 재확인)
 - [x] A139 A 모듈 ID 생성을 `security/ids.py`로 통합([#65 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/65#issuecomment-6472889394)), B6.8 복구에 `new_id("run")` 연결(A138) · [기록](archive/a/A139-ids-module.md)
 - [x] A150 A 단위 시험 압축: 1차 같은 모양 시험 묶기([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)), 2차 줄 수 줄이기(목표 30% 미달) · [기록](archive/a/A150-a-test-compression.md)

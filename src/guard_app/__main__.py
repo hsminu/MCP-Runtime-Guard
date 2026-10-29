@@ -70,7 +70,10 @@ def main() -> int:
             codex.close()
             print(_claim_refusal(error), file=sys.stderr)
             return 1
-    confirmed: bool | None = None  # None: _run raised before the backend reported
+    from guard_app.services.bridge import BackendCleanupUnconfirmedError
+
+    # None: _run raised before starting the backend or after its end was confirmed.
+    confirmed: bool | None = None
     handler: RotatingFileHandler | None = None
     root = logging.getLogger()
     previous_level = root.level
@@ -92,7 +95,10 @@ def main() -> int:
             )
             root.addHandler(handler)
             root.setLevel(logging.INFO)
-        code, confirmed = _run(args, codex, settings)
+        try:
+            code, confirmed = _run(args, codex, settings)
+        except BackendCleanupUnconfirmedError:
+            code, confirmed = EXIT_CLEANUP_UNCONFIRMED, False
     finally:
         if handler is not None:
             root.removeHandler(handler)

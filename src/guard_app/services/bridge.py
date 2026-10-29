@@ -84,6 +84,10 @@ from guard_app.services.policy_view import PolicyView as PolicyView  # UI re-exp
 from guard_app.services.session_preparation import L2_FAILURE_CODES as L2_FAILURE_CODES
 
 
+class BackendCleanupUnconfirmedError(Exception):
+    """run_application ended by an exception and the started backend's end was not confirmed."""
+
+
 def valid_server_id(server_id: object) -> bool:
     """Forward B's pure syntax result, including before backend startup/after close.
 

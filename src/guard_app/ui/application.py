@@ -25,7 +25,7 @@ def run_application(
     from PySide6.QtCore import QTimer
     from PySide6.QtGui import QCloseEvent
 
-    from guard_app.services.bridge import BridgeState
+    from guard_app.services.bridge import BackendCleanupUnconfirmedError, BridgeState
 
     from .runtime import RuntimePanel
     from .window import GuardWindow
@@ -66,9 +66,21 @@ def run_application(
     timer.timeout.connect(quit_when_closed)
     timer.start()
     app.aboutToQuit.connect(bridge.close)
-    window.show()
-    bridge.start()
-    code = app.exec()
+    finished = False
+    try:
+        window.show()
+        bridge.start()
+        code = app.exec()
+        finished = True
+    finally:
+        # #101, REC-01/REC-05: even an exception must confirm Store shutdown
+        # before the entry point can release the single-owner lock.
+        if not finished:
+            bridge.close()
+            waited_s = time.monotonic() - closing_since[0] if closing_since else 0.0
+            done = bridge.wait_done(close_limit_s - waited_s)
+            if not done or bridge.cleanup_unconfirmed:
+                raise BackendCleanupUnconfirmedError
     # A quit from elsewhere (session end) also gets the observation window.
     waited_s = time.monotonic() - closing_since[0] if closing_since else 0.0
     done = bridge.wait_done(close_limit_s - waited_s)
