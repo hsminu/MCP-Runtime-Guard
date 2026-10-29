@@ -113,7 +113,7 @@
 - [ ] B6.13 SQLite 대기 응답성·Store 정지 가시성(B-QA-03/10) — B 단위 구현·C 독립 검증 및 측정 완료, A 연결·#55와 C 기록 PR 대기 · [기록](archive/b/B6.13-sqlite-writer.md) · [C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/58#issuecomment-6468999539)
 - [x] B6.14 RegistryStore 계약·SQLite v2·빈 v1 이관 B 구현·합의 전 제안 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.15 규칙 버전 감사(AGT-02) — 막힘: 판정·감사 버전 추적 범위와 직접 저장·간접 조회 합의 · [조사](archive/b/B2.9-B2.11-agt-removal.md#b615agt-04와-공통-계약-문안)
-- [ ] B6.16 A 시작 게이트·조회 요구와 C 인수 기준을 대조해 API 합의 기록 — 막힘: A·C 회신
+- [ ] B6.16 화면용 권위 조회 B 단위 제안 구현 · A·C 확인(#76) 대기 · [기록](archive/b/B6.16-store-queries.md)
 - [x] B6.17 SEQ·REC B 결정안·A·C 동의(#37), 사용자 contracts 반영 완료 · 구현 B6.8·B6.13 대기 · [기록](archive/b/B6.17-seq-rec-decisions.md)
 - [x] B6.18 RegistryStore 계약·C4.10(#46) 사본 교체/승인 무효화와 C4.19(#53) 연결 완료 · [기록](archive/b/B6.14-registry-store.md)
 - [ ] B6.19 지문 변경과 예약/승인 소비·전송 경쟁(S03) 원자 조건·독립 검증 — 막힘: 3인 합의·A/C 연결
