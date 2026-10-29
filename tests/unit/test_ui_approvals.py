@@ -22,12 +22,13 @@ from guard_app.ui.approvals import (
     ApprovalSort,
     ApprovalSummary,
 )
+from guard_app.ui.call_logs import CallLogPage
 from guard_app.ui.models import LoadState
 from guard_app.ui.runtime import RuntimePanel
 from guard_app.ui.window import GuardWindow
 
 from .test_ui_icons_style import app as app
-from .test_ui_icons_style import closing_widgets, resize_widget
+from .test_ui_icons_style import closing_widgets, resize_widget, show_widget
 
 NOW = datetime(2026, 10, 12, 5, 0, tzinfo=UTC)
 
@@ -478,3 +479,19 @@ def test_waiting_hint_follows_the_stored_expiry_not_the_profile(app: QApplicatio
         assert not hint(summary(1, created_at=NOW - timedelta(days=2), ttl=None))
         naive = replace(summary(1, created_at=created), expires_at=datetime(2026, 1, 1))
         assert not hint(naive)
+
+
+def test_page_counts_stay_on_one_line_beside_the_pager_buttons(app):
+    """#92 window check: in a wide window the count broke mid-phrase."""
+    calls = CallLogPage()
+    calls.set_source_connected(True)
+    approvals = ApprovalListPage()
+    with closing_widgets(calls, approvals):
+        for page in (calls, approvals):
+            show_widget(app, page, 1056, 760)
+            page.count_label.setText("전체 122건 · 현재 페이지 50건")
+            app.processEvents()
+            label = page.count_label
+            # It takes the free width, not its wrapped hint (85px with real fonts).
+            assert label.width() > label.sizeHint().width()
+            assert label.width() >= label.fontMetrics().horizontalAdvance(label.text())

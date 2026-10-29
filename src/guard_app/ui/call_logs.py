@@ -363,8 +363,9 @@ class CallLogPage(QWidget):
         pager = QBoxLayout(QBoxLayout.Direction.LeftToRight, self.pager)
         pager.setContentsMargins(0, 0, 0, 0)
         self.count_label = plain_label("총건수 미제공 · 현재 페이지 0건", name="secondary")
-        pager.addWidget(self.count_label)
-        pager.addStretch(1)
+        # The count takes the free width; a wrapping label beside a stretch got
+        # only its narrow hint and broke mid-phrase.
+        pager.addWidget(self.count_label, 1)
         self.previous_button = KeyboardActionButton("이전")
         self.previous_button.clicked.connect(self.previous_page)
         pager.addWidget(self.previous_button)
