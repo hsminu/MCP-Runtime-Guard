@@ -401,6 +401,7 @@ class TaskPolicy:
                     # C validation refuses before writing; do not require restart.
                     rejected = True
                     raise SessionRuntimeError("REG_TOOLS_INVALID") from None
+                # check_registration() already refused a missing saver before any write.
                 if self._saver is None:
                     raise SessionRuntimeError("REG_SETTINGS_UNAVAILABLE")
                 try:

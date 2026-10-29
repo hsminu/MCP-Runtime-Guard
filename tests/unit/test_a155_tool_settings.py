@@ -344,6 +344,26 @@ async def test_registry_refusal_does_not_save_or_require_restart(tmp_path, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("active", [False, True])
+async def test_missing_saver_refuses_before_apply_settings(tmp_path, monkeypatch, active):
+    async with tools_harness(tmp_path, active=active) as h:
+        before = await h.store.load_registration("docs")
+        before_file = read_settings(h.folders).document
+
+        async def forbidden(*args, **kwargs):
+            pytest.fail("a missing saver must refuse before apply_settings")
+
+        monkeypatch.setattr(h.registry, "apply_settings", forbidden)
+        h.policy._saver = None
+        assert (await h.commands(h.request)).code == "REG_SETTINGS_UNAVAILABLE"
+        assert h.admission.restart_code is None
+        assert not h.commands._unknown
+        assert read_settings(h.folders).document == before_file
+        assert await h.store.load_registration("docs") == before
+        assert h.peer.calls == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failure",
     [
