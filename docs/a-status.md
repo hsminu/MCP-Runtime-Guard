@@ -15,7 +15,7 @@
 | mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
 
-**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
+**A가 막고 있는 것**: C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
 
 ## 계약·환경
 
@@ -165,7 +165,8 @@
 - [ ] A36·A37 전체 GUI 인수 — 막힘: C
 - [x] A47 신뢰하지 않는 텍스트 표시 위젯(모델 답변·서버 설명·threat_summary) · [기록](archive/a/A47-untrusted-text-view.md)
 - [x] A47 모델 대화의 비신뢰 텍스트·일반 텍스트 표시 연결 · [기록](archive/a/A63-session-workspace.md)
-- [ ] A47 등록 화면·Scanner 경고에 연결 — 막힘: UI 이벤트 계약(B1.5)·검토된 설명(#20 3번)·SCAN-01. 지금 활성화는 검사 미연결 안내와 `reviewed_scan_id=None`(A105)
+- [x] A47 Scanner 경고에 연결: 모델 설명(`threat_summary`)을 300자·검증되지 않은 내용으로 등록 검사 창·활성화 확인·승인 창에 표시 · [기록](archive/a/A201-scan-warning-screens.md)
+- [ ] A47 등록 화면의 서버 설명 검토·검토된 설명 입력(DESC-01)
 - [x] A48 Scanner API 키 입력 화면(가림·끝 4자리·주입형 저장) · [기록](archive/a/A48-scanner-key-form.md)
 - [x] A48 자격증명 관리자 저장 연결(C2.10 `save_scanner_key`, 끝 4자리는 `scanner_key_tail()`, [#62 요청](https://github.com/hsminu/MCP-Runtime-Guard/pull/62)) · [기록](archive/a/A48-scanner-key-credential-store.md)
 - [x] A48 실제 Windows 자격 증명 관리자 저장·재시작 뒤 끝자리 조회 확인 · [기록](archive/a/A48-real-windows-credential.md)
@@ -217,7 +218,7 @@
 - [x] A128 MCP 서버 추가: '초안' 표기 제거, 설정 붙여넣기로 칸 채우기, 표시 이름·ID 추천·찾아보기·명령줄 인자, `.exe`만 통과(EXE-01) · [기록](archive/a/A128-server-add-paste.md)
 - [x] A128 실제 Registry 등록·EXE-01 지문 확인(`command_sha256`·`command_size` 저장, C2.22)·변경 재확인·목록 반영 · [기록](archive/a/A128-registry-registration.md)
 - [x] A128 등록 뒤 Scanner 검사·기록·활성화 연결: 등록 확인 뒤 같은 목록으로 자동 검사, 수동 재검사, 진행 신호, 보여 준 검사 ID를 `reviewed_scan_id`로 전달, 종료 때 검사 취소 뒤 `close()` · [기록](archive/a/A200-registration-scan-wiring.md)
-- [ ] A128 등록 화면·승인 창의 Scanner 경고 표시(C4.13)
+- [x] A128 등록 화면·활성화 확인·승인 창의 Scanner 경고 표시(C4.13): 서비스 오류와 보고서 진단 분리, 키 없으면 YARA만 표시, 보인 검사 ID만 활성화에 전달, 경고는 판정·버튼을 바꾸지 않음 · [기록](archive/a/A201-scan-warning-screens.md)
 - [x] A128·A105 등록만 저장되고 설정 저장이 끝나지 않은 PENDING 행: 목록·상세에 "설정 없음" 표시, 같은 서버를 다시 입력해 도구 지문·경계가 등록과 같을 때만 설정 파일에 저장(Registry는 그대로) · [기록](archive/a/A165-registration-settings-restore.md)
 - [x] A128 실제 MCP 서버 PENDING 등록·EXE-01 화면 확인 · [기록](archive/a/A128-real-desktop-registration.md)
 - [x] A157 #83 C 리뷰 후속: 시작하지 못한 서버의 등록 거부 문구, 설정 파일 URL 거부를 그 서버만 격리, 시작 예산에 서버 조립, `main()` 시험의 로그 상태 복원 · [기록](archive/a/A157-pr83-c-review-followups.md)

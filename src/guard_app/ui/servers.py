@@ -44,6 +44,7 @@ from .presentation import (
     fixed_code,
     public_display_text,
 )
+from .scan_report import ScanReviewDialog, activation_scan_text, attach_activation_scan
 from .scan_status import ScanStatusCard, ScanStatusProjection
 from .tool_settings import ToolSettingsDialog
 from .widgets import (
@@ -200,6 +201,7 @@ class ServerListPage(QWidget):
         self._activation_command = ""
         self._activation_action = "activate"
         self._activation_dialog: ToolAllowDialog | None = None
+        self._scan_dialog: ScanReviewDialog | None = None
         self._tools_dialog: ToolSettingsDialog | None = None
         self._visible_servers: list[ServerSummary] = []
         self._state = LoadState.UNAVAILABLE
@@ -288,6 +290,9 @@ class ServerListPage(QWidget):
         self.detail_button.clicked.connect(self._open_selected)
         self.detail_button.setEnabled(False)
         layout.addWidget(self.detail_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self.scan_button = KeyboardActionButton("선택한 서버 검사 결과·설명 검토")
+        self.scan_button.clicked.connect(self._open_scan_review)
+        layout.addWidget(self.scan_button)
         self.activate_button = KeyboardActionButton("선택한 서버 활성화")
         self.activate_button.clicked.connect(lambda: self._preview_activation("activate"))
         layout.addWidget(self.activate_button)
@@ -461,6 +466,7 @@ class ServerListPage(QWidget):
         self.activate_button.setEnabled(
             ready and configured and selected is not None and selected.registry_status == "pending"
         )
+        self.scan_button.setEnabled(self.activate_button.isEnabled())
         self.block_button.setEnabled(
             ready and selected is not None and selected.registry_status in ("pending", "active")
         )
@@ -474,6 +480,14 @@ class ServerListPage(QWidget):
         self.restore_button.setEnabled(restorable)
         self.restore_button.setVisible(restorable)
         self.restore_hint.setVisible(restorable)
+
+    def _open_scan_review(self) -> None:
+        server_id = self._selected_id()
+        if server_id is not None and self._activation_bridge is not None:
+            if self._scan_dialog is not None:
+                self._scan_dialog.close()
+            self._scan_dialog = ScanReviewDialog(self._activation_bridge, server_id, self)
+            self._scan_dialog.open()
 
     def _restore_selected(self) -> None:
         selected = next((s for s in self._servers if s.server_id == self._selected_id()), None)
@@ -540,8 +554,13 @@ class ServerListPage(QWidget):
             dialog = ToolAllowDialog(server, view.activation, self)
             self._activation_dialog = dialog
             dialog.setWindowTitle("서버 활성화 확인" if action == "activate" else "서버 차단 확인")
+            reviewed_scan_id = (
+                attach_activation_scan(dialog, dialog.warning, view.scan)
+                if action == "activate"
+                else None
+            )
             dialog.warning.setText(
-                "검사 결과 표시는 아직 연결되지 않음. 검사 없이 확인하는 단계임.\n"
+                activation_scan_text(view.scan) + "\n"
                 "종류 미정 도구는 허용할 수 없음. 종류·출처·목적지 설정이 필요함.\n"
                 "저장하면 실행 중인 Task가 모두 정지됨.\n"
                 "다시 시작하면 연결됨. 저장 후 앱을 다시 시작하세요."
@@ -564,6 +583,7 @@ class ServerListPage(QWidget):
                         expected_row_revision=view.row_revision,
                         allowed=dialog.selection()[0],
                         denied=dialog.selection()[1],
+                        reviewed_scan_id=reviewed_scan_id,
                     )
                 )
             )
