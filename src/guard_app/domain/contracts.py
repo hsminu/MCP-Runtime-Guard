@@ -9,7 +9,13 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 
-from guard_app.domain.enums import ApprovalStatus, RegStatus, RequestStatus, ScanErrorCode
+from guard_app.domain.enums import (
+    ApprovalStatus,
+    RegStatus,
+    RequestStatus,
+    ScanErrorCode,
+    TurnInterruptOutcome,
+)
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import Boundary, Frozen, ProposedCall, StrictLabel, TaskState, ToolSpec
 from guard_app.domain.reasons import Reason
@@ -34,6 +40,14 @@ class TaskIdentity(Frozen):
 
     task_id: Identifier
     epoch: int = Field(ge=0)
+
+
+class TurnInterrupt(Frozen):
+    """합의 전 제안: 원문 없이 턴 중단 시 승인·호출 상태를 알려준다."""
+
+    outcome: TurnInterruptOutcome
+    cancelled_approvals: int = Field(ge=0)
+    call_in_progress: bool
 
 
 class RawResult(Frozen):
