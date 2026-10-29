@@ -118,7 +118,13 @@ CODEX_LOGIN_NOTICES = {
     "LOGIN_CANCELLED": "로그인 요청을 취소함.",
     "LOGIN_TIMEOUT": "로그인 대기 시간이 지나 요청을 취소함. 다시 시도하세요.",
     "LOGIN_REQUEST_UNCONFIRMED": "로그인 요청 처리를 확인하지 못함. 상태를 다시 확인하세요.",
+    "LOGIN_CANCEL_UNCONFIRMED": "로그인 취소 처리를 확인하지 못함. 상태를 다시 확인하세요.",
+    "LOGOUT_REQUEST_UNCONFIRMED": "로그아웃 처리를 확인하지 못함. 상태를 다시 확인하세요.",
+    "ACCOUNT_READ_UNCONFIRMED": "상태 확인 결과를 받지 못함.",
 }
+# An account command refused before any backend work, with a code not listed
+# in COMMAND_REFUSALS.
+ACCOUNT_REQUEST_REFUSED = "요청을 접수하지 않음. 잠시 뒤 다시 보내세요."
 # Backend command codes -> what happened and what the operator can do next.
 # The code itself stays visible only as secondary text.
 RUN_RESULTS = {

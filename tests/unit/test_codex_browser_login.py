@@ -22,9 +22,14 @@ from guard_app.services.bridge import (
 )
 from guard_app.services.bridge_commands import AccountCommands
 from guard_app.services.bridge_ingress import account_command
-from guard_app.services.codex_account import AccountError, CodexAccountClient
+from guard_app.services.codex_account import (
+    AccountError,
+    AccountRefusedError,
+    CodexAccountClient,
+)
 from guard_app.services.codex_preparation import CodexProcessPreparation
 from guard_app.ui.model_settings import CodexLoginInfo
+from guard_app.ui.presentation import ACCOUNT_REQUEST_REFUSED, COMMAND_REFUSALS
 from guard_app.ui.runtime import RuntimePanel
 from guard_app.ui.window import GuardWindow
 
@@ -545,6 +550,131 @@ def test_window_routes_browser_command_and_recovers_after_queue_rejection(app):
         )
     )
     assert login.browser_button.isEnabled()
-    assert "확인하지 못함" in login.status.text()
+    # Nothing ran, so the signed-out state stays and the refusal is named.
+    assert login.view.state == "SIGNED_OUT"
+    assert "접수하지 않음" in login.status.text()
     window.close()
     bridge.close()
+
+
+class RefusingServer(BrowserServer):
+    """Codex answers every login start with a JSON-RPC error."""
+
+    def _request(self, message):
+        if message["method"] == "account/login/start":
+            self.login_requests.append(message["params"])
+            self.emit({"id": message["id"], "error": {"code": -1, "message": "PRIVATE"}})
+        else:
+            super()._request(message)
+
+
+def test_a_refused_login_start_keeps_the_account_process():
+    # Codex answered, so nothing it refused is left running (A109 follow-up).
+    async def run():
+        server = RefusingServer()
+        access = FakeAccess(server=lambda: server)
+        access.access = lambda: replace(FakeAccess.access(access), open_browser=opened)
+        account = product_account(access)
+        try:
+            for start in (
+                lambda: account.login_api_key("sk-refused"),
+                account.start_device_login,
+                account.start_browser_login,
+            ):
+                with pytest.raises(AccountRefusedError, match="^CODEX_ACCOUNT_FAILED$"):
+                    await start()
+            assert [params["type"] for params in server.login_requests] == [
+                "apiKey",
+                "chatgptDeviceCode",
+                "chatgpt",
+            ]
+            assert (await account.read()).state == "API_KEY"
+            assert len(access.processes) == 1
+            assert access.processes[0].closes == 0
+        finally:
+            await account.aclose()
+
+    asyncio.run(run())
+
+
+async def refused_open(_url):
+    return False
+
+
+@pytest.mark.parametrize("opener", [opened, refused_open])
+def test_a_refused_cancel_ends_the_account_process(opener):
+    # The login callback may still run after Codex refuses to cancel it.
+    async def run():
+        server = BrowserServer()
+        server.refuse_cancel = True
+        access = FakeAccess(server=lambda: server)
+        access.access = lambda: replace(FakeAccess.access(access), open_browser=opener)
+        account = product_account(access)
+
+        async def start_and_cancel():
+            # A refused opener cancels inside the start; an opened one here.
+            pending = await account.start_browser_login()
+            await account.cancel_login(pending.login_id)
+
+        try:
+            with pytest.raises(AccountError) as failed:
+                await start_and_cancel()
+            assert type(failed.value) is AccountError
+            assert server.cancelled == ["browser-1"]
+            assert access.processes[0].closes == 1
+        finally:
+            await account.aclose()
+
+    asyncio.run(run())
+
+
+def account_event(action, stage, code):
+    return CommandEvent("c", "control", action, "account", stage, code)
+
+
+@pytest.mark.parametrize(
+    ("action", "notice"),
+    [
+        ("account_read", "상태 확인 결과를 받지 못함"),
+        ("account_logout", "로그아웃 처리를 확인하지 못함"),
+        ("account_cancel_login", "로그인 취소 처리를 확인하지 못함"),
+        ("account_login_api_key", "로그인 요청 처리를 확인하지 못함"),
+        ("account_login_device", "로그인 요청 처리를 확인하지 못함"),
+        ("account_login_browser", "로그인 요청 처리를 확인하지 못함"),
+    ],
+)
+def test_an_unconfirmed_account_command_names_what_was_not_confirmed(app, action, notice):
+    form = CodexLoginInfo()
+    form.set_view(AccountView("CHATGPT", browser_available=True))
+    form.account_command_changed(
+        account_event(action, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
+    )
+    assert form.view.state == "FAILED"
+    assert form.view.browser_available
+    assert notice in form.status.text()
+    assert ("로그인 요청" in form.status.text()) == action.startswith("account_login_")
+    form.close()
+
+
+def test_a_refused_account_command_keeps_the_last_state(app):
+    form = CodexLoginInfo()
+    pending = AccountView("PENDING_BROWSER", login_id="browser-1", browser_available=True)
+    form.set_view(pending)
+    form.cancel_button.click()
+    assert not form.cancel_button.isEnabled()
+    form.account_command_changed(
+        account_event("account_cancel_login", CommandStage.REJECTED, "QUEUE_FULL")
+    )
+    # The login is still pending, so it can be cancelled again.
+    assert form.view == pending
+    assert form.cancel_button.isEnabled()
+    assert COMMAND_REFUSALS["QUEUE_FULL"] in form.status.text()
+    form.set_view(AccountView("CHATGPT", browser_available=True))
+    form.account_command_changed(
+        account_event("account_logout", CommandStage.REJECTED, "SHUTTING_DOWN")
+    )
+    assert form.view.state == "CHATGPT"
+    assert form.logout_button.isEnabled()
+    assert ACCOUNT_REQUEST_REFUSED in form.status.text()
+    assert "확인하지 못함" not in form.status.text()
+    form.close()
