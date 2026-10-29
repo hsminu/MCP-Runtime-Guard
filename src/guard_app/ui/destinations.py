@@ -1,10 +1,18 @@
 """Destination editor; sends only immutable bridge commands."""
 
-from PySide6.QtWidgets import QCheckBox, QDialog, QFormLayout, QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from guard_app.services.bridge import DestinationEdit, PolicyDestination
 
-from .presentation import TIER_NAMES
+from .presentation import LABELS, TIER_NAMES
 from .widgets import KeyboardActionButton, SelectionBox, plain_label
 
 DESTINATION_NOTE = (
@@ -59,7 +67,13 @@ class DestinationDialog(QDialog):
             "Task 정지 안내 확인 · 삭제" if deleting else "Task 정지 안내 확인 · 저장"
         )
         self.save_button.clicked.connect(self.accept)
-        layout.addWidget(self.save_button)
+        save_row = QHBoxLayout()
+        layout.addLayout(save_row)
+        save_row.addWidget(self.save_button)
+        self.input_hint = plain_label(
+            "ID·경계 종류·최고 수신 등급을 입력하세요", name="secondary", wrap=False
+        )
+        save_row.addWidget(self.input_hint)
         close = KeyboardActionButton("취소")
         close.clicked.connect(self.reject)
         layout.addWidget(close)
@@ -78,7 +92,7 @@ class DestinationDialog(QDialog):
             else ("PUBLIC", "INTERNAL")
         )
         for value in values:
-            self.label.addItem(value, value)
+            self.label.addItem(f"{LABELS[value][0]} · {value}", value)
         self.label.setCurrentIndex(max(0, self.label.findData(old)))
 
     def _valid(self) -> None:
@@ -89,6 +103,7 @@ class DestinationDialog(QDialog):
                     self.identifier.text() and self.tier.currentData() and self.label.currentData()
                 )
             )
+            self.input_hint.setVisible(not self.save_button.isEnabled())
 
     def selection(self) -> DestinationEdit:
         return DestinationEdit(

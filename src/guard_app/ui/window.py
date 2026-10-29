@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QGuiApplication, QResizeEvent
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -31,7 +31,6 @@ from guard_app.services.bridge import (
 from .approvals import ApprovalListPage, ApprovalPage, ApprovalQuery
 from .call_logs import CallLogPage, DetailRequest, PublicCallDetail, PublicCallSummary
 from .icons import line_icon
-from .model_settings import CodexLoginInfo
 from .models import (
     LoadState,
     OverviewSnapshot,
@@ -45,17 +44,15 @@ from .policy import PolicyPage
 from .presentation import (
     LIFECYCLE_MESSAGES,
     PAGES,
-    SETTINGS_FILE_LOCATION,
     SETTINGS_FILE_NOT_READ,
-    SETTINGS_FILE_PENDING,
     SETTINGS_FILE_STATUS,
 )
 from .runtime import RuntimePanel
-from .scan_status import ScanStatusProjection
-from .scanner_key import KeySaver, KeyTail, ScannerKeyForm
+from .scanner_key import KeySaver, KeyTail
 from .server_add import ServerAddForm
 from .servers import ServerListPage
 from .sessions import SessionWorkspace
+from .settings_page import SettingsPage
 from .store_views import StoreQueryLink
 from .style import apply_style, current_theme, set_theme, system_theme
 from .task_status import TaskStatusCard
@@ -96,7 +93,6 @@ class GuardWindow(QMainWindow):
     navigation_requested = Signal(str, str)
     approval_query_requested = Signal(object)
     call_log_detail_requested = Signal(object)
-    scan_snapshot_requested = Signal(str, int)
 
     _COMPACT_NAV_WIDTH = 900
     _COMPACT_NAV_HEIGHT = 700
@@ -140,6 +136,28 @@ class GuardWindow(QMainWindow):
         work.addWidget(self.stack, 1)
         root.addWidget(workspace, 1)
         self._connect_shell()
+        for key, callback in (
+            ("Ctrl+N", self.sessions.new_session),
+            ("Ctrl+K", self._focus_session_search),
+            ("Ctrl+L", self._focus_message),
+        ):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.setAutoRepeat(False)
+            shortcut.activated.connect(callback)
+        self.new_session_button.setToolTip("새 세션 (Ctrl+N)")
+        self.sessions.search.setToolTip("세션 검색 (Ctrl+K)")
+        self.menu_button.setToolTip("메뉴 · 세션 검색 (Ctrl+K)")
+
+    def _focus_message(self) -> None:
+        self.navigate("runs")
+        self.sessions.current.draft.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def _focus_session_search(self) -> None:
+        if self.sidebar.isHidden():
+            self._nav_menu.popup(self.menu_button.mapToGlobal(QPoint(0, self.menu_button.height())))
+        else:
+            self.sessions.search.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def _assemble_shell(self) -> QHBoxLayout:
         central = QWidget()
@@ -163,7 +181,7 @@ class GuardWindow(QMainWindow):
         side.addLayout(brand)
         brand.setContentsMargins(8, 0, 0, 0)
         brand.setSpacing(8)
-        brand.addWidget(IconMark("shield", "on_accent", 20, 13, name="brandMark"))
+        brand.addWidget(IconMark("shield", "on_primary", 20, 13, name="brandMark"))
         brand.addWidget(plain_label("MCP Runtime Guard", name="brandTitle"), 1)
         self.theme_button = KeyboardActionButton()
         self.theme_button.setObjectName("iconButton")
@@ -218,6 +236,8 @@ class GuardWindow(QMainWindow):
         self._nav_menu.addAction("새 세션", self._new_session)
         self._session_menu = self._nav_menu.addMenu("세션 선택")
         self._session_menu.aboutToShow.connect(self._populate_session_menu)
+        self._session_actions: list[QAction] = []
+        self._nav_menu.aboutToShow.connect(self._populate_session_menu)
         self._nav_menu.addSeparator()
         for page in PAGES:
             action = self._nav_menu.addAction(PAGES[page])
@@ -253,12 +273,11 @@ class GuardWindow(QMainWindow):
         self.overview.navigate_requested.connect(self.navigate)
         self._page_indices["overview"] = self.stack.addWidget(_scroll_page(self.overview))
         self.server_page = ServerListPage()
-        self.server_page.scan_snapshot_requested.connect(self.scan_snapshot_requested.emit)
         self.server_page.restore_requested.connect(self._start_settings_restore)
         self._page_indices["servers"] = self.stack.addWidget(_scroll_page(self.server_page))
         self.log_page = CallLogPage()
         self.log_page.detail_requested.connect(self.call_log_detail_requested.emit)
-        self._page_indices["logs"] = self.stack.addWidget(_scroll_page(self.log_page))
+        self._page_indices["logs"] = self.stack.addWidget(self.log_page)
         self.approval_page = ApprovalListPage()
         self.approval_page.query_requested.connect(self.approval_query_requested.emit)
         # Unconnected until something answers: an attached bridge whose run has
@@ -354,22 +373,13 @@ class GuardWindow(QMainWindow):
     def _assemble_settings(
         self, scanner_key_saver: KeySaver | None, scanner_key_tail: KeyTail | None
     ) -> None:
-        settings = QWidget()
-        settings_layout = QVBoxLayout(settings)
-        settings_layout.setContentsMargins(24, 24, 24, 24)
-        settings_layout.addWidget(plain_label("설정", name="pageTitle"))
-        settings_layout.addWidget(plain_label("설정 파일", name="cardTitle"))
-        self.settings_file_status = plain_label(SETTINGS_FILE_PENDING, name="secondary")
-        self.settings_file_status.setAccessibleName("설정 파일 상태")
-        settings_layout.addWidget(self.settings_file_status)
-        settings_layout.addWidget(plain_label(SETTINGS_FILE_LOCATION, name="secondary"))
-        settings_layout.addSpacing(12)
-        self.scanner_key_form = ScannerKeyForm(saver=scanner_key_saver, tail=scanner_key_tail)
-        self.codex_login_info = CodexLoginInfo()
-        settings_layout.addWidget(self.codex_login_info)
-        settings_layout.addWidget(self.scanner_key_form)
-        settings_layout.addStretch(1)
-        self._page_indices["settings"] = self.stack.addWidget(_scroll_page(settings))
+        self.settings_page = SettingsPage(scanner_key_saver, tail=scanner_key_tail)
+        self.settings_file_status = self.settings_page.settings_file_status
+        self.scanner_key_form = self.settings_page.scanner_key_form
+        self.codex_login_info = self.settings_page.codex_login_info
+        self.settings_page.policy_requested.connect(lambda: self.navigate("policy"))
+        self._page_indices["settings"] = self.stack.addWidget(_scroll_page(self.settings_page))
+
         self.policy_page = PolicyPage()
         self._page_indices["policy"] = self.stack.addWidget(_scroll_page(self.policy_page))
         for page in PAGES:
@@ -395,6 +405,7 @@ class GuardWindow(QMainWindow):
         self.sessions.results_requested.connect(self._toggle_activity)
         self.sessions.approval_review_requested.connect(self._open_approval_review)
         self.sessions.selection_changed.connect(self._session_selected)
+        self.sessions.titles_changed.connect(self._session_titles_changed)
         self.navigate("runs", "")
         # Open on the message box, as messengers do.
         self.sessions.current.draft.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -430,8 +441,20 @@ class GuardWindow(QMainWindow):
     def _populate_session_menu(self) -> None:
         self._session_menu.clear()
         for key, view in self.sessions.sessions.items():
-            action = self._session_menu.addAction(view.title)
+            action = self._session_menu.addAction(
+                self.sessions.display_title(view).replace("&", "&&")
+            )
             action.triggered.connect(lambda checked=False, target=key: self.sessions.select(target))
+        for action in self._session_actions:
+            self._nav_menu.removeAction(action)
+            action.deleteLater()
+        before = len(self._nav_menu.actions())
+        self.sessions.add_session_actions(self._nav_menu, self.sessions.current_key, current=True)
+        self._session_actions = self._nav_menu.actions()[before:]
+
+    def _session_titles_changed(self) -> None:
+        self.results_scope.setText(self.sessions.current.heading.text())
+        self._populate_session_menu()
 
     def _session_selected(self, _key: str) -> None:
         panel = self._runtime_panel
@@ -518,12 +541,20 @@ class GuardWindow(QMainWindow):
         self._connect_runtime(panel)
 
     def _connect_runtime(self, panel: RuntimePanel) -> None:
-        panel.state_changed.connect(lambda: self.sessions.set_busy_scopes(panel.busy_scopes))
+        self.sessions.set_stopper(panel.stop_task)
+        panel.state_changed.connect(
+            lambda: self.sessions.set_busy_scopes(panel.busy_scopes, turn_scopes=panel.turn_scopes)
+        )
         panel.selected_snapshot_changed.connect(self._sync_selected_task)
         bridge = panel.bridge
         self.server_add_form.attach_registration(bridge)
         self.server_page.attach_activation(bridge)
         self.store_queries = StoreQueryLink(bridge, self.approval_page, self.log_page, self)
+        self.sessions.approval_lookup_requested.connect(self.store_queries.lookup_session_approval)
+        self.store_queries.session_approval_ready.connect(self.sessions.set_session_approval)
+        self.store_queries.session_approval_source_changed.connect(
+            self.sessions.set_approval_source_available
+        )
         bridge.registration_changed.connect(self._registration_rows)
         bridge.task_changed.connect(self.sessions.set_snapshot)
         bridge.session_created.connect(self.sessions.session_created)
@@ -699,6 +730,7 @@ class GuardWindow(QMainWindow):
             self.set_settings_status("SETTINGS_REGISTRATION_SAVED")
         if view.rows is None:
             return
+        self.log_page.set_known_servers([row.server_id for row in view.rows])
         self.set_server_snapshot(
             Surface(
                 LoadState.READY,
@@ -729,15 +761,8 @@ class GuardWindow(QMainWindow):
 
         self.server_page.set_servers(snapshot)
 
-    def set_scan_snapshot(
-        self, server_id: str, token: int, snapshot: Surface[ScanStatusProjection]
-    ) -> bool:
-        """Show only the current server detail's confirmed public scan query."""
-
-        return self.server_page.set_scan_snapshot(server_id, token, snapshot)
-
     def set_settings_status(self, code: object) -> None:
-        """Show the settings file status; with no file, open the settings page (CFG-01)."""
+        """Show the settings file status without changing the current page."""
 
         if code is None:
             self.settings_file_status.setText(SETTINGS_FILE_NOT_READ)
@@ -746,9 +771,6 @@ class GuardWindow(QMainWindow):
         self.settings_file_status.setText(
             text if text is not None else "설정 파일 상태를 확인하지 못함."
         )
-        # Only from the start page, so a page the user already chose stays.
-        if code == "SETTINGS_FILE_MISSING" and self._page == "runs":
-            self.navigate("settings")
 
     def set_approval_query_connected(self, connected: bool) -> None:
         """Enable approval listing only when something answers its queries."""
@@ -802,14 +824,16 @@ class GuardWindow(QMainWindow):
             self.approval_page.select_approval(target_id)
         self.breadcrumb.setText(PAGES[page])
         if page == "results":
-            self.results_scope.setText(self.sessions.current.title)
+            self.results_scope.setText(self.sessions.current.heading.text())
         self._update_back_row()
         self._place_activity()
         if page == "runs":
             self.sessions.return_to_conversation()
         for key, button in self._nav_buttons.items():
             button.setProperty("selected", key == page)
-            button.setIcon(line_icon(self._nav_icon(key), "ink" if key == page else "mute"))
+            button.setIcon(
+                line_icon(self._nav_icon(key), "primary_text" if key == page else "mute")
+            )
             button.style().unpolish(button)
             button.style().polish(button)
         for key, action in self._menu_actions.items():

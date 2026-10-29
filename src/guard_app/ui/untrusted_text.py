@@ -9,17 +9,41 @@ breaks so a multi-line answer remains readable; all other controls are
 visualized. The caller decides the length cap and whether to show the
 unverified notice (for ``threat_summary``: 300 characters and the notice,
 contracts 2026-10-15). The view stores nothing besides its Qt document.
+
+``conversation_display_text`` is for chat only: unlike approval review text,
+it preserves visible characters and backslashes, marking only hidden/bidi text
+and the notation opener. Approval and description views keep their strict rules.
 """
 
 from __future__ import annotations
+
+import unicodedata
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPlainTextEdit, QSizePolicy, QVBoxLayout, QWidget
 
 from .approval_detail import visible_review_text
+from .presentation import is_hidden_char
 from .widgets import plain_label
 
 UNVERIFIED_NOTICE = "검증되지 않은 내용"
+
+
+def conversation_display_text(value: str) -> str:
+    """Expose hidden and right-to-left characters without annotating chat glyphs."""
+    if type(value) is not str:
+        raise TypeError("untrusted text has invalid type")
+    return "".join(
+        f"⟦U+{ord(char):04X}⟧"
+        if char not in "\n\t"
+        and (
+            is_hidden_char(char)
+            or unicodedata.bidirectional(char) in {"R", "AL", "AN"}
+            or char == "⟦"
+        )
+        else char
+        for char in value.replace("\r\n", "\n")
+    )
 
 
 def untrusted_display_text(value: str, *, max_chars: int | None = None) -> tuple[str, int]:

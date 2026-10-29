@@ -39,9 +39,11 @@ from guard_app.services.product_assembly import (
     AssembledGuard,
 )
 from guard_app.services.product_settings import (
+    SETTINGS_FILE_DEFAULT,
     SETTINGS_LOADED,
 )
 from guard_app.services.product_startup import bootstrap_product as bootstrap_product
+from guard_app.services.registration_scans import RegistrationScans
 from guard_app.services.registry import ServerRegistry, ToolListingView
 from guard_app.services.runner import CodexSession, CodexTaskRunner
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
@@ -237,7 +239,8 @@ class SessionRuntime:
             # Without a Profile, a settings-file failure says more than "not connected".
             missing_code=(
                 settings_status
-                if settings_status is not None and settings_status != SETTINGS_LOADED
+                if settings_status is not None
+                and settings_status not in (SETTINGS_LOADED, SETTINGS_FILE_DEFAULT)
                 else "GUARD_PROFILE_UNAVAILABLE"
             ),
         )
@@ -296,6 +299,7 @@ class SessionRuntime:
         collect: Callable[[ServerSettings], Awaitable[ToolListingView]],
         *,
         saver: ProfileSaver | None = None,
+        scans: RegistrationScans | None = None,
     ) -> RegistrationCommands:
         """Bind registration to the same policy lock without exposing TaskPolicy."""
         if saver is not None:
@@ -307,6 +311,7 @@ class SessionRuntime:
             collect,
             self.close_policy_stopped,
             self.check_execution,
+            scans=scans,
         )
 
     def execution_allowed(self) -> bool:
@@ -360,9 +365,12 @@ class SessionRuntime:
                 return blocker
         if self._signing_out():
             return "CODEX_SIGNING_OUT"
+        blocker = self._policy.blocker()
+        if blocker is not None:
+            return blocker
         if self._session_factory is None:
             return "CODEX_SESSION_UNAVAILABLE"
-        return self._policy.blocker()
+        return None
 
     async def prepare_startup(self) -> None:
         """Run the app-wide preparation once at product start (A101).
@@ -396,6 +404,9 @@ class SessionRuntime:
     ) -> TaskProjection:
         expected = await self._startup.check()
         await self._startup.verify(expected)
+        blocker = self._policy.blocker()
+        if blocker is not None:
+            raise SessionRuntimeError(blocker)
         factory = self._session_factory
         if factory is None:
             raise SessionRuntimeError("CODEX_SESSION_UNAVAILABLE")

@@ -7,15 +7,14 @@
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
 | fixture·로그 정책·독립 인수 | C | A07–A12, A14–A16, A23, A36–A40 |
-| domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
-| `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22, A50 |
-| 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
+| domain/ports 합의 | A·B·C | A01·A03 |
+| A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)). `ModelClient` 포트는 #109에서 `examples/`로 옮겨짐 | A·B·C | A19–A22, A50 |
 | T43/T46·수신 상한 독립 인수(C5.8) ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A52 |
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
-| mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
+| mcp 1.30.0 고정. main은 아직 1.29.0(`pyproject.toml`·`uv.lock`·`requirements.lock`). A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))는 main에 들어감 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
 
-**A가 막고 있는 것**: C4.13 경고 표시 화면(A47·A128), C2.3·C2.11 파일 서버 등록·출처 폴더 연결(A49 구현, 다음 PR로 올림), C6.20 설치판 리소스 위치(패키징), mcp 1.30.0 고정(A145 main 병합 먼저).
+**A가 막고 있는 것**: C6.20 설치판 리소스 위치(패키징). C4.13 경고 표시 화면은 A201([#110](https://github.com/hsminu/MCP-Runtime-Guard/pull/110)) 병합 대기.
 
 ## 계약·환경
 
@@ -28,7 +27,7 @@
 - [x] A04 C Registry 제품 활성화·차단을 정책 잠금으로 연결 · [기록](archive/a/A105-activation-lock.md)
 - [ ] A04 활성화·차단 독립 수신·부작용 인수 — 막힘: C T/S
 - [x] A05 앱 내부 Task projection·사람 review 연결
-- [ ] A05 공통 조회 DTO — 막힘: B·C 계약 검토
+- [x] A05 공통 조회 DTO: B6-05 합의([#76](https://github.com/hsminu/MCP-Runtime-Guard/issues/76))대로 B `StoreQueries`를 승인 목록·호출 로그에 씀(A33–A35) · [기록](archive/a/A203-status-cleanup.md)
 
 ## transport·worker
 
@@ -155,7 +154,7 @@
 - [x] A135 설정 파일이 없을 때 첫 등록에서 파일을 만들고 활성화 저장까지 연결(#52 C 리뷰) · [기록](archive/a/A105-activation-lock.md)
 - [x] A24–A27 제품 설정 기반 Guard 조립·명시 Store 시작·활성화 ACK 뒤 접수·복구 화면 · [기록](archive/a/A138-product-store-startup.md)
 - [x] A138 #58 전역 정지 연결(`on_global_halt=store.halt_execution`), 새 Task·turn·도구 응답 전 `execution_state()` 확인과 `state_revision` 감시, B6.8 명시 시작·복구 화면([#69 A 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/69#issuecomment-6474818368)) · [기록](archive/a/A138-product-store-startup.md)
-- [ ] A28–A32 Registry·Scanner 조회 화면 — 막힘: 조회 계약 합의
+- [ ] A28–A32 Registry·Scanner 조회 화면 — 서버 목록·상세·추가(A128·A163)와 검사·활성화 분리·경고(A200·A201, #110)는 C Registry·`ScanService`에 연결됨. 남은 것: #110 병합 뒤 원래 완료 기준(A29 현황 숫자 원천, A30 ACTIVE≠연결됨≠검사 완료)과 대조 · [기록](archive/a/A203-status-cleanup.md)
 - [x] A33·A34 승인 T18 필드·위젯·4스킴(W3), SQLite 승인 표시·중복 승인·재시작 권한 미복원
 - [x] A33·A34 승인 목록(대기·이력)을 B Store 조회에 연결: 만료 표시는 저장된 만료 시각, `row_revision` 보관, 조회 실패는 불명, 검색어는 B 형식만 보냄(#86 후속) · [기록](archive/a/A163-pr86-followups.md)
 - [x] A33–A35 B6-05 조회 합의 확인: A 동의, C3.8 조건 충족, #86 구현 기준([#76 B 정리](https://github.com/hsminu/MCP-Runtime-Guard/issues/76#issuecomment-6497583247)). A163 변환이 그 구현을 그대로 씀 · [기록](archive/a/A163-pr86-followups.md)
@@ -165,7 +164,8 @@
 - [ ] A36·A37 전체 GUI 인수 — 막힘: C
 - [x] A47 신뢰하지 않는 텍스트 표시 위젯(모델 답변·서버 설명·threat_summary) · [기록](archive/a/A47-untrusted-text-view.md)
 - [x] A47 모델 대화의 비신뢰 텍스트·일반 텍스트 표시 연결 · [기록](archive/a/A63-session-workspace.md)
-- [ ] A47 등록 화면·Scanner 경고에 연결 — 막힘: UI 이벤트 계약(B1.5)·검토된 설명(#20 3번)·SCAN-01. 지금 활성화는 검사 미연결 안내와 `reviewed_scan_id=None`(A105)
+- [x] A47 Scanner 경고에 연결: 모델 설명(`threat_summary`)을 300자·검증되지 않은 내용으로 등록 검사 창·활성화 확인·승인 창에 표시 · [기록](archive/a/A201-scan-warning-screens.md)
+- [x] A47 PENDING 서버의 도구 설명 검토·검토된 설명 저장(DESC-01, B3.13): 서버 설명은 이번 실행 메모리에만 두고 비신뢰 텍스트로 표시, 모델에 갈 설명은 사용자가 직접 입력, 저장 뒤 재활성화·재시작으로 새 세션부터 적용 · [기록](archive/a/A202-reviewed-description-input.md)
 - [x] A48 Scanner API 키 입력 화면(가림·끝 4자리·주입형 저장) · [기록](archive/a/A48-scanner-key-form.md)
 - [x] A48 자격증명 관리자 저장 연결(C2.10 `save_scanner_key`, 끝 4자리는 `scanner_key_tail()`, [#62 요청](https://github.com/hsminu/MCP-Runtime-Guard/pull/62)) · [기록](archive/a/A48-scanner-key-credential-store.md)
 - [x] A48 실제 Windows 자격 증명 관리자 저장·재시작 뒤 끝자리 조회 확인 · [기록](archive/a/A48-real-windows-credential.md)
@@ -216,9 +216,8 @@
 - [x] A127 현황 화면을 줄 목록·막대그래프로 줄임(시연 기준 5075px → 1673px) · [기록](archive/a/A127-overview-rows.md)
 - [x] A128 MCP 서버 추가: '초안' 표기 제거, 설정 붙여넣기로 칸 채우기, 표시 이름·ID 추천·찾아보기·명령줄 인자, `.exe`만 통과(EXE-01) · [기록](archive/a/A128-server-add-paste.md)
 - [x] A128 실제 Registry 등록·EXE-01 지문 확인(`command_sha256`·`command_size` 저장, C2.22)·변경 재확인·목록 반영 · [기록](archive/a/A128-registry-registration.md)
-- [ ] A128 등록 뒤 Scanner 검사·경고 표시 — 막힘: A47·SCAN-01
-  - 검사 서비스: `ScanService(registry, cisco_connector())`를 백엔드 루프 안에서 하나 만들고 그 루프에서만 부름. 앱 종료 때 진행 중 검사 Task를 먼저 취소한 뒤 `close()`([#59 A 확인](https://github.com/hsminu/MCP-Runtime-Guard/pull/59#issuecomment-6468803889))
-  - 흐름: `register` → `scan(on_started=)` → 경고(LLM 검사 빠짐 포함) → `activate(expected_row_revision=검사 뒤 row_revision, reviewed_scan_id=)`. `SCAN_RECORD_UNKNOWN`은 `refresh` 뒤 다시 검사 안내, revision 거부도 다시 검사 안내
+- [x] A128 등록 뒤 Scanner 검사·기록·활성화 연결: 등록 확인 뒤 같은 목록으로 자동 검사, 수동 재검사, 진행 신호, 보여 준 검사 ID를 `reviewed_scan_id`로 전달, 종료 때 검사 취소 뒤 `close()` · [기록](archive/a/A200-registration-scan-wiring.md)
+- [x] A128 등록 화면·활성화 확인·승인 창의 Scanner 경고 표시(C4.13): 서비스 오류와 보고서 진단 분리, 키 없으면 YARA만 표시, 보인 검사 ID만 활성화에 전달, 경고는 판정·버튼을 바꾸지 않음 · [기록](archive/a/A201-scan-warning-screens.md)
 - [x] A128·A105 등록만 저장되고 설정 저장이 끝나지 않은 PENDING 행: 목록·상세에 "설정 없음" 표시, 같은 서버를 다시 입력해 도구 지문·경계가 등록과 같을 때만 설정 파일에 저장(Registry는 그대로) · [기록](archive/a/A165-registration-settings-restore.md)
 - [x] A128 실제 MCP 서버 PENDING 등록·EXE-01 화면 확인 · [기록](archive/a/A128-real-desktop-registration.md)
 - [x] A157 #83 C 리뷰 후속: 시작하지 못한 서버의 등록 거부 문구, 설정 파일 URL 거부를 그 서버만 격리, 시작 예산에 서버 조립, `main()` 시험의 로그 상태 복원 · [기록](archive/a/A157-pr83-c-review-followups.md)
@@ -242,6 +241,22 @@
 - [x] A179 #101 B-ACCEPT-01: READY 뒤 예외에도 backend 종료 확인 전에는 앱 잠금 유지, 미확인이면 잠금을 쥔 채 종료 · [기록](archive/a/A179-ready-exception-lock-order.md)
 - [x] A180 #101 제안: 정책·목적지 저장 성공 뒤 B 적용 중 취소에도 재시작 요구·Guard 닫기, 일곱 저장 경로 취소 시험 · [기록](archive/a/A180-cancel-during-apply.md)
 - [x] A183 #107 C 리뷰 1번: UI 색 리터럴 검사가 주석의 이슈 번호(`#101`)를 색으로 읽지 않게 함 · [기록](archive/a/A183-color-check-skips-comments.md)
+- [x] A184 설정 파일이 없는 첫 실행도 기본 정책(서버·도구 없음)으로 바로 Task 시작, 파일은 첫 저장 때 만듦(사용자 결정 2026-10-30, CFG-01 문구 반영 필요) · [기록](archive/a/A184-first-run-default-profile.md)
+- [x] A185 공통 색·글자·컴포넌트: 파란 주 동작·선택, 상태 알약(모양+글자)과 등급 태그(방패 외곽선) 구분, `Disclosure`·`FitStack`·`SecretLineEdit`·`SectionCard` · [기록](archive/a/A185-ui-tokens-components.md)
+- [x] A186 서버 추가: 연결 방식 칸이 현재 방식 높이만 차지(`FitStack`), 필수 입력 오류는 칸을 고치거나 떠난 뒤·제출 뒤에만 표시, 남은 필수 수 안내 · [기록](archive/a/A186-server-add-fit-and-touched-errors.md)
+- [x] A187 epoch·Task ID·상태 코드·dispatch 수를 대화 머리·활동 요약에서 빼고 상태 알약 툴팁과 접힌 "진단 정보"로 옮김 · [기록](archive/a/A187-diagnostics-disclosure.md)
+- [x] A188 세션 `⋯`·우클릭·F2·Delete 메뉴, 이름 변경(수동 제목 유지), 상태별 삭제(진행 중은 CANCEL 뒤 종료 확인 시에만), 첫 사용자 메시지 자동 제목(민감값이면 `작업 HH:MM`) · [기록](archive/a/A188-session-menu-and-auto-title.md)
+- [x] A189 설정 화면 세 카드(정책·설정 파일 / LLM·Codex 인증 / Scanner 키), 인증 상태별 동작만 표시, 키 입력 가림·표시 전환과 입력·저장 중·저장됨·실패 구분 · [기록](archive/a/A189-settings-page.md)
+- [x] A190 정책 · 경계: 요약(모르면 "—"), 접근 규칙·목적지 탭, 거부 우선·기본 거부 표시, 서버·상태 필터, 진행·결과·"변경됨"은 성공 확인 뒤에만 · [기록](archive/a/A190-policy-tabs-and-summary.md)
+- [x] A191 대화: Enter 전송·Shift+Enter 줄바꿈·IME 조합 보호, PlainText 답변 블록·코드 복사, 최신 메시지 이동, 확인 뒤 Task 중지, 승인 대기 요약 카드, Ctrl+N/K/L(첨부·재생성·답변만 중단은 백엔드 미지원) · [기록](archive/a/A191-chat-usability.md)
+- [x] A192 호출 로그: 기본 다섯 열(ID는 선택 열), 판정·승인·현재 상태 알약 분리, 고정 헤더·열 너비 조절, 행 선택 시 옆 상세 패널, 서버 필터는 Store 질의·상태/기간은 현재 페이지(안내 표시), 실제 범위를 적은 CSV 복사 · [기록](archive/a/A192-call-log-readability.md)
+- [x] A198 #109 A 리뷰 후속: 등록과 다른 설정 서버를 띄우지 않음을 두 시험에 단언, 시험 이름·서버 상세 문구(연결하지 않음) 정리, Codex 스트림 기한 시험 간헐 실패(30ms→0.3s) · [기록](archive/a/A198-pr109-followups.md)
+- [x] A199 #94 B 답 3번: 조립이 파일 서버 루트를 args 모양과 앱 Python 실행 파일(`sys.executable`)이 모두 맞을 때만 인정, 아니면 자원형 READ는 예약 전 거부 · [기록](archive/a/A199-file-server-command.md)
+- [x] A203 현황 정리: 이미 풀린 막힘 줄(A05 조회 DTO, `ModelClient`, mcp 고정·A145, A가 막는 것) 고치기, B·C 현황의 낡은 A 대기 줄 확인 · [기록](archive/a/A203-status-cleanup.md)
+- [x] A204 채팅 한글 표시·생각 중 표시: 대화·세션 제목은 숨은 문자·RTL만 `⟦U+…⟧`로 표기하고 한글·기호·역슬래시는 그대로(승인 화면 규칙 유지), 첫 답 조각 전까지 `생각 중 · n초` 임시 줄 · [기록](archive/a/A204-chat-text-and-thinking.md)
+- [x] A205 드롭다운 휠 무시: `SelectionBox`는 휠로 값을 바꾸지 않고 페이지가 스크롤됨(`StrongFocus`), 호출 로그 필터도 `SelectionBox`로, A204 생각 중 줄 색은 `$mute` · [기록](archive/a/A205-selection-wheel.md)
+- [x] A206 서버 상세 창: 받는 곳 없던 A32 검사 카드를 지우고 `scan_status` 등록 요청과 A201 `ScanReportPanel`로 마지막 저장 검사를 표시(무한 로딩 제거), 상태·연결 설정·최근 검사 세 묶음 두 열 배치 · [기록](archive/a/A206-server-detail-scan.md)
+- [x] A207 A199가 깨뜨린 구조 시험(A 모듈 `import os` 금지): 실행 파일 비교를 `Path` 동등 비교로 바꾸고 `os` import 제거, `/` 경로 사례 추가 · [기록](archive/a/A207-architecture-os-import.md)
 
 ## 통합·패키징
 

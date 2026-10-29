@@ -361,6 +361,8 @@ class BackendHost:
         self._events.recovery(bindings.recovery_report)
         self._events.recovery_page(bindings.recovery_page)
         self._events.settings(status if type(status) is str else None)
+        if bindings.scan_events is not None:
+            bindings.scan_events(self._out.scan_changed)
         if bindings.task_events is not None:
             bindings.task_events(self._views.task_event)
         if bindings.answer_partials is not None:

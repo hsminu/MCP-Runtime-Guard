@@ -416,8 +416,9 @@ async def test_jsonrpc_deadline_cancels_stuck_drain_without_retrying_write() -> 
         await asyncio.Event().wait()
 
     channel = CodexStreamChannel(pipe.read, pipe.write, drain, max_frame_bytes=512)
+    # 0.3s so a busy loop still reaches drain before the deadline (#109 A review 5).
     client = JsonRpcClient(
-        channel, request_timeout_s=0.03, max_frame_bytes=512, max_pending=1, version_field=False
+        channel, request_timeout_s=0.3, max_frame_bytes=512, max_pending=1, version_field=False
     )
     client.start()
     pending = asyncio.create_task(client.request("pending"))

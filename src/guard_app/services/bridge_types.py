@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from guard_app.adapters.codex_protocol import REASONING_EFFORTS
+from guard_app.domain.contracts import ScanReport
 from guard_app.domain.enums import Label, TaskStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.models import RecoveryItemPage, RecoveryReport
@@ -124,6 +125,8 @@ class BackendBindings:
     # B6-05 read-only Store queries for the approval list and call log; None
     # leaves both screens unconnected.
     queries: StoreQueries | None = None
+    scan_events: Callable[[Callable[[ScanState], None]], None] | None = None
+    scan_for_review: Callable[[str], ScanState | None] | None = None
 
 
 # A read-only Store query (B6-05) and its answer. `token` is the screen's own
@@ -223,6 +226,8 @@ class ApprovalReview:
     arguments_bytes: bytes
     # The same metadata as (label, value) pairs, shown one field per line.
     fields: tuple[tuple[str, str], ...] = ()
+    tool_name: str = ""
+    scan: ScanState | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -254,6 +259,20 @@ class ToolSettingsRow:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class DescriptionRow:
+    """One tool's descriptions for human review (DESC-01, B3.13).
+
+    ``server_text`` is the untrusted description the server sent in this app
+    run's listing, or None when no matching listing was received this run.
+    ``reviewed`` is the saved reviewed description, the only text the model sees.
+    """
+
+    name: str
+    server_text: str | None
+    reviewed: str
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class RegistrationRequest:
     action: str
     server_id: str = ""
@@ -278,6 +297,33 @@ class RegistrationRequest:
     # registration whose settings save did not finish (A128·A105). Nothing is
     # written to the Registry.
     restore: bool = False
+    # activate only: the report shown in the human confirmation window.
+    reviewed_scan_id: str | None = None
+    descriptions: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ScanState:
+    """One server's Scanner state as the backend knows it now (A-local value).
+
+    ``run`` is this app run's scan job: "none", "queued", "running", "done" or
+    "failed" (``code`` then holds the fixed ScanService or collection code).
+    ``report`` is B's stored ScanReport, unchanged, only while it covers exactly
+    the registered tool fingerprints; ``scan_id`` is its id. ``outdated`` means a
+    stored report exists but no longer matches the registration. ``tools`` are
+    the registered tool names in registration order. ``reviewed`` is True only
+    for the report the user confirmed at activation (approval window use).
+    Warnings never change a Guard decision or activation (2026-10-15 decision).
+    """
+
+    server_id: str
+    run: str = "none"
+    code: str = ""
+    scan_id: str | None = None
+    report: ScanReport | None = None
+    outdated: bool = False
+    tools: tuple[str, ...] = ()
+    reviewed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,3 +356,5 @@ class RegistrationView:
     current_policy: PolicyView | None = None
     tool_settings: tuple[ToolSettingsRow, ...] = ()
     server_id: str = ""
+    scan: ScanState | None = None
+    descriptions: tuple[DescriptionRow, ...] = ()
