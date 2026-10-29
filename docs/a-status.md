@@ -254,4 +254,4 @@
 - [x] A154 `BackendBridge`를 Qt 경계·생명주기 host·명령 접수 문맥·action 처리로 분리 · [기록](archive/a/A154-backend-bridge-commands.md)
 - [ ] A116·A152–A154 독립 리뷰 — C: 화면 격리·signal·로그 설치 순서, bridge 생명주기·replay·종료 순서. B: Store 활성화·종료 확인
 - [x] A139 A 모듈 ID 생성을 `security/ids.py`로 통합([#65 수용](https://github.com/hsminu/MCP-Runtime-Guard/pull/65#issuecomment-6472889394)), B6.8 복구에 `new_id("run")` 연결(A138) · [기록](archive/a/A139-ids-module.md)
-- [ ] A150 A 단위 시험 압축 — A 차례: 1차(같은 모양 시험 묶기)는 [#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)로 올림, 2차(줄 수 줄이기) 뒤 기록 하나
+- [x] A150 A 단위 시험 압축: 1차 같은 모양 시험 묶기([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)), 2차 줄 수 줄이기(목표 30% 미달) · [기록](archive/a/A150-a-test-compression.md)
