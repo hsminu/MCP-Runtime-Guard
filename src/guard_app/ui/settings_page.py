@@ -16,7 +16,7 @@ from .widgets import Disclosure, KeyboardActionButton, SectionCard, StatusPill, 
 _FILE_PILLS = {
     "SETTINGS_LOADED": ("정책 확인됨", "ok"),
     "SETTINGS_REGISTRATION_SAVED": ("등록 저장됨", "ok"),
-    "SETTINGS_FILE_MISSING": ("설정 파일 없음", "attn"),
+    "SETTINGS_FILE_DEFAULT": ("기본 정책 사용 중", "ok"),
     "SETTINGS_PROFILE_INVALID": ("정책 오류", "deny"),
     "REGISTRY_UNAVAILABLE": ("등록 기록 오류", "deny"),
 }
