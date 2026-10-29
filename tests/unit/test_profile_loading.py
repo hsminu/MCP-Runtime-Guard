@@ -44,7 +44,7 @@ def _document():
             {
                 "id": "remote",
                 "transport": "streamable_http",
-                "url": "https://unvalidated.invalid/mcp?secret=value",
+                "url": "https://unvalidated.invalid/mcp",
                 "tier": "general_external",
                 "max_label": "INTERNAL",
                 "tools": [{"name": "send", "kind": "send", "destination_arg": "target"}],
@@ -496,7 +496,9 @@ def test_loading_takes_immutable_snapshot_and_does_no_io(monkeypatch):
 
 
 def test_representations_redact_commands_arguments_and_urls():
-    loaded = load_profile_settings(_document(), _Registry())
+    document = _document()
+    document["servers"][1]["url"] += "?secret=value"
+    loaded = load_profile_settings(document, _Registry())
     for value in (loaded, loaded.profile, loaded.guard_settings, *loaded.servers):
         assert "<redacted>" in repr(value)
         assert "private-module-contents" not in repr(value)

@@ -35,6 +35,7 @@ from guard_app.domain.models import (
 from guard_app.domain.reasons import Reason
 from guard_app.ports import Registry
 from guard_app.security.digest import JcsCanonicalizationError, digest, jcs_canonicalize
+from guard_app.security.endpoints import EndpointError, canonical_endpoint
 from guard_app.services.catalog_schema import ArgumentSchema, CatalogConfigError
 from guard_app.services.catalog_sources import (
     SourceClassifier,
@@ -791,14 +792,19 @@ class _ProfileRegistry:
     """현재 Registry를 읽고 Profile과 설정 범위만 Catalog에 노출한다."""
 
     def __init__(
-        self, registry: Registry, servers: tuple[ServerSettings, ...], allowed: tuple[str, ...]
+        self,
+        registry: Registry,
+        servers: tuple[ServerSettings, ...],
+        allowed: tuple[str, ...],
+        issues: Mapping[str, str] | None = None,
     ) -> None:
         self._registry = registry
         self._servers = {server.id: server for server in servers if server.id in allowed}
+        self._issues = MappingProxyType(dict(issues or {}))
 
     def _matching_registration(self, server_id: str) -> tuple[RegisteredServer | None, bool]:
         settings = self._servers.get(server_id)
-        if settings is None:
+        if settings is None or server_id in self._issues:
             return None, False
         record = self._registry.registration(server_id)
         if record is None:
@@ -827,6 +833,10 @@ class _ProfileRegistry:
         return self._matching_registration(server_id)[0]
 
     def server_issue(self, server_id: str) -> str | None:
+        if server_id not in self._servers:
+            return None
+        if server_id in self._issues:
+            return self._issues[server_id]
         _, mismatch = self._matching_registration(server_id)
         return "REG_SETTINGS_MISMATCH" if mismatch else None
 
@@ -868,6 +878,13 @@ def load_profile_settings(
         normalized = config.model_dump(mode="json")
         normalized["access_rules"] = normalize_access_rules(rules)
         version = digest(jcs_canonicalize(normalized))
+        issues: dict[str, str] = {}
+        for server in config.servers:
+            if server.transport == "streamable_http":
+                try:
+                    canonical_endpoint(server.url)
+                except EndpointError as error:
+                    issues[server.id] = cast(str, error.args[0])
         selected = config.profile
         profile = Profile(
             profile_id=selected.id,
@@ -875,7 +892,7 @@ def load_profile_settings(
             destination_ids=selected.destinations,
             source_rules=tuple(source.as_rule() for source in selected.sources),
         )
-        profile_registry = _ProfileRegistry(registry, config.servers, profile.server_ids)
+        profile_registry = _ProfileRegistry(registry, config.servers, profile.server_ids, issues)
         catalog = Catalog(
             profile_registry,
             profile_id=profile.profile_id,
