@@ -31,7 +31,6 @@ from guard_app.services.bridge import (
 from .approvals import ApprovalListPage, ApprovalPage, ApprovalQuery
 from .call_logs import CallLogPage, DetailRequest, PublicCallDetail, PublicCallSummary
 from .icons import line_icon
-from .model_settings import CodexLoginInfo
 from .models import (
     LoadState,
     OverviewSnapshot,
@@ -45,17 +44,16 @@ from .policy import PolicyPage
 from .presentation import (
     LIFECYCLE_MESSAGES,
     PAGES,
-    SETTINGS_FILE_LOCATION,
     SETTINGS_FILE_NOT_READ,
-    SETTINGS_FILE_PENDING,
     SETTINGS_FILE_STATUS,
 )
 from .runtime import RuntimePanel
 from .scan_status import ScanStatusProjection
-from .scanner_key import KeySaver, KeyTail, ScannerKeyForm
+from .scanner_key import KeySaver, KeyTail
 from .server_add import ServerAddForm
 from .servers import ServerListPage
 from .sessions import SessionWorkspace
+from .settings_page import SettingsPage
 from .store_views import StoreQueryLink
 from .style import apply_style, current_theme, set_theme, system_theme
 from .task_status import TaskStatusCard
@@ -356,22 +354,13 @@ class GuardWindow(QMainWindow):
     def _assemble_settings(
         self, scanner_key_saver: KeySaver | None, scanner_key_tail: KeyTail | None
     ) -> None:
-        settings = QWidget()
-        settings_layout = QVBoxLayout(settings)
-        settings_layout.setContentsMargins(24, 24, 24, 24)
-        settings_layout.addWidget(plain_label("설정", name="pageTitle"))
-        settings_layout.addWidget(plain_label("설정 파일", name="cardTitle"))
-        self.settings_file_status = plain_label(SETTINGS_FILE_PENDING, name="secondary")
-        self.settings_file_status.setAccessibleName("설정 파일 상태")
-        settings_layout.addWidget(self.settings_file_status)
-        settings_layout.addWidget(plain_label(SETTINGS_FILE_LOCATION, name="secondary"))
-        settings_layout.addSpacing(12)
-        self.scanner_key_form = ScannerKeyForm(saver=scanner_key_saver, tail=scanner_key_tail)
-        self.codex_login_info = CodexLoginInfo()
-        settings_layout.addWidget(self.codex_login_info)
-        settings_layout.addWidget(self.scanner_key_form)
-        settings_layout.addStretch(1)
-        self._page_indices["settings"] = self.stack.addWidget(_scroll_page(settings))
+        self.settings_page = SettingsPage(scanner_key_saver, tail=scanner_key_tail)
+        self.settings_file_status = self.settings_page.settings_file_status
+        self.scanner_key_form = self.settings_page.scanner_key_form
+        self.codex_login_info = self.settings_page.codex_login_info
+        self.settings_page.policy_requested.connect(lambda: self.navigate("policy"))
+        self._page_indices["settings"] = self.stack.addWidget(_scroll_page(self.settings_page))
+
         self.policy_page = PolicyPage()
         self._page_indices["policy"] = self.stack.addWidget(_scroll_page(self.policy_page))
         for page in PAGES:
