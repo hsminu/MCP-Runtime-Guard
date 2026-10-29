@@ -380,7 +380,7 @@ class GuardService:
 
     async def aclose(self) -> None:
         """앱 종료 시 A가 transport 종결과 함께 await한다. 새 submit은 즉시 거부한다."""
-        self._halt_globally()
+        self._halt_globally(Reason.GUARD_CLOSED)
         await self._approvals.aclose()
 
     async def apply_policy_change(

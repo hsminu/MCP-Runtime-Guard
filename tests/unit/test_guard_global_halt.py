@@ -45,7 +45,7 @@ def test_local_checker_failure_does_not_report_global_halt():
         assert observed == []
         assert not h.guard._global_halt
         await h.guard.aclose()
-        assert observed == [Reason.INTERNAL_ERROR]
+        assert observed == [Reason.GUARD_CLOSED]
 
     asyncio.run(scenario())
 
@@ -58,6 +58,17 @@ def test_global_halt_without_callback_preserves_existing_behavior():
         assert h.guard._global_halt
         assert isinstance(await h.guard.submit("task", _call()), Denied)
         await h.guard.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_normal_close_without_callback_still_denies_new_calls():
+    async def scenario():
+        h = _Harness()
+        await h.guard.aclose()
+        assert h.guard._global_halt
+        assert isinstance(await h.guard.submit("task", _call()), Denied)
+        assert h.transport.calls == []
 
     asyncio.run(scenario())
 

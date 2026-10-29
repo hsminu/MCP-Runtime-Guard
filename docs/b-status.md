@@ -77,6 +77,7 @@
 - [x] B4.7 본문이 섞인 오류 READ도 분류, 알려진 전송 실패와 예기치 않은 처리 오류 구분
 - [x] B4.8 SEND 응답은 commit_send_outcome으로 요청·감사만 저장
 - [x] B4.9 정책·Profile 불일치는 Task 정지·승인 무효, 기록 실패가 겹치면 global halt
+- [x] B4.10 Guard 정상 종료 사유 GUARD_CLOSED B 구현·합의 전 제안 · A 문구·3인 합의 대기 · [기록](archive/b/B4.10-guard-close-reason.md)
 
 ## B5 · 승인 프로토콜
 
