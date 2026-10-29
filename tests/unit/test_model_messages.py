@@ -51,7 +51,7 @@ def test_each_reason_has_a_fixed_denial_message(reason: Reason) -> None:
     if reason in _VISIBLE_REASONS:
         assert text == f"{_DENIED_TEXT}: {reason.value}"
     else:
-        assert text == _DENIED_TEXT
+        assert text == (_STOPPED_TEXT if reason is Reason.GUARD_CLOSED else _DENIED_TEXT)
         assert reason.value not in text
 
 
@@ -59,6 +59,23 @@ def test_each_reason_has_a_fixed_denial_message(reason: Reason) -> None:
 def test_denied_outcomes_cover_every_reason_without_metadata(reason: Reason) -> None:
     outcome = Denied(request_id="PRIVATE_REQUEST", reasons=(reason,))
     assert outcome_model_message(outcome) == fixed_model_message(ModelMessageKind.DENIED, reason)
+
+
+@pytest.mark.parametrize(
+    ("reasons", "text"),
+    [
+        ((Reason.GUARD_CLOSED,), _STOPPED_TEXT),
+        ((Reason.GUARD_CLOSED, Reason.GUARD_CLOSED), _STOPPED_TEXT),
+        ((Reason.GUARD_CLOSED, Reason.INTERNAL_ERROR), _DENIED_TEXT),
+        ((Reason.GUARD_CLOSED, Reason.INVALID_ARGUMENTS), _DENIED_TEXT),
+    ],
+)
+def test_guard_closed_uses_private_stopped_message_without_exposing_mixed_reasons(
+    reasons: tuple[Reason, ...], text: str
+) -> None:
+    outcome = Denied(request_id="PRIVATE_REQUEST", reasons=reasons)
+    assert outcome_model_message(outcome) == (False, text)
+    assert all(reason.value not in text for reason in reasons)
 
 
 @pytest.mark.parametrize(
