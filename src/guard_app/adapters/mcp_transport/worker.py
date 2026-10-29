@@ -459,7 +459,7 @@ class ServerWorker:
             self._call_timeout_s + 0.05, self._force_settle_timeout, cmd
         )
         try:
-            try:  # nosemgrep: broad-except-only-in-allowed
+            try:
                 async with asyncio.timeout(self._call_timeout_s):
                     if self._on_dispatch is not None:
                         self._on_dispatch(cmd.req.request_id)
@@ -478,7 +478,7 @@ class ServerWorker:
                 if not cmd.future.done():
                     cmd.future.set_exception(DispatchError("TimeoutError"))
                 return
-            except Exception as exc:  # noqa: BLE001 - designated ServerWorker._execute boundary
+            except Exception as exc:  # noqa: BLE001 - designated ServerWorker._execute boundary  # nosemgrep: broad-except-only-in-allowed
                 if _session_broken(exc):
                     self._stop_unhealthy()
                 if not cmd.future.done():

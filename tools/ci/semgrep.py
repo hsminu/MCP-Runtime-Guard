@@ -56,67 +56,80 @@ def cases(path, data, url, client):
     except OSError as error:
         pass
 
-    # ok: no-swallow, broad-except-only-in-allowed
+    # ok: no-swallow
     try:
         os.remove(path)
+    # ok: broad-except-only-in-allowed
     except OSError:
         data = None
 
-    # ruleid: broad-except-only-in-allowed
     try:
         os.remove(path)
+    # ruleid: broad-except-only-in-allowed
     except Exception:
         data = None
 
-    # ruleid: broad-except-only-in-allowed
     try:
         os.remove(path)
+    # ruleid: broad-except-only-in-allowed
     except Exception as error:
         data = error
 
-    # ruleid: broad-except-only-in-allowed
     try:
         os.remove(path)
+    # ruleid: broad-except-only-in-allowed
     except BaseException as error:
         data = error
 
-    # ruleid: broad-except-only-in-allowed
     try:
         os.remove(path)
+    # ruleid: broad-except-only-in-allowed
     except:
         data = None
 
-    # ruleid: broad-except-only-in-allowed
     try:
         os.remove(path)
+    # ruleid: broad-except-only-in-allowed
     except (Exception, asyncio.CancelledError) as error:
         data = error
 
-    # ruleid: broad-except-only-in-allowed
     try:
         os.remove(path)
+    # ruleid: broad-except-only-in-allowed
     except (OSError, BaseException):
         data = None
 
-    # ruleid: broad-except-only-in-allowed
     try:
         os.remove(path)
     except FileNotFoundError:
         data = None
+    # ruleid: broad-except-only-in-allowed
     except (OSError, builtins.Exception):
         data = None
 
-    # ok: broad-except-only-in-allowed
     try:
         os.remove(path)
+    # ruleid: broad-except-only-in-allowed
+    except (
+        OSError,
+        Exception,
+    ):
+        data = None
+
+    try:
+        os.remove(path)
+    # ok: broad-except-only-in-allowed
     except (OSError, ExceptionGroup, BaseExceptionGroup) as error:
         data = error
 
-    # ok: broad-except-only-in-allowed
     try:
         os.remove(path)
+    # ok: broad-except-only-in-allowed
     except CustomException:
         data = None
+
+    # ok: broad-except-only-in-allowed
+    except_count = 1
 
     # ruleid: no-unsafe-deserialize
     pickle.loads(data)

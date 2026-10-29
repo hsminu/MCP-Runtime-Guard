@@ -69,9 +69,9 @@ class SQLiteWriter:
         # 작업 하나의 모든 실패를 호출자에게 전달해야 다음 큐 작업을 처리할 수 있다.
         # 예외 메시지와 traceback은 스레드 경계를 넘어가지 않는다.
         # writer 작업 경계의 넓은 예외 처리다(#58 합의, Semgrep 예외, 약점 대장).
-        try:  # nosemgrep: broad-except-only-in-allowed
+        try:
             return _Outcome(value=operation())
-        except BaseException as error:  # noqa: BLE001
+        except BaseException as error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
             if test_raw_exceptions:
                 return _Outcome(error=error)
             failure = StoreError(error.reason) if isinstance(error, StoreError) else StoreError()

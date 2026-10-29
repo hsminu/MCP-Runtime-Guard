@@ -68,51 +68,15 @@ rules:
     languages: [python]
     severity: ERROR
     message: broad exception handling only in fail_closed, after_dispatch and ServerWorker._execute
+    # The `except` clause text, not a structural pattern: in a tuple handler Semgrep binds a
+    # metavariable to the first element only, so `except (OSError, Exception)` slipped through.
+    # A finding starts on the `except` line. `ExceptionGroup` and `CustomException` do not match.
     pattern-either:
-      - pattern: |
-          try:
-            ...
-          except Exception:
-            ...
-      - pattern: |
-          try:
-            ...
-          except Exception as $E:
-            ...
-      - pattern: |
-          try:
-            ...
-          except BaseException:
-            ...
-      - pattern: |
-          try:
-            ...
-          except BaseException as $E:
-            ...
-      - pattern: |
-          try:
-            ...
-          except:
-            ...
-      # Tuples such as `except (Exception, asyncio.CancelledError)`.
-      - patterns:
-          - pattern-either:
-              - pattern: |
-                  try:
-                    ...
-                  except $EXC:
-                    ...
-              - pattern: |
-                  try:
-                    ...
-                  except $EXC as $E:
-                    ...
-          - metavariable-regex:
-              metavariable: $EXC
-              regex: .*\b(Exception|BaseException)\b
+      - pattern-regex: '(?m)^[ \t]*except\b[^:]*\b(?:Exception|BaseException)\b[^:]*:'
+      - pattern-regex: '(?m)^[ \t]*except[ \t]*:'
     # No file is excluded. The designed boundaries (fail_closed, after_dispatch,
-    # ServerWorker._execute) carry `# nosemgrep` on their own lines, so a new broad handler
-    # elsewhere in those files is still reported.
+    # ServerWorker._execute) carry `# nosemgrep` on their own `except` lines, so a new broad
+    # handler elsewhere in those files is still reported.
 
   - id: no-unsafe-deserialize
     languages: [python]

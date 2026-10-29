@@ -14,14 +14,14 @@ async def fail_closed[T](
     on_containment_error: Callable[[BaseException], T] | None = None,
 ) -> T:
     """예약 전 실패를 변환한다. 감사 실패 시 공급된 global-halt 경계를 사용한다."""
-    try:  # nosemgrep: broad-except-only-in-allowed
+    try:
         return await operation()
-    except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
+    except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
         if on_containment_error is None:
             return await on_error(error)
-        try:  # nosemgrep: broad-except-only-in-allowed
+        try:
             return await on_error(error)
-        except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001
+        except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
             return on_containment_error(containment_error)
 
 
@@ -42,20 +42,20 @@ async def after_dispatch[T](
     있으므로 on_containment_error는 멱등이어야 한다.
     콜백이 없는 기존 호출의 결과 변환 의미는 유지한다.
     """
-    try:  # nosemgrep: broad-except-only-in-allowed
+    try:
         return await operation()
-    except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
+    except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
         cancelled = error if isinstance(error, asyncio.CancelledError) else None
-        try:  # nosemgrep: broad-except-only-in-allowed
+        try:
             result = await on_error(error)
-        except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001
+        except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
             result = on_containment_error(containment_error)
             if cancelled is None and isinstance(containment_error, asyncio.CancelledError):
                 cancelled = containment_error
         if cancelled is not None and on_cancelled is not None:
-            try:  # nosemgrep: broad-except-only-in-allowed
+            try:
                 on_cancelled(result)
-            except (Exception, asyncio.CancelledError) as callback_error:  # noqa: BLE001
+            except (Exception, asyncio.CancelledError) as callback_error:  # noqa: BLE001  # nosemgrep: broad-except-only-in-allowed
                 try:
                     on_containment_error(callback_error)
                 finally:
