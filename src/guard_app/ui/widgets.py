@@ -593,18 +593,19 @@ class SectionCard(QFrame):
         self.content = QVBoxLayout(self)
         self.content.setContentsMargins(16, 16, 16, 16)
         self.content.setSpacing(16)
+        # Attach each sub-layout before adding widgets so Qt alone owns them (A178).
         header = QHBoxLayout()
+        self.content.addLayout(header)
         header.setSpacing(8)
         self.title = plain_label(title, name="cardTitle")
         header.addWidget(self.title)
         self.status_slot = QHBoxLayout()
-        self.status_slot.setSpacing(8)
         header.addLayout(self.status_slot)
+        self.status_slot.setSpacing(8)
         header.addStretch(1)
         self.action_slot = QHBoxLayout()
-        self.action_slot.setSpacing(8)
         header.addLayout(self.action_slot)
-        self.content.addLayout(header)
+        self.action_slot.setSpacing(8)
 
     def set_status(self, widget: QWidget) -> None:
         while self.status_slot.count():

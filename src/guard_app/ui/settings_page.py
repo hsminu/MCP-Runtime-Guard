@@ -94,7 +94,7 @@ class SettingsPage(QWidget):
         for card in (self.policy_card, self.codex_login_info, self.scanner_key_form):
             layout.addWidget(card)
         row = QHBoxLayout()
+        outer.addLayout(row)
         row.addWidget(self.content, 1)
         row.addStretch(0)
-        outer.addLayout(row)
         outer.addStretch(1)
