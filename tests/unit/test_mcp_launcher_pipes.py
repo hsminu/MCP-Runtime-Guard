@@ -302,6 +302,57 @@ async def test_product_rejects_folders_and_injected_streams(tmp_path):
         folders.close()
 
 
+@pytest.mark.asyncio
+async def test_product_refuses_a_store_without_global_halt(tmp_path, monkeypatch):
+    """I6: the product never runs without the Store-wide halt (#83 B review 1).
+
+    Only an injected composition (no folders) may assemble without it.
+    """
+    from guard_app.services.product_assembly import ProductAssemblyError
+
+    from .test_product_assembly import Registry, spec
+
+    launched = []
+
+    async def launch(*args):
+        launched.append(args)
+        raise AssertionError("no server may start")
+
+    monkeypatch.setattr(launcher_streams, "launch_mcp_server", launch)
+
+    class WithoutHalt:
+        def __init__(self, inner, halt):
+            self._inner = inner
+            self._halt = halt
+
+        def __getattr__(self, name):
+            if name == "halt_execution":
+                if self._halt is None:
+                    raise AttributeError(name)
+                return self._halt
+            return getattr(self._inner, name)
+
+    folders = prepare_app_folders(tmp_path / "app")
+    store = SQLiteStore(tmp_path / "guard.db", audit_id_factory=lambda: uuid4().hex)
+    peer = Peer([READ_DEFINITION])
+    injected = inputs(peer, Registry(spec(READ_DEFINITION).fingerprint), document())
+    product = replace(injected, folders=folders, server_streams=None)
+    assembled = None
+    try:
+        for halt in (None, "not callable"):
+            with pytest.raises(ProductAssemblyError, match="^GLOBAL_HALT_UNAVAILABLE$"):
+                await assemble_guard(WithoutHalt(store, halt), product)
+        assert launched == []
+        assert peer.calls == []
+        assembled = await assemble_guard(WithoutHalt(store, None), injected)
+        assert assembled.guard._on_global_halt is None
+    finally:
+        if assembled is not None:
+            await assembled.aclose()
+        store.close()
+        folders.close()
+
+
 @pytest.mark.usefixtures("preserve_logging_state")
 def test_main_settings_start_uses_launcher_folders(tmp_path, monkeypatch):
     """I1/EXE-01/REC-01: real main -> bootstrap -> settings assembly, no Task.

@@ -384,6 +384,11 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     streams = _server_streams(loaded, inputs)
     if any(server_id not in streams for server_id in server_ids):
         raise ProductAssemblyError("PROFILE_SERVER_UNAVAILABLE")
+    # The product must reach the Store-wide halt; only an injected composition may
+    # run without it (#83 B review 1). Refused before any server connection.
+    global_halt = getattr(store, "halt_execution", None)
+    if inputs.folders is not None and not callable(global_halt):
+        raise ProductAssemblyError("GLOBAL_HALT_UNAVAILABLE")
     transport = McpTransport(
         {server_id: streams[server_id] for server_id in server_ids},
         call_timeout_s=inputs.call_timeout_s,
@@ -416,7 +421,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             approval_id_factory=lambda: new_id("approval"),
             next_call_seq=inputs.next_call_seq,
             failure_audit=inputs.failure_audit,
-            on_global_halt=getattr(store, "halt_execution", None),
+            on_global_halt=global_halt,
             monotonic=time.monotonic,
             approval_ttl_seconds=settings.approval_ttl_seconds,
             taint_mode=settings.taint_mode,
