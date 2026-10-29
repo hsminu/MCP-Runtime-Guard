@@ -12,8 +12,8 @@ import threading
 from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from uuid import uuid4
 
+from guard_app.security.ids import new_id, new_suffix
 from guard_app.services import catalog_sources
 from guard_app.services.bridge_types import (
     CODEX_REASONING_EFFORTS,
@@ -51,9 +51,19 @@ class BridgeCommand:
         return CommandEvent(self.command_id, self.lane, self.action, self.target_id, stage, code)
 
 
+def new_command_id() -> str:
+    """Allocate a command correlation ID before the UI sends its command."""
+    return new_id("command")
+
+
+def new_draft_key() -> str:
+    """Keep the UI's draft namespace separate from durable Task identities."""
+    return f"draft:{new_suffix()}"
+
+
 def bridge_id(value: str | None, *, generate: bool = False) -> str:
     if value is None and generate:
-        return uuid4().hex
+        return new_command_id()
     if (
         type(value) is not str
         or not value

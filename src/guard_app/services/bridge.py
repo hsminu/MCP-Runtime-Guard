@@ -50,6 +50,8 @@ from guard_app.services.bridge_ingress import (
     run_command,
     session_command,
 )
+from guard_app.services.bridge_ingress import new_command_id as new_command_id
+from guard_app.services.bridge_ingress import new_draft_key as new_draft_key
 from guard_app.services.bridge_lanes import CommandLanes
 from guard_app.services.bridge_streams import MAX_PARTIAL_CHARS as MAX_PARTIAL_CHARS
 from guard_app.services.bridge_streams import PARTIAL_FLUSH_S as PARTIAL_FLUSH_S

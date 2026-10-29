@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from uuid import uuid4
 
 from PySide6.QtCore import (
     QModelIndex,
@@ -54,6 +53,8 @@ from guard_app.services.bridge import (
     SessionCreated,
     SessionOptions,
     TaskProjection,
+    new_command_id,
+    new_draft_key,
 )
 
 from .icons import line_icon
@@ -591,7 +592,7 @@ class SessionWorkspace(QWidget):
         return self.sessions[self.current_key]
 
     def new_session(self) -> None:
-        key = f"draft:{uuid4().hex}"
+        key = new_draft_key()
         self._next_session_number += 1
         number = self._next_session_number
         self._create(key, f"새 세션 {number}")
@@ -984,7 +985,7 @@ class SessionWorkspace(QWidget):
         if len(text) > 32768:
             view.notice.setText("메시지는 32,768자 이하로 입력하세요.")
             return
-        command = uuid4().hex
+        command = new_command_id()
         view.command_notice = ""
         view.pending_command = command
         self._refresh_view(view)
@@ -996,7 +997,7 @@ class SessionWorkspace(QWidget):
         if not view.start.isEnabled() or view.snapshot is not None or view is not self.current:
             return
         options = SessionOptions(model=view.model.model)
-        command = uuid4().hex
+        command = new_command_id()
         view.command_notice = "새 Task 생성 요청됨 · 연결과 시작 검사 확인 중"
         view.pending_command = command
         self._refresh_view(view)

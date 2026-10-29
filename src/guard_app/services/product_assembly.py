@@ -35,7 +35,6 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from uuid import uuid4
 
 from guard_app.adapters.access_rules_checker import AccessRulesChecker
 from guard_app.adapters.mcp_transport import McpTransport, StreamFactory, ToolListLimits
@@ -46,6 +45,7 @@ from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ToolSpec
 from guard_app.ports import Registry, Store
 from guard_app.security.digest import JcsCanonicalizationError, tool_fingerprint
+from guard_app.security.ids import new_id
 from guard_app.services.catalog import (
     CatalogConfigError,
     GuardSettings,
@@ -342,8 +342,8 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             profile_id=settings.profile_id,
             policy_version=settings.policy_version,
             operator_id=inputs.operator_id,
-            request_id_factory=lambda: f"request-{uuid4().hex}",
-            approval_id_factory=lambda: f"approval-{uuid4().hex}",
+            request_id_factory=lambda: new_id("request"),
+            approval_id_factory=lambda: new_id("approval"),
             next_call_seq=inputs.next_call_seq,
             failure_audit=inputs.failure_audit,
             monotonic=time.monotonic,
