@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-30 · 확인한 main `f0c2643`(#103·#104·#109 병합) · 완료 90/95, 남음 5 · [#106 결정 기록](archive/b/B-106-agreement-closure.md) · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-30 · 확인한 main `4d8c7a6`(#110·#111 병합) · 완료 91/96, 남음 5 · [#106 결정 기록](archive/b/B-106-agreement-closure.md) · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 완료 기록(archive)의 시험 이름은 작성 당시 기준이다. 이후 #100(시험 정리)·AGT 제거 등으로 이름이 바뀐 것이 있다. 확인한 현재 대응 시험은 [B 최종 점검](archive/b/B-final-check.md)에 정리했다.
 
@@ -10,7 +10,6 @@
 
 | 기다리는 것 | 누구 | 막힌 항목 |
 | --- | --- | --- |
-| 자원 ID 판정기의 제품 조립 연결 | A | B3.3 |
 | 지문 변경·예약/승인 소비·전송 경쟁(S03) 원자 조건 후속(제출 범위 밖) | A·B·C | B6.19 |
 | 독립 통합 인수 | C | B7.8 |
 
@@ -44,7 +43,7 @@
 
 - [x] B3.1 `server_id__tool_name` 네임스페이스·고정 JSON Schema 검증, ToolKind는 annotation을 신뢰하지 않음 · [기록](archive/b3-catalog.md)
 - [x] B3.2 미등록 서버·도구·목적지·OTHER는 DENY · [근거](archive/b3-catalog.md)
-- [x] B3.3 자원형 READ의 expected_resource_id 계산·대조 B 구현 완료. C2.3(#63) `file_resource_resolver`가 Catalog `ResourceResolver`와 연결됨 · A `ProductInputs.resource_resolver` 제품 조립 연결 대기
+- [x] B3.3 자원형 READ의 expected_resource_id 계산·대조 B 구현 완료. C2.3(#63) `file_resource_resolver`가 Catalog `ResourceResolver`와 연결됨 · 제품 조립이 파일 서버 루트로 판정기를 연결함(`services/product_assembly.py`, #110 A199 실행 파일 조건·#111 C2.11-2)
 - [x] B3.4 출처 접두어 매칭·중복은 최고 등급·미매칭은 Unclassified · [근거](archive/b3-catalog.md)
 - [x] B3.5 도구 단위 READ는 `prefix: []` 규칙만, 없으면 Unclassified
   - 자원형 출처 규칙(prefix ≠ ())은 Guard가 기대 자원 ID를 계산하고 응답 ID를 신뢰 코드가 만드는 서버(현재 C 파일 서버)에만 적용한다. 그 밖의 서버는 도구 단위 READ만 쓴다. 도구 단위 READ 등급은 운영자가 그 도구의 모든 결과에 붙이는 선언이며 응답 `resource_id`는 거부에만 사용한다([#94 B 답](https://github.com/hsminu/MCP-Runtime-Guard/issues/94#issuecomment-6505157878)). 파일 서버 인정 조건의 실행 파일 확인은 A·C 결정 대기다.
@@ -54,7 +53,7 @@
 - [x] B3.9 파싱된 설정·Profile 로딩 1단계와 policy_version 계산(10-18 결정) · [기록](archive/b/B3.9-profile-loading.md)
 - [x] B3.10 정책 변경 준비·적용·Task 정지·승인 무효화(10-18 결정) · [기록](archive/b/B3.10-policy-change.md)
 - [x] B3.11 CFG-01 B 변환 함수 완료, C 파일 연산(C2.14)·A 시작/저장 연결 병합([#44](https://github.com/hsminu/MCP-Runtime-Guard/pull/44)·[#52](https://github.com/hsminu/MCP-Runtime-Guard/pull/52)); B3.12 인수 범위 대조 완료 · [기록](archive/b/B3.11-settings-file.md)
-- [x] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 완료 · [#83](https://github.com/hsminu/MCP-Runtime-Guard/pull/83)·[#44](https://github.com/hsminu/MCP-Runtime-Guard/pull/44)·[#52](https://github.com/hsminu/MCP-Runtime-Guard/pull/52)·[#43](https://github.com/hsminu/MCP-Runtime-Guard/pull/43)·[#56](https://github.com/hsminu/MCP-Runtime-Guard/pull/56) · A184 파일 누락 시 내장 빈 Profile로 Task 허용은 [#110](https://github.com/hsminu/MCP-Runtime-Guard/pull/110) 병합 대기; CFG-01 공통 문구 변경 제안 필요
+- [x] B3.12 A81 허용 체크·CFG-01 시작/저장/적용·Task 생성 직렬화·C 거부/누락 전송 0 검증 완료 · [#83](https://github.com/hsminu/MCP-Runtime-Guard/pull/83)·[#44](https://github.com/hsminu/MCP-Runtime-Guard/pull/44)·[#52](https://github.com/hsminu/MCP-Runtime-Guard/pull/52)·[#43](https://github.com/hsminu/MCP-Runtime-Guard/pull/43)·[#56](https://github.com/hsminu/MCP-Runtime-Guard/pull/56) · A184 파일 누락 시 내장 빈 Profile로 Task 허용은 [#110](https://github.com/hsminu/MCP-Runtime-Guard/pull/110)으로 병합됨; CFG-01 공통 문구 변경 제안 필요
 - [x] B3.13 DESC-01 검토 설명은 PENDING 저장→재활성화→재시작 후 새 세션에 적용, 원격 설명 별도 영속화 없음·화면 전 빈 설명([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · 후속: A 검토 입력 화면
 - [x] B3.14 EXE-01 실행 파일 고정 설정 필드 B 구현 · A 등록 화면·launcher 연결 대기 · [기록](archive/b/B3.14-exe01-settings-fields.md)
 - [x] B3.15 URL-01 HTTP 서버 URL을 서버별 검사 · #86 병합 · A 연결·표시 대기 · [기록](archive/b/B3.15-B3.16-server-settings.md)
@@ -89,6 +88,7 @@
 - [x] B5.12 모델 고정 문구표 A 검토·세션 관리자 연결 · [#20 A 검토 댓글(2026-10-28)](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6464059746)
 - [x] B5.13 NOTIFY-01 계약·연결 [#28](https://github.com/hsminu/MCP-Runtime-Guard/pull/28)·[#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106): 완료 전 콜백 실패는 알림 0·전역 정지·재발행 0 · 후속: C6.10 독립 주입 검증
 - [x] B5.14 STOP-01 계약·A 연결·T41 확인([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · 후속: 실제 Codex T42 승인 대기·A watchdog 경로 확인
+- [x] B5.15 턴 단위 중단 B 구현·#20 A 동의, 진행 호출 유지·대상 ASK 취소와 최종 알림 · `TURN_INTERRUPTED`·`CANCELLED` 및 C 독립 계수 확인 대기 · [기록](archive/b/B5.15-interrupt-turn.md)
 
 ## B6 · SQLite 저장소
 
