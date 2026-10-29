@@ -237,6 +237,7 @@
 - [x] A82 넓은 예외 경계의 `Task.exception()` 고정 코드 변환을 허용 패턴으로 정리(2026-10-18 사용자 결정) · [기록](archive/a/A82-task-exception-boundary.md)
 - [x] A79 `codex-pending` profile·policy_version을 `GuardSettings` 값으로 교체 · [기록](archive/a/A86-profile-guard-assembly.md)
 - [x] A173 #91 도구 설정 저장을 apply_settings로 전환·불일치 재저장 복구 · [기록](archive/a/A173-apply-settings-switch.md)
+- [x] A175 승인 목록 서버 거르기를 bridge의 B 서버 ID 규칙으로 검사 · [기록](archive/a/A175-approval-server-filter-id.md)
 
 ## 통합·패키징
 

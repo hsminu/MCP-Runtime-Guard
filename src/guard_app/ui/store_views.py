@@ -36,6 +36,7 @@ from .approval_presentation import (
     ApprovalSort,
     ApprovalSummary,
     valid_query_text,
+    valid_server_filter,
 )
 from .approvals import ApprovalListPage as ApprovalListView
 from .call_logs import (
@@ -58,7 +59,7 @@ def approval_list_query(query: ApprovalQuery) -> ApprovalListQuery | None:
     offset = (query.page - 1) * query.page_size
     if (
         not valid_query_text(query.search)
-        or not valid_query_text(query.server_id)
+        or not valid_server_filter(query.server_id)
         or not 0 <= offset <= _MAX_OFFSET
     ):
         return None
