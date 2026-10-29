@@ -500,7 +500,7 @@ def test_listing_that_cannot_be_recorded_blocks_the_server_for_this_run(
     assert status is RegStatus.PENDING
 
 
-def test_settings_that_differ_from_the_registration_stop_the_assembly(tmp_path) -> None:
+def test_settings_that_differ_from_the_registration_hide_only_that_server(tmp_path) -> None:
     """A differing boundary hides this server without refusing the whole assembly."""
     registered_doc = document()
     run_doc = json.loads(json.dumps(registered_doc))
