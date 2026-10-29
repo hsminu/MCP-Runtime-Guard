@@ -14,7 +14,12 @@ from typing import Protocol
 from guard_app.domain.errors import DispatchError
 from guard_app.services.bridge_types import ScanState
 from guard_app.services.catalog import ServerSettings
-from guard_app.services.registry import ServerRegistry, ToolListingView
+from guard_app.services.registry import (
+    RegistryError,
+    ServerRegistry,
+    ToolListingView,
+    listing_fingerprints,
+)
 from guard_app.services.scanner import ScanError, ScanOutcome
 
 
@@ -47,6 +52,7 @@ class RegistrationScans:
         self._service = service
         self._collect = collect
         self._collect_timeout_s = collect_timeout_s
+        self._descriptions: dict[str, tuple[dict[str, str], dict[str, str]]] = {}
         self._runs: dict[str, tuple[str, str]] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._listener: Callable[[ScanState], None] | None = None
@@ -72,6 +78,26 @@ class RegistrationScans:
                 server_id, run, code, scan_id=stored.scan_id, report=stored.report, tools=tools
             )
         return ScanState(server_id, run, code, outdated=stored is not None, tools=tools)
+
+    def server_descriptions(self, server_id: str) -> dict[str, str] | None:
+        cached = self._descriptions.get(server_id)
+        entry = self._registry.entry(server_id)
+        if cached is None or entry is None:
+            return None
+        registered = {t.tool_name: t.fingerprint for t in entry.registration.tools}
+        return dict(cached[1]) if cached[0] == registered else None
+
+    def _cache_descriptions(self, server_id: str, listing: ToolListingView) -> None:
+        try:
+            fingerprints = listing_fingerprints(listing)
+        except RegistryError:
+            return  # Invalid listings never supply descriptions; Scanner handles its own failure.
+        descriptions = {}
+        for name, tool in zip(fingerprints, listing.tools, strict=True):
+            value = tool.get("description")
+            descriptions[name] = value if isinstance(value, str) else ""
+        if not self._closed:
+            self._descriptions[server_id] = (fingerprints, descriptions)
 
     def reviewed(self, server_id: str) -> ScanState | None:
         entry = self._registry.entry(server_id)
@@ -119,6 +145,7 @@ class RegistrationScans:
                 raise
             except TimeoutError:
                 raise _ScanFailed("SCAN_COLLECT_TIMEOUT") from None
+        self._cache_descriptions(server.id, listing)
         try:
             await self._service.scan(
                 server.id, listing, on_started=lambda: self._set(server.id, "running", "")
@@ -158,6 +185,7 @@ class RegistrationScans:
         if self._closed:
             return
         self._closed = True
+        self._descriptions.clear()
         tasks = tuple(self._tasks.values())
         for task in tasks:
             task.cancel()

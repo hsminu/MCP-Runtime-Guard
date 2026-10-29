@@ -259,6 +259,20 @@ class ToolSettingsRow:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class DescriptionRow:
+    """One tool's descriptions for human review (DESC-01, B3.13).
+
+    ``server_text`` is the untrusted description the server sent in this app
+    run's listing, or None when no matching listing was received this run.
+    ``reviewed`` is the saved reviewed description, the only text the model sees.
+    """
+
+    name: str
+    server_text: str | None
+    reviewed: str
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class RegistrationRequest:
     action: str
     server_id: str = ""
@@ -285,6 +299,7 @@ class RegistrationRequest:
     restore: bool = False
     # activate only: the report shown in the human confirmation window.
     reviewed_scan_id: str | None = None
+    descriptions: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -342,3 +357,4 @@ class RegistrationView:
     tool_settings: tuple[ToolSettingsRow, ...] = ()
     server_id: str = ""
     scan: ScanState | None = None
+    descriptions: tuple[DescriptionRow, ...] = ()

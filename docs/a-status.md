@@ -9,7 +9,6 @@
 | fixture·로그 정책·독립 인수 | C | A07–A12, A14–A16, A23, A36–A40 |
 | domain/ports·UI 조회 DTO 합의 | A·B·C | A01·A03, A05, A28–A32 |
 | `ModelClient` 제거·A66 세션 관리자 제안의 공통 계약 정의·합의 ([제안](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6246972714)) | A·B·C | A19–A22, A50 |
-| 검토된 설명(DESC-01)·SCAN-01 필드 3인 합의. 합의 전 제안은 [PR #32](https://github.com/hsminu/MCP-Runtime-Guard/pull/32)로 main 반영 ([#20](https://github.com/hsminu/MCP-Runtime-Guard/issues/20)) | A·B·C | A47 |
 | T43/T46·수신 상한 독립 인수(C5.8) ([#21](https://github.com/hsminu/MCP-Runtime-Guard/issues/21)) | C | A09·A10, A52 |
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
 | mcp 1.30.0 고정 변경. [#73](https://github.com/hsminu/MCP-Runtime-Guard/pull/73)은 mcp를 1.29.0으로 둔 채 병합됨. A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))가 main에 들어간 뒤 C가 올림 | C | A144 |
@@ -166,7 +165,7 @@
 - [x] A47 신뢰하지 않는 텍스트 표시 위젯(모델 답변·서버 설명·threat_summary) · [기록](archive/a/A47-untrusted-text-view.md)
 - [x] A47 모델 대화의 비신뢰 텍스트·일반 텍스트 표시 연결 · [기록](archive/a/A63-session-workspace.md)
 - [x] A47 Scanner 경고에 연결: 모델 설명(`threat_summary`)을 300자·검증되지 않은 내용으로 등록 검사 창·활성화 확인·승인 창에 표시 · [기록](archive/a/A201-scan-warning-screens.md)
-- [ ] A47 등록 화면의 서버 설명 검토·검토된 설명 입력(DESC-01)
+- [x] A47 PENDING 서버의 도구 설명 검토·검토된 설명 저장(DESC-01, B3.13): 서버 설명은 이번 실행 메모리에만 두고 비신뢰 텍스트로 표시, 모델에 갈 설명은 사용자가 직접 입력, 저장 뒤 재활성화·재시작으로 새 세션부터 적용 · [기록](archive/a/A202-reviewed-description-input.md)
 - [x] A48 Scanner API 키 입력 화면(가림·끝 4자리·주입형 저장) · [기록](archive/a/A48-scanner-key-form.md)
 - [x] A48 자격증명 관리자 저장 연결(C2.10 `save_scanner_key`, 끝 4자리는 `scanner_key_tail()`, [#62 요청](https://github.com/hsminu/MCP-Runtime-Guard/pull/62)) · [기록](archive/a/A48-scanner-key-credential-store.md)
 - [x] A48 실제 Windows 자격 증명 관리자 저장·재시작 뒤 끝자리 조회 확인 · [기록](archive/a/A48-real-windows-credential.md)

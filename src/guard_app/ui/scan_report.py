@@ -30,6 +30,7 @@ from guard_app.services.bridge import (
 )
 
 from .presentation import format_kst, public_display_text
+from .reviewed_descriptions import DescriptionReviewDialog
 from .untrusted_text import UntrustedTextView
 from .widgets import KeyboardActionButton, plain_label, size_detail_for_viewport
 
@@ -366,6 +367,10 @@ class ScanReviewDialog(QDialog):
         self.rescan_button = KeyboardActionButton("다시 검사")
         self.rescan_button.clicked.connect(lambda: self._send("scan"))
         buttons.addWidget(self.rescan_button)
+        self._description_dialog: DescriptionReviewDialog | None = None
+        self.describe_button = KeyboardActionButton("설명 검토")
+        self.describe_button.clicked.connect(self._describe)
+        buttons.addWidget(self.describe_button)
         close = KeyboardActionButton("닫기")
         close.clicked.connect(self.close)
         buttons.addWidget(close)
@@ -374,6 +379,10 @@ class ScanReviewDialog(QDialog):
         bridge.scan_changed.connect(self._scan)
         self.finished.connect(self._finish)
         self._send("scan_status")
+
+    def _describe(self) -> None:
+        self._description_dialog = DescriptionReviewDialog(self._bridge, self._server_id, self)
+        self._description_dialog.open()
 
     def _send(self, action: str) -> None:
         if self._closed or self._command_id:

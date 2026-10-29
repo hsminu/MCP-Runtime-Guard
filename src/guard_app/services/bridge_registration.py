@@ -14,11 +14,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from guard_app.domain.contracts import RegistryEntry
 from guard_app.domain.enums import RegStatus, ToolKind
 from guard_app.domain.errors import DispatchError, StoreError
+from guard_app.domain.reasons import Reason
+from guard_app.domain.text import ReviewedDescription
 from guard_app.ports import RegistryStore
 from guard_app.security.endpoints import ENDPOINT_REJECT_CODES, EndpointError, normalize_endpoint
 from guard_app.security.ids import new_id
@@ -32,7 +34,12 @@ from guard_app.servers.file_server import (
     file_server_args,
     file_server_root,
 )
-from guard_app.services.bridge_types import RegistrationRequest, RegistrationRow, RegistrationView
+from guard_app.services.bridge_types import (
+    DescriptionRow,
+    RegistrationRequest,
+    RegistrationRow,
+    RegistrationView,
+)
 from guard_app.services.catalog import CatalogConfigError, ServerSettings, load_profile_settings
 from guard_app.services.policy_view import PolicyServer, PolicyTool, PolicyView
 from guard_app.services.registration_scans import RegistrationScans
@@ -50,6 +57,20 @@ from guard_app.services.session_tool_settings import tool_settings_rows
 # A teardown that could not be confirmed raises another DispatchError and stays
 # unconfirmed.
 _SERVER_START_FAILURES = frozenset({"SessionStartFailed", "SessionStartTimeout"})
+
+
+_REVIEWED_DESCRIPTION = TypeAdapter(ReviewedDescription)
+
+
+def reviewed_description_issue(value: str) -> str | None:
+    """DESC-01 validation without rewriting text or exposing validation errors."""
+    if not isinstance(value, str):
+        return "REG_DESCRIPTION_CHARACTERS"
+    try:
+        _REVIEWED_DESCRIPTION.validate_python(value, strict=True)
+    except ValidationError:
+        return "REG_DESCRIPTION_TOO_LONG" if len(value) > 2000 else "REG_DESCRIPTION_CHARACTERS"
+    return None
 
 
 def endpoint_input(value: str) -> tuple[str | None, str | None]:
@@ -216,6 +237,28 @@ class RegistrationCommands:
         self.policy.check_registration()
         if self._unknown:
             return RegistrationView("REG_STORE_UNKNOWN")
+        # Registration commands serialize on self._lock; Store CAS guards activation races.
+        if request.action == "descriptions_preview":
+            entry = self.registry.entry(request.server_id)
+            if entry is None or entry.registration.status is not RegStatus.PENDING:
+                return RegistrationView("REG_DESCRIPTIONS_UNAVAILABLE", server_id=request.server_id)
+            descriptions = self.scans.server_descriptions(request.server_id) if self.scans else None
+            description_rows = tuple(
+                DescriptionRow(
+                    t.tool_name,
+                    None if descriptions is None else descriptions.get(t.tool_name, ""),
+                    t.reviewed_description,
+                )
+                for t in entry.registration.tools
+            )
+            return RegistrationView(
+                "REG_DESCRIPTIONS_PREVIEW",
+                server_id=request.server_id,
+                row_revision=entry.registration.row_revision,
+                descriptions=description_rows,
+            )
+        if request.action == "descriptions_save":
+            return await self._save_descriptions(request)
         if request.action == "scan":
             if self.scans is None:
                 return RegistrationView("SCAN_UNAVAILABLE", server_id=request.server_id)
@@ -480,6 +523,51 @@ class RegistrationCommands:
         )
         return RegistrationView(
             codes.get(mode, "REG_REGISTERED"), rows=await self._rows(), scan=scan
+        )
+
+    async def _save_descriptions(self, request: RegistrationRequest) -> RegistrationView:
+        pairs = request.descriptions
+        if type(pairs) is not tuple or any(
+            type(pair) is not tuple
+            or len(pair) != 2
+            or any(type(value) is not str for value in pair)
+            for pair in pairs
+        ):
+            return RegistrationView("REG_DESCRIPTIONS_INVALID")
+        names = tuple(name for name, _ in pairs)
+        entry = self.registry.entry(request.server_id)
+        if len(set(names)) != len(names) or (
+            entry is not None
+            and not set(names).issubset(t.tool_name for t in entry.registration.tools)
+        ):
+            return RegistrationView("REG_DESCRIPTIONS_INVALID")
+        if any(reviewed_description_issue(value) for _, value in pairs):
+            return RegistrationView("REG_DESCRIPTION_INVALID")
+        if (
+            entry is None
+            or entry.registration.status is not RegStatus.PENDING
+            or entry.registration.row_revision != request.expected_row_revision
+        ):
+            return RegistrationView("REG_DESCRIPTIONS_STALE")
+        written = False
+        try:
+            await self.registry.save_reviewed_descriptions(
+                request.server_id, dict(pairs), expected_row_revision=request.expected_row_revision
+            )
+            written = True
+        except StoreError as error:
+            if error.reason not in (Reason.APPROVAL_RACE, Reason.REG_NOT_ACTIVE):
+                raise
+            written = True  # Known refusal: no uncertain write to retry.
+            return RegistrationView("REG_DESCRIPTIONS_STALE")
+        except RegistryError:
+            written = True
+            return RegistrationView("REG_DESCRIPTIONS_STALE")
+        finally:
+            if not written:
+                self._unknown = True
+        return RegistrationView(
+            "REG_DESCRIPTIONS_SAVED", server_id=request.server_id, rows=await self._rows()
         )
 
     def _restore_refusal(self, server: ServerSettings, entry: RegistryEntry | None) -> str | None:
