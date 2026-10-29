@@ -609,6 +609,10 @@ def test_ui_plain_names_controls_bridge_request_and_result(monkeypatch):
     assert not dialog.controls["resource"][0].isEnabled()
     assert not dialog.controls["none"][0].model().item(2).isEnabled()
     assert "다시 활성화" in dialog.warning.text()
+    assert dialog.warning.text().splitlines()[2] == (
+        "읽기 결과 등급은 그 도구가 돌려주는 모든 결과에 같이 붙음. "
+        "여러 출처를 섞어 돌려주는 도구는 그중 가장 높은 등급을 고르세요."
+    )
     assert "목적지는 정책 화면에서 등록하세요" in dialog.warning.text()
     dialog.save_button.click()
     request = requests[-1][0]
