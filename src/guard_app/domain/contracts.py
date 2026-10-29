@@ -16,6 +16,9 @@ from guard_app.domain.reasons import Reason
 from guard_app.domain.text import ScanRisk, ThreatSummary
 
 type Identifier = Annotated[str, Field(min_length=1)]
+type FindingCode = Annotated[
+    str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_ ]{1,64}$")
+]
 type Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 type Reasons = Annotated[tuple[Reason, ...], Field(min_length=1)]
 
@@ -199,7 +202,7 @@ class Finding(Frozen):
     """정의 metadata 검사 결과 초안. description은 기본 repr에 공개하지 않는다."""
 
     analyzer: Identifier
-    code: Identifier
+    code: FindingCode
     severity: Identifier
     tool_fingerprint: Sha256 | None = None
     description: str = Field(default="", repr=False)
