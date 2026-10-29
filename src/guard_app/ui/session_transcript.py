@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from PySide6.QtCore import (
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import (
@@ -28,6 +30,7 @@ USER_LABEL = "나"
 ANSWER_LABEL = "Guard · 모델 답변 (검증되지 않은 내용)"
 PARTIAL_ANSWER_LABEL = "Guard · 모델 답변 작성 중 (검증되지 않은 내용)"
 STOPPED_ANSWER_LABEL = "Guard · 모델 답변 중단됨 (완료되지 않은 내용)"
+_clock = time.monotonic
 
 
 @dataclass(slots=True)
@@ -84,6 +87,14 @@ class _Transcript(QScrollArea):
         content.setObjectName("transcriptContent")
         self._column = QVBoxLayout(content)
         self._column.setSpacing(20)
+        self._thinking_started: float | None = None
+        self._thinking = plain_label("생각 중 · 0초", name="thinkingLabel")
+        self._thinking.setAccessibleName("모델 응답 기다리는 중")
+        self._thinking.hide()
+        self._thinking_timer = QTimer(self)
+        self._thinking_timer.setInterval(1000)
+        self._thinking_timer.timeout.connect(self._update_thinking_time)
+        self._column.addWidget(self._thinking)
         self._column.addStretch(1)
         self.setWidget(content)
         self.jump = KeyboardActionButton("최신 메시지로 이동", self.viewport())
@@ -98,10 +109,31 @@ class _Transcript(QScrollArea):
     def is_empty(self) -> bool:
         return not self.turns
 
+    def set_thinking(self, active: bool) -> None:
+        """Show an ephemeral waiting line outside the copied conversation."""
+        if active:
+            if self._thinking_started is not None:
+                return
+            self._thinking_started = _clock()
+            self._update_thinking_time()
+            self._thinking.show()
+            self._thinking_timer.start()
+        else:
+            self._thinking_timer.stop()
+            self._thinking_started = None
+            self._thinking.hide()
+            self._thinking.setText("생각 중 · 0초")
+
+    def _update_thinking_time(self) -> None:
+        if self._thinking_started is not None:
+            elapsed = int(_clock() - self._thinking_started)
+            self._thinking.setText(f"생각 중 · {elapsed}초")
+
     def toPlainText(self) -> str:  # noqa: N802 - mirrors the Qt text widgets
         return "\n".join(turn.plain for turn in self.turns)
 
     def setPlainText(self, text: str) -> None:  # noqa: N802 - mirrors the Qt text widgets
+        self.set_thinking(False)
         self._remove_from(0)
         if text:
             row = QWidget()
@@ -113,6 +145,7 @@ class _Transcript(QScrollArea):
         self.changed.emit()
 
     def clear(self) -> None:
+        self.set_thinking(False)
         self._remove_from(0)
         self.changed.emit()
 
@@ -151,7 +184,7 @@ class _Transcript(QScrollArea):
 
     def _add(self, turn: _Turn) -> None:
         self.turns.append(turn)
-        self._column.insertWidget(self._column.count() - 1, turn.widget)
+        self._column.insertWidget(self._column.indexOf(self._thinking), turn.widget)
         if turn.role == "user":
             self._fit_bubble(turn)
 

@@ -38,7 +38,7 @@ from guard_app.ui.session_transcript import (
 )
 from guard_app.ui.sessions import APPROVAL_SUMMARY_UNAVAILABLE
 from guard_app.ui.task_status import status_title
-from guard_app.ui.untrusted_text import untrusted_display_text
+from guard_app.ui.untrusted_text import conversation_display_text
 from guard_app.ui.widgets import ConfirmDialog
 
 from .test_ui_session_manage import rename
@@ -214,7 +214,7 @@ def test_plain_render_copy_and_stream_prefix_reuse(window, app):
     event = ConversationEvent("task-one", 1, "assistant", raw, "stream")
     bridge.conversation_partial.emit(event)
     turn = view.transcript.turns[-1]
-    shown = untrusted_display_text(raw)[0]
+    shown = conversation_display_text(raw)
     assert turn.text == shown
     assert (
         view.transcript.toPlainText()
@@ -234,7 +234,7 @@ def test_plain_render_copy_and_stream_prefix_reuse(window, app):
     assert (
         QApplication.clipboard().text()
         == code.toPlainText()
-        == untrusted_display_text("x\u202e")[0]
+        == conversation_display_text("x\u202e")
     )
     assert code_button.text() == "복사함"
     assert "작성 중인 내용임" in turn.copy.toolTip()

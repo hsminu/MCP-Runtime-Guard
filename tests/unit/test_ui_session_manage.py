@@ -23,7 +23,7 @@ from guard_app.services.bridge import (
     SessionCreated,
 )
 from guard_app.ui.session_list import _ROW_ROLE, _SessionRowDelegate
-from guard_app.ui.untrusted_text import untrusted_display_text
+from guard_app.ui.untrusted_text import conversation_display_text, untrusted_display_text
 from guard_app.ui.widgets import ConfirmDialog, plain_tooltip
 
 from .test_ui_sessions import app as app
@@ -411,4 +411,4 @@ def test_automatic_ellipsis_is_ui_punctuation_and_tooltip_keeps_full_display(win
     bridge.conversation_ready.emit(ConversationEvent("task-one", 1, "user", "가" * 40, "first"))
     assert view.heading.text() == "가" * 27 + "…"
     assert row_for(shell, view).data(_ROW_ROLE).title == view.heading.text()
-    assert row_for(shell, view).toolTip().startswith(untrusted_display_text(view.title)[0])
+    assert row_for(shell, view).toolTip().startswith(conversation_display_text(view.title))

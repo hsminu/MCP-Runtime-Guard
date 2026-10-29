@@ -92,7 +92,7 @@ from .session_transcript import (
     _Turn as _Turn,
 )
 from .task_status import FINAL_STATUSES, status_code, status_title
-from .untrusted_text import untrusted_display_text
+from .untrusted_text import conversation_display_text
 from .widgets import (
     ConfirmDialog,
     ElidedLabel,
@@ -161,6 +161,7 @@ class SessionView:
     snapshot: TaskProjection | None = None
     updated: datetime = field(default_factory=datetime.now)
     pending_command: str | None = None
+    run_command: str | None = None
     content_present: bool = False
     focus_draft: bool = False
     command_notice: str = ""
@@ -368,7 +369,7 @@ class SessionWorkspace(QWidget):
     def _set_title(self, view: SessionView, title: str) -> None:
         view.title = title
         view.heading.setText(self.display_title(view))
-        view.heading.setToolTip(plain_tooltip(untrusted_display_text(title)[0]))
+        view.heading.setToolTip(plain_tooltip(conversation_display_text(title)))
         self._refresh_list()
         self.titles_changed.emit()
 
@@ -376,8 +377,8 @@ class SessionWorkspace(QWidget):
     def display_title(view: SessionView) -> str:
         # The automatic truncation mark is UI punctuation, not message content.
         if view.title_source == "auto" and view.auto_title_set and view.title.endswith("…"):
-            return untrusted_display_text(view.title[:-1])[0] + "…"
-        return untrusted_display_text(view.title)[0]
+            return conversation_display_text(view.title[:-1]) + "…"
+        return conversation_display_text(view.title)
 
     def delete_disabled_reason(self, key: str) -> str:
         view = self.sessions.get(key)
@@ -496,9 +497,9 @@ class SessionWorkspace(QWidget):
         titles = QVBoxLayout()
         header.addLayout(titles, 1)
         titles.setSpacing(4)
-        heading = ElidedLabel(untrusted_display_text(title)[0])
+        heading = ElidedLabel(conversation_display_text(title))
         heading.setObjectName("sessionTitle")
-        heading.setToolTip(plain_tooltip(untrusted_display_text(title)[0]))
+        heading.setToolTip(plain_tooltip(conversation_display_text(title)))
         titles.addWidget(heading)
         facts = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         titles.addLayout(facts)
@@ -797,7 +798,20 @@ class SessionWorkspace(QWidget):
         if first:
             self.select(key)
 
+    def _update_thinking(self, view: SessionView) -> None:
+        snapshot = view.snapshot
+        command = view.pending_command
+        view.transcript.set_thinking(
+            snapshot is not None
+            and snapshot.status is TaskStatus.RUNNING
+            and command is not None
+            and command == view.run_command
+            and view.partial is None
+            and (snapshot.task_id, snapshot.epoch, command, "assistant") not in self._seen_events
+        )
+
     def _refresh_view(self, view: SessionView) -> None:
+        self._update_thinking(view)
         snapshot = view.snapshot
         display = session_display(
             snapshot,
@@ -945,6 +959,7 @@ class SessionWorkspace(QWidget):
         view.command_notice = ""
         view.command_code = ""
         view.pending_command = command
+        view.run_command = command
         self._refresh_view(view)
         self.message_requested.emit(
             view.snapshot.task_id, view.snapshot.epoch, text, command, view.model.message_effort
@@ -972,7 +987,7 @@ class SessionWorkspace(QWidget):
         if view.title_source != "manual":
             view.title = view.title.replace("새 세션", "세션", 1)
         view.heading.setText(self.display_title(view))
-        view.heading.setToolTip(plain_tooltip(untrusted_display_text(view.title)[0]))
+        view.heading.setToolTip(plain_tooltip(conversation_display_text(view.title)))
         view.pending_command = None
         view.command_notice = ""
         self.sessions[key] = view
@@ -1015,6 +1030,7 @@ class SessionWorkspace(QWidget):
             view.draft.clear()
         view.content_present = True
         view.updated = datetime.now()
+        self._update_thinking(view)
         self._refresh_list()
 
     def conversation_partial(self, event: ConversationEvent) -> None:
@@ -1033,6 +1049,7 @@ class SessionWorkspace(QWidget):
         view.partial = _PartialAnswer(event.command_id, start, event.text)
         view.content_present = True
         view.updated = datetime.now()
+        self._update_thinking(view)
 
     def _stop_partial(self, view: SessionView) -> None:
         """Keep an unfinished streamed answer, labelled as not completed."""
@@ -1040,11 +1057,14 @@ class SessionWorkspace(QWidget):
         if partial is not None:
             self._write_block(view, STOPPED_ANSWER_LABEL, partial.text, partial.start)
             view.partial = None
+        if partial is None or partial.command_id == view.run_command:
+            view.run_command = None
+        self._update_thinking(view)
 
     @staticmethod
     def _write_block(view: SessionView, label: str, value: str, start: int | None) -> int:
         """Append a speaker turn, or replace the one at ``start`` and after it."""
-        text, _ = untrusted_display_text(value)
+        text = conversation_display_text(value)
         return view.transcript.write_turn(label, text, start)
 
     def settle_command(self, command_id: str, code: str) -> None:
@@ -1073,6 +1093,7 @@ class SessionWorkspace(QWidget):
                 self._stop_partial(view)
             if view.pending_command == command_id:
                 view.pending_command = None
+                view.run_command = None
                 view.command_code = code
                 # Always replace the pending notice, including unknown failures.
                 view.command_notice = ""
@@ -1128,7 +1149,7 @@ class SessionWorkspace(QWidget):
             item = QListWidgetItem(text)
             item.setToolTip(
                 plain_tooltip(
-                    f"{untrusted_display_text(view.title)[0]}\n{status}"
+                    f"{conversation_display_text(view.title)}\n{status}"
                     + (f" ({code})" if code else "")
                 )
             )
@@ -1148,14 +1169,15 @@ class SessionWorkspace(QWidget):
             if view.key == self.current_key:
                 self.list.setCurrentItem(item)
 
-    @staticmethod
-    def _clear_content(view: SessionView) -> None:
+    def _clear_content(self, view: SessionView) -> None:
         view.transcript.clear()
         view.draft.clear()
         view.draft.document().clearUndoRedoStacks()
         view.pending_command = None
+        view.run_command = None
         view.partial = None
         view.content_present = False
+        self._update_thinking(view)
 
     def clear_content(self) -> None:
         for dialog in tuple(self._dialogs.values()):
