@@ -336,7 +336,7 @@ MUTATIONS = {
         lambda o: o.server_requests.append("item/commandExecution/requestApproval"),
         "L2_SERVER_REQUEST_UNEXPECTED",
     ),
-    "probe_overlap": (lambda o: setattr(o, "probe_overlap", True), "L2_PROBE_CALLS_UNEXPECTED"),
+    "probe_overlap": (lambda o: setattr(o, "probe_overlap", True), "L2_PROBE_CALLS_OVERLAP"),
     "probe_missing": (lambda o: o.probe_calls.pop(), "L2_PROBE_CALLS_UNEXPECTED"),
     "turn_failed": (lambda o: setattr(o, "turn_status", "failed"), "L2_TURN_NOT_COMPLETED"),
     "model_get": (
@@ -364,6 +364,43 @@ def test_each_departure_fails_with_its_code(name):
     observation = good()
     mutate(observation)
     assert code in _judge(observation)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="정션은 Windows 기능이다")
+def test_the_same_files_under_another_path_pass_and_other_files_fail(tmp_path):
+    """A161: 앱 패키지 가상화처럼 Codex가 같은 파일을 다른 경로로 보고해도 통과한다.
+    내용이 같아도 다른 파일이면 실패한다."""
+    home = tmp_path / "home"
+    other = tmp_path / "other"
+    for folder in (home, other):
+        folder.mkdir()
+        for name in ("config.toml", "model_catalog.json"):
+            (folder / name).write_text("same content", encoding="utf-8")
+    alias = tmp_path / "alias"
+    import _winapi
+
+    _winapi.CreateJunction(str(home), str(alias))
+
+    def reported(folder):
+        observation = good()
+        observation.config_layers[1]["name"]["file"] = str(folder / "config.toml")
+        observation.config["model_catalog_json"] = str(folder / "model_catalog.json")
+        return evaluate(observation, l1_config=L1, codex_home=home)
+
+    assert reported(home) == ()
+    assert reported(alias) == ()
+    assert reported(other) == ("L2_CONFIG_LAYERS_UNEXPECTED", "L2_CONFIG_MISMATCH")
+    assert reported(tmp_path / "missing") == ("L2_CONFIG_LAYERS_UNEXPECTED", "L2_CONFIG_MISMATCH")
+
+
+def test_probe_calls_in_either_order_pass():
+    """#21: 실제 0.162.1이 두 검사 호출을 바꾼 순서로 차례로 보낸 경우(40회 중 1회)는 통과다."""
+    swapped = good()
+    swapped.probe_calls.reverse()
+    assert _judge(swapped) == ()
+    doubled = good()
+    doubled.probe_calls.append(doubled.probe_calls[0])
+    assert "L2_PROBE_CALLS_UNEXPECTED" in _judge(doubled)
 
 
 def test_allowed_extra_feature_and_missing_config_shapes():
@@ -579,14 +616,14 @@ def _codes_in_module() -> set[str]:
 def test_l2_failure_codes_are_exactly_the_codes_the_module_uses():
     """#83 C 리뷰 참고 4: A가 사본 대신 쓸 상수. 코드를 더하거나 빼면 상수도 함께 바뀐다."""
     assert _codes_in_module() == codex_l2.L2_FAILURE_CODES
-    assert len(codex_l2.L2_FAILURE_CODES) == 28
+    assert len(codex_l2.L2_FAILURE_CODES) == 29
 
 
-def test_a_l2_failure_codes_match_until_a_uses_the_constant():
-    """A151 사본(`session_preparation.L2_FAILURE_CODES`)이 C 상수와 같은지. A가 바꾸면 자명하다."""
+def test_a_l2_failure_codes_are_the_c_constant():
+    """A151 이름(`session_preparation.L2_FAILURE_CODES`)이 사본이 아니라 C 상수인지(C6.14-2)."""
     from guard_app.services.session_preparation import L2_FAILURE_CODES
 
-    assert L2_FAILURE_CODES == codex_l2.L2_FAILURE_CODES
+    assert L2_FAILURE_CODES is codex_l2.L2_FAILURE_CODES
 
 
 @pytest.mark.asyncio
