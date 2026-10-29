@@ -15,20 +15,6 @@ from guard_app.ui.model_settings import CodexLoginInfo
 from guard_app.ui.window import GuardWindow
 
 
-def test_codex_login_info_explains_both_login_methods_with_one_masked_key_field():
-    app = QApplication.instance() or QApplication([])
-    form = CodexLoginInfo()
-    text = " ".join(label.text() for label in form.findChildren(QLabel))
-    assert "ChatGPT 기기 코드와 API 키" in text
-    assert "Codex가 Windows 자격증명 관리자에 직접 저장" in text
-    assert "gpt-6.1-sol" in text
-    assert "준비 중" in text
-    assert form.findChildren(QLineEdit) == [form.api_key_input]
-    assert form.api_key_input.echoMode() == QLineEdit.EchoMode.Password
-    app.processEvents()
-    form.close()
-
-
 def test_new_session_has_fixed_codex_model_and_settings_keep_only_scanner_key():
     app = QApplication.instance() or QApplication([])
     window = GuardWindow()
@@ -64,6 +50,13 @@ def test_api_key_goes_only_to_the_sender_and_leaves_just_four_characters():
 
     app = QApplication.instance() or QApplication([])
     form = CodexLoginInfo()
+    text = " ".join(label.text() for label in form.findChildren(QLabel))
+    assert "ChatGPT 기기 코드와 API 키" in text
+    assert "Codex가 Windows 자격증명 관리자에 직접 저장" in text
+    assert "gpt-6.1-sol" in text
+    assert "준비 중" in text
+    assert form.findChildren(QLineEdit) == [form.api_key_input]
+    assert form.api_key_input.echoMode() == QLineEdit.EchoMode.Password
     field = form.api_key_input
     assert field.contextMenuPolicy() == Qt.ContextMenuPolicy.NoContextMenu
     assert not field.testAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled)

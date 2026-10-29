@@ -6,15 +6,12 @@ create a Registry record or authorize a tool call.
 
 from __future__ import annotations
 
-import pytest
-
 from guard_app.services import catalog_sources
 from guard_app.services.bridge import valid_server_id
 
 
-@pytest.mark.parametrize(
-    "server_id",
-    [
+def test_bridge_preserves_b_server_id_result_without_normalization():
+    values = (
         "docs",
         "local_docs",
         "_docs",
@@ -30,24 +27,24 @@ from guard_app.services.bridge import valid_server_id
         None,
         1,
         ["docs"],
-    ],
-)
-def test_bridge_preserves_b_server_id_result_without_normalization(server_id: object) -> None:
-    assert valid_server_id(server_id) is catalog_sources.valid_server_id(server_id)
+    )
+    assert [
+        value
+        for value in values
+        if valid_server_id(value) is not catalog_sources.valid_server_id(value)
+    ] == []
 
 
-@pytest.mark.parametrize("result", [False, True])
-def test_bridge_uses_b_checker_instead_of_a_second_policy(
-    monkeypatch: pytest.MonkeyPatch, result: bool
-) -> None:
-    calls: list[object] = []
+def test_bridge_uses_b_checker_instead_of_a_second_policy(monkeypatch):
+    calls, results = [], iter((False, True))
     value = object()
 
-    def check(server_id: object) -> bool:
+    def check(server_id):
         calls.append(server_id)
-        return result
+        return next(results)
 
     monkeypatch.setattr(catalog_sources, "valid_server_id", check)
-
-    assert valid_server_id(value) is result
-    assert calls == [value]
+    observed = [(valid_server_id(value), calls[:]) for _ in range(2)]
+    assert observed == [(False, [value]), (True, [value, value])]
+    assert observed[0][0] is False
+    assert observed[1][0] is True

@@ -145,79 +145,69 @@ class Harness:
         return self.cleanup_result
 
 
-def test_configuration_receipts_are_immutable():
+@pytest.mark.asyncio
+async def test_shared_preparation_once_but_verification_for_every_task_and_before_factory():
     with pytest.raises(FrozenInstanceError):
         CONFIGURATION.config_digest = "changed"
+    harness = Harness()
+    runtime = harness.runtime
+    first = await runtime.create_session(SessionOptions())
+    second = await runtime.create_session(SessionOptions())
+    assert harness.startups == 1
+    assert harness.verifications == 4
+    assert harness.factories == harness.store.creates == 2
+    for state in (first, second):
+        operations = [name for name, task_id in harness.trace if task_id == state.task_id]
+        assert operations == ["prepare", "factory", "store"]
+        position = harness.trace.index(("factory", state.task_id))
+        assert harness.trace[position - 1] == ("verify", None)
+    await runtime.close()
+    for state in (first, second):
+        operations = [name for name, task_id in harness.trace if task_id == state.task_id]
+        assert operations[-4:] == ["interrupt", "close", "confirm", "cleanup"]
+    assert not runtime.pending_cleanup
 
 
-def test_shared_preparation_once_but_verification_for_every_task_and_before_factory():
-    async def run():
+@pytest.mark.asyncio
+async def test_missing_malformed_or_unbound_l2_never_creates_resources_session_or_store(subtests):
+    async def check(receipt, code):
         harness = Harness()
-        runtime = harness.runtime
-        first = await runtime.create_session(SessionOptions())
-        second = await runtime.create_session(SessionOptions())
-        assert harness.startups == 1
-        assert harness.verifications == 4
-        assert harness.factories == harness.store.creates == 2
-        for state in (first, second):
-            operations = [name for name, task_id in harness.trace if task_id == state.task_id]
-            assert operations == ["prepare", "factory", "store"]
-            position = harness.trace.index(("factory", state.task_id))
-            assert harness.trace[position - 1] == ("verify", None)
-        await runtime.close()
-        for state in (first, second):
-            operations = [name for name, task_id in harness.trace if task_id == state.task_id]
-            assert operations[-4:] == ["interrupt", "close", "confirm", "cleanup"]
-        assert not runtime.pending_cleanup
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize(
-    ("receipt", "code"),
-    [
-        (True, "CODEX_PREPARATION_FAILED"),
-        (StartupReceipt(CONFIGURATION, None, True), "CODEX_L2_UNAVAILABLE"),
-        (StartupReceipt(CONFIGURATION, CONFIGURATION, False), "CODEX_L2_FAILED"),
-        (StartupReceipt(CONFIGURATION, CHANGED, True), "CODEX_CONFIG_MISMATCH"),
-        (
-            StartupReceipt(replace(CONFIGURATION, config_digest=""), CONFIGURATION, True),
-            "CODEX_PREPARATION_FAILED",
-        ),
-        (
-            StartupReceipt(CONFIGURATION, replace(CONFIGURATION, model_digest="x" * 64), True),
-            "CODEX_PREPARATION_FAILED",
-        ),
-    ],
-)
-def test_missing_malformed_or_unbound_l2_never_creates_resources_session_or_store(receipt, code):
-    async def run():
-        harness = Harness()
-        harness.receipt = receipt
+        if receipt is None:
+            harness.build(None)
+        else:
+            harness.receipt = receipt
         with pytest.raises(SessionRuntimeError, match=code):
             await harness.runtime.create_session(SessionOptions())
         assert harness.factories == harness.store.creates == 0
         assert not harness.resources
+        if receipt is None:
+            assert harness.startups == 0
         await harness.runtime.close()
 
-    asyncio.run(run())
+    for case_index, (receipt, code) in enumerate(
+        [
+            (None, "CODEX_CONFIG_UNAVAILABLE"),
+            (True, "CODEX_PREPARATION_FAILED"),
+            (StartupReceipt(CONFIGURATION, None, True), "CODEX_L2_UNAVAILABLE"),
+            (StartupReceipt(CONFIGURATION, CONFIGURATION, False), "CODEX_L2_FAILED"),
+            (StartupReceipt(CONFIGURATION, CHANGED, True), "CODEX_CONFIG_MISMATCH"),
+            (
+                StartupReceipt(replace(CONFIGURATION, config_digest=""), CONFIGURATION, True),
+                "CODEX_PREPARATION_FAILED",
+            ),
+            (
+                StartupReceipt(CONFIGURATION, replace(CONFIGURATION, model_digest="x" * 64), True),
+                "CODEX_PREPARATION_FAILED",
+            ),
+        ]
+    ):
+        with subtests.test(case=case_index):
+            await check(receipt, code)
 
 
-def test_no_preparation_has_no_boolean_l2_bypass():
-    async def run():
-        harness = Harness()
-        harness.build(None)
-        with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_UNAVAILABLE"):
-            await harness.runtime.create_session(SessionOptions())
-        assert harness.startups == harness.factories == harness.store.creates == 0
-        await harness.runtime.close()
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("stage", ["startup", "verify", "prepare", "factory"])
-def test_callback_errors_use_fixed_codes_and_reclaim_only_owned_resources(stage):
-    async def run():
+@pytest.mark.asyncio
+async def test_callback_errors_use_fixed_codes_and_reclaim_only_owned_resources(subtests):
+    async def check(stage):
         harness = Harness()
         setattr(harness, f"{stage}_error", OSError("private-file-and-token-text"))
         with pytest.raises(SessionRuntimeError, match="^CODEX_PREPARATION_FAILED$") as error:
@@ -225,48 +215,43 @@ def test_callback_errors_use_fixed_codes_and_reclaim_only_owned_resources(stage)
         assert str(error.value) == "CODEX_PREPARATION_FAILED"
         assert harness.store.creates == 0
         assert len(harness.cleaned) == (stage == "factory")
-        await harness.runtime.close()
-
-    asyncio.run(run())
-
-
-def test_cached_startup_cannot_bypass_changed_task_configuration():
-    async def run():
-        harness = Harness()
-        await harness.runtime.create_session(SessionOptions())
-        harness.observed = CHANGED
-        with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_MISMATCH"):
-            await harness.runtime.create_session(SessionOptions())
-        assert harness.startups == 1
-        assert harness.factories == harness.store.creates == 1
-        await harness.runtime.close()
-
-    asyncio.run(run())
-
-
-def test_failed_shared_preparation_is_not_repeated_within_same_app():
-    async def run():
-        harness = Harness()
-        harness.startup_error = OSError("private-error")
-        for _ in range(2):
+        if stage == "startup":
             with pytest.raises(SessionRuntimeError, match="CODEX_PREPARATION_FAILED"):
                 await harness.runtime.create_session(SessionOptions())
-        assert harness.startups == 1
-        assert harness.factories == harness.store.creates == 0
+            assert harness.startups == 1
+            assert harness.factories == harness.store.creates == 0
         await harness.runtime.close()
 
-    asyncio.run(run())
+    for case_index, stage in enumerate(["startup", "verify", "prepare", "factory"]):
+        with subtests.test(case=case_index):
+            await check(stage)
 
 
-def test_change_during_resource_setup_is_rechecked_before_factory_and_reclaimed():
-    async def run():
+@pytest.mark.asyncio
+async def test_cached_startup_cannot_bypass_changed_task_configuration():
+    harness = Harness()
+    await harness.runtime.create_session(SessionOptions())
+    harness.observed = CHANGED
+    with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_MISMATCH"):
+        await harness.runtime.create_session(SessionOptions())
+    assert harness.startups == 1
+    assert harness.factories == harness.store.creates == 1
+    await harness.runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_resource_configuration_changes_are_reclaimed_before_factory(subtests):
+    async def check(during_setup):
         harness = Harness()
 
         async def prepare(task_id, expected):
             resources = await harness.prepare(task_id, expected)
-            harness.observed = CHANGED
+            if during_setup:
+                harness.observed = CHANGED
             return resources
 
+        if not during_setup:
+            harness.resource_config = CHANGED
         harness.build(replace(harness.preparation, prepare_task=prepare))
         with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_MISMATCH"):
             await harness.runtime.create_session(SessionOptions())
@@ -278,25 +263,14 @@ def test_change_during_resource_setup_is_rechecked_before_factory_and_reclaimed(
         ]
         await harness.runtime.close()
 
-    asyncio.run(run())
+    for during_setup in (True, False):
+        with subtests.test(during_setup=during_setup):
+            await check(during_setup)
 
 
-def test_resource_receipt_configuration_must_match_startup():
-    async def run():
-        harness = Harness()
-        harness.resource_config = CHANGED
-        with pytest.raises(SessionRuntimeError, match="CODEX_CONFIG_MISMATCH"):
-            await harness.runtime.create_session(SessionOptions())
-        assert harness.factories == harness.store.creates == 0
-        assert len(harness.cleaned) == 1
-        await harness.runtime.close()
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("shared_field", ["owner_token", "handle", "task_id"])
-def test_shared_resource_receipt_never_closes_or_erases_another_task(shared_field):
-    async def run():
+@pytest.mark.asyncio
+async def test_shared_resource_receipt_never_closes_or_erases_another_task(subtests):
+    async def check(shared_field):
         harness = Harness()
         owned = []
 
@@ -326,30 +300,32 @@ def test_shared_resource_receipt_never_closes_or_erases_another_task(shared_fiel
             await harness.runtime.close()
         assert harness.cleaned == [first.task_id]
 
-    asyncio.run(run())
+    for case_index, shared_field in enumerate(["owner_token", "handle", "task_id"]):
+        with subtests.test(case=case_index):
+            await check(shared_field)
 
 
-def test_store_failure_closes_confirms_then_cleans_before_releasing_ownership():
-    async def run():
-        harness = Harness()
-        harness.store.fail_create = True
-        with pytest.raises(StoreError):
-            await harness.runtime.create_session(SessionOptions())
-        task_id = next(iter(harness.sessions))
-        assert harness.trace[-3:] == [
-            ("close", task_id),
-            ("confirm", task_id),
-            ("cleanup", task_id),
-        ]
-        assert not harness.runtime.pending_cleanup
-        await harness.runtime.close()
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_store_failure_closes_confirms_then_cleans_before_releasing_ownership():
+    harness = Harness()
+    harness.store.fail_create = True
+    with pytest.raises(StoreError):
+        await harness.runtime.create_session(SessionOptions())
+    task_id = next(iter(harness.sessions))
+    assert harness.trace[-3:] == [
+        ("close", task_id),
+        ("confirm", task_id),
+        ("cleanup", task_id),
+    ]
+    assert not harness.runtime.pending_cleanup
+    await harness.runtime.close()
 
 
-@pytest.mark.parametrize("confirmation", [False, None, 1])
-def test_unconfirmed_exit_retains_resources_blocks_new_tasks_and_preserves_other_task(confirmation):
-    async def run():
+@pytest.mark.asyncio
+async def test_unconfirmed_exit_retains_resources_blocks_new_tasks_and_preserves_other_task(
+    subtests,
+):
+    async def check(confirmation):
         harness = Harness()
         first = await harness.runtime.create_session(SessionOptions())
         second = await harness.runtime.create_session(SessionOptions())
@@ -371,12 +347,14 @@ def test_unconfirmed_exit_retains_resources_blocks_new_tasks_and_preserves_other
             await harness.runtime.close()
         assert harness.cleaned == [second.task_id]
 
-    asyncio.run(run())
+    for case_index, confirmation in enumerate([False, None, 1]):
+        with subtests.test(case=case_index):
+            await check(confirmation)
 
 
-@pytest.mark.parametrize("result", [False, True, "invalid"])
-def test_cleanup_result_must_be_none_before_ownership_is_released(result):
-    async def run():
+@pytest.mark.asyncio
+async def test_cleanup_result_must_be_none_before_ownership_is_released(subtests):
+    async def check(result):
         harness = Harness()
         state = await harness.runtime.create_session(SessionOptions())
         harness.cleanup_result = result
@@ -390,12 +368,14 @@ def test_cleanup_result_must_be_none_before_ownership_is_released(result):
             await harness.runtime.close()
         assert harness.cleaned == [state.task_id]
 
-    asyncio.run(run())
+    for case_index, result in enumerate([False, True, "invalid"]):
+        with subtests.test(case=case_index):
+            await check(result)
 
 
-@pytest.mark.parametrize("stage", ["startup", "prepare", "verify", "factory"])
-def test_shutdown_reclaims_cancellation_ignoring_late_returns_in_order(stage):
-    async def run():
+@pytest.mark.asyncio
+async def test_shutdown_reclaims_cancellation_ignoring_late_returns_in_order(subtests):
+    async def check(stage):
         harness = Harness()
         entered, release = asyncio.Event(), asyncio.Event()
         factory = None
@@ -463,26 +443,26 @@ def test_shutdown_reclaims_cancellation_ignoring_late_returns_in_order(stage):
                 assert harness.factories == 0
         assert not harness.runtime.pending_cleanup
 
-    asyncio.run(run())
+    for case_index, stage in enumerate(["startup", "prepare", "verify", "factory"]):
+        with subtests.test(case=case_index):
+            await check(stage)
 
 
-def test_honored_preparation_cancellation_remains_cancelled_and_never_creates_session():
-    async def run():
-        harness = Harness()
-        entered = asyncio.Event()
+@pytest.mark.asyncio
+async def test_honored_preparation_cancellation_remains_cancelled_and_never_creates_session():
+    harness = Harness()
+    entered = asyncio.Event()
 
-        async def prepare(task_id, expected):
-            entered.set()
-            await asyncio.Future()
+    async def prepare(task_id, expected):
+        entered.set()
+        await asyncio.Future()
 
-        harness.build(replace(harness.preparation, prepare_task=prepare))
-        creation = asyncio.create_task(harness.runtime.create_session(SessionOptions()))
-        await entered.wait()
-        creation.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await creation
-        assert harness.factories == harness.store.creates == 0
-        assert not harness.cleaned
-        await harness.runtime.close()
-
-    asyncio.run(run())
+    harness.build(replace(harness.preparation, prepare_task=prepare))
+    creation = asyncio.create_task(harness.runtime.create_session(SessionOptions()))
+    await entered.wait()
+    creation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await creation
+    assert harness.factories == harness.store.creates == 0
+    assert not harness.cleaned
+    await harness.runtime.close()

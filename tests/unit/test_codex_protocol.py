@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -26,9 +27,9 @@ def view(ref: str) -> ToolView:
     return ToolView(tool_ref=ref, input_schema=SCHEMA, description="d")
 
 
-@pytest.mark.parametrize(
-    ("ref", "kept"),
-    [
+def test_dynamic_tool_names_follow_codex_rules() -> None:
+    failures = []
+    for ref, kept in [
         ("docs__read", True),
         ("docs__read_v2-final", True),
         ("docs__" + "t" * 128, True),
@@ -44,13 +45,26 @@ def view(ref: str) -> ToolView:
         ("web__search", False),
         ("terminal__run", False),
         ("docs__한글", False),
-    ],
-    ids=lambda value: str(value)[:24],
-)
-def test_dynamic_tool_names_follow_codex_rules(ref: str, kept: bool) -> None:
-    plan = build_dynamic_tools((view(ref),))
-    assert (ref in plan.tool_refs) is kept
-    assert (ref in plan.excluded) is (not kept)
+    ]:
+        with check_case(failures, ((ref, kept))):
+            plan = build_dynamic_tools((view(ref),))
+            assert (ref in plan.tool_refs) is kept
+            assert (ref in plan.excluded) is (not kept)
+
+    for ref, reason in [
+        ("docs__read.v2", "TOOL_NAME"),
+        ("docs__" + "t" * 129, "TOOL_NAME"),
+        ("docs__mcp", "TOOL_NAME"),
+        ("s" * 65 + "__read", "NAMESPACE_NAME"),
+        ("mcp__read", "NAMESPACE_NAME"),
+        ("docsread", "NAMESPACE_NAME"),
+        ("web__search", "NAMESPACE_RESERVED"),
+    ]:
+        with check_case(failures, ((ref, reason))):
+            plan = build_dynamic_tools((view(ref),))
+            assert [(item.tool_ref, item.reason) for item in plan.exclusions] == [(ref, reason)]
+            assert plan.excluded == (ref,)
+    assert not failures, failures
 
 
 def test_tools_are_grouped_by_server_namespace_once() -> None:
@@ -63,10 +77,28 @@ def test_tools_are_grouped_by_server_namespace_once() -> None:
     ]
     assert plan.excluded == ("docs__read",)  # duplicate ref is not registered twice
 
+    plan = build_dynamic_tools((view("docs__read"), view("docs__read")))
+    assert [(item.tool_ref, item.reason) for item in plan.exclusions] == [
+        ("docs__read", "DUPLICATE")
+    ]
 
-@pytest.mark.parametrize(
-    "params",
-    [
+
+def test_tool_call_parse_keeps_only_codex_fields() -> None:
+    failures = []
+    call = parse_dynamic_tool_call(
+        {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x", "arguments": {"a": 1}}
+    )
+    assert (call.namespace, call.tool, call.arguments) == (None, "x", {"a": 1})
+
+    for arguments in [[], [1], "x", 1, None, True]:
+        # A88 QA: Codex may send any JSON; the relay answers INVALID_ARGUMENTS (I7).
+        with check_case(failures, (arguments)):
+            call = parse_dynamic_tool_call(
+                {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x", "arguments": arguments}
+            )
+            assert call.arguments is None
+
+    for params in [
         None,
         [],
         {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x"},
@@ -80,29 +112,10 @@ def test_tools_are_grouped_by_server_namespace_once() -> None:
             "arguments": {},
             "namespace": 1,
         },
-    ],
-)
-def test_tool_call_parse_is_strict(params: object) -> None:
-    with pytest.raises(CodexProtocolError):
-        parse_dynamic_tool_call(params)
-
-
-def test_tool_call_parse_keeps_only_codex_fields() -> None:
-    call = parse_dynamic_tool_call(
-        {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x", "arguments": {"a": 1}}
-    )
-    assert (call.namespace, call.tool, call.arguments) == (None, "x", {"a": 1})
-
-
-@pytest.mark.parametrize("arguments", [[], [1], "x", 1, None, True])
-def test_non_object_arguments_parse_to_none_for_an_invalid_arguments_answer(
-    arguments: object,
-) -> None:
-    # A88 QA: Codex may send any JSON; the relay answers INVALID_ARGUMENTS (I7).
-    call = parse_dynamic_tool_call(
-        {"threadId": "t", "turnId": "u", "callId": "c", "tool": "x", "arguments": arguments}
-    )
-    assert call.arguments is None
+    ]:
+        with check_case(failures, (params)), pytest.raises(CodexProtocolError):
+            parse_dynamic_tool_call(params)
+    assert not failures, failures
 
 
 def test_released_texts_add_structured_json_after_text() -> None:
@@ -117,16 +130,10 @@ def test_released_texts_add_structured_json_after_text() -> None:
     }
 
 
-def test_turn_text_limit_matches_codex() -> None:
-    assert turn_start_params("thread", "x" * MAX_TURN_TEXT_CHARS)["threadId"] == "thread"
-    for text in ("", "x" * (MAX_TURN_TEXT_CHARS + 1)):
-        with pytest.raises(CodexProtocolError):
-            turn_start_params("thread", text)
-
-
 def test_turn_effort_is_sent_only_when_picked_and_only_from_the_offered_levels() -> None:
     # turn/start can also override the model, sandbox and approval policy for
     # the turn; any such key would get around L1, so the whole key set is pinned.
+    failures = []
     assert turn_start_params("thread", "hi") == {
         "threadId": "thread",
         "input": [{"type": "text", "text": "hi"}],
@@ -135,8 +142,14 @@ def test_turn_effort_is_sent_only_when_picked_and_only_from_the_offered_levels()
     assert set(picked) == {"threadId", "input", "effort"}
     assert picked["effort"] == "high"
     for effort in ("ultra", "minimal", "", "HIGH"):
-        with pytest.raises(CodexProtocolError):
+        with check_case(failures, (effort)), pytest.raises(CodexProtocolError):
             turn_start_params("thread", "hi", effort)
+
+    assert turn_start_params("thread", "x" * MAX_TURN_TEXT_CHARS)["threadId"] == "thread"
+    for text in ("", "x" * (MAX_TURN_TEXT_CHARS + 1)):
+        with check_case(failures, (text)), pytest.raises(CodexProtocolError):
+            turn_start_params("thread", text)
+    assert not failures, failures
 
 
 def test_offered_levels_come_from_the_pinned_model_catalog_without_delegation() -> None:
@@ -148,27 +161,9 @@ def test_offered_levels_come_from_the_pinned_model_catalog_without_delegation() 
     assert model["default_reasoning_level"] in REASONING_EFFORTS
 
 
-@pytest.mark.parametrize(
-    ("ref", "reason"),
-    [
-        ("docs__read.v2", "TOOL_NAME"),
-        ("docs__" + "t" * 129, "TOOL_NAME"),
-        ("docs__mcp", "TOOL_NAME"),
-        ("s" * 65 + "__read", "NAMESPACE_NAME"),
-        ("mcp__read", "NAMESPACE_NAME"),
-        ("docsread", "NAMESPACE_NAME"),
-        ("web__search", "NAMESPACE_RESERVED"),
-    ],
-    ids=lambda value: str(value)[:24],
-)
-def test_each_left_out_tool_carries_a_fixed_reason(ref: str, reason: str) -> None:
-    plan = build_dynamic_tools((view(ref),))
-    assert [(item.tool_ref, item.reason) for item in plan.exclusions] == [(ref, reason)]
-    assert plan.excluded == (ref,)
-
-
-def test_a_repeated_tool_is_left_out_as_a_duplicate() -> None:
-    plan = build_dynamic_tools((view("docs__read"), view("docs__read")))
-    assert [(item.tool_ref, item.reason) for item in plan.exclusions] == [
-        ("docs__read", "DUPLICATE")
-    ]
+@contextmanager
+def check_case(failures, case):
+    try:
+        yield
+    except (AssertionError, pytest.fail.Exception) as error:
+        failures.append((case, str(error)))

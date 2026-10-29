@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any
 
 import pytest
@@ -23,6 +23,24 @@ from guard_app.adapters.mcp_transport import (
 from guard_app.domain.errors import DispatchError
 
 from .test_mcp_transport import _request, _Session, _streams
+
+
+@contextmanager
+def _dispatch_error(code):
+    with pytest.raises(DispatchError) as caught:
+        yield caught
+    assert caught.value.exception_type == code
+
+
+def _check_cases(cases, check):
+    """Keep checking cheap table rows after an assertion/expected-error mismatch."""
+    failures = []
+    for case in cases:
+        try:
+            check(*case)
+        except (AssertionError, pytest.fail.Exception) as error:
+            failures.append((case, str(error)))
+    assert not failures, failures
 
 
 def _tool(name: str, **extra: Any) -> Tool:
@@ -57,7 +75,7 @@ def _nested(levels: int) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_complete_listing_keeps_every_sent_field_across_pages() -> None:
+async def test_complete_listing_keeps_every_sent_field_across_pages():
     session = _Pages(
         [
             ListToolsResult(
@@ -85,55 +103,57 @@ async def test_complete_listing_keeps_every_sent_field_across_pages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_too_many_tools_is_incomplete_without_partial_definitions() -> None:
-    limits = ToolListLimits(max_tools=3)
-    session = _Pages(
-        [
-            ListToolsResult(tools=[_tool("a"), _tool("b")], nextCursor="c1"),
-            ListToolsResult(tools=[_tool("c"), _tool("d")], nextCursor="c2"),
-        ]
-    )
-    listing = await collect_tool_definitions(session, limits)
-    assert listing == ToolListing(complete=False, tools=(), reason="TOOLS_LIST_TOO_MANY_TOOLS")
-    assert session.cursors == [None, "c1"]
+async def test_listing_bounds_discard_partial_definitions_and_stop_requests():
+    cases = [
+        (
+            ToolListLimits(max_tools=3),
+            [
+                ListToolsResult(tools=[_tool("a"), _tool("b")], nextCursor="c1"),
+                ListToolsResult(tools=[_tool("c"), _tool("d")], nextCursor="c2"),
+            ],
+            "TOOLS_LIST_TOO_MANY_TOOLS",
+            [None, "c1"],
+        ),
+        (
+            ToolListLimits(max_pages=3),
+            [ListToolsResult(tools=[], nextCursor=f"c{i}") for i in range(5)],
+            "TOOLS_LIST_TOO_MANY_PAGES",
+            [None, "c0", "c1"],
+        ),
+        (
+            ToolListLimits(),
+            [
+                ListToolsResult(tools=[_tool("a")], nextCursor="x"),
+                ListToolsResult(tools=[_tool("b")], nextCursor="x"),
+                ListToolsResult(tools=[_tool("c")]),
+            ],
+            "TOOLS_LIST_CURSOR_REPEATED",
+            [None, "x"],
+        ),
+        (
+            ToolListLimits(),
+            [
+                ListToolsResult(tools=[_tool("a")], nextCursor="c1"),
+                ListToolsResult(tools=[_tool("a", description="later")]),
+            ],
+            "TOOLS_LIST_DUPLICATE_NAME",
+            [None, "c1"],
+        ),
+    ]
+    failures = []
+    for limits, pages, reason, cursors in cases:
+        session = _Pages(pages)
+        listing = await collect_tool_definitions(session, limits)
+        if (
+            listing != ToolListing(complete=False, tools=(), reason=reason)
+            or session.cursors != cursors
+        ):
+            failures.append((reason, listing, session.cursors))
+    assert not failures, failures
 
 
 @pytest.mark.asyncio
-async def test_page_cap_stops_requests_and_never_reports_done() -> None:
-    limits = ToolListLimits(max_pages=3)
-    session = _Pages([ListToolsResult(tools=[], nextCursor=f"c{i}") for i in range(5)])
-    listing = await collect_tool_definitions(session, limits)
-    assert listing.reason == "TOOLS_LIST_TOO_MANY_PAGES"
-    assert not listing.complete
-    assert listing.tools == ()
-    assert session.cursors == [None, "c0", "c1"]
-
-
-@pytest.mark.asyncio
-async def test_repeated_cursor_and_duplicate_name_stop_at_once() -> None:
-    # C operating proposal v1: a seen cursor or a repeated tool name is incomplete.
-    looping = _Pages(
-        [
-            ListToolsResult(tools=[_tool("a")], nextCursor="x"),
-            ListToolsResult(tools=[_tool("b")], nextCursor="x"),
-            ListToolsResult(tools=[_tool("c")]),
-        ]
-    )
-    listing = await collect_tool_definitions(looping, ToolListLimits())
-    assert listing == ToolListing(complete=False, tools=(), reason="TOOLS_LIST_CURSOR_REPEATED")
-    assert looping.cursors == [None, "x"]
-    duplicate = _Pages(
-        [
-            ListToolsResult(tools=[_tool("a")], nextCursor="c1"),
-            ListToolsResult(tools=[_tool("a", description="later")]),
-        ]
-    )
-    listing = await collect_tool_definitions(duplicate, ToolListLimits())
-    assert listing == ToolListing(complete=False, tools=(), reason="TOOLS_LIST_DUPLICATE_NAME")
-
-
-@pytest.mark.asyncio
-async def test_default_limits_match_the_decided_values() -> None:
+async def test_default_limits_match_the_decided_values():
     limits = ToolListLimits()
     assert (limits.max_tools, limits.max_pages, limits.max_json_depth) == (256, 32, 64)
     assert (limits.page_timeout_s, limits.collection_timeout_s) == (10.0, 30.0)
@@ -144,7 +164,7 @@ async def test_default_limits_match_the_decided_values() -> None:
 
 
 @pytest.mark.asyncio
-async def test_json_depth_limit_counts_the_tool_object_as_one_level() -> None:
+async def test_json_depth_limit_counts_the_tool_object_as_one_level():
     ok = _Pages([ListToolsResult(tools=[Tool.model_validate(_nested(64))])])
     assert (await collect_tool_definitions(ok, ToolListLimits())).complete
     deep = _Pages([ListToolsResult(tools=[Tool.model_validate(_nested(65))])])
@@ -154,7 +174,7 @@ async def test_json_depth_limit_counts_the_tool_object_as_one_level() -> None:
 
 
 @pytest.mark.asyncio
-async def test_page_and_collection_timeouts_are_incomplete() -> None:
+async def test_page_and_collection_timeouts_are_incomplete():
     slow_page = _Pages([ListToolsResult(tools=[])], delay=0.2)
     listing = await collect_tool_definitions(slow_page, ToolListLimits(page_timeout_s=0.02))
     assert listing.reason == "TOOLS_LIST_TIMEOUT"
@@ -167,7 +187,7 @@ async def test_page_and_collection_timeouts_are_incomplete() -> None:
 
 
 @pytest.mark.asyncio
-async def test_server_error_and_malformed_pages_are_fixed_codes() -> None:
+async def test_server_error_and_malformed_pages_are_fixed_codes():
     marker = "TEST_SECRET_SERVER_TEXT"
     failed = _Pages([McpError(ErrorData(code=-32603, message=marker))])
     listing = await collect_tool_definitions(failed, ToolListLimits())
@@ -183,21 +203,26 @@ async def test_server_error_and_malformed_pages_are_fixed_codes() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "kwargs",
-    [
-        {"max_tools": 0},
-        {"max_pages": -1},
-        {"max_json_depth": 1.5},
-        {"max_json_depth": 65},
-        {"page_timeout_s": 0},
-        {"collection_timeout_s": float("inf")},
-        {"max_tools": True},
-    ],
-)
-def test_invalid_limits_are_rejected(kwargs: dict[str, object]) -> None:
-    with pytest.raises(ValueError, match="tools/list"):
-        ToolListLimits(**kwargs)  # type: ignore[arg-type]
+def test_invalid_limits_are_rejected():
+    def check(kwargs):
+        with pytest.raises(ValueError, match="tools/list"):
+            ToolListLimits(**kwargs)  # type: ignore[arg-type]
+
+    _check_cases(
+        (
+            (kwargs,)
+            for kwargs in [
+                {"max_tools": 0},
+                {"max_pages": -1},
+                {"max_json_depth": 1.5},
+                {"max_json_depth": 65},
+                {"page_timeout_s": 0},
+                {"collection_timeout_s": float("inf")},
+                {"max_tools": True},
+            ]
+        ),
+        check,
+    )
 
 
 class _ListingSession(_Session):
@@ -211,9 +236,7 @@ class _ListingSession(_Session):
 
 
 @pytest.mark.asyncio
-async def test_worker_lists_after_initialize_and_before_ready(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_worker_lists_after_initialize_and_before_ready(monkeypatch):
     session = _ListingSession([ListToolsResult(tools=[_tool("tool")])])
     monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
     transport = McpTransport({"one": _streams([])}, tool_list_limits=ToolListLimits())
@@ -231,9 +254,7 @@ async def test_worker_lists_after_initialize_and_before_ready(
 
 
 @pytest.mark.asyncio
-async def test_incomplete_listing_is_reported_and_worker_still_serves_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_incomplete_listing_is_reported_and_worker_still_serves_calls(monkeypatch):
     session = _ListingSession([McpError(ErrorData(code=-32601, message="no tools"))])
     monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
     transport = McpTransport({"one": _streams([])}, tool_list_limits=ToolListLimits())
@@ -247,9 +268,7 @@ async def test_incomplete_listing_is_reported_and_worker_still_serves_calls(
 
 
 @pytest.mark.asyncio
-async def test_collection_is_off_by_default_and_never_lists(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_collection_is_off_by_default_and_never_lists(monkeypatch):
     session = _ListingSession([])
     monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
     transport = McpTransport({"one": _streams([])})
@@ -262,7 +281,7 @@ async def test_collection_is_off_by_default_and_never_lists(
 
 
 @pytest.mark.asyncio
-async def test_initialize_keeps_its_own_bound_when_listing_is_enabled() -> None:
+async def test_initialize_keeps_its_own_bound_when_listing_is_enabled():
     session = _ListingSession([ListToolsResult(tools=[])])
     session.initialize_release = asyncio.Event()
 
@@ -279,15 +298,14 @@ async def test_initialize_keeps_its_own_bound_when_listing_is_enabled() -> None:
         max_result_copy_bytes=1024,
         tool_list_limits=ToolListLimits(collection_timeout_s=5.0),
     )
-    with pytest.raises(DispatchError) as failed:
+    with _dispatch_error("SessionStartFailed"):
         await worker.start()
-    assert failed.value.exception_type == "SessionStartFailed"
     assert worker.tool_listing is None
     assert "list" not in [name for name, _ in session.events]
     await worker.close()
 
 
-def test_worker_rejects_wrong_limit_type() -> None:
+def test_worker_rejects_wrong_limit_type():
     with pytest.raises(TypeError, match="tools/list"):
         ServerWorker(
             lambda: None,  # type: ignore[arg-type,return-value]
@@ -300,7 +318,7 @@ def test_worker_rejects_wrong_limit_type() -> None:
 
 
 @pytest.mark.asyncio
-async def test_real_synthetic_http_server_listing_is_complete() -> None:
+async def test_real_synthetic_http_server_listing_is_complete():
     async with http_spike() as spike:
         transport = McpTransport(
             {"spike": http_stream_factory(spike.endpoint, read_timeout_s=30.0)},
@@ -333,9 +351,7 @@ class _SlowStreams:
 
 
 @pytest.mark.asyncio
-async def test_initialization_bound_includes_connecting(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_initialization_bound_includes_connecting(monkeypatch):
     # C proposal v1: "서버 연결·initialize 완료까지. 대기 시작부터 계산".
     session = _ListingSession([ListToolsResult(tools=[])])
     monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)
@@ -344,14 +360,13 @@ async def test_initialization_bound_includes_connecting(
         startup_timeout_s=0.1,
         tool_list_limits=ToolListLimits(collection_timeout_s=5.0),
     )
-    with pytest.raises(DispatchError) as failed:
+    with _dispatch_error("SessionStartFailed"):
         await transport.start()
-    assert failed.value.exception_type == "SessionStartFailed"
     assert "initialize" not in [name for name, _ in session.events]
 
 
 @pytest.mark.asyncio
-async def test_collection_deadline_counts_from_initialization_start() -> None:
+async def test_collection_deadline_counts_from_initialization_start():
     # C proposal v1: "초기화 시작부터 모든 목록 페이지 수신 완료까지".
     session = _ListingSession([ListToolsResult(tools=[], nextCursor="c")])
     session.pages.delay = 0.1
@@ -380,9 +395,7 @@ async def test_collection_deadline_counts_from_initialization_start() -> None:
 
 
 @pytest.mark.asyncio
-async def test_close_during_collection_is_a_clean_close(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_close_during_collection_is_a_clean_close(monkeypatch):
     session = _ListingSession([ListToolsResult(tools=[])])
     session.pages.delay = 5.0
     monkeypatch.setattr(sdk_session, "_UnvalidatedClientSession", lambda *_args, **_kwargs: session)

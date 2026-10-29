@@ -76,7 +76,7 @@ async def response_for(
 
 
 @pytest.mark.asyncio
-async def test_exact_json_preserves_raw_whitespace_and_debits_once() -> None:
+async def test_exact_json_preserves_raw_whitespace_and_debits_once():
     body = payload()
     gate = listing(len(body))
     source = Source([body[:13], body[13:]])
@@ -88,7 +88,7 @@ async def test_exact_json_preserves_raw_whitespace_and_debits_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_oversize_json_never_reaches_json_parser_or_yields(monkeypatch) -> None:
+async def test_oversize_json_never_reaches_json_parser_or_yields(monkeypatch):
     body = payload()
     gate = listing(len(body) - 1)
     source = Source([body])
@@ -116,35 +116,35 @@ async def test_oversize_json_never_reaches_json_parser_or_yields(monkeypatch) ->
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ending", [b"\n", b"\r", b"\r\n"])
-async def test_fragmented_sse_multiline_counts_utf8_payload_and_preserves_framing(ending) -> None:
-    body = b'{"jsonrpc":"2.0",\n"id":1,"result":{"tools":[],"x":"' + "한".encode() + b'"}}'
-    first, second = body.split(b"\n")
-    wire = (
-        b": comment"
-        + ending
-        + b"event: message"
-        + ending
-        + b"data: "
-        + first
-        + ending
-        + b"data:"
-        + second
-        + ending
-        + ending
-    )
-    gate = listing(len(body))
-    source = Source([wire[index : index + 1] for index in range(len(wire))])
-    response, _ = await response_for(source, gate, "text/event-stream; charset=utf-8")
-    events = [event async for event in EventSource(response).aiter_sse()]
-    assert len(events) == 1
-    assert events[0].data.encode() == body
-    assert gate.candidate_limit == 0
-    assert source.closed == 1
+async def test_fragmented_sse_multiline_counts_utf8_payload_and_preserves_framing():
+    for ending in [b"\n", b"\r", b"\r\n"]:
+        body = b'{"jsonrpc":"2.0",\n"id":1,"result":{"tools":[],"x":"' + "한".encode() + b'"}}'
+        first, second = body.split(b"\n")
+        wire = (
+            b": comment"
+            + ending
+            + b"event: message"
+            + ending
+            + b"data: "
+            + first
+            + ending
+            + b"data:"
+            + second
+            + ending
+            + ending
+        )
+        gate = listing(len(body))
+        source = Source([wire[index : index + 1] for index in range(len(wire))])
+        response, _ = await response_for(source, gate, "text/event-stream; charset=utf-8")
+        events = [event async for event in EventSource(response).aiter_sse()]
+        assert len(events) == 1
+        assert events[0].data.encode() == body
+        assert gate.candidate_limit == 0
+        assert source.closed == 1
 
 
 @pytest.mark.asyncio
-async def test_sse_budget_is_per_event_and_notifications_do_not_debit() -> None:
+async def test_sse_budget_is_per_event_and_notifications_do_not_debit():
     notification = b'{"jsonrpc":"2.0","method":"notifications/progress"}'
     body = payload().rstrip(b"\r\n") + b" " * 10
     wire = b"".join(b"data: " + notification + b"\n\n" for _ in range(25))
@@ -159,17 +159,87 @@ async def test_sse_budget_is_per_event_and_notifications_do_not_debit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sse_data_oversize_rejected_before_utf8_decode() -> None:
-    gate = listing(20)
-    source = Source([b"data: " + b"\xff" * 21 + b"\n\n"])
-    response, _ = await response_for(source, gate, "text/event-stream")
-    with pytest.raises(IngressError, match="^TOOLS_LIST_PAGE_TOO_LARGE$"):
-        await response.aread()
-    assert source.closed == 1
+async def test_rejected_response_closes_source_without_retry():
+    async def check(media, encoding, chunks, limit, error, reason, reads):
+        gate = listing(limit)
+        source = Source(chunks, error)
+        response, inner = await response_for(source, gate, media, encoding)
+        assert gate.reason is None
+        with pytest.raises(IngressError, match=f"^{reason}$"):
+            await response.aread()
+        assert source.closed == inner.requests == 1
+        assert gate.failed.is_set()
+        if reads is not None:
+            assert source.reads == reads
+
+    cases = [
+        (
+            "text/event-stream",
+            "identity",
+            [b"data: " + b"\xff" * 21 + b"\n\n"],
+            20,
+            None,
+            "TOOLS_LIST_PAGE_TOO_LARGE",
+            None,
+        ),
+        (
+            "text/event-stream",
+            "identity",
+            [b":" + b"x" * 11],
+            10,
+            None,
+            "TOOLS_LIST_FRAMING_TOO_LARGE",
+            None,
+        ),
+        (
+            "application/json",
+            "br",
+            [b"secret remote error"],
+            100,
+            None,
+            "TOOLS_LIST_INGRESS_INVALID",
+            0,
+        ),
+        (
+            "application/json",
+            "identity",
+            [b"{"],
+            100,
+            httpx.ReadError("RAW_SECRET"),
+            "TOOLS_LIST_INGRESS_IO_FAILED",
+            None,
+        ),
+    ]
+    cases += [
+        ("application/json", "gzip", [body], 200, None, "TOOLS_LIST_INGRESS_INVALID", None)
+        for body in (b"bad", gzip.compress(payload())[:-5])
+    ]
+    cases += [
+        (media, "identity", [b"data: {}\n\n"], 100, None, "TOOLS_LIST_INGRESS_INVALID", 0)
+        for media in (
+            "application/jsonBAD",
+            "text/event-streamBAD",
+            "x-text/event-stream",
+            "application/x-text/event-stream",
+            "text/event-stream; charset=latin1",
+            "text/event-stream; charset=utf-8-sig",
+        )
+    ]
+    cases += [
+        ("text/event-stream", "identity", [wire], 100, None, "TOOLS_LIST_INGRESS_EOF", None)
+        for wire in (b"data: {}", b"data: {}\n", b": comment\n")
+    ]
+    failures = []
+    for case in cases:
+        try:
+            await check(*case)
+        except (AssertionError, pytest.fail.Exception) as error:
+            failures.append((case, str(error)))
+    assert not failures, failures
 
 
 @pytest.mark.asyncio
-async def test_existing_get_event_started_before_scope_cannot_bypass_gate() -> None:
+async def test_existing_get_event_started_before_scope_cannot_bypass_gate():
     gate = IngressGate()
 
     class ActivatingSource(Source):
@@ -187,7 +257,7 @@ async def test_existing_get_event_started_before_scope_cannot_bypass_gate() -> N
 
 
 @pytest.mark.asyncio
-async def test_custom_event_payload_is_bounded_but_not_json_parsed() -> None:
+async def test_custom_event_payload_is_bounded_but_not_json_parsed():
     source = Source([b"event: custom\ndata: not-json\n\n"])
     gate = listing(100)
     response, _ = await response_for(source, gate, "text/event-stream")
@@ -196,52 +266,42 @@ async def test_custom_event_payload_is_bounded_but_not_json_parsed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sse_metadata_has_separate_bound() -> None:
-    gate = listing(10)
-    source = Source([b":" + b"x" * 11])
-    response, _ = await response_for(source, gate, "text/event-stream")
-    with pytest.raises(IngressError, match="^TOOLS_LIST_FRAMING_TOO_LARGE$"):
-        await response.aread()
-    assert source.closed == 1
+async def test_ordinary_call_body_is_not_capped():
+    for media in ["application/json", "text/event-stream"]:
+        body = payload() + b" " * 100000
+        if media == "text/event-stream":
+            body = b"data: " + body.replace(b"\r\n", b"") + b"\n\n"
+        source = Source([body])
+        gate = IngressGate()
+        response, _ = await response_for(source, gate, media)
+        assert await response.aread() == body
+        assert gate.reason is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("media", ["application/json", "text/event-stream"])
-async def test_ordinary_call_body_is_not_capped(media) -> None:
-    body = payload() + b" " * 100000
-    if media == "text/event-stream":
-        body = b"data: " + body.replace(b"\r\n", b"") + b"\n\n"
-    source = Source([body])
-    gate = IngressGate()
-    response, _ = await response_for(source, gate, media)
-    assert await response.aread() == body
-    assert gate.reason is None
+async def test_compressed_json_decodes_once_even_when_fragmented():
+    for encoding in ["gzip", "deflate", "raw-deflate"]:
+        body = payload()
+        if encoding == "gzip":
+            compressed = gzip.compress(body)
+        elif encoding == "deflate":
+            compressed = zlib.compress(body)
+        else:
+            compressor = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+            compressed = compressor.compress(body) + compressor.flush()
+        gate = listing(len(body))
+        source = Source([compressed[index : index + 1] for index in range(len(compressed))])
+        response, _ = await response_for(
+            source, gate, encoding="deflate" if encoding == "raw-deflate" else encoding
+        )
+        assert "content-encoding" not in response.headers
+        assert "content-length" not in response.headers
+        assert await response.aread() == body
+        assert gate.candidate_limit == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("encoding", ["gzip", "deflate", "raw-deflate"])
-async def test_compressed_json_decodes_once_even_when_fragmented(encoding) -> None:
-    body = payload()
-    if encoding == "gzip":
-        compressed = gzip.compress(body)
-    elif encoding == "deflate":
-        compressed = zlib.compress(body)
-    else:
-        compressor = zlib.compressobj(wbits=-zlib.MAX_WBITS)
-        compressed = compressor.compress(body) + compressor.flush()
-    gate = listing(len(body))
-    source = Source([compressed[index : index + 1] for index in range(len(compressed))])
-    response, _ = await response_for(
-        source, gate, encoding="deflate" if encoding == "raw-deflate" else encoding
-    )
-    assert "content-encoding" not in response.headers
-    assert "content-length" not in response.headers
-    assert await response.aread() == body
-    assert gate.candidate_limit == 0
-
-
-@pytest.mark.asyncio
-async def test_gzip_bomb_uses_bounded_zlib_outputs_before_gate_rejection(monkeypatch) -> None:
+async def test_gzip_bomb_uses_bounded_zlib_outputs_before_gate_rejection(monkeypatch):
     compressed = gzip.compress(b" " * 1000000)
     gate = listing(100)
     limits = []
@@ -268,62 +328,17 @@ async def test_gzip_bomb_uses_bounded_zlib_outputs_before_gate_rejection(monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body", [b"bad", gzip.compress(payload())[:-5]])
-async def test_invalid_or_truncated_compressed_body_fails_with_fixed_reason(body) -> None:
-    gate = listing(200)
-    source = Source([body])
-    response, _ = await response_for(source, gate, encoding="gzip")
-    with pytest.raises(IngressError, match="^TOOLS_LIST_INGRESS_INVALID$"):
-        await response.aread()
-    assert source.closed == 1
+async def test_get_sse_substring_media_is_rejected_before_eventsource_parses():
+    for media in ["x-text/event-stream", "application/x-text/event-stream"]:
+        source = Source([b"data: " + payload() + b"\n\n"])
+        response, _ = await response_for(source, listing(1), media)
+        with pytest.raises(IngressError, match="^TOOLS_LIST_INGRESS_INVALID$"):
+            _events = [event async for event in EventSource(response).aiter_sse()]
+        assert source.reads == 0
 
 
 @pytest.mark.asyncio
-async def test_unsupported_encoding_failure_is_deferred_until_body_iteration() -> None:
-    gate = listing(100)
-    source = Source([b"secret remote error"])
-    response, inner = await response_for(source, gate, encoding="br")
-    assert gate.reason is None
-    with pytest.raises(IngressError, match="^TOOLS_LIST_INGRESS_INVALID$"):
-        await response.aread()
-    assert source.closed == inner.requests == 1
-    assert source.reads == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "media",
-    [
-        "application/jsonBAD",
-        "text/event-streamBAD",
-        "x-text/event-stream",
-        "application/x-text/event-stream",
-        "text/event-stream; charset=latin1",
-        "text/event-stream; charset=utf-8-sig",
-    ],
-)
-async def test_ambiguous_sdk_media_or_non_utf8_sse_fails_before_iteration(media) -> None:
-    gate = listing(100)
-    source = Source([b"data: {}\n\n"])
-    response, _ = await response_for(source, gate, media)
-    with pytest.raises(IngressError, match="^TOOLS_LIST_INGRESS_INVALID$"):
-        await response.aread()
-    assert source.reads == 0
-    assert source.closed == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("media", ["x-text/event-stream", "application/x-text/event-stream"])
-async def test_get_sse_substring_media_is_rejected_before_eventsource_parses(media: str) -> None:
-    source = Source([b"data: " + payload() + b"\n\n"])
-    response, _ = await response_for(source, listing(1), media)
-    with pytest.raises(IngressError, match="^TOOLS_LIST_INGRESS_INVALID$"):
-        _events = [event async for event in EventSource(response).aiter_sse()]
-    assert source.reads == 0
-
-
-@pytest.mark.asyncio
-async def test_empty_data_priming_event_does_not_parse_or_debit() -> None:
+async def test_empty_data_priming_event_does_not_parse_or_debit():
     page = payload()
     gate = listing(len(page), len(page))
     source = Source([b"id: start\ndata:\n\ndata: " + page + b"\n\n"])
@@ -336,42 +351,23 @@ async def test_empty_data_priming_event_does_not_parse_or_debit() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fragment", [1, 2, 17, 4096])
-async def test_raw_deflate_ambiguous_zlib_prefix_has_bounded_fallback(fragment: int) -> None:
-    page = payload() + b" " * (156 - len(payload()))
-    compressed = b"\x78\x9c\x00\x63\xff" + page + b"\x01\x00\x00\xff\xff"
-    assert zlib.decompress(compressed, -zlib.MAX_WBITS) == page
-    source = Source(
-        [compressed[offset : offset + fragment] for offset in range(0, len(compressed), fragment)]
-    )
-    response, _ = await response_for(source, listing(len(page)), encoding="deflate")
-    assert await response.aread() == page
+async def test_raw_deflate_ambiguous_zlib_prefix_has_bounded_fallback():
+    for fragment in [1, 2, 17, 4096]:
+        page = payload() + b" " * (156 - len(payload()))
+        compressed = b"\x78\x9c\x00\x63\xff" + page + b"\x01\x00\x00\xff\xff"
+        assert zlib.decompress(compressed, -zlib.MAX_WBITS) == page
+        source = Source(
+            [
+                compressed[offset : offset + fragment]
+                for offset in range(0, len(compressed), fragment)
+            ]
+        )
+        response, _ = await response_for(source, listing(len(page)), encoding="deflate")
+        assert await response.aread() == page
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("wire", [b"data: {}", b"data: {}\n", b": comment\n"])
-async def test_active_sse_partial_event_eof_is_not_admitted(wire) -> None:
-    gate = listing(100)
-    source = Source([wire])
-    response, _ = await response_for(source, gate, "text/event-stream")
-    with pytest.raises(IngressError, match="^TOOLS_LIST_INGRESS_EOF$"):
-        await response.aread()
-    assert source.closed == 1
-
-
-@pytest.mark.asyncio
-async def test_source_read_failure_marks_gate_and_closes_without_retry() -> None:
-    gate = listing(100)
-    source = Source([b"{"], httpx.ReadError("RAW_SECRET"))
-    response, inner = await response_for(source, gate)
-    with pytest.raises(IngressError, match="^TOOLS_LIST_INGRESS_IO_FAILED$"):
-        await response.aread()
-    assert source.closed == inner.requests == 1
-    assert gate.failed.is_set()
-
-
-@pytest.mark.asyncio
-async def test_cancellation_closes_source_without_retry() -> None:
+async def test_cancellation_closes_source_without_retry():
     waiting = asyncio.Event()
 
     class WaitingSource(Source):
@@ -391,7 +387,7 @@ async def test_cancellation_closes_source_without_retry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transport_close_delegates_once() -> None:
+async def test_transport_close_delegates_once():
     inner = Inner(Source([]), "application/json")
     transport = BoundedHttpTransport(inner, IngressGate())
     await transport.aclose()
@@ -399,7 +395,7 @@ async def test_transport_close_delegates_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_source_close_timeout_is_bounded_and_marks_connection_failed(monkeypatch) -> None:
+async def test_source_close_timeout_is_bounded_and_marks_connection_failed(monkeypatch):
     class StalledClose(Source):
         async def aclose(self) -> None:
             await asyncio.Event().wait()

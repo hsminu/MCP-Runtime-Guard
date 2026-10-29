@@ -7,6 +7,7 @@ network, model, real credential or C independent acceptance is exercised.
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 from dataclasses import replace
 
 import pytest
@@ -86,52 +87,44 @@ async def opened(_url):
     return True
 
 
-def test_browser_login_keeps_url_backend_only_and_checks_account_after_completion():
-    async def run():
-        fake = BrowserServer()
-        urls = []
+@pytest.mark.asyncio
+async def test_browser_login_keeps_url_backend_only_and_checks_account_after_completion():
+    fake = BrowserServer()
+    urls = []
 
-        async def open_browser(url):
-            urls.append(url)
-            return True
+    async def open_browser(url):
+        urls.append(url)
+        return True
 
-        account = CodexAccountClient(fake, version="test", open_browser=open_browser)
-        await account.start()
-        try:
-            assert (await account.read()).browser_available
-            pending = await account.start_browser_login()
-            assert pending.state == "PENDING_BROWSER"
-            assert pending.login_id == "browser-1"
-            assert pending.verification_url is None
-            assert urls == [AUTH_URL]
-            assert "private-login-state" not in repr(pending)
-            assert fake.login_requests == [{"type": "chatgpt"}]
-            waiting = asyncio.create_task(account.wait_login(pending.login_id))
-            fake.finish()
-            view = await asyncio.wait_for(waiting, 2)
-            assert (view.state, view.plan) == ("CHATGPT", "plus")
-            assert "PRIVATE" not in repr(view)
-            assert fake.methods()[-1] == "account/read"
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
+    account = CodexAccountClient(fake, version="test", open_browser=open_browser)
+    await account.start()
+    async with aclosing(account):
+        assert (await account.read()).browser_available
+        pending = await account.start_browser_login()
+        assert pending.state == "PENDING_BROWSER"
+        assert pending.login_id == "browser-1"
+        assert pending.verification_url is None
+        assert urls == [AUTH_URL]
+        assert "private-login-state" not in repr(pending)
+        assert fake.login_requests == [{"type": "chatgpt"}]
+        waiting = asyncio.create_task(account.wait_login(pending.login_id))
+        fake.finish()
+        view = await asyncio.wait_for(waiting, 2)
+        assert (view.state, view.plan) == ("CHATGPT", "plus")
+        assert "PRIVATE" not in repr(view)
+        assert fake.methods()[-1] == "account/read"
 
 
-def test_browser_without_c_opener_is_unavailable_and_does_not_start_login():
-    async def run():
-        fake = BrowserServer()
-        account = CodexAccountClient(fake, version="test")
-        await account.start()
-        try:
-            assert not (await account.read()).browser_available
-            view = await account.start_browser_login()
-            assert view.notice == "BROWSER_LOGIN_UNAVAILABLE"
-            assert fake.login_requests == []
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_browser_without_c_opener_is_unavailable_and_does_not_start_login():
+    fake = BrowserServer()
+    account = CodexAccountClient(fake, version="test")
+    await account.start()
+    async with aclosing(account):
+        assert not (await account.read()).browser_available
+        view = await account.start_browser_login()
+        assert view.notice == "BROWSER_LOGIN_UNAVAILABLE"
+        assert fake.login_requests == []
 
 
 def test_preparation_passes_injected_opener_without_launching_or_claiming():
@@ -140,31 +133,25 @@ def test_preparation_passes_injected_opener_without_launching_or_claiming():
     assert preparation.account_access(open_browser=opened).open_browser is opened
 
 
-def test_open_timeout_cancels_callback_and_does_not_report_pending():
-    async def run():
-        fake = BrowserServer()
-        cancelled = asyncio.Event()
+@pytest.mark.asyncio
+async def test_open_timeout_cancels_callback_and_does_not_report_pending():
+    fake = BrowserServer()
+    cancelled = asyncio.Event()
 
-        async def stalled(_url):
-            try:
-                await asyncio.Event().wait()
-                return True
-            finally:
-                cancelled.set()
-
-        account = CodexAccountClient(
-            fake, version="test", request_timeout_s=0.05, open_browser=stalled
-        )
-        await account.start()
+    async def stalled(_url):
         try:
-            view = await asyncio.wait_for(account.start_browser_login(), 2)
-            assert view.notice == "BROWSER_OPEN_FAILED"
-            assert cancelled.is_set()
-            assert fake.cancelled == ["browser-1"]
+            await asyncio.Event().wait()
+            return True
         finally:
-            await account.aclose()
+            cancelled.set()
 
-    asyncio.run(run())
+    account = CodexAccountClient(fake, version="test", request_timeout_s=0.05, open_browser=stalled)
+    await account.start()
+    async with aclosing(account):
+        view = await asyncio.wait_for(account.start_browser_login(), 2)
+        assert view.notice == "BROWSER_OPEN_FAILED"
+        assert cancelled.is_set()
+        assert fake.cancelled == ["browser-1"]
 
 
 def test_device_rpc_failure_keeps_browser_fallback_available(app):
@@ -195,95 +182,78 @@ def test_device_rpc_failure_keeps_browser_fallback_available(app):
         close_bridge(app, bridge)
 
 
-@pytest.mark.parametrize("reply", [None, {}, {"type": "chatgpt", "authUrl": AUTH_URL}])
-def test_malformed_browser_reply_ends_product_account_process(reply):
-    async def run():
+@pytest.mark.asyncio
+async def test_malformed_browser_reply_ends_product_account_process():
+    for reply in [None, {}, {"type": "chatgpt", "authUrl": AUTH_URL}]:
         server = BrowserServer()
         server.browser_reply = reply
-        access = FakeAccess(server=lambda: server)
-        access.access = lambda: replace(FakeAccess.access(access), open_browser=opened)
+        access = FakeAccess(server=lambda *, server=server: server)
+        access.access = lambda *, access=access: replace(
+            FakeAccess.access(access), open_browser=opened
+        )
         account = product_account(access)
-        try:
+        async with aclosing(account):
             with pytest.raises(AccountError, match="^CODEX_ACCOUNT_FAILED$"):
                 await account.start_browser_login()
             assert access.processes[0].closes == 1
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
 
 
-@pytest.mark.parametrize("url", [None, "", AUTH_URL])
-def test_refused_url_or_open_failure_cancels_the_callback(url):
-    async def run():
+@pytest.mark.asyncio
+async def test_refused_url_or_open_failure_cancels_the_callback():
+    for url in [None, "", AUTH_URL]:
         fake = BrowserServer()
         fake.browser_reply["authUrl"] = url
         calls = []
 
-        async def refused(value):
+        async def refused(value, *, calls=calls):
             calls.append(value)
             return False
 
         account = CodexAccountClient(fake, version="test", open_browser=refused)
         await account.start()
-        try:
+        async with aclosing(account):
             view = await account.start_browser_login()
             assert (view.state, view.notice) == ("FAILED", "BROWSER_OPEN_FAILED")
             assert calls == ([url] if url else [])
             assert fake.cancelled == ["browser-1"]
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
 
 
-def test_cancelled_opener_preserves_cancellation_even_if_cancel_rpc_fails():
-    async def run():
-        fake = BrowserServer()
-        fake.refuse_cancel = True
-        entered = asyncio.Event()
+@pytest.mark.asyncio
+async def test_cancelled_opener_preserves_cancellation_even_if_cancel_rpc_fails():
+    fake = BrowserServer()
+    fake.refuse_cancel = True
+    entered = asyncio.Event()
 
-        async def opening(_url):
-            entered.set()
-            await asyncio.Event().wait()
-            return True
+    async def opening(_url):
+        entered.set()
+        await asyncio.Event().wait()
+        return True
 
-        account = CodexAccountClient(fake, version="test", open_browser=opening)
-        await account.start()
-        try:
-            operation = asyncio.create_task(account.start_browser_login())
-            await asyncio.wait_for(entered.wait(), 2)
-            operation.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(operation, 2)
-            assert fake.cancelled == ["browser-1"]
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
+    account = CodexAccountClient(fake, version="test", open_browser=opening)
+    await account.start()
+    async with aclosing(account):
+        operation = asyncio.create_task(account.start_browser_login())
+        await asyncio.wait_for(entered.wait(), 2)
+        operation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(operation, 2)
+        assert fake.cancelled == ["browser-1"]
 
 
-@pytest.mark.parametrize(
-    ("success", "signed_in", "expected"),
-    [
+@pytest.mark.asyncio
+async def test_browser_open_or_success_notification_alone_is_not_signed_in():
+    for success, signed_in, expected in [
         (False, False, "LOGIN_NOT_COMPLETED"),
         (True, False, "SIGNED_OUT"),
-    ],
-)
-def test_browser_open_or_success_notification_alone_is_not_signed_in(success, signed_in, expected):
-    async def run():
+    ]:
         fake = BrowserServer()
         account = CodexAccountClient(fake, version="test", open_browser=opened)
         await account.start()
-        try:
+        async with aclosing(account):
             await account.start_browser_login()
             fake.finish(success=success, signed_in=signed_in)
             view = await asyncio.wait_for(account.wait_login("browser-1"), 2)
             assert view.state == expected
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
 
 
 def browser_bridge(fake, loops):
@@ -395,33 +365,31 @@ class AbsorbingWaitPort:
         return AccountView("SIGNED_OUT", browser_available=True)
 
 
-def test_a_wait_returning_after_its_cancel_cannot_overwrite_the_next_login():
-    async def run():
-        port = AbsorbingWaitPort()
-        outlet = Outlet()
-        commands = AccountCommands(NoCapability(), outlet, lambda: False, consume)
-        try:
-            assert await send(commands, port, "account_login_browser") == "ACCOUNT_PENDING_BROWSER"
-            await asyncio.sleep(0)  # the waiter enters wait_login
-            await send(commands, port, "account_cancel_login", "browser-1")
-            await asyncio.wait_for(port.absorbed.wait(), 2)
-            assert await send(commands, port, "account_login_device") == "ACCOUNT_PENDING_DEVICE"
-            port.release.set()
-            await asyncio.wait_for(port.late.wait(), 2)
-            for _ in range(3):
-                await asyncio.sleep(0)
-            states = [view.state for view in outlet.views]
-            assert "CHATGPT" not in states
-            assert states[-1] == "PENDING_DEVICE"
-            # The next login is still the pending one, and cancels normally.
-            assert await send(commands, port, "account_read") == "ACCOUNT_PENDING_DEVICE"
-            await send(commands, port, "account_cancel_login", "device-1")
-            last = outlet.views[-1]
-            assert (last.state, last.notice) == ("SIGNED_OUT", "LOGIN_CANCELLED")
-        finally:
-            commands.cancel_waits()
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_a_wait_returning_after_its_cancel_cannot_overwrite_the_next_login():
+    port = AbsorbingWaitPort()
+    outlet = Outlet()
+    commands = AccountCommands(NoCapability(), outlet, lambda: False, consume)
+    try:
+        assert await send(commands, port, "account_login_browser") == "ACCOUNT_PENDING_BROWSER"
+        await asyncio.sleep(0)  # the waiter enters wait_login
+        await send(commands, port, "account_cancel_login", "browser-1")
+        await asyncio.wait_for(port.absorbed.wait(), 2)
+        assert await send(commands, port, "account_login_device") == "ACCOUNT_PENDING_DEVICE"
+        port.release.set()
+        await asyncio.wait_for(port.late.wait(), 2)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        states = [view.state for view in outlet.views]
+        assert "CHATGPT" not in states
+        assert states[-1] == "PENDING_DEVICE"
+        # The next login is still the pending one, and cancels normally.
+        assert await send(commands, port, "account_read") == "ACCOUNT_PENDING_DEVICE"
+        await send(commands, port, "account_cancel_login", "device-1")
+        last = outlet.views[-1]
+        assert (last.state, last.notice) == ("SIGNED_OUT", "LOGIN_CANCELLED")
+    finally:
+        commands.cancel_waits()
 
 
 class RecordedWait:
@@ -441,49 +409,47 @@ class RecordedWait:
             self._returned.set()
 
 
-def test_a_completion_inside_the_cancel_rpc_does_not_overwrite_the_cancelled_view():
+@pytest.mark.asyncio
+async def test_a_completion_inside_the_cancel_rpc_does_not_overwrite_the_cancelled_view():
     """The waiter wakes during the cancel RPC and is cancelled while it waits for the lock."""
 
-    async def run():
-        returned = asyncio.Event()
-        replies = []
+    returned = asyncio.Event()
+    replies = []
 
-        class CompletesDuringCancel(BrowserServer):
-            def _request(self, message):
-                if message["method"] != "account/login/cancel":
-                    super()._request(message)
-                    return
-                self.cancelled.append(message["params"]["loginId"])
-                self.finish(success=False, signed_in=False)
-                replies.append(asyncio.ensure_future(self.reply_after_wait(message["id"])))
+    class CompletesDuringCancel(BrowserServer):
+        def _request(self, message):
+            if message["method"] != "account/login/cancel":
+                super()._request(message)
+                return
+            self.cancelled.append(message["params"]["loginId"])
+            self.finish(success=False, signed_in=False)
+            replies.append(asyncio.ensure_future(self.reply_after_wait(message["id"])))
 
-            async def reply_after_wait(self, request_id):
-                await returned.wait()
-                self.emit({"id": request_id, "result": {"status": "canceled"}})
+        async def reply_after_wait(self, request_id):
+            await returned.wait()
+            self.emit({"id": request_id, "result": {"status": "canceled"}})
 
-        fake = CompletesDuringCancel()
-        client = CodexAccountClient(fake, version="test", open_browser=opened)
-        await client.start()
-        outlet = Outlet()
-        commands = AccountCommands(NoCapability(), outlet, lambda: False, consume)
-        port = RecordedWait(client, returned)
-        try:
-            assert await send(commands, port, "account_login_browser") == "ACCOUNT_PENDING_BROWSER"
+    fake = CompletesDuringCancel()
+    client = CodexAccountClient(fake, version="test", open_browser=opened)
+    await client.start()
+    outlet = Outlet()
+    commands = AccountCommands(NoCapability(), outlet, lambda: False, consume)
+    port = RecordedWait(client, returned)
+    try:
+        assert await send(commands, port, "account_login_browser") == "ACCOUNT_PENDING_BROWSER"
+        await asyncio.sleep(0)
+        cancelling = send(commands, port, "account_cancel_login", "browser-1")
+        assert await asyncio.wait_for(cancelling, 2) == "ACCOUNT_SIGNED_OUT"
+        assert returned.is_set()  # the wait returned before the cancel reply
+        for _ in range(3):
             await asyncio.sleep(0)
-            cancelling = send(commands, port, "account_cancel_login", "browser-1")
-            assert await asyncio.wait_for(cancelling, 2) == "ACCOUNT_SIGNED_OUT"
-            assert returned.is_set()  # the wait returned before the cancel reply
-            for _ in range(3):
-                await asyncio.sleep(0)
-            assert "LOGIN_NOT_COMPLETED" not in [view.state for view in outlet.views]
-            last = outlet.views[-1]
-            assert (last.state, last.notice) == ("SIGNED_OUT", "LOGIN_CANCELLED")
-            assert fake.cancelled == ["browser-1"]
-        finally:
-            commands.cancel_waits()
-            await client.aclose()
-
-    asyncio.run(run())
+        assert "LOGIN_NOT_COMPLETED" not in [view.state for view in outlet.views]
+        last = outlet.views[-1]
+        assert (last.state, last.notice) == ("SIGNED_OUT", "LOGIN_CANCELLED")
+        assert fake.cancelled == ["browser-1"]
+    finally:
+        commands.cancel_waits()
+        await client.aclose()
 
 
 def test_browser_timeout_cancels_codex_login(app, monkeypatch):
@@ -568,92 +534,83 @@ class RefusingServer(BrowserServer):
             super()._request(message)
 
 
-def test_a_refused_login_start_keeps_the_account_process():
+@pytest.mark.asyncio
+async def test_a_refused_login_start_keeps_the_account_process():
     # Codex answered, so nothing it refused is left running (A109 follow-up).
-    async def run():
-        server = RefusingServer()
-        access = FakeAccess(server=lambda: server)
-        access.access = lambda: replace(FakeAccess.access(access), open_browser=opened)
-        account = product_account(access)
-        try:
-            for start in (
-                lambda: account.login_api_key("sk-refused"),
-                account.start_device_login,
-                account.start_browser_login,
-            ):
-                with pytest.raises(AccountRefusedError, match="^CODEX_ACCOUNT_FAILED$"):
-                    await start()
-            assert [params["type"] for params in server.login_requests] == [
-                "apiKey",
-                "chatgptDeviceCode",
-                "chatgpt",
-            ]
-            assert (await account.read()).state == "API_KEY"
-            assert len(access.processes) == 1
-            assert access.processes[0].closes == 0
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
+    server = RefusingServer()
+    access = FakeAccess(server=lambda: server)
+    access.access = lambda: replace(FakeAccess.access(access), open_browser=opened)
+    account = product_account(access)
+    async with aclosing(account):
+        for start in (
+            lambda: account.login_api_key("sk-refused"),
+            account.start_device_login,
+            account.start_browser_login,
+        ):
+            with pytest.raises(AccountRefusedError, match="^CODEX_ACCOUNT_FAILED$"):
+                await start()
+        assert [params["type"] for params in server.login_requests] == [
+            "apiKey",
+            "chatgptDeviceCode",
+            "chatgpt",
+        ]
+        assert (await account.read()).state == "API_KEY"
+        assert len(access.processes) == 1
+        assert access.processes[0].closes == 0
 
 
 async def refused_open(_url):
     return False
 
 
-@pytest.mark.parametrize("opener", [opened, refused_open])
-def test_a_refused_cancel_ends_the_account_process(opener):
-    # The login callback may still run after Codex refuses to cancel it.
-    async def run():
+@pytest.mark.asyncio
+async def test_a_refused_cancel_ends_the_account_process():
+    for opener in [opened, refused_open]:
+        # The login callback may still run after Codex refuses to cancel it.
         server = BrowserServer()
         server.refuse_cancel = True
-        access = FakeAccess(server=lambda: server)
-        access.access = lambda: replace(FakeAccess.access(access), open_browser=opener)
+        access = FakeAccess(server=lambda *, server=server: server)
+        access.access = lambda *, access=access, opener=opener: replace(
+            FakeAccess.access(access), open_browser=opener
+        )
         account = product_account(access)
 
-        async def start_and_cancel():
+        async def start_and_cancel(*, account=account):
             # A refused opener cancels inside the start; an opened one here.
             pending = await account.start_browser_login()
             await account.cancel_login(pending.login_id)
 
-        try:
+        async with aclosing(account):
             with pytest.raises(AccountError) as failed:
                 await start_and_cancel()
             assert type(failed.value) is AccountError
             assert server.cancelled == ["browser-1"]
             assert access.processes[0].closes == 1
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
 
 
 def account_event(action, stage, code):
     return CommandEvent("c", "control", action, "account", stage, code)
 
 
-@pytest.mark.parametrize(
-    ("action", "notice"),
-    [
+def test_an_unconfirmed_account_command_names_what_was_not_confirmed(app):
+    for action, notice in [
         ("account_read", "상태 확인 결과를 받지 못함"),
         ("account_logout", "로그아웃 처리를 확인하지 못함"),
         ("account_cancel_login", "로그인 취소 처리를 확인하지 못함"),
         ("account_login_api_key", "로그인 요청 처리를 확인하지 못함"),
         ("account_login_device", "로그인 요청 처리를 확인하지 못함"),
         ("account_login_browser", "로그인 요청 처리를 확인하지 못함"),
-    ],
-)
-def test_an_unconfirmed_account_command_names_what_was_not_confirmed(app, action, notice):
-    form = CodexLoginInfo()
-    form.set_view(AccountView("CHATGPT", browser_available=True))
-    form.account_command_changed(
-        account_event(action, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
-    )
-    assert form.view.state == "FAILED"
-    assert form.view.browser_available
-    assert notice in form.status.text()
-    assert ("로그인 요청" in form.status.text()) == action.startswith("account_login_")
-    form.close()
+    ]:
+        form = CodexLoginInfo()
+        form.set_view(AccountView("CHATGPT", browser_available=True))
+        form.account_command_changed(
+            account_event(action, CommandStage.UNCONFIRMED, "BACKEND_UNCONFIRMED")
+        )
+        assert form.view.state == "FAILED"
+        assert form.view.browser_available
+        assert notice in form.status.text()
+        assert ("로그인 요청" in form.status.text()) == action.startswith("account_login_")
+        form.close()
 
 
 def test_a_refused_account_command_keeps_the_last_state(app):

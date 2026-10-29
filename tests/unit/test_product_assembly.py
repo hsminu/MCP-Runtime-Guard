@@ -327,74 +327,48 @@ def test_missing_access_rule_is_denied_before_dispatch(tmp_path) -> None:
     assert peer.calls == []
 
 
-@pytest.mark.parametrize(
-    "live",
-    [[{**READ_DEFINITION, "description": "changed by the server"}], []],
-    ids=["changed", "absent"],
-)
-def test_live_definition_mismatch_hides_the_tool_and_blocks_dispatch(tmp_path, live) -> None:
-    peer = Peer(live)
-    outcome, views, mismatched = asyncio.run(
-        submit_read(tmp_path, peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
-    )
-    assert mismatched == frozenset({("docs", "read")})
-    assert views == ()
-    assert type(outcome) is Denied
-    # The whole server is PENDING for this run (I10; 9.1/10.1), checked before
-    # the per-tool fingerprint.
-    assert outcome.reasons == (Reason.REG_NOT_ACTIVE,)
-    assert peer.calls == []
+def test_live_definition_mismatch_hides_the_tool_and_blocks_dispatch(tmp_path, subtests):
+    """I10: changed, absent, added, duplicate or sibling tool blocks the server."""
+    cases = [
+        (
+            [{**READ_DEFINITION, "description": "changed by the server"}],
+            False,
+            "read",
+            frozenset({("docs", "read")}),
+        ),
+        ([], False, "read", frozenset({("docs", "read")})),
+        (
+            [{**READ_DEFINITION, "description": "changed by the server"}, LIST_DEFINITION],
+            True,
+            "list",
+            frozenset({("docs", "read")}),
+        ),
+        ([READ_DEFINITION, LIST_DEFINITION], False, "read", frozenset()),
+        ([READ_DEFINITION, READ_DEFINITION], False, "read", None),
+    ]
+    for index, (live, sibling, name, mismatched) in enumerate(cases):
+        with subtests.test(case=index):
+            path = tmp_path / str(index)
+            path.mkdir()
+            peer = Peer(live)
+            registry = Registry(
+                tool_fingerprint(READ_DEFINITION), *((spec(LIST_DEFINITION),) if sibling else ())
+            )
+            doc = document(tools=(READ_SETTINGS, LIST_SETTINGS) if sibling else (READ_SETTINGS,))
+            outcome, views, view = asyncio.run(
+                submit_call(path, peer, registry, doc, tool_ref=f"docs__{name}")
+            )
+            assert views == ()
+            assert type(outcome) is Denied
+            assert outcome.reasons == (Reason.REG_NOT_ACTIVE,)
+            assert peer.calls == []
+            assert view.blocked_servers == frozenset({"docs"})
+            assert view.status("docs") is RegStatus.PENDING
+            if mismatched is not None:
+                assert view.mismatched == mismatched
 
 
 LIST_SETTINGS = {"name": "list", "kind": "read", "resource_arg": "path"}
-
-
-def test_one_mismatched_tool_blocks_every_tool_of_its_server(tmp_path) -> None:
-    """I10: a server that changed one tool is not trusted for its other tools."""
-    peer = Peer([{**READ_DEFINITION, "description": "changed by the server"}, LIST_DEFINITION])
-    registry = Registry(tool_fingerprint(READ_DEFINITION), spec(LIST_DEFINITION))
-    doc = document(tools=(READ_SETTINGS, LIST_SETTINGS))
-    outcome, views, view = asyncio.run(
-        submit_call(tmp_path, peer, registry, doc, tool_ref="docs__list")
-    )
-    # Only `read` differs, yet `list` (whose definition still matches) is
-    # neither offered to the model nor dispatched.
-    assert views == ()
-    assert type(outcome) is Denied
-    assert outcome.reasons == (Reason.REG_NOT_ACTIVE,)
-    assert peer.calls == []
-    assert view.mismatched == frozenset({("docs", "read")})
-    assert view.blocked_servers == frozenset({"docs"})
-    assert view.status("docs") is RegStatus.PENDING
-
-
-def test_a_listed_tool_missing_from_the_registration_blocks_the_server(tmp_path) -> None:
-    """PR #29 B review 3: an added tool is a definition change, like a removed one."""
-    peer = Peer([READ_DEFINITION, LIST_DEFINITION])
-    outcome, views, view = asyncio.run(
-        submit_call(tmp_path, peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
-    )
-    # `read` itself still matches, yet the server is not trusted for this run.
-    assert view.mismatched == frozenset()
-    assert view.blocked_servers == frozenset({"docs"})
-    assert view.status("docs") is RegStatus.PENDING
-    assert views == ()
-    assert type(outcome) is Denied
-    assert outcome.reasons == (Reason.REG_NOT_ACTIVE,)
-    assert peer.calls == []
-
-
-def test_incomplete_listing_blocks_the_server(tmp_path) -> None:
-    """A duplicate tool name makes tools/list incomplete; nothing is guessed (I10)."""
-    peer = Peer([READ_DEFINITION, READ_DEFINITION])
-    outcome, views, view = asyncio.run(
-        submit_call(tmp_path, peer, Registry(tool_fingerprint(READ_DEFINITION)), document())
-    )
-    assert views == ()
-    assert type(outcome) is Denied
-    assert outcome.reasons == (Reason.REG_NOT_ACTIVE,)
-    assert peer.calls == []
-    assert view.blocked_servers == frozenset({"docs"})
 
 
 def test_registration_rewritten_mid_run_no_longer_matches_the_live_definition(tmp_path) -> None:
@@ -569,83 +543,104 @@ class DyingPeer(Peer):
         await super().write(frame)
 
 
-@pytest.mark.parametrize("die_on_call", [False, True], ids=["while-idle", "during-a-call"])
-def test_a_server_that_stops_serving_is_pending_for_the_rest_of_the_run(
-    tmp_path, die_on_call
-) -> None:
-    """#61: the call that finds the dead session keeps its unknown outcome and
-    halts its Task; every later call is denied with REG_NOT_ACTIVE before it is
-    reserved, so no other Task is locked. C's Registry is not written."""
-    peer = DyingPeer([READ_DEFINITION], die_on_call=die_on_call)
-    registry = Registry(tool_fingerprint(READ_DEFINITION))
-    audits: list[FailureEvent] = []
+def test_a_server_that_stops_serving_is_pending_for_the_rest_of_the_run(tmp_path, subtests):
+    def check(die_on_call, tmp_path):
+        """#61: the call that finds the dead session keeps its unknown outcome and
+        halts its Task; every later call is denied with REG_NOT_ACTIVE before it is
+        reserved, so no other Task is locked. C's Registry is not written."""
+        peer = DyingPeer([READ_DEFINITION], die_on_call=die_on_call)
+        registry = Registry(tool_fingerprint(READ_DEFINITION))
+        audits: list[FailureEvent] = []
 
-    async def run():
-        async with running(tmp_path, peer, registry, document(), audits) as (assembled, store):
-            guard = assembled.guard
-            base = await store.load_task("task-1")
-            for task_id in ("task-2", "task-3"):
-                await store.create_task(
-                    base.model_copy(update={"task_id": task_id}), created_at_utc=datetime.now(UTC)
+        async def run():
+            async with running(tmp_path, peer, registry, document(), audits) as (assembled, store):
+                guard = assembled.guard
+                base = await store.load_task("task-1")
+                for task_id in ("task-2", "task-3"):
+                    await store.create_task(
+                        base.model_copy(update={"task_id": task_id}),
+                        created_at_utc=datetime.now(UTC),
+                    )
+                first = await guard.submit("task-1", read_call("c1"), expected_epoch=1)
+                if not die_on_call:
+                    peer.die()
+                    await peer.ended.wait()
+                    # Let the SDK close the session first, so the next call finds it
+                    # closed rather than in flight; both end the same way.
+                    await asyncio.sleep(0.05)
+                found = await guard.submit("task-2", read_call("c2"), expected_epoch=1)
+                later = await guard.submit("task-3", read_call("c3"), expected_epoch=1)
+                states = [(await store.load_task(t)).status for t in ("task-2", "task-3")]
+                return (
+                    first,
+                    found,
+                    later,
+                    states,
+                    assembled.offered_tool_views(),
+                    assembled.registry,
                 )
-            first = await guard.submit("task-1", read_call("c1"), expected_epoch=1)
-            if not die_on_call:
-                peer.die()
-                await peer.ended.wait()
-                # Let the SDK close the session first, so the next call finds it
-                # closed rather than in flight; both end the same way.
-                await asyncio.sleep(0.05)
-            found = await guard.submit("task-2", read_call("c2"), expected_epoch=1)
-            later = await guard.submit("task-3", read_call("c3"), expected_epoch=1)
-            states = [(await store.load_task(t)).status for t in ("task-2", "task-3")]
-            return first, found, later, states, assembled.offered_tool_views(), assembled.registry
 
-    first, found, later, states, offered, view = asyncio.run(run())
-    assert type(first) is Released
-    assert type(found) is Withheld
-    assert found.reasons == (Reason.POST_DISPATCH_ERROR,)
-    assert type(later) is Denied
-    assert later.reasons == (Reason.REG_NOT_ACTIVE,)
-    assert states == [TaskStatus.HALTED, TaskStatus.RUNNING]
-    assert len(peer.calls) == (2 if die_on_call else 1)
-    assert [(e.task_id, e.phase, e.reason) for e in audits if e.task_id == "task-3"] == [
-        ("task-3", "before_dispatch", Reason.REG_NOT_ACTIVE)
-    ]
-    assert view.status("docs") is RegStatus.PENDING
-    assert view.unavailable == frozenset({"docs"})
-    assert offered == ()
-    assert registry.record.status is RegStatus.ACTIVE
+        first, found, later, states, offered, view = asyncio.run(run())
+        assert type(first) is Released
+        assert type(found) is Withheld
+        assert found.reasons == (Reason.POST_DISPATCH_ERROR,)
+        assert type(later) is Denied
+        assert later.reasons == (Reason.REG_NOT_ACTIVE,)
+        assert states == [TaskStatus.HALTED, TaskStatus.RUNNING]
+        assert len(peer.calls) == (2 if die_on_call else 1)
+        assert [(e.task_id, e.phase, e.reason) for e in audits if e.task_id == "task-3"] == [
+            ("task-3", "before_dispatch", Reason.REG_NOT_ACTIVE)
+        ]
+        assert view.status("docs") is RegStatus.PENDING
+        assert view.unavailable == frozenset({"docs"})
+        assert offered == ()
+        assert registry.record.status is RegStatus.ACTIVE
+
+    for case_index, die_on_call in enumerate([False, True]):
+        with subtests.test(case=case_index):
+            case_path = tmp_path / str(case_index)
+            case_path.mkdir()
+            check(die_on_call, case_path)
 
 
-def test_close_settles_between_the_transport_and_guard(tmp_path) -> None:
-    """#58 B review: a session stop recorded in the background must end after the
-    reserved calls settled (transport closed) and before Guard halts globally."""
-    order: list[str] = []
+def test_close_settles_between_the_transport_and_guard(tmp_path, subtests):
+    """NOTIFY-01, #58: transport -> optional stop settlement -> Guard."""
 
-    async def run():
-        store = SQLiteStore(tmp_path / "close.db", audit_id_factory=lambda: f"audit-{uuid4().hex}")
-        try:
-            peer = Peer([READ_DEFINITION])
-            registry = Registry(tool_fingerprint(READ_DEFINITION))
-            assembled = await assemble_guard(store, inputs(peer, registry, document()))
-            guard_close = assembled.guard.aclose
+    async def check(with_settle, path):
+        order = []
+        with SQLiteStore(path, audit_id_factory=lambda: f"audit-{uuid4().hex}") as store:
+            assembled = await assemble_guard(
+                store,
+                inputs(
+                    Peer([READ_DEFINITION]), Registry(tool_fingerprint(READ_DEFINITION)), document()
+                ),
+            )
+            close_transport, close_guard = assembled.transport.close, assembled.guard.aclose
 
-            async def closing_guard() -> None:
+            async def transport_closed():
+                order.append("transport")
+                await close_transport()
+
+            async def guard_closed():
                 order.append("guard")
-                await guard_close()
+                await close_guard()
 
-            assembled.guard.aclose = closing_guard  # type: ignore[method-assign]
-
-            async def settle() -> None:
+            async def settle():
                 order.append("settle")
                 assert assembled.transport._closed
 
-            await assembled.aclose(settle=settle)
-        finally:
-            store.close()
+            assembled.transport.close = transport_closed
+            assembled.guard.aclose = guard_closed
+            if with_settle:
+                await assembled.aclose(settle=settle)
+                assert order == ["transport", "settle", "guard"]
+            else:
+                await assembled.aclose()
+                assert order == ["transport", "guard"]
 
-    asyncio.run(run())
-    assert order == ["settle", "guard"]
+    for with_settle in (False, True):
+        with subtests.test(settle=with_settle):
+            asyncio.run(check(with_settle, tmp_path / f"{with_settle}.db"))
 
 
 def test_a_server_failure_is_not_superseded_by_the_comparison() -> None:

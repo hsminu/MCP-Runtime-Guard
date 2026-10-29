@@ -25,6 +25,24 @@ from .test_guard import _call, _Harness
 from .test_mcp_transport import _request
 
 
+@contextmanager
+def _dispatch_error(code):
+    with pytest.raises(DispatchError) as caught:
+        yield caught
+    assert caught.value.exception_type == code
+
+
+def _check_cases(cases, check):
+    """Keep checking cheap table rows after an assertion/expected-error mismatch."""
+    failures = []
+    for case in cases:
+        try:
+            check(*case)
+        except (AssertionError, pytest.fail.Exception) as error:
+            failures.append((case, str(error)))
+    assert not failures, failures
+
+
 class ProtocolProbe:
     """Synthetic server: count actual tools/call POSTs separately from effects."""
 
@@ -156,63 +174,80 @@ async def close_failed_channel(transport):
     assert all(worker._owner.done() for worker in transport._workers.values())
 
 
-@pytest.mark.parametrize(
-    "endpoint",
-    [
-        "",
-        "http://external.example/mcp",
-        "http://localhost/mcp",
-        "ftp://example/mcp",
-        "https://user:RAW_SECRET@example/mcp",
-        "https://example/mcp?key=RAW_SECRET",
-        "https://example/mcp#fragment",
-        "https://example/mcp\n",
-        "https://example\\mcp",
-        "/mcp",
-        "https://[bad",
-        "https://example/" + "x" * 2048,
-        # C2.5 canonical form only (URL-01): no silent normalization here.
-        "HTTPS://example.test/mcp",
-        "https://Example.test/mcp",
-        "https://example.test",
-        "https://example.test:443/mcp",
-        "http://127.0.0.1:80/mcp",
-        "https://example.test/a/../mcp",
-        "https://example.test/%2e%2e/mcp",
-        # Addresses C forbids even over HTTPS.
-        "https://169.254.169.254/latest",
-        "https://[::ffff:127.0.0.1]/mcp",
-        "https://0x7f.1/mcp",
-        "https://2130706433/mcp",
-    ],
-)
-def test_endpoint_envelope_rejects_unsupported_urls_without_echo(endpoint):
-    with pytest.raises(ValueError) as caught:
-        http_stream_factory(endpoint)
-    assert str(caught.value) == "Invalid HTTP MCP endpoint"
-    assert "RAW_SECRET" not in str(caught.value)
+def test_endpoint_envelope_rejects_unsupported_urls_without_echo():
+    # C2.5 / URL-01: only the canonical endpoint form is accepted.
+    def check(endpoint):
+        with pytest.raises(ValueError) as caught:
+            http_stream_factory(endpoint)
+        assert str(caught.value) == "Invalid HTTP MCP endpoint"
+        assert "RAW_SECRET" not in str(caught.value)
+
+    _check_cases(
+        (
+            (endpoint,)
+            for endpoint in [
+                "",
+                "http://external.example/mcp",
+                "http://localhost/mcp",
+                "ftp://example/mcp",
+                "https://user:RAW_SECRET@example/mcp",
+                "https://example/mcp?key=RAW_SECRET",
+                "https://example/mcp#fragment",
+                "https://example/mcp\n",
+                "https://example\\mcp",
+                "/mcp",
+                "https://[bad",
+                "https://example/" + "x" * 2048,
+                "HTTPS://example.test/mcp",
+                "https://Example.test/mcp",
+                "https://example.test",
+                "https://example.test:443/mcp",
+                "http://127.0.0.1:80/mcp",
+                "https://example.test/a/../mcp",
+                "https://example.test/%2e%2e/mcp",
+                "https://169.254.169.254/latest",
+                "https://[::ffff:127.0.0.1]/mcp",
+                "https://0x7f.1/mcp",
+                "https://2130706433/mcp",
+            ]
+        ),
+        check,
+    )
 
 
-@pytest.mark.parametrize(
-    "endpoint",
-    [
-        "https://example.test/mcp",
-        "https://xn--fa-hia.de/mcp",
-        "http://127.0.0.2:9000/mcp",
-        "http://[::1]:9000/mcp",
-        "https://example.test/",
-    ],
-)
-def test_endpoint_is_cs_canonical_form_and_requested_unchanged(endpoint):
-    """A08 second line: C's `canonical_endpoint` decides, and httpx keeps the string."""
-    assert str(streams._endpoint_url(endpoint)) == endpoint
+def test_endpoint_is_cs_canonical_form_and_requested_unchanged():
+    def check(endpoint):
+        """A08 second line: C's `canonical_endpoint` decides, and httpx keeps the string."""
+        assert str(streams._endpoint_url(endpoint)) == endpoint
+
+    _check_cases(
+        (
+            (endpoint,)
+            for endpoint in [
+                "https://example.test/mcp",
+                "https://xn--fa-hia.de/mcp",
+                "http://127.0.0.2:9000/mcp",
+                "http://[::1]:9000/mcp",
+                "https://example.test/",
+            ]
+        ),
+        check,
+    )
 
 
-@pytest.mark.parametrize("timeout", [0, -1, True, "5", float("nan"), float("inf"), 301, 10**400])
-@pytest.mark.parametrize("name", ["io_timeout_s", "read_timeout_s"])
-def test_http_timeouts_are_bounded(timeout, name):
-    with pytest.raises(ValueError):
-        http_stream_factory("https://example.test/mcp", **{name: timeout})
+def test_http_timeouts_are_bounded():
+    def check(timeout, name):
+        with pytest.raises(ValueError):
+            http_stream_factory("https://example.test/mcp", **{name: timeout})
+
+    _check_cases(
+        (
+            (timeout, name)
+            for timeout in [0, -1, True, "5", float("nan"), float("inf"), 301, 10**400]
+            for name in ["io_timeout_s", "read_timeout_s"]
+        ),
+        check,
+    )
 
 
 def test_http_read_timeout_cannot_be_shorter_than_call_timeout():
@@ -309,91 +344,94 @@ async def test_tls_context_is_built_off_the_event_loop_and_still_verifies(monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "json_response,stateless", [(True, False), (False, False), (True, True), (False, True)]
-)
-async def test_real_fastmcp_json_and_sse_sessions_work_through_guard(
-    json_response, stateless, caplog
-):
-    caplog.set_level(logging.DEBUG)
-    async with http_spike(json_response=json_response, stateless=stateless) as spike:
-        dispatches = []
-        transport = transport_for(spike.endpoint, dispatches, call_timeout=2)
-        h = _Harness()
-        h.guard._transport = transport
-        try:
+async def test_real_fastmcp_json_and_sse_sessions_work_through_guard(caplog):
+    for json_response, stateless in [(True, False), (False, False), (True, True), (False, True)]:
+        caplog.set_level(logging.DEBUG)
+        async with http_spike(json_response=json_response, stateless=stateless) as spike:
+            dispatches = []
+            transport = transport_for(spike.endpoint, dispatches, call_timeout=2)
+            h = _Harness()
+            h.guard._transport = transport
+            try:
+                await transport.start()
+                assert isinstance(
+                    await h.guard.submit("task", _call("send"), expected_epoch=1), Released
+                )
+                assert len(dispatches) == 1 and spike.counts["receiver_effect"] == 1
+            finally:
+                await transport.close()
+        sdk_logs = [
+            record for record in caplog.records if record.name.startswith(("mcp.", "uvicorn."))
+        ]
+        assert sdk_logs and all(record.getMessage() == "MCP_LOG_WITHHELD" for record in sdk_logs)
+
+
+@pytest.mark.asyncio
+async def test_http_failure_never_replays_send_or_releases_unknown_result(caplog):
+    for mode in ["307", "308", "401", "404", "500", "lost", "timeout", "sse-loss"]:
+        probe, redirect_target = ProtocolProbe(mode), ProtocolProbe()
+        caplog.set_level(logging.DEBUG)
+        async with (
+            serve_loopback(redirect_target) as redirect_url,
+            serve_loopback(probe) as endpoint,
+        ):
+            probe.redirect_url = redirect_url
+            dispatches = []
+            transport = transport_for(endpoint, dispatches)
+            h = _Harness()
+            h.guard._transport = transport
+            try:
+                await transport.start()
+                outcome = await asyncio.wait_for(
+                    h.guard.submit("task", _call("send"), expected_epoch=1), 2
+                )
+                assert isinstance(outcome, OutcomeUnknown)
+                assert h.store.states["task"].status is TaskStatus.UNKNOWN_OUTCOME
+                assert isinstance(
+                    await h.guard.submit("task", _call("send"), expected_epoch=1), Denied
+                )
+                assert len(dispatches) == probe.wire_calls == 1
+                assert probe.effects == int(mode in {"lost", "timeout", "sse-loss"})
+                assert redirect_target.requests == []
+                assert all(b"last-event-id" not in headers for _, headers in probe.requests)
+                assert all(
+                    b"cookie" not in headers and b"authorization" not in headers
+                    for _, headers in probe.requests
+                )
+            finally:
+                probe.release.set()
+                await close_failed_channel(transport)
+        assert "RAW_RESPONSE_MARKER" not in caplog.text and "RAW_COOKIE" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_http_status_failure_fails_the_worker_but_its_teardown_is_complete():
+    for mode in ["307", "308", "401", "500"]:
+        """#61 A follow-up: the SDK re-raises the request's HTTPStatusError only after
+        the session is torn down, so closing reports no failure. The worker still
+        refuses later calls for the rest of the run."""
+        probe, redirect_target = ProtocolProbe(mode), ProtocolProbe()
+        async with (
+            serve_loopback(redirect_target) as redirect_url,
+            serve_loopback(probe) as endpoint,
+        ):
+            probe.redirect_url = redirect_url
+            dispatches, failed = [], []
+            transport = transport_for(endpoint, dispatches, failed=failed)
             await transport.start()
-            assert isinstance(
-                await h.guard.submit("task", _call("send"), expected_epoch=1), Released
-            )
-            assert len(dispatches) == 1 and spike.counts["receiver_effect"] == 1
-        finally:
+            worker = transport._workers["docs"]
+            with pytest.raises(DispatchError):
+                await transport.call(_request("docs", seq=1))
+            await asyncio.wait_for(worker._stopped.wait(), 2)
+            assert worker._state.name == "FAILED"
+            assert failed == ["docs"]  # the owner can refuse the server's next calls (#61)
+            with _dispatch_error("WorkerClosed"):
+                await transport.call(_request("docs", seq=2))
             await transport.close()
-    sdk_logs = [record for record in caplog.records if record.name.startswith(("mcp.", "uvicorn."))]
-    assert sdk_logs and all(record.getMessage() == "MCP_LOG_WITHHELD" for record in sdk_logs)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["307", "308", "401", "404", "500", "lost", "timeout", "sse-loss"])
-async def test_http_failure_never_replays_send_or_releases_unknown_result(mode, caplog):
-    probe, redirect_target = ProtocolProbe(mode), ProtocolProbe()
-    caplog.set_level(logging.DEBUG)
-    async with serve_loopback(redirect_target) as redirect_url, serve_loopback(probe) as endpoint:
-        probe.redirect_url = redirect_url
-        dispatches = []
-        transport = transport_for(endpoint, dispatches)
-        h = _Harness()
-        h.guard._transport = transport
-        try:
-            await transport.start()
-            outcome = await asyncio.wait_for(
-                h.guard.submit("task", _call("send"), expected_epoch=1), 2
-            )
-            assert isinstance(outcome, OutcomeUnknown)
-            assert h.store.states["task"].status is TaskStatus.UNKNOWN_OUTCOME
-            assert isinstance(await h.guard.submit("task", _call("send"), expected_epoch=1), Denied)
+            assert worker._owner is not None and worker._owner.done()
             assert len(dispatches) == probe.wire_calls == 1
-            assert probe.effects == int(mode in {"lost", "timeout", "sse-loss"})
             assert redirect_target.requests == []
-            assert all(b"last-event-id" not in headers for _, headers in probe.requests)
-            assert all(
-                b"cookie" not in headers and b"authorization" not in headers
-                for _, headers in probe.requests
-            )
-        finally:
-            probe.release.set()
-            await close_failed_channel(transport)
-    assert "RAW_RESPONSE_MARKER" not in caplog.text and "RAW_COOKIE" not in caplog.text
-
-
-@pytest.mark.asyncio
-# 404 is not here: the SDK answers the waiting request as "session terminated"
-# and the session lives on.
-@pytest.mark.parametrize("mode", ["307", "308", "401", "500"])
-async def test_http_status_failure_fails_the_worker_but_its_teardown_is_complete(mode):
-    """#61 A follow-up: the SDK re-raises the request's HTTPStatusError only after
-    the session is torn down, so closing reports no failure. The worker still
-    refuses later calls for the rest of the run."""
-    probe, redirect_target = ProtocolProbe(mode), ProtocolProbe()
-    async with serve_loopback(redirect_target) as redirect_url, serve_loopback(probe) as endpoint:
-        probe.redirect_url = redirect_url
-        dispatches, failed = [], []
-        transport = transport_for(endpoint, dispatches, failed=failed)
-        await transport.start()
-        worker = transport._workers["docs"]
-        with pytest.raises(DispatchError):
-            await transport.call(_request("docs", seq=1))
-        await asyncio.wait_for(worker._stopped.wait(), 2)
-        assert worker._state.name == "FAILED"
-        assert failed == ["docs"]  # the owner can refuse the server's next calls (#61)
-        with pytest.raises(DispatchError) as refused:
-            await transport.call(_request("docs", seq=2))
-        assert refused.value.exception_type == "WorkerClosed"
-        await transport.close()
-        assert worker._owner is not None and worker._owner.done()
-        assert len(dispatches) == probe.wire_calls == 1
-        assert redirect_target.requests == []
-        assert failed == ["docs"]
+            assert failed == ["docs"]
 
 
 class _FailingPost(httpx.AsyncBaseTransport):
@@ -426,9 +464,8 @@ async def test_a_session_ending_with_another_error_is_still_unconfirmed(monkeypa
         await transport.call(_request("docs", seq=1))
     await asyncio.wait_for(worker._stopped.wait(), 2)
     assert worker._state.name == "FAILED"
-    with pytest.raises(DispatchError) as close_failed:
+    with _dispatch_error("SessionCloseFailed"):
         await transport.close()
-    assert close_failed.value.exception_type == "SessionCloseFailed"
     assert "PRIVATE_TRANSPORT_TEXT" not in caplog.text
 
 
@@ -439,20 +476,28 @@ def _status_error() -> httpx.HTTPStatusError:
     )
 
 
-@pytest.mark.parametrize(
-    ("error", "completed"),
-    [
-        (ExceptionGroup("sdk", [_status_error()]), True),
-        (ExceptionGroup("sdk", [_status_error(), httpx.ReadError("read")]), True),
-        (ExceptionGroup("outer", [ExceptionGroup("inner", [httpx.ReadError("read")])]), True),
-        (ExceptionGroup("sdk", [_status_error(), OSError("other")]), False),
-        (BaseExceptionGroup("sdk", [_status_error(), asyncio.CancelledError()]), False),
-        (_status_error(), False),
-        (OSError("other"), False),
-    ],
-)
-def test_only_a_group_of_http_errors_counts_as_a_completed_teardown(error, completed):
-    assert streams.http_teardown_completed(error) is completed
+def test_only_a_group_of_http_errors_counts_as_a_completed_teardown():
+    def check(error, completed):
+        assert streams.http_teardown_completed(error) is completed
+
+    _check_cases(
+        (
+            (error, completed)
+            for (error, completed) in [
+                (ExceptionGroup("sdk", [_status_error()]), True),
+                (ExceptionGroup("sdk", [_status_error(), httpx.ReadError("read")]), True),
+                (
+                    ExceptionGroup("outer", [ExceptionGroup("inner", [httpx.ReadError("read")])]),
+                    True,
+                ),
+                (ExceptionGroup("sdk", [_status_error(), OSError("other")]), False),
+                (BaseExceptionGroup("sdk", [_status_error(), asyncio.CancelledError()]), False),
+                (_status_error(), False),
+                (OSError("other"), False),
+            ]
+        ),
+        check,
+    )
 
 
 @pytest.mark.asyncio
@@ -669,9 +714,8 @@ async def test_json_tool_slower_than_call_timeout_times_out_and_worker_stays_usa
         await transport.start()
         worker = transport._workers["docs"]
         try:
-            with pytest.raises(DispatchError) as timeout:
+            with _dispatch_error("TimeoutError"):
                 await transport.call(_request("docs", seq=1))
-            assert timeout.value.exception_type == "TimeoutError"
             # The late JSON response arrives for an abandoned request ID.
             await asyncio.wait_for(probe.responded.wait(), 2)
             await asyncio.sleep(0.05)

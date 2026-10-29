@@ -95,15 +95,17 @@ def test_refused_or_unavailable_change_keeps_the_policy_view(app):
         close_bridge(app, bridge)
 
 
-@pytest.mark.parametrize(
-    ("server_id", "allowed", "denied"),
-    [("", (), ()), ("docs", ["read"], ()), ("docs", (), (1,)), ("docs", ("",), ())],
-)
-def test_malformed_access_change_is_rejected_before_the_backend(app, server_id, allowed, denied):
+def test_malformed_access_change_is_rejected_before_the_backend(app):
     bridge, _receiver, _views = start(app, None)
+    failures = []
     try:
-        with pytest.raises(ValueError, match="Policy access change is invalid"):
-            bridge.request_policy_access(server_id, allowed, denied)
+        for case in (("", (), ()), ("docs", ["read"], ()), ("docs", (), (1,)), ("docs", ("",), ())):
+            try:
+                with pytest.raises(ValueError, match="Policy access change is invalid"):
+                    bridge.request_policy_access(*case)
+            except (AssertionError, pytest.fail.Exception) as error:
+                failures.append((case, str(error)))
+        assert failures == []
     finally:
         close_bridge(app, bridge)
 

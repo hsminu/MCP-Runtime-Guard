@@ -121,212 +121,190 @@ def product_account(
     return ProductAccount(fake.access(), version="0.1.0", sessions_alive=sessions_alive)
 
 
-def test_logout_ends_the_app_server_before_c_deletes_the_credentials() -> None:
-    async def run() -> None:
-        fake = FakeAccess()
-        account = product_account(fake)
-        assert (await account.read()).state == "API_KEY"
-        view = await account.logout()
-        assert (view.state, view.notice) == ("SIGNED_OUT", None)
-        assert fake.lifecycle() == list(LIFECYCLE)
-        assert not account.signing_out
-        # The next request starts a new app-server, which reads the signed-out home.
-        assert (await account.read()).state == "SIGNED_OUT"
-        assert len(fake.processes) == 2
-        assert await account.aclose() is True
-        assert [process.closes for process in fake.processes] == [1, 1]
-        with pytest.raises(AccountError):
-            await account.read()
-        assert len(fake.processes) == 2
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_logout_ends_the_app_server_before_c_deletes_the_credentials() -> None:
+    fake = FakeAccess()
+    account = product_account(fake)
+    assert (await account.read()).state == "API_KEY"
+    view = await account.logout()
+    assert (view.state, view.notice) == ("SIGNED_OUT", None)
+    assert fake.lifecycle() == list(LIFECYCLE)
+    assert not account.signing_out
+    # The next request starts a new app-server, which reads the signed-out home.
+    assert (await account.read()).state == "SIGNED_OUT"
+    assert len(fake.processes) == 2
+    assert await account.aclose() is True
+    assert [process.closes for process in fake.processes] == [1, 1]
+    with pytest.raises(AccountError):
+        await account.read()
+    assert len(fake.processes) == 2
 
 
-def test_logout_is_refused_while_a_session_may_run() -> None:
-    async def run() -> None:
-        fake = FakeAccess()
-        alive = [True]
-        account = product_account(fake, lambda: alive[0])
-        view = await account.logout()
-        assert (view.state, view.notice) == ("API_KEY", LOGOUT_SESSIONS_RUNNING)
-        assert fake.lifecycle() == ["launch"]
-        assert not account.signing_out
-        alive[0] = False
-        assert (await account.logout()).notice is None
-        assert fake.lifecycle() == list(LIFECYCLE)
-        await account.aclose()
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_logout_is_refused_while_a_session_may_run() -> None:
+    fake = FakeAccess()
+    alive = [True]
+    account = product_account(fake, lambda: alive[0])
+    view = await account.logout()
+    assert (view.state, view.notice) == ("API_KEY", LOGOUT_SESSIONS_RUNNING)
+    assert fake.lifecycle() == ["launch"]
+    assert not account.signing_out
+    alive[0] = False
+    assert (await account.logout()).notice is None
+    assert fake.lifecycle() == list(LIFECYCLE)
+    await account.aclose()
 
 
-def test_credentials_stay_when_codex_refuses_the_logout() -> None:
-    async def run() -> None:
-        fake = FakeAccess(server=LogoutRefusedServer)
-        account = product_account(fake)
-        with pytest.raises(AccountError) as refused:
-            await account.logout()
-        assert str(refused.value) == "CODEX_ACCOUNT_FAILED"
-        assert fake.lifecycle() == ["launch", "account/logout"]
-        assert not account.signing_out
-        # The same app-server keeps answering.
-        assert (await account.read()).state == "API_KEY"
-        assert len(fake.processes) == 1
-        assert await account.aclose() is True
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_credentials_stay_when_codex_refuses_the_logout() -> None:
+    fake = FakeAccess(server=LogoutRefusedServer)
+    account = product_account(fake)
+    with pytest.raises(AccountError) as refused:
+        await account.logout()
+    assert str(refused.value) == "CODEX_ACCOUNT_FAILED"
+    assert fake.lifecycle() == ["launch", "account/logout"]
+    assert not account.signing_out
+    # The same app-server keeps answering.
+    assert (await account.read()).state == "API_KEY"
+    assert len(fake.processes) == 1
+    assert await account.aclose() is True
 
 
-def test_credentials_stay_when_the_exit_is_not_confirmed() -> None:
-    async def run() -> None:
-        fake = FakeAccess(exits=False)
-        account = product_account(fake)
-        view = await account.logout()
-        assert (view.state, view.notice) == ("SIGNED_OUT", LOGOUT_EXIT_UNCONFIRMED)
-        assert fake.lifecycle() == ["launch", "account/logout", "exit"]
-        # A process that may still run is never replaced by another one.
-        with pytest.raises(AccountError):
-            await account.read()
-        assert len(fake.processes) == 1
-        assert await account.aclose() is False
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_credentials_stay_when_the_exit_is_not_confirmed() -> None:
+    fake = FakeAccess(exits=False)
+    account = product_account(fake)
+    view = await account.logout()
+    assert (view.state, view.notice) == ("SIGNED_OUT", LOGOUT_EXIT_UNCONFIRMED)
+    assert fake.lifecycle() == ["launch", "account/logout", "exit"]
+    # A process that may still run is never replaced by another one.
+    with pytest.raises(AccountError):
+        await account.read()
+    assert len(fake.processes) == 1
+    assert await account.aclose() is False
 
 
-def test_a_failed_credential_cleanup_is_reported_and_can_be_asked_again() -> None:
-    async def run() -> None:
-        fake = FakeAccess(cleared=False)
-        account = product_account(fake)
-        view = await account.logout()
-        assert (view.state, view.notice) == ("SIGNED_OUT", LOGOUT_CLEANUP_FAILED)
-        fake.cleared = True
-        assert (await account.logout()).notice is None
-        assert fake.lifecycle() == list(LIFECYCLE) * 2
-        assert await account.aclose() is True
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_a_failed_credential_cleanup_is_reported_and_can_be_asked_again() -> None:
+    fake = FakeAccess(cleared=False)
+    account = product_account(fake)
+    view = await account.logout()
+    assert (view.state, view.notice) == ("SIGNED_OUT", LOGOUT_CLEANUP_FAILED)
+    fake.cleared = True
+    assert (await account.logout()).notice is None
+    assert fake.lifecycle() == list(LIFECYCLE) * 2
+    assert await account.aclose() is True
 
 
-def test_an_app_server_that_reports_remote_control_is_ended_not_reused() -> None:
+@pytest.mark.asyncio
+async def test_an_app_server_that_reports_remote_control_is_ended_not_reused() -> None:
     # C-CODEX-07: the account client refuses it; the owner ends it and starts afresh next time.
-    async def run() -> None:
-        fake = FakeAccess(server=lambda: FakeAppServer(remote_control="connected"))
-        account = product_account(fake)
-        for _ in range(2):
-            with pytest.raises(AccountError):
-                await account.read()
-        assert [process.closes for process in fake.processes] == [1, 1]
+    fake = FakeAccess(server=lambda: FakeAppServer(remote_control="connected"))
+    account = product_account(fake)
+    for _ in range(2):
+        with pytest.raises(AccountError):
+            await account.read()
+    assert [process.closes for process in fake.processes] == [1, 1]
+    assert await account.aclose() is True
+
+
+@pytest.mark.asyncio
+async def test_a_run_whose_startup_refused_codex_shows_login_as_unavailable() -> None:
+    launches: list[str] = []
+
+    async def launch() -> FakeProcess:
+        launches.append("launch")
+        raise AccountUnavailableError()
+
+    async def clear() -> bool:
+        raise AssertionError("nothing to clear without an app-server")
+
+    for alive in (False, True):
+        account = ProductAccount(
+            AccountAccess(launch, clear), version="0.1.0", sessions_alive=lambda a=alive: a
+        )
+        assert (await account.read()).state == "UNAVAILABLE"
+        assert (await account.start_device_login()).state == "UNAVAILABLE"
+        assert (await account.logout()).state == "UNAVAILABLE"
+        assert not account.signing_out
         assert await account.aclose() is True
-
-    asyncio.run(run())
-
-
-def test_a_run_whose_startup_refused_codex_shows_login_as_unavailable() -> None:
-    async def run() -> None:
-        launches: list[str] = []
-
-        async def launch() -> FakeProcess:
-            launches.append("launch")
-            raise AccountUnavailableError()
-
-        async def clear() -> bool:
-            raise AssertionError("nothing to clear without an app-server")
-
-        for alive in (False, True):
-            account = ProductAccount(
-                AccountAccess(launch, clear), version="0.1.0", sessions_alive=lambda a=alive: a
-            )
-            assert (await account.read()).state == "UNAVAILABLE"
-            assert (await account.start_device_login()).state == "UNAVAILABLE"
-            assert (await account.logout()).state == "UNAVAILABLE"
-            assert not account.signing_out
-            assert await account.aclose() is True
-        assert len(launches) == 6
-
-    asyncio.run(run())
+    assert len(launches) == 6
 
 
-def test_no_session_starts_while_a_logout_runs(tmp_path) -> None:
-    async def run() -> None:
-        fake = FakeAccess()
-        fake.clear_gate = asyncio.Event()
-        runtime, sessions = make_runtime(tmp_path, account=fake.access())
-        try:
-            account = runtime.bindings().account
-            assert isinstance(account, ProductAccount)
-            logout = asyncio.ensure_future(account.logout())
-            await asyncio.wait_for(fake.clearing.wait(), 2)
-            assert runtime.creation_blocker() == "CODEX_SIGNING_OUT"
-            with pytest.raises(SessionRuntimeError, match="^CODEX_SIGNING_OUT$"):
-                await runtime.create_session(SessionOptions())
-            assert sessions == []
-            fake.clear_gate.set()
-            assert (await logout).notice is None
-            assert runtime.creation_blocker() is None
-            created = await runtime.create_session(SessionOptions())
-            # An open session refuses the next logout until it is stopped and cleaned up.
-            assert (await account.logout()).notice == LOGOUT_SESSIONS_RUNNING
-            await runtime.stop_session(created.task_id, created.epoch, ControlAction.CANCEL)
-            assert (await account.logout()).notice is None
-            assert fake.lifecycle().count("clear") == 2
-        finally:
-            await runtime.close()
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_no_session_starts_while_a_logout_runs(tmp_path) -> None:
+    fake = FakeAccess()
+    fake.clear_gate = asyncio.Event()
+    runtime, sessions = make_runtime(tmp_path, account=fake.access())
+    try:
+        account = runtime.bindings().account
+        assert isinstance(account, ProductAccount)
+        logout = asyncio.ensure_future(account.logout())
+        await asyncio.wait_for(fake.clearing.wait(), 2)
+        assert runtime.creation_blocker() == "CODEX_SIGNING_OUT"
+        with pytest.raises(SessionRuntimeError, match="^CODEX_SIGNING_OUT$"):
+            await runtime.create_session(SessionOptions())
+        assert sessions == []
+        fake.clear_gate.set()
+        assert (await logout).notice is None
+        assert runtime.creation_blocker() is None
+        created = await runtime.create_session(SessionOptions())
+        # An open session refuses the next logout until it is stopped and cleaned up.
+        assert (await account.logout()).notice == LOGOUT_SESSIONS_RUNNING
+        await runtime.stop_session(created.task_id, created.epoch, ControlAction.CANCEL)
+        assert (await account.logout()).notice is None
+        assert fake.lifecycle().count("clear") == 2
+    finally:
+        await runtime.close()
 
 
-def test_logout_is_refused_while_a_session_is_being_created(tmp_path) -> None:
-    async def run() -> None:
-        fake = FakeAccess()
-        entered, release = asyncio.Event(), asyncio.Event()
+@pytest.mark.asyncio
+async def test_logout_is_refused_while_a_session_is_being_created(tmp_path) -> None:
+    fake = FakeAccess()
+    entered, release = asyncio.Event(), asyncio.Event()
 
-        async def factory(state, options, resources):
-            entered.set()
-            await release.wait()
-            return Session()
+    async def factory(state, options, resources):
+        entered.set()
+        await release.wait()
+        return Session()
 
-        runtime, _ = make_runtime(tmp_path, factory=factory, account=fake.access())
-        try:
-            creating = asyncio.ensure_future(runtime.create_session(SessionOptions()))
-            await asyncio.wait_for(entered.wait(), 2)
-            account = runtime.bindings().account
-            assert account is not None
-            assert (await account.logout()).notice == LOGOUT_SESSIONS_RUNNING
-            assert "account/logout" not in fake.events
-            release.set()
-            await creating
-        finally:
-            await runtime.close()
-
-    asyncio.run(run())
+    runtime, _ = make_runtime(tmp_path, factory=factory, account=fake.access())
+    try:
+        creating = asyncio.ensure_future(runtime.create_session(SessionOptions()))
+        await asyncio.wait_for(entered.wait(), 2)
+        account = runtime.bindings().account
+        assert account is not None
+        assert (await account.logout()).notice == LOGOUT_SESSIONS_RUNNING
+        assert "account/logout" not in fake.events
+        release.set()
+        await creating
+    finally:
+        await runtime.close()
 
 
 @pytest.mark.parametrize("exits", [True, False])
-def test_runtime_close_ends_the_login_app_server(tmp_path, exits) -> None:
-    async def run() -> None:
-        fake = FakeAccess(exits=exits)
-        runtime, _ = make_runtime(tmp_path, account=fake.access())
-        account = runtime.bindings().account
-        assert account is not None
-        await account.read()
-        if exits:
+@pytest.mark.asyncio
+async def test_runtime_close_ends_the_login_app_server(tmp_path, exits) -> None:
+    fake = FakeAccess(exits=exits)
+    runtime, _ = make_runtime(tmp_path, account=fake.access())
+    account = runtime.bindings().account
+    assert account is not None
+    await account.read()
+    if exits:
+        await runtime.close()
+    else:
+        with pytest.raises(SessionRuntimeError, match="^CODEX_CLEANUP_UNCONFIRMED$"):
             await runtime.close()
-        else:
-            with pytest.raises(SessionRuntimeError, match="^CODEX_CLEANUP_UNCONFIRMED$"):
-                await runtime.close()
-        assert fake.processes[0].closes == 1
-
-    asyncio.run(run())
+    assert fake.processes[0].closes == 1
 
 
-def test_runtime_without_account_access_leaves_login_unavailable(tmp_path) -> None:
-    async def run() -> None:
-        runtime, _ = make_runtime(tmp_path)
-        try:
-            assert runtime.bindings().account is None
-        finally:
-            await runtime.close()
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_runtime_without_account_access_leaves_login_unavailable(tmp_path) -> None:
+    runtime, _ = make_runtime(tmp_path)
+    try:
+        assert runtime.bindings().account is None
+    finally:
+        await runtime.close()
 
 
 def test_login_panel_explains_a_refused_or_partial_logout(app) -> None:

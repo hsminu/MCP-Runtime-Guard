@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import aclosing
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -40,71 +41,47 @@ def _fields(view: AccountView) -> str:
     )
 
 
-def test_device_code_login_shows_url_and_code_then_reads_the_plan_without_email() -> None:
-    async def run() -> None:
+@pytest.mark.asyncio
+async def test_device_code_login_shows_url_and_code_then_reads_the_plan_without_email() -> None:
+    fake = FakeAppServer()
+    account = await client(fake)
+    async with aclosing(account):
+        assert (await account.read()).state == "SIGNED_OUT"
+        pending = await account.start_device_login()
+        assert pending.state == "PENDING_DEVICE"
+        assert pending.verification_url == "https://auth.example/device"
+        assert pending.user_code == "ABCD-1234"
+        waiting = asyncio.ensure_future(account.wait_login("login-1"))
+        await asyncio.sleep(0)
+        fake.finish_device_login()
+        done = await asyncio.wait_for(waiting, 2)
+        assert (done.state, done.plan) == ("CHATGPT", "plus")
+        assert "PRIVATE" not in _fields(done)
+        assert (await account.logout()).state == "SIGNED_OUT"
+        await account.start_device_login()
+        waiting = asyncio.ensure_future(account.wait_login("login-1"))
+        await asyncio.sleep(0)
+        fake.finish_device_login(success=False)
+        assert (await asyncio.wait_for(waiting, 2)).state == "LOGIN_NOT_COMPLETED"
+        await account.start_device_login()
+        waiting = asyncio.ensure_future(account.wait_login("login-1"))
+        await asyncio.sleep(0)
+        assert (await account.cancel_login("login-1")).state == "SIGNED_OUT"
+        assert (await asyncio.wait_for(waiting, 2)).state == "LOGIN_NOT_COMPLETED"
+        assert (await account.login_api_key("  sk-unit  ")).state == "API_KEY"
+        assert fake.login_requests == [{"type": "chatgptDeviceCode"}] * 3 + [
+            {"type": "apiKey", "apiKey": "sk-unit"}
+        ]
+        assert (await account.login_api_key("   ")).state == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_remote_control_not_disabled_ends_the_account_connection() -> None:
+    for status in ["connected", None]:
+        # C-CODEX-07: remote attachment also invalidates the login connection.
         fake = FakeAppServer()
         account = await client(fake)
-        try:
-            assert (await account.read()).state == "SIGNED_OUT"
-            pending = await account.start_device_login()
-            assert pending.state == "PENDING_DEVICE"
-            assert pending.verification_url == "https://auth.example/device"
-            assert pending.user_code == "ABCD-1234"
-            waiting = asyncio.ensure_future(account.wait_login("login-1"))
-            await asyncio.sleep(0)
-            fake.finish_device_login()
-            done = await asyncio.wait_for(waiting, 2)
-            assert (done.state, done.plan) == ("CHATGPT", "plus")
-            assert "PRIVATE" not in _fields(done)
-            assert (await account.logout()).state == "SIGNED_OUT"
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
-
-
-def test_cancelled_or_failed_device_login_is_not_completed() -> None:
-    async def run() -> None:
-        fake = FakeAppServer()
-        account = await client(fake)
-        try:
-            await account.start_device_login()
-            waiting = asyncio.ensure_future(account.wait_login("login-1"))
-            await asyncio.sleep(0)
-            fake.finish_device_login(success=False)
-            assert (await asyncio.wait_for(waiting, 2)).state == "LOGIN_NOT_COMPLETED"
-            await account.start_device_login()
-            waiting = asyncio.ensure_future(account.wait_login("login-1"))
-            await asyncio.sleep(0)
-            assert (await account.cancel_login("login-1")).state == "SIGNED_OUT"
-            assert (await asyncio.wait_for(waiting, 2)).state == "LOGIN_NOT_COMPLETED"
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
-
-
-def test_api_key_login_is_passed_to_codex_trimmed_and_reads_the_kind() -> None:
-    async def run() -> None:
-        fake = FakeAppServer()
-        account = await client(fake)
-        try:
-            assert (await account.login_api_key("  sk-unit  ")).state == "API_KEY"
-            assert fake.login_requests == [{"type": "apiKey", "apiKey": "sk-unit"}]
-            assert (await account.login_api_key("   ")).state == "FAILED"
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize("status", ["connected", None])
-def test_remote_control_not_disabled_ends_the_account_connection(status) -> None:
-    # C-CODEX-07: the login app-server is no safer than a Task's once a remote client may attach.
-    async def run() -> None:
-        fake = FakeAppServer()
-        account = await client(fake)
-        try:
+        async with aclosing(account):
             assert (await account.start_device_login()).state == "PENDING_DEVICE"
             waiting = asyncio.ensure_future(account.wait_login("login-1"))
             await asyncio.sleep(0)
@@ -114,22 +91,14 @@ def test_remote_control_not_disabled_ends_the_account_connection(status) -> None
             with pytest.raises(AccountError):
                 await account.login_api_key("sk-unit")
             assert fake.login_requests == [{"type": "chatgptDeviceCode"}]
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
 
 
-def test_remote_control_reported_while_starting_fails_the_account_start() -> None:
-    async def run() -> None:
-        account = CodexAccountClient(FakeAppServer(remote_control="connected"), version="0.1.0")
-        try:
-            with pytest.raises(AccountError):
-                await asyncio.wait_for(account.start(), 2)
-        finally:
-            await account.aclose()
-
-    asyncio.run(run())
+@pytest.mark.asyncio
+async def test_remote_control_reported_while_starting_fails_the_account_start() -> None:
+    account = CodexAccountClient(FakeAppServer(remote_control="connected"), version="0.1.0")
+    async with aclosing(account):
+        with pytest.raises(AccountError):
+            await asyncio.wait_for(account.start(), 2)
 
 
 def test_login_panel_has_only_the_masked_key_field_and_follows_the_state(app) -> None:

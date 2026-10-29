@@ -44,69 +44,54 @@ def test_admission_refusals_keep_their_order_and_never_lift():
     assert admission.restart_code == "POLICY_APPLY_FAILED"
 
 
-def test_admission_refuses_a_creator_that_ignored_its_cancellation():
+@pytest.mark.asyncio
+async def test_admission_refuses_a_creator_that_ignored_its_cancellation():
     """A preparation callback that swallows cancellation must not let creation go on (I9)."""
 
-    async def run():
-        admission = SessionAdmission()
-        entered = asyncio.Event()
+    admission = SessionAdmission()
+    entered = asyncio.Event()
 
-        async def creator():
-            entered.set()
-            with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.Future()
-            admission.check()
+    async def creator():
+        entered.set()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.Future()
+        admission.check()
 
-        task = asyncio.create_task(creator())
-        await entered.wait()
-        task.cancel()
-        with pytest.raises(SessionRuntimeError, match="^SESSION_UNAVAILABLE$"):
-            await task
-        admission.check()  # not being cancelled: admitted
-
-    asyncio.run(run())
-
-
-def test_cleanup_limits_default_to_the_reviewed_bounds():
-    """PR #35 A review, A103: exit confirmation and folder removal outlast the session bound."""
-    limits = CleanupLimits()
-    assert (limits.session_s, limits.confirm_exit_s, limits.task_folder_s) == (0.5, 12.0, 5.0)
+    task = asyncio.create_task(creator())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(SessionRuntimeError, match="^SESSION_UNAVAILABLE$"):
+        await task
+    admission.check()  # not being cancelled: admitted
 
 
 def _cleanup(admission: SessionAdmission) -> SessionCleanup:
     return SessionCleanup(None, admission, CleanupLimits(), BackgroundWork(), lambda _: None)
 
 
-@pytest.mark.parametrize(
-    "receipt",
-    [
-        lambda handle: object(),
-        lambda handle: TaskResources("task-9", CONFIGURATION, "token-2", object()),
-        lambda handle: TaskResources("task-2", CONFIGURATION, "", object()),
-        lambda handle: TaskResources("task-2", CONFIGURATION, "t" * 257, object()),
-        lambda handle: TaskResources("task-2", CONFIGURATION, "token-2", None),
-        lambda handle: TaskResources("task-2", CONFIGURATION, "token-1", object()),
-        lambda handle: TaskResources("task-2", CONFIGURATION, "token-2", handle),
-    ],
-    ids=[
-        "not-a-receipt",
-        "other-task",
-        "empty-token",
-        "long-token",
-        "no-handle",
-        "shared-token",
-        "shared-handle",
-    ],
-)
-def test_cleanup_never_owns_a_mismatched_or_shared_receipt(receipt):
-    admission = SessionAdmission()
-    cleanup = _cleanup(admission)
-    handle = object()
-    cleanup.claim_resources("task-1", TaskResources("task-1", CONFIGURATION, "token-1", handle))
-    with pytest.raises(SessionRuntimeError, match="^CODEX_CLEANUP_UNCONFIRMED$"):
-        cleanup.claim_resources("task-2", receipt(handle))
-    assert cleanup.pending == {"task-1"}  # nothing to erase on another Task's behalf
-    assert admission.refusal() == "CODEX_CLEANUP_UNCONFIRMED"
+def test_cleanup_never_owns_a_mismatched_or_shared_receipt(subtests):
+    for case_index, receipt in enumerate(
+        [
+            lambda handle: object(),
+            lambda handle: TaskResources("task-9", CONFIGURATION, "token-2", object()),
+            lambda handle: TaskResources("task-2", CONFIGURATION, "", object()),
+            lambda handle: TaskResources("task-2", CONFIGURATION, "t" * 257, object()),
+            lambda handle: TaskResources("task-2", CONFIGURATION, "token-2", None),
+            lambda handle: TaskResources("task-2", CONFIGURATION, "token-1", object()),
+            lambda handle: TaskResources("task-2", CONFIGURATION, "token-2", handle),
+        ]
+    ):
+        with subtests.test(case=case_index):
+            admission = SessionAdmission()
+            cleanup = _cleanup(admission)
+            handle = object()
+            cleanup.claim_resources(
+                "task-1", TaskResources("task-1", CONFIGURATION, "token-1", handle)
+            )
+            with pytest.raises(SessionRuntimeError, match="^CODEX_CLEANUP_UNCONFIRMED$"):
+                cleanup.claim_resources("task-2", receipt(handle))
+            assert cleanup.pending == {"task-1"}  # nothing to erase on another Task's behalf
+            assert admission.refusal() == "CODEX_CLEANUP_UNCONFIRMED"
 
 
 class _Session:
@@ -121,6 +106,9 @@ class _Session:
 
 
 def test_cleanup_refuses_a_shared_session_but_still_closes_an_incomplete_one():
+    # A103: independently reviewed exit and folder bounds.
+    limits = CleanupLimits()
+    assert (limits.session_s, limits.confirm_exit_s, limits.task_folder_s) == (0.5, 12.0, 5.0)
     cleanup = _cleanup(SessionAdmission())
     session = _Session()
     cleanup.claim_session("task-1", session)
@@ -185,24 +173,29 @@ class _RowStore:
         return self.state
 
 
-@pytest.mark.parametrize(
-    ("status", "writes"),
-    [
-        (TaskStatus.RUNNING, [TaskStatus.HALTED]),
-        (TaskStatus.HALTED, []),
-        (TaskStatus.UNKNOWN_OUTCOME, []),  # an unknown SEND outcome is never rewritten
-        (TaskStatus.CLOSED, []),
-    ],
-)
-def test_stop_channel_without_guard_halts_only_a_live_row(status, writes):
-    async def run():
-        store = _RowStore(status)
-        channel = StopChannel(store, None, SessionAdmission(), BackgroundWork())
-        settled = []
-        await channel.stop(TaskIdentity(task_id="task-1", epoch=1), "CODEX_L3_VIOLATION", settled)
-        return store.writes, settled
+def test_stop_channel_without_guard_halts_only_a_live_row(subtests):
+    def check(status, writes):
+        async def run():
+            store = _RowStore(status)
+            channel = StopChannel(store, None, SessionAdmission(), BackgroundWork())
+            settled = []
+            await channel.stop(
+                TaskIdentity(task_id="task-1", epoch=1), "CODEX_L3_VIOLATION", settled
+            )
+            return store.writes, settled
 
-    assert asyncio.run(run()) == (writes, [])
+        assert asyncio.run(run()) == (writes, [])
+
+    for case_index, (status, writes) in enumerate(
+        [
+            (TaskStatus.RUNNING, [TaskStatus.HALTED]),
+            (TaskStatus.HALTED, []),
+            (TaskStatus.UNKNOWN_OUTCOME, []),  # an unknown SEND outcome is never rewritten
+            (TaskStatus.CLOSED, []),
+        ]
+    ):
+        with subtests.test(case=case_index):
+            check(status, writes)
 
 
 def test_stop_channel_reports_a_failed_system_stop_as_unconfirmed():

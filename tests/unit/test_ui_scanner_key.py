@@ -39,6 +39,20 @@ def test_input_is_masked_without_context_menu(app):
     assert not form.key_input.testAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled)
     assert "자격증명 관리자" in form.guidance.text()
     assert "사용 한도" in form.guidance.text()
+    form.key_input.setText("abcd")
+    form.save_button.click()
+    assert form.saved_suffix == ""
+    assert "abcd" not in form.status.text()
+    form.show()
+    form.key_input.setText(KEY)
+    form.hide()
+    assert form.key_input.text() == ""
+    called = []
+    form = ScannerKeyForm(lambda key: called.append(key) or True)
+    form.key_input.setText("   ")
+    assert not form.save_button.isEnabled()
+    QTest.keyClick(form.key_input, Qt.Key.Key_Return)
+    assert called == []
 
 
 def test_without_saver_the_key_cannot_be_saved_and_is_not_kept(app):
@@ -69,15 +83,20 @@ def test_successful_save_keeps_only_the_last_four_characters(app, caplog):
     assert KEY not in caplog.text
 
 
-@pytest.mark.parametrize("result", [False, None, "yes", 1])
-def test_failed_or_ambiguous_save_reports_fixed_text_and_clears_input(app, result):
-    form = ScannerKeyForm(lambda _key: result)
-    form.key_input.setText(KEY)
-    form.save_button.click()
-    assert form.status.text() == SAVE_FAILED
-    assert form.key_input.text() == ""
-    assert form.saved_suffix == ""
-    assert not any(KEY in text for text in _visible_texts(form))
+def test_failed_or_ambiguous_save_reports_fixed_text_and_clears_input(app):
+    failures = []
+    for result in [False, None, "yes", 1]:
+        try:
+            form = ScannerKeyForm(lambda _key, result=result: result)
+            form.key_input.setText(KEY)
+            form.save_button.click()
+            assert form.status.text() == SAVE_FAILED
+            assert form.key_input.text() == ""
+            assert form.saved_suffix == ""
+            assert not any(KEY in text for text in _visible_texts(form))
+        except AssertionError as error:
+            failures.append((result, str(error)))
+    assert not failures, failures
 
 
 def test_raising_saver_never_leaves_the_previous_success_on_screen(app):
@@ -100,28 +119,3 @@ def test_raising_saver_never_leaves_the_previous_success_on_screen(app):
     assert form.saved_suffix == ""
     assert form.key_input.text() == ""
     assert not any("9z7Q" in text or "WXYZ" in text for text in _visible_texts(form))
-
-
-def test_blank_input_cannot_be_saved(app):
-    called = []
-    form = ScannerKeyForm(lambda key: called.append(key) or True)
-    form.key_input.setText("   ")
-    assert not form.save_button.isEnabled()
-    QTest.keyClick(form.key_input, Qt.Key.Key_Return)
-    assert called == []
-
-
-def test_short_key_shows_no_suffix(app):
-    form = ScannerKeyForm(lambda _key: True)
-    form.key_input.setText("abcd")
-    form.save_button.click()
-    assert form.saved_suffix == ""
-    assert "abcd" not in form.status.text()
-
-
-def test_hiding_the_form_clears_unsaved_input(app):
-    form = ScannerKeyForm(lambda _key: True)
-    form.show()
-    form.key_input.setText(KEY)
-    form.hide()
-    assert form.key_input.text() == ""

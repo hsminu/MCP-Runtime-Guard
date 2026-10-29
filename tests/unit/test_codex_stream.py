@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import contextmanager
 
 import pytest
 
@@ -83,20 +84,20 @@ async def test_exact_frame_limit_and_preparse_buffer_bound() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("data", [b"\n", b"\r\n", b" \t\n", b"unfinished"])
-async def test_empty_lines_and_partial_eof_fail_closed(data: bytes) -> None:
-    pipe = BytePipe()
-    channel = _channel(pipe)
-    pipe.push(data)
-    pipe.push(b"")
-    reason = "EMPTY_FRAME" if data.endswith(b"\n") else "PARTIAL_EOF"
-    with pytest.raises(CodexStreamError, match=reason):
-        await channel.receive()
-    with pytest.raises(CodexStreamError, match=reason):
-        await channel.receive()
-    with pytest.raises(CodexStreamError, match=reason):
-        await channel.send(b"{}")
-    assert not channel._buffer
+async def test_empty_lines_and_partial_eof_fail_closed() -> None:
+    for data in [b"\n", b"\r\n", b" \t\n", b"unfinished"]:
+        pipe = BytePipe()
+        channel = _channel(pipe)
+        pipe.push(data)
+        pipe.push(b"")
+        reason = "EMPTY_FRAME" if data.endswith(b"\n") else "PARTIAL_EOF"
+        with pytest.raises(CodexStreamError, match=reason):
+            await channel.receive()
+        with pytest.raises(CodexStreamError, match=reason):
+            await channel.receive()
+        with pytest.raises(CodexStreamError, match=reason):
+            await channel.send(b"{}")
+        assert not channel._buffer
 
 
 @pytest.mark.asyncio
@@ -141,84 +142,84 @@ async def test_writes_append_one_newline_and_hold_serialization_through_drain() 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", ["read", "write", "drain"])
 async def test_io_failure_hides_raw_error_and_never_retries(
-    failure_stage: str, caplog: pytest.LogCaptureFixture
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    pipe = BytePipe()
+    for failure_stage in ["read", "write", "drain"]:
+        pipe = BytePipe()
 
-    async def read(limit: int) -> bytes:
-        if failure_stage == "read":
-            raise OSError(MARKER)
-        return await pipe.read(limit)
+        async def read(limit: int, *, failure_stage=failure_stage, pipe=pipe) -> bytes:
+            if failure_stage == "read":
+                raise OSError(MARKER)
+            return await pipe.read(limit)
 
-    async def write(frame: bytes) -> None:
-        await pipe.write(frame)
-        if failure_stage == "write":
-            raise RuntimeError(MARKER)
+        async def write(frame: bytes, *, failure_stage=failure_stage, pipe=pipe) -> None:
+            await pipe.write(frame)
+            if failure_stage == "write":
+                raise RuntimeError(MARKER)
 
-    async def drain() -> None:
-        await pipe.drain()
-        if failure_stage == "drain":
-            raise ValueError(MARKER)
+        async def drain(*, failure_stage=failure_stage, pipe=pipe) -> None:
+            await pipe.drain()
+            if failure_stage == "drain":
+                raise ValueError(MARKER)
 
-    channel = CodexStreamChannel(read, write, drain, max_frame_bytes=512)
-    action = channel.receive() if failure_stage == "read" else channel.send(b"{}")
-    with pytest.raises(CodexStreamError, match="IO_FAILED") as failed:
-        await action
-    with pytest.raises(CodexStreamError, match="IO_FAILED"):
-        await channel.send(b"{}")
-    assert pipe.write_count == (failure_stage != "read")
-    assert MARKER not in str(failed.value)
-    assert failed.value.__context__ is None
-    assert MARKER not in caplog.text
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("frame", [b"", b" \t", b"{}\n{}", b"x" * 17])
-async def test_invalid_outgoing_frame_is_rejected_before_writing(frame: bytes) -> None:
-    pipe = BytePipe()
-    channel = _channel(pipe, limit=16)
-    with pytest.raises(CodexStreamError):
-        await channel.send(frame)
-    assert pipe.write_count == 0
-    assert pipe.drain_count == 0
-    assert channel.closed_reason is not None
+        channel = CodexStreamChannel(read, write, drain, max_frame_bytes=512)
+        action = channel.receive() if failure_stage == "read" else channel.send(b"{}")
+        with pytest.raises(CodexStreamError, match="IO_FAILED") as failed:
+            await action
+        with pytest.raises(CodexStreamError, match="IO_FAILED"):
+            await channel.send(b"{}")
+        assert pipe.write_count == (failure_stage != "read")
+        assert MARKER not in str(failed.value)
+        assert failed.value.__context__ is None
+        assert MARKER not in caplog.text
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["receive", "send"])
-async def test_cancel_and_local_close_release_waiters_without_source_close(operation: str) -> None:
-    pipe = BytePipe()
-    entered = asyncio.Event()
+async def test_invalid_outgoing_frame_is_rejected_before_writing() -> None:
+    for frame in [b"", b" \t", b"{}\n{}", b"x" * 17]:
+        pipe = BytePipe()
+        channel = _channel(pipe, limit=16)
+        with pytest.raises(CodexStreamError):
+            await channel.send(frame)
+        assert pipe.write_count == 0
+        assert pipe.drain_count == 0
+        assert channel.closed_reason is not None
 
-    async def read(_limit: int) -> bytes:
-        entered.set()
-        await asyncio.Event().wait()
-        return b""
 
-    async def write(_frame: bytes) -> None:
-        entered.set()
-        await asyncio.Event().wait()
+@pytest.mark.asyncio
+async def test_cancel_and_local_close_release_waiters_without_source_close() -> None:
+    for operation in ["receive", "send"]:
+        pipe = BytePipe()
+        entered = asyncio.Event()
 
-    channel = CodexStreamChannel(read, write, pipe.drain, max_frame_bytes=512)
-    waiting = asyncio.create_task(
-        channel.receive() if operation == "receive" else channel.send(b"{}")
-    )
-    await asyncio.wait_for(entered.wait(), timeout=1)
-    waiting.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(waiting, timeout=1)
-    assert channel.closed_reason == "CANCELLED"
-    with pytest.raises(CodexStreamError, match="CANCELLED"):
-        await channel.send(b"{}")
+        async def read(_limit: int, *, entered=entered) -> bytes:
+            entered.set()
+            await asyncio.Event().wait()
+            return b""
 
-    second = _channel(pipe)
-    blocked = asyncio.create_task(second.receive())
-    await asyncio.sleep(0)
-    second.close()
-    with pytest.raises(CodexStreamError, match="CLOSED"):
-        await asyncio.wait_for(blocked, timeout=1)
+        async def write(_frame: bytes, *, entered=entered) -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+        channel = CodexStreamChannel(read, write, pipe.drain, max_frame_bytes=512)
+        waiting = asyncio.create_task(
+            channel.receive() if operation == "receive" else channel.send(b"{}")
+        )
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(waiting, timeout=1)
+        assert channel.closed_reason == "CANCELLED"
+        with pytest.raises(CodexStreamError, match="CANCELLED"):
+            await channel.send(b"{}")
+
+        second = _channel(pipe)
+        blocked = asyncio.create_task(second.receive())
+        await asyncio.sleep(0)
+        second.close()
+        with pytest.raises(CodexStreamError, match="CLOSED"):
+            await asyncio.wait_for(blocked, timeout=1)
 
 
 @pytest.mark.asyncio
@@ -279,70 +280,75 @@ async def test_jsonrpc_round_trip_over_synthetic_codex_bytes() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("line", [b"not-json\n", b"\xff\n", b"[]\n", b"{\n"])
-async def test_malformed_json_is_fail_closed_by_existing_client_codec(line: bytes) -> None:
-    pipe = BytePipe()
-    channel = _channel(pipe)
-    client = JsonRpcClient(
-        channel, request_timeout_s=1, max_frame_bytes=512, max_pending=1, version_field=False
-    )
-    client.start()
-    pending = asyncio.create_task(client.request("pending"))
-    await pipe.next_write()
-    pipe.push(line)
-    with pytest.raises(JsonRpcError, match="PROTOCOL_ERROR"):
-        await pending
-    await client.close()
-    channel.close()
+async def test_malformed_json_is_fail_closed_by_existing_client_codec() -> None:
+    for line in [b"not-json\n", b"\xff\n", b"[]\n", b"{\n"]:
+        pipe = BytePipe()
+        channel = _channel(pipe)
+        client = JsonRpcClient(
+            channel, request_timeout_s=1, max_frame_bytes=512, max_pending=1, version_field=False
+        )
+        client.start()
+        pending = asyncio.create_task(client.request("pending"))
+        await pipe.next_write()
+        pipe.push(line)
+        with pytest.raises(JsonRpcError, match="PROTOCOL_ERROR"):
+            await pending
+        await client.close()
+        channel.close()
 
 
-@pytest.mark.parametrize(("limit", "chunk"), [(0, 1), (True, 1), (16, 0), (16, -1)])
-def test_invalid_limits_are_rejected(limit: int, chunk: int) -> None:
-    with pytest.raises(ValueError, match="positive integer"):
-        _channel(BytePipe(), limit=limit, chunk=chunk)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("limit", "accepted"), [(16, False), (17, True)])
-async def test_crlf_retains_cr_and_counts_it_toward_frame_limit(limit: int, accepted: bool) -> None:
-    pipe = BytePipe()
-    channel = _channel(pipe, limit=limit)
-    pipe.push(b"x" * 16 + b"\r\n")
-    if accepted:
-        assert await channel.receive() == b"x" * 16 + b"\r"
-    else:
-        with pytest.raises(CodexStreamError, match="FRAME_TOO_LARGE"):
-            await channel.receive()
-    channel.close()
+def test_invalid_limits_are_rejected() -> None:
+    failures = []
+    for limit, chunk in [(0, 1), (True, 1), (16, 0), (16, -1)]:
+        with (
+            check_case(failures, (limit, chunk)),
+            pytest.raises(ValueError, match="positive integer"),
+        ):
+            _channel(BytePipe(), limit=limit, chunk=chunk)
+    assert not failures, failures
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["read", "write", "drain"])
-async def test_close_wins_when_injected_io_completes_in_the_same_turn(stage: str) -> None:
-    pipe = BytePipe()
-    holder: list[CodexStreamChannel] = []
+async def test_crlf_retains_cr_and_counts_it_toward_frame_limit() -> None:
+    for limit, accepted in [(16, False), (17, True)]:
+        pipe = BytePipe()
+        channel = _channel(pipe, limit=limit)
+        pipe.push(b"x" * 16 + b"\r\n")
+        if accepted:
+            assert await channel.receive() == b"x" * 16 + b"\r"
+        else:
+            with pytest.raises(CodexStreamError, match="FRAME_TOO_LARGE"):
+                await channel.receive()
+        channel.close()
 
-    async def read(_limit: int) -> bytes:
-        holder[0].close()
-        return b"{}\n"
 
-    async def write(frame: bytes) -> None:
-        await pipe.write(frame)
-        if stage == "write":
+@pytest.mark.asyncio
+async def test_close_wins_when_injected_io_completes_in_the_same_turn() -> None:
+    for stage in ["read", "write", "drain"]:
+        pipe = BytePipe()
+        holder: list[CodexStreamChannel] = []
+
+        async def read(_limit: int, *, holder=holder) -> bytes:
+            holder[0].close()
+            return b"{}\n"
+
+        async def write(frame: bytes, *, holder=holder, pipe=pipe, stage=stage) -> None:
+            await pipe.write(frame)
+            if stage == "write":
+                holder[0].close()
+
+        async def drain(*, holder=holder, pipe=pipe) -> None:
+            await pipe.drain()
             holder[0].close()
 
-    async def drain() -> None:
-        await pipe.drain()
-        holder[0].close()
-
-    channel = CodexStreamChannel(read, write, drain, max_frame_bytes=512)
-    holder.append(channel)
-    action = channel.receive() if stage == "read" else channel.send(b"{}")
-    with pytest.raises(CodexStreamError, match="CLOSED"):
-        await asyncio.wait_for(action, timeout=1)
-    assert pipe.write_count == (stage != "read")
-    assert pipe.drain_count == (stage == "drain")
-    assert not channel._buffer
+        channel = CodexStreamChannel(read, write, drain, max_frame_bytes=512)
+        holder.append(channel)
+        action = channel.receive() if stage == "read" else channel.send(b"{}")
+        with pytest.raises(CodexStreamError, match="CLOSED"):
+            await asyncio.wait_for(action, timeout=1)
+        assert pipe.write_count == (stage != "read")
+        assert pipe.drain_count == (stage == "drain")
+        assert not channel._buffer
 
 
 @pytest.mark.asyncio
@@ -388,25 +394,23 @@ async def test_cancel_ignoring_source_late_error_is_retrieved_without_logging(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("data", "reason"), [(b"", "EOF"), (b"partial", "PARTIAL_EOF")])
-async def test_jsonrpc_pending_request_fails_on_clean_or_partial_eof(
-    data: bytes, reason: str
-) -> None:
-    pipe = BytePipe()
-    channel = _channel(pipe)
-    client = JsonRpcClient(
-        channel, request_timeout_s=1, max_frame_bytes=512, max_pending=1, version_field=False
-    )
-    client.start()
-    pending = asyncio.create_task(client.request("pending"))
-    await pipe.next_write()
-    pipe.push(data)
-    pipe.push(b"")
-    with pytest.raises(JsonRpcError, match="EOF" if not data else "CHANNEL_FAILED"):
-        await pending
-    assert channel.closed_reason == reason
-    assert pipe.write_count == 1
-    await client.close()
+async def test_jsonrpc_pending_request_fails_on_clean_or_partial_eof() -> None:
+    for data, reason in [(b"", "EOF"), (b"partial", "PARTIAL_EOF")]:
+        pipe = BytePipe()
+        channel = _channel(pipe)
+        client = JsonRpcClient(
+            channel, request_timeout_s=1, max_frame_bytes=512, max_pending=1, version_field=False
+        )
+        client.start()
+        pending = asyncio.create_task(client.request("pending"))
+        await pipe.next_write()
+        pipe.push(data)
+        pipe.push(b"")
+        with pytest.raises(JsonRpcError, match="EOF" if not data else "CHANNEL_FAILED"):
+            await pending
+        assert channel.closed_reason == reason
+        assert pipe.write_count == 1
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -433,3 +437,11 @@ async def test_jsonrpc_deadline_cancels_stuck_drain_without_retrying_write() -> 
     with pytest.raises(JsonRpcError, match="SEND_TIMEOUT"):
         await client.request("retry")
     assert pipe.write_count == 1
+
+
+@contextmanager
+def check_case(failures, case):
+    try:
+        yield
+    except (AssertionError, pytest.fail.Exception) as error:
+        failures.append((case, str(error)))
