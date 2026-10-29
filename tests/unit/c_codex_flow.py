@@ -3,22 +3,22 @@
 - **모델:** C6.14의 `MockModel`에 대본을 준다. 요청 순서대로 정해 둔 도구 호출을 내고, 다 쓰면
   최종 답이다. OpenAI 계정은 쓰지 않는다.
 - **Codex:** 고정 0.162.1 `codex.exe`(`GUARD_TEST_CODEX_EXE`). L1 `CODEX_HOME`을 쓰고 앱 시작 때
-  실제 L2(`run_l2`)를 돌려 그 결과를 시작 영수증으로 넘긴다. Task마다 C launcher의 `l2_spec`으로
-  그 Task 전용 가짜 모델에 붙인다.
-- **A:** 제품 시작 `bootstrap_product`, 세션 관리자, Guard relay를 그대로 쓴다. 이 하니스는
-  `SessionPreparation`과 `ProductInputs`만 채운다.
-- **Guard·서버:** `c_counting`의 제품 조립 입력(C Registry 등록·활성화, 실제 stdio·HTTP
-  서버)과 계수.
+  실제 L2(`run_l2`, 제품과 같은 `l2_thread_params`)를 돌려 그 결과를 시작 영수증으로 넘긴다.
+  Task마다 C launcher의 `l2_spec`으로 그 Task 전용 가짜 모델에 붙인다.
+- **A·B:** 제품 시작 `bootstrap_product`를 설정 파일(CFG-01)과 앱 폴더로 부른다. B6.8 명시 시작,
+  같은 Store 위의 C Registry·call_seq·실패 감사, 설정에서 만든 조립 입력(C launcher·HTTP),
+  세션 관리자, Guard relay가 모두 제품 그대로다.
+- **서버·계수:** `c_counting`이 같은 앱 폴더 DB에 서버를 등록·활성화하고(C4.10) 계수를 센다.
 
 제품과 다른 점
-- Store는 `bootstrap_product`가 여는 즉시 모드다(B6.8 명시 시작은 A138).
-- Registry는 `c_counting`의 Store에 있고, call_seq·실패 감사는 하니스 안에서 센다. 제품
-  `bootstrap_product`가 조립 입력을 받기 전에 Store를 만들기 때문이다(A138에서 맞출 일).
+- Task 세션 준비(`SessionPreparation`)는 이 하니스 것이다. Task마다 대본 가짜 모델에 붙인다.
+- 조립 입력에 `resource_resolver`(경로 그대로)와 호출 상한을 넣는다. 제품은 아직 READ 도구의
+  resource resolver가 없고(A49), 호출 상한은 30초 고정이다.
 """
 
 from __future__ import annotations
 
-import itertools
+import copy
 import json
 import os
 import sqlite3
@@ -26,21 +26,21 @@ import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
-from guard_app.adapters.codex_protocol import DynamicToolsPlan, thread_start_params
 from guard_app.security.codex_home import load_codex_pins, verify_codex_home, write_codex_home
 from guard_app.security.codex_l2 import MockModel, run_l2
 from guard_app.security.ids import new_token
 from guard_app.security.launcher import CodexLauncher, ExecutablePin, LaunchedProcess
 from guard_app.security.paths import AppFolders
-from guard_app.services.bridge_types import SessionOptions
-from guard_app.services.codex_preparation import configuration_receipt
-from guard_app.services.codex_prompt import BASE_INSTRUCTIONS
-from guard_app.services.guard import FailureEvent
+from guard_app.services import session_runtime
+from guard_app.services.codex_preparation import configuration_receipt, l2_thread_params
 from guard_app.services.product_assembly import ProductInputs
+from guard_app.services.product_settings import read_settings
 from guard_app.services.session_preparation import (
     ConfigurationReceipt,
     SessionPreparation,
@@ -73,14 +73,6 @@ def call(name: str, arguments: dict[str, object], call_id: str) -> Item:
     }
 
 
-def thread_params(tools: object) -> dict[str, object]:
-    """L2가 쓰는 `thread/start` 인자. A 세션과 같은 모델·지시문·도구 형식이다."""
-    plan = DynamicToolsPlan(tuple(tools), (), frozenset())  # type: ignore[arg-type]
-    return thread_start_params(
-        model=SessionOptions().model, base_instructions=BASE_INSTRUCTIONS, plan=plan
-    )
-
-
 @dataclass
 class CodexTasks:
     """C 앱 폴더·CODEX_HOME·launcher 위의 `SessionPreparation`. Task마다 대본 모델 하나."""
@@ -102,10 +94,12 @@ class CodexTasks:
         pins = load_codex_pins()
         self._digest = write_codex_home(self.folders.paths.codex_home)
         self._launcher = CodexLauncher(self.executable, self.folders.paths.codex_home, self._digest)
-        report = await run_l2(self._launcher, self.folders, thread_params=thread_params)
+        report = await run_l2(self._launcher, self.folders, thread_params=l2_thread_params)
         self.l2_failures = report.failures
         l2 = ConfigurationReceipt(report.home_digest, report.executable_sha256, report.model_sha256)
-        return StartupReceipt(configuration_receipt(self._digest, pins), l2, report.passed)
+        return StartupReceipt(
+            configuration_receipt(self._digest, pins), l2, report.passed, report.failures
+        )
 
     async def _verify(self, _expected: ConfigurationReceipt) -> ConfigurationReceipt:
         verify_codex_home(self.folders.paths.codex_home, self._digest)
@@ -153,7 +147,6 @@ class Flow:
     tasks: CodexTasks
     bindings: object
     db: Path
-    audits: list[FailureEvent]
 
     def approvals(self, status: str | None = None) -> int:
         query = "SELECT COUNT(*) FROM approvals"
@@ -215,31 +208,27 @@ async def codex_flow(
     call_timeout_s: float = 30.0,
     **harness_options: object,
 ) -> AsyncIterator[Flow]:
+    """`c_counting`이 등록·활성화한 앱 폴더 DB와 설정 파일로 제품 시작을 부른다."""
     assert REAL_CODEX is not None
     async with harness(tmp_path, kind, pin, dispatched, assemble=False, **harness_options) as run:
-        tasks = CodexTasks(run.folders, Path(REAL_CODEX), scripts, wrong_token_launches)
-        sequence = itertools.count(1)
-        audits: list[FailureEvent] = []
-
-        async def next_call_seq(_task_id: str) -> int:
-            return next(sequence)
-
-        async def failure_audit(event: FailureEvent) -> None:
-            audits.append(event)
-
-        inputs = ProductInputs(
-            profile_document=run.document,
-            registry=run.registry,
-            server_streams={"docs": await run.connect()},
-            next_call_seq=next_call_seq,
-            failure_audit=failure_audit,
-            operator_id="local-operator",
-            resource_resolver=identity,
-            call_timeout_s=call_timeout_s,
+        # 한 DB 파일을 Store 둘이 함께 쓰지 않는다(B6.13). 등록을 쓴 Store를 닫은 뒤 제품이 연다.
+        run.store.close()
+        assert await run.store.wait_closed(5.0)
+        settings = copy.deepcopy(run.document)
+        if kind == "stdio":
+            server = settings["servers"][0]  # type: ignore[index]
+            server.update(command_size=pin.size, command_sha256=pin.sha256)
+        run.folders.paths.settings_file.write_text(
+            json.dumps({"schema_version": 1, "settings": settings}), encoding="utf-8"
         )
-        db = tmp_path / "flow.db"
-        bindings = await bootstrap_product(str(db), preparation=tasks.preparation(), product=inputs)
-        flow = Flow(run, tasks, bindings, db, audits)
+        tasks = CodexTasks(run.folders, Path(REAL_CODEX), scripts, wrong_token_launches)
+        # 제품 조립 입력에 없는 두 값만 더한다(머리말 "제품과 다른 점").
+        inputs = partial(ProductInputs, resource_resolver=identity, call_timeout_s=call_timeout_s)
+        with mock.patch.object(session_runtime, "ProductInputs", inputs):
+            bindings = await bootstrap_product(
+                run.folders, preparation=tasks.preparation(), settings=read_settings(run.folders)
+            )
+        flow = Flow(run, tasks, bindings, run.db)
         try:
             yield flow
         finally:

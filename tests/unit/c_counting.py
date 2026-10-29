@@ -554,7 +554,8 @@ async def harness(
         counters.wire_file = tmp_path / "wire.jsonl"
         counters.effect_file = tmp_path / "effect.jsonl"
     folders = prepare_app_folders(tmp_path / "app")
-    db = tmp_path / "guard.db"
+    # 제품과 같은 앱 폴더의 DB(C2.19). Codex 경유 하니스가 이 파일을 `bootstrap_product`로 연다.
+    db = folders.db_path()
     audits = iter(range(1_000_000))
     store = SQLiteStore(db, audit_id_factory=lambda: f"audit-{next(audits)}")
     launched: list[LaunchedProcess] = []

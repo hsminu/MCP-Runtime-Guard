@@ -1,9 +1,10 @@
 """C6.8-2: 실제 codex.exe를 거친 T41·T42(하니스 `c_codex_flow`).
 
 - T41: 모델이 허용 밖 항목(웹 검색)을 내면 A 세션 관리자(L3)가 그 Task를 멈춘다. Guard 도구는
-  실행되지 않고 모델에 다음 요청이 가지 않는다.
-- T42: 실행이 끝났지만 응답이 오지 않는 SEND는 호출 상한에서 결과 불명이 되고 Task가 멈춘다.
-  같은 호출을 다시 보내지 않는다.
+  실행되지 않고 모델에 다음 요청이 가지 않는다. 멈춘 이유가 L3인지 감사 사유로 확인한다.
+- T42(부분): 실행이 끝났지만 응답이 오지 않는 SEND는 호출 상한에서 결과 불명이 되고 Task가
+  멈춘다. 같은 호출을 다시 보내지 않는다. 승인 대기 쪽과 A 감시 상한(`SESSION_WATCHDOG_EXCEEDED`)은
+  여기서 보지 않는다(#84 A 리뷰).
 """
 
 from __future__ import annotations
@@ -58,13 +59,16 @@ def test_t41_an_item_outside_the_allow_list_halts_the_task(tmp_path, kind, pin, 
                 snapshot.status,
                 len(flow.tasks.models[task_id].requests),
                 flow.counts("read", "public/a.txt"),
+                flow.audit_reasons(task_id),
             )
 
-    status, task_status, requests, counts = asyncio.run(scenario())
+    status, task_status, requests, counts, reasons = asyncio.run(scenario())
     assert status == "halted"
     assert task_status is TaskStatus.HALTED
     assert requests == 1
     assert counts == ZERO
+    # 다른 이유가 아니라 L3 허용 목록 위반으로 멈췄다(#84 A 리뷰).
+    assert reasons[-1] == "SESSION_L3_VIOLATION"
 
 
 @pytest.mark.parametrize("kind", ["stdio", "http"])

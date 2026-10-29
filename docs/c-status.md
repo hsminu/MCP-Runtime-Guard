@@ -1,6 +1,6 @@
 # C 현황
 
-갱신: 2026-10-29 · main `48ea024` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
+갱신: 2026-10-29 · main `fa36962` · 이전 상세: [2026-10-15까지의 C 현황](archive/status/c-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -105,7 +105,7 @@
 - [ ] C6.5 실험 스크립트 Windows 수정(socket 차단·`PYTHONPATH`·인코딩)과 MCP 정의 수집기 저장소 반영
 - [ ] C6.6 Windows Cisco 실험(2026-10-14~15) 완료 기록 작성
 - [ ] C6.7 Fake·실제 Transport·Store·AccessChecker·Scanner에 같은 계약 테스트
-- [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05. 41개 중 완료 28·부분 3·미실행 10([현황](archive/c/C6.25-verification-summary.md), 그 뒤 C6.8-2로 6개 완료). Guard 경로 T01·T09·T10·T11(재시작)·T26·T30 계수와 T28 지연 측정 완료 · [기록](archive/c/C6.8-1-guard-path-counts.md). 실제 codex.exe(대본 가짜 모델)를 거친 T01–T03·T21·T41·T42·T43·T45·T46 완료 · [기록](archive/c/C6.8-2-codex-flow.md)
+- [ ] C6.8 C 담당 T/S 구현: T01–T04·T07–T12·T14–T17·T19–T24·T26·T28–T30·T33–T37·T39–T46·S01·S02·S04·S05. 41개 중 완료 27·부분 4·미실행 10([현황](archive/c/C6.25-verification-summary.md), 그 뒤 C6.8-2로 T21·T41·T43·T45·T46 완료, T42 부분). Guard 경로 T01·T09·T10·T11(재시작)·T26·T30 계수와 T28 지연 측정 완료 · [기록](archive/c/C6.8-1-guard-path-counts.md). 실제 codex.exe(대본 가짜 모델)를 거친 T01–T03·T21·T41·T42·T43·T45·T46 완료 · [기록](archive/c/C6.8-2-codex-flow.md)
 - [x] C6.9 자체 접근 규칙의 거절·오류·누락(활성화 때 사용자가 끈 도구)에서 전송 0: 제품 조립의 실제 `AccessRulesChecker`·C `ServerRegistry`와 실제 stdio(C2.6)·HTTP 서버로 승인 소비·host_dispatch·wire `tools/call`·수신 효과 4개 계수 확인, 대조군 포함 28개 · [결정](contracts.md#사용자-결정) · [기록](archive/c/C6.9-access-rule-counts.md)
 - [ ] C6.10 정책·승인·응답 게이트 공격
 - [ ] C6.11 accumulate·last_read·none replay(사전 정답 고정, 모드별 10회, 일치율·과잉 제한·완료율·p50/p95)
