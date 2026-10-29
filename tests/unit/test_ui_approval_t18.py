@@ -15,12 +15,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QPlainTextEdit
 
 from guard_app.domain.enums import ApprovalStatus, Label, TaskStatus, ToolKind
-from guard_app.services.bridge import (
-    ApprovalReview,
-    TaskProjection,
-    _review_fields,
-    _review_header,
-)
+from guard_app.services.bridge import ApprovalReview, TaskProjection
+from guard_app.services.bridge_commands import review_fields, review_header
 from guard_app.ui.approval_detail import (
     ApprovalDetailDialog,
     ApprovalDetailValue,
@@ -142,8 +138,8 @@ def test_all_approval_fields_are_literal_and_never_open_links(app, monkeypatch, 
             effective_label=Label.INTERNAL,
             expires_at_utc=now,
         )
-        header = _review_header(approval)
-        fields = _review_fields(approval)
+        header = review_header(approval)
+        fields = review_fields(approval)
         assert header.count(payload) == 4
         bridge.review_ready.emit(
             ApprovalReview("review", payload, payload, 1, header, payload.encode(), fields)

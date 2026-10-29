@@ -14,12 +14,12 @@ async def fail_closed[T](
     on_containment_error: Callable[[BaseException], T] | None = None,
 ) -> T:
     """예약 전 실패를 변환한다. 감사 실패 시 공급된 global-halt 경계를 사용한다."""
-    try:
+    try:  # nosemgrep: broad-except-only-in-allowed
         return await operation()
     except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
         if on_containment_error is None:
             return await on_error(error)
-        try:
+        try:  # nosemgrep: broad-except-only-in-allowed
             return await on_error(error)
         except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001
             return on_containment_error(containment_error)
@@ -42,18 +42,18 @@ async def after_dispatch[T](
     있으므로 on_containment_error는 멱등이어야 한다.
     콜백이 없는 기존 호출의 결과 변환 의미는 유지한다.
     """
-    try:
+    try:  # nosemgrep: broad-except-only-in-allowed
         return await operation()
     except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
         cancelled = error if isinstance(error, asyncio.CancelledError) else None
-        try:
+        try:  # nosemgrep: broad-except-only-in-allowed
             result = await on_error(error)
         except (Exception, asyncio.CancelledError) as containment_error:  # noqa: BLE001
             result = on_containment_error(containment_error)
             if cancelled is None and isinstance(containment_error, asyncio.CancelledError):
                 cancelled = containment_error
         if cancelled is not None and on_cancelled is not None:
-            try:
+            try:  # nosemgrep: broad-except-only-in-allowed
                 on_cancelled(result)
             except (Exception, asyncio.CancelledError) as callback_error:  # noqa: BLE001
                 try:

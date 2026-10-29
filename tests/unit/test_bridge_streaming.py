@@ -132,7 +132,7 @@ def test_streamed_answer_is_coalesced_bound_to_the_command_and_precedes_the_fina
         assert all("stale-epoch" not in e.text and "other" not in e.text for _, e in seen)
         assert all("late" not in e.text for _, e in seen)
         assert "Hello" not in repr(first)
-        assert not bridge._streams
+        assert not bridge._streams.active()
     finally:
         close_bridge(app, bridge)
 

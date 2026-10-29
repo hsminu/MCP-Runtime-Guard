@@ -377,16 +377,23 @@ async def test_store_closes_last_on_owner_thread(tmp_path, monkeypatch, failure)
 
 @pytest.mark.parametrize("during_bootstrap", [False, True])
 def test_bridge_reports_store_cleanup_failure(tmp_path, monkeypatch, during_bootstrap):
-    """직접 대응 T/S ID 없음, A 종료 상태(I6): Store close 실패를 미확인으로 표시."""
+    """직접 대응 T/S ID 없음, A 종료 상태(I6): Store 연결 종료를 확인하지 못하면 미확인으로 표시.
+
+    #58 뒤 close는 예외 없이 종료만 요청하고, 실패는 wait_closed의 False로 알린다.
+    """
     app = QApplication.instance() or QApplication([])
     events, threads = [], []
     original_close = SQLiteStore.close
+    original_wait = SQLiteStore.wait_closed
     original_create = SQLiteStore.create_task
 
     def close(self):
         threads.append(("close", threading.get_ident()))
         original_close(self)
-        raise StoreError()
+
+    async def wait_closed(self, timeout):  # noqa: ASYNC109 - the Store port's signature
+        await original_wait(self, timeout)
+        return False
 
     async def create(self, state, **kwargs):
         threads.append(("create", threading.get_ident()))
@@ -395,6 +402,7 @@ def test_bridge_reports_store_cleanup_failure(tmp_path, monkeypatch, during_boot
             raise StoreError()
 
     monkeypatch.setattr(SQLiteStore, "close", close)
+    monkeypatch.setattr(SQLiteStore, "wait_closed", wait_closed)
     monkeypatch.setattr(SQLiteStore, "create_task", create)
     bridge = BackendBridge(
         lambda: synthetic_app.bootstrap(store_kind="sqlite", db_path=tmp_path / "app.db")

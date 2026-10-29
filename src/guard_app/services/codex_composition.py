@@ -14,7 +14,7 @@ from importlib import metadata
 
 from guard_app.adapters.codex_protocol import build_dynamic_tools
 from guard_app.domain.models import TaskState
-from guard_app.services.bridge import SessionOptions, SessionStartError
+from guard_app.services.bridge_types import SessionOptions, SessionStartError
 from guard_app.services.codex_prompt import BASE_INSTRUCTIONS
 from guard_app.services.codex_session import CodexAppServerSession, CodexPipes, SessionLimits
 from guard_app.services.guard_relay import ApprovalOutcomes, GuardToolRelay, TrustedTask

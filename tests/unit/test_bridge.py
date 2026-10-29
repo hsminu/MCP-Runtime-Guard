@@ -33,9 +33,8 @@ from guard_app.services.bridge import (
     ControlAction,
     LifecycleEvent,
     TaskProjection,
-    _review_fields,
-    _review_header,
 )
+from guard_app.services.bridge_commands import review_fields, review_header
 from guard_app.services.runner import RunUpdate
 
 
@@ -303,7 +302,7 @@ def test_ingress_flood_is_bounded_and_emergency_enters_first(app) -> None:
         loop.call_soon_threadsafe(hold_backend)
         assert blocked.wait(timeout=2)
         run_ids = [bridge.request_run("task-1", command_id=f"flood-{index}") for index in range(24)]
-        assert len(bridge._ingress["run"]) == 2
+        assert bridge._ingress.waiting("run") == 2
         assert all(not receiver.stages(command_id) for command_id in run_ids[:2])
         assert all(
             receiver.stages(command_id)[-1].code == "INGRESS_FULL" for command_id in run_ids[2:]
@@ -320,13 +319,13 @@ def test_ingress_flood_is_bounded_and_emergency_enters_first(app) -> None:
             )
             for index in range(3)
         ]
-        assert len(bridge._ingress["control"]) == 1
+        assert bridge._ingress.waiting("control") == 1
         assert all(
             receiver.stages(command_id)[-1].code == "INGRESS_FULL"
             for command_id in normal_controls[1:]
         )
         urgent = bridge.request_control(ControlAction.EMERGENCY_HALT, "task-2")
-        assert len(bridge._ingress["urgent"]) == 1
+        assert bridge._ingress.waiting("urgent") == 1
         release.set()
         pump_until(
             app,
@@ -371,8 +370,8 @@ def test_ingress_flood_is_bounded_and_emergency_enters_first(app) -> None:
         ]
         prior_count = len(receiver.stages(run_ids[0]))
         bridge.request_run("task-1", command_id=run_ids[0])
-        assert len(bridge._ingress["run"]) == 2
-        assert len(bridge._ingress["replay"]) == 1
+        assert bridge._ingress.waiting("run") == 2
+        assert bridge._ingress.waiting("replay") == 1
         assert len(receiver.stages(run_ids[0])) == prior_count
         replay_release.set()
         pump_until(app, lambda: len(receiver.stages(run_ids[0])) == prior_count + 1)
@@ -422,7 +421,7 @@ def test_shutdown_rejects_commands_waiting_at_ingress(app) -> None:
         bridge.close()
         assert receiver.stages(run)[-1].code == "SHUTTING_DOWN"
         assert receiver.stages(urgent)[-1].code == "SHUTTING_DOWN"
-        assert all(not queue for queue in bridge._ingress.values())
+        assert bridge._ingress.waiting() == 0
         release.set()
         pump_until(app, lambda: bridge.thread_done)
         assert runner.calls == 0
@@ -456,7 +455,7 @@ def test_shutdown_settles_command_already_removed_from_ingress(app, monkeypatch)
         monkeypatch.setattr(bridge, "_admit", held_admit)
         command_id = bridge.request_run("task-1")
         assert removed.wait(timeout=2)
-        assert not bridge._ingress["run"]
+        assert not bridge._ingress.waiting("run")
         bridge.close()
         release.set()
         pump_until(app, lambda: bool(receiver.stages(command_id)))
@@ -506,7 +505,7 @@ def test_admission_error_settles_command_and_continues_drain(app, monkeypatch) -
         assert receiver.stages(broken)[-1].stage is CommandStage.UNCONFIRMED
         assert receiver.stages(broken)[-1].code == "ADMISSION_UNCONFIRMED"
         assert "private failure detail" not in repr(receiver.commands)
-        assert not bridge._ingress_scheduled
+        assert not bridge._ingress.scheduled
         assert runner.calls == 1
         prior_count = len(receiver.stages(broken))
         bridge.request_run("task-1", command_id=broken)
@@ -821,7 +820,7 @@ def test_startup_timeout_reclaims_late_bindings_once(app, late_delay: float) -> 
     assert receiver.states[-1] == LifecycleEvent(BridgeState.FAILED, "STARTUP_FAILED")
     assert len(cleanup_threads) == 1
     assert cleanup_threads[0] != threading.get_ident()
-    assert bridge._bindings is None
+    assert bridge._bindings.current is None
     bridge.close()
     assert len(cleanup_threads) == 1
 
@@ -854,7 +853,7 @@ def test_close_during_startup_reclaims_cancelled_bootstrap_result(app) -> None:
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLOSED")
     assert BridgeState.READY not in [event.state for event in receiver.states]
-    assert bridge._bindings is None
+    assert bridge._bindings.current is None
     bridge.close()
     assert cleanup_calls == 1
 
@@ -881,7 +880,7 @@ def test_late_bootstrap_close_error_is_fixed_unconfirmed_code(app) -> None:
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.FAILED, "STARTUP_CLEANUP_UNCONFIRMED")
     assert "secret" not in repr(receiver.states)
-    assert bridge._bindings is None
+    assert bridge._bindings.current is None
     bridge.close()
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLEANUP_UNCONFIRMED")
@@ -907,7 +906,7 @@ def test_completed_bootstrap_bindings_have_single_close_owner(app) -> None:
     close_bridge(app, bridge)
     assert cleanup_calls == 1
     assert receiver.states[-1] == LifecycleEvent(BridgeState.CLOSED, "CLOSED")
-    assert bridge._bindings is None
+    assert bridge._bindings.current is None
     # A110: main reads these after the Qt loop to decide whether to keep the lock.
     assert bridge.wait_done(0.0)
     assert not bridge.cleanup_unconfirmed
@@ -1168,8 +1167,8 @@ def test_review_header_names_tool_kind_and_expiry_on_one_line() -> None:
             expires_at_utc=datetime(2026, 10, 13, 12, minute, tzinfo=UTC),
         )
 
-    read = _review_header(snapshot("read_doc", ToolKind.READ, 5))
-    send = _review_header(snapshot("send_doc", ToolKind.SEND, 6))
+    read = review_header(snapshot("read_doc", ToolKind.READ, 5))
+    send = review_header(snapshot("send_doc", ToolKind.SEND, 6))
     assert "\n" not in read and "\\n" not in read
     assert read == (
         "도구: read_doc (READ) · MCP 서버: docs (경계 docs) · 목적지 경계: 없음"
@@ -1178,7 +1177,7 @@ def test_review_header_names_tool_kind_and_expiry_on_one_line() -> None:
     assert "send_doc (SEND)" in send and "12:06:00 UTC" in send
     assert read != send
     # The review panel shows the same fields one per line.
-    assert _review_fields(snapshot("read_doc", ToolKind.READ, 5)) == (
+    assert review_fields(snapshot("read_doc", ToolKind.READ, 5)) == (
         ("도구", "read_doc (READ)"),
         ("MCP 서버", "docs (경계 docs)"),
         ("목적지 경계", "없음"),
@@ -1450,8 +1449,8 @@ def test_distinct_tasks_run_while_same_task_commands_wait_and_shutdown_settles_a
                 CommandStage.UNCONFIRMED,
                 CommandStage.REJECTED,
             )
-        assert not bridge._records
-        assert not bridge._operations
+        assert not bridge._ledger.unsettled()
+        assert not bridge._lanes.running()
     finally:
         first_gate.set()
         second_gate.set()
