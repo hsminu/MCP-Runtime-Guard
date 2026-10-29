@@ -67,9 +67,8 @@ def test_summary_accepts_bounded_plain_text_without_rewriting(text):
     assert ScanReport.model_validate_json(report.model_dump_json()) == report
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
+def test_invalid_summary_is_rejected_without_echoing_or_sanitizing(subtests):
+    cases = [
         "가" * 301,
         "a" * 301,
         "PRIVATE_MARKER <b>본문</b>",
@@ -101,13 +100,17 @@ def test_summary_accepts_bounded_plain_text_without_rewriting(text):
         "PRIVATE_MARKER\u200b",
         "PRIVATE_MARKER\u2028",
         "PRIVATE_MARKER\ud800",
-    ],
-)
-@pytest.mark.parametrize("target", ["report", "finding"])
-def test_invalid_summary_is_rejected_without_echoing_or_sanitizing(text, target):
-    with pytest.raises(ValidationError) as error:
-        make_scan(threat_summary=text) if target == "report" else _finding(threat_summary=text)
-    assert "PRIVATE_MARKER" not in str(error.value)
+    ]
+    for case, text in enumerate(cases):
+        for target in ("report", "finding"):
+            with subtests.test(case=case, target=target):
+                with pytest.raises(ValidationError) as error:
+                    (
+                        make_scan(threat_summary=text)
+                        if target == "report"
+                        else _finding(threat_summary=text)
+                    )
+                assert "PRIVATE_MARKER" not in str(error.value)
 
 
 @pytest.mark.parametrize("value", [None, b"text", 1, True, [], {}])
