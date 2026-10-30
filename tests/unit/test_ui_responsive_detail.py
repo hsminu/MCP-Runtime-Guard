@@ -12,17 +12,13 @@ from PySide6.QtWidgets import QApplication, QBoxLayout, QFormLayout, QLabel, QSc
 
 from guard_app.ui.approval_detail import ApprovalDetailDialog, ApprovalDetailValue
 from guard_app.ui.models import (
-    AttentionItem,
     LoadState,
-    OverviewSnapshot,
-    RecentCall,
     ServerSummary,
     Surface,
 )
 from guard_app.ui.server_add import ServerAddForm
 from guard_app.ui.servers import ServerDetailDialog, ServerListPage
 from guard_app.ui.widgets import PlainDetailDialog
-from guard_app.ui.window import GuardWindow
 
 from .test_ui_icons_style import app as app
 from .test_ui_icons_style import closing_widgets, resize_widget, show_widget
@@ -175,39 +171,3 @@ def test_server_detail_keeps_security_summary_above_scan_on_short_owner(app: QAp
         scan_top = detail.scan_report.mapTo(scroll.viewport(), QPoint(0, 0)).y()
         assert scan_top < scroll.viewport().height()
         assert scan_top + detail.scan_report.height() > 0
-
-
-def test_long_public_ids_do_not_expand_small_overview(app: QApplication) -> None:
-    long_id = "synthetic-" + "x" * 100
-    window = GuardWindow()
-    window.resize(320, 400)
-    window.navigate("overview")
-    window.set_overview_snapshot(
-        OverviewSnapshot(
-            servers=Surface(
-                LoadState.READY, (ServerSummary(long_id, long_id, session_status="connected"),)
-            ),
-            attention=Surface(
-                LoadState.READY,
-                (
-                    AttentionItem(
-                        "synthetic-attention",
-                        "outcome_unknown",
-                        server_id=long_id,
-                        target_page="servers",
-                        target_id=long_id,
-                        action_available=True,
-                    ),
-                ),
-            ),
-            recent_calls=Surface(LoadState.READY, (RecentCall(long_id, long_id, long_id),)),
-        )
-    )
-    window.show()
-    app.processEvents()
-    with closing_widgets(window):
-        scroll = window.stack.currentWidget()
-        assert isinstance(scroll, QScrollArea)
-        assert window.width() == 320
-        assert scroll.horizontalScrollBar().maximum() == 0
-        assert any(long_id in label.text() for label in window.overview.findChildren(QLabel))

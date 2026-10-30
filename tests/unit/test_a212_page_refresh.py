@@ -152,7 +152,7 @@ def test_unconnected_snapshot_target_still_selects_existing_call(screen):
 def test_other_pages_do_not_refresh_store_lists(screen):
     connect(screen)
     count = len(screen.queries)
-    for page in ("overview", "audit", "servers", "runs", "results"):
+    for page in ("servers", "runs", "results"):
         screen.window.navigate(page)
     assert len(screen.queries) == count
 

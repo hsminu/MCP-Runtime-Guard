@@ -1,4 +1,4 @@
-"""Qt shell with navigation and backend-confirmed overview rendering."""
+"""Qt shell with navigation and backend-confirmed page rendering."""
 
 from __future__ import annotations
 
@@ -34,13 +34,11 @@ from .call_logs import CallLogPage, DetailRequest, PublicCallDetail, PublicCallS
 from .icons import line_icon
 from .models import (
     LoadState,
-    OverviewSnapshot,
     RuntimeIdentity,
     RuntimeMode,
     ServerSummary,
     Surface,
 )
-from .overview import OverviewPage
 from .policy import PolicyPage
 from .presentation import (
     LIFECYCLE_MESSAGES,
@@ -72,22 +70,6 @@ def _scroll_page(content: QWidget) -> QScrollArea:
     return scroll
 
 
-def _placeholder_page(page: str) -> QWidget:
-    content = QWidget()
-    layout = QVBoxLayout(content)
-    layout.setContentsMargins(32, 32, 32, 32)
-    layout.setSpacing(12)
-    layout.addWidget(plain_label(PAGES[page], name="pageTitle"))
-    note = plain_label(
-        "백엔드 확정 조회 계약을 연결한 뒤 표시할 화면임. "
-        "현황으로 돌아가면 현재 제공된 상태를 볼 수 있음.",
-        name="secondary",
-    )
-    layout.addWidget(note)
-    layout.addStretch(1)
-    return content
-
-
 class GuardWindow(QMainWindow):
     """Provides view navigation; backend commands belong to the bridge."""
 
@@ -117,7 +99,7 @@ class GuardWindow(QMainWindow):
             min(1260, usable_width),
             min(820, usable_height),
         )
-        self._page = "overview"
+        self._page = "runs"
         self._navigation_target = ""
         self._nav_buttons: dict[str, QPushButton] = {}
         self._menu_actions: dict[str, QAction] = {}
@@ -211,7 +193,7 @@ class GuardWindow(QMainWindow):
         management_caption.setToolTip("백엔드 확정 조회만 표시함.")
         side.addWidget(management_caption)
         side.addSpacing(2)
-        for page in ("servers", "server_add", "overview", "logs", "policy", "audit", "settings"):
+        for page in ("servers", "server_add", "logs", "policy", "settings"):
             side.addWidget(self._nav_button(page))
         root.addWidget(self.sidebar)
         # Start with the compact shell so a 320 px resize cannot be constrained
@@ -249,7 +231,7 @@ class GuardWindow(QMainWindow):
             self._menu_actions[page] = action
         self.menu_button.setMenu(self._nav_menu)
         self.menu_button.hide()
-        self.breadcrumb = plain_label(PAGES["overview"], name="breadcrumb", wrap=False)
+        self.breadcrumb = plain_label(PAGES[self._page], name="breadcrumb", wrap=False)
         top.addWidget(self.breadcrumb, 0, 0)
         self.runtime_identity = plain_label(name="modeBadge", wrap=False)
         top.addWidget(self.runtime_identity, 0, 1)
@@ -272,9 +254,6 @@ class GuardWindow(QMainWindow):
         self, scanner_key_saver: KeySaver | None, scanner_key_tail: KeyTail | None
     ) -> None:
         self.stack = QStackedWidget()
-        self.overview = OverviewPage()
-        self.overview.navigate_requested.connect(self.navigate)
-        self._page_indices["overview"] = self.stack.addWidget(_scroll_page(self.overview))
         self.server_page = ServerListPage()
         self.server_page.restore_requested.connect(self._start_settings_restore)
         self._page_indices["servers"] = self.stack.addWidget(_scroll_page(self.server_page))
@@ -385,21 +364,6 @@ class GuardWindow(QMainWindow):
 
         self.policy_page = PolicyPage()
         self._page_indices["policy"] = self.stack.addWidget(_scroll_page(self.policy_page))
-        for page in PAGES:
-            if page not in (
-                "policy",
-                "overview",
-                "servers",
-                "logs",
-                "approvals",
-                "server_add",
-                "runs",
-                "results",
-                "settings",
-            ):
-                self._page_indices[page] = self.stack.addWidget(
-                    _scroll_page(_placeholder_page(page))
-                )
 
     def _connect_shell(self) -> None:
         self.set_theme(system_theme())
@@ -726,11 +690,6 @@ class GuardWindow(QMainWindow):
             "server_add": "plus",
         }.get(page, page)
 
-    def set_overview_snapshot(self, snapshot: OverviewSnapshot) -> None:
-        """Called on the Qt thread with a bridge-approved public projection."""
-
-        self.overview.set_snapshot(snapshot)
-
     def _registration_rows(self, view: RegistrationView) -> None:
         if view.code in ("REG_REGISTERED", "REG_PIN_SAVED", "REG_SETTINGS_RESTORED"):
             self.set_settings_status("SETTINGS_REGISTRATION_SAVED")
@@ -763,7 +722,7 @@ class GuardWindow(QMainWindow):
         self.navigate("server_add")
 
     def set_server_snapshot(self, snapshot: Surface[tuple[ServerSummary, ...]]) -> None:
-        """Update Registry rows from their own query, never overview rows."""
+        """Update Registry rows from their public query projection."""
 
         self.server_page.set_servers(snapshot)
 

@@ -376,7 +376,7 @@ class ServerListPage(QWidget):
         self.table_hint.setVisible(compact)
 
     def set_servers(self, surface: Surface[tuple[ServerSummary, ...]]) -> None:
-        """The bridge supplies the Registry result; overview rows are not reused."""
+        """The bridge supplies the public Registry query result."""
 
         if self._detail_dialog is not None:
             self._detail_dialog.close()

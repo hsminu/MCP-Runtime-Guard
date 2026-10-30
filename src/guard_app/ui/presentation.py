@@ -255,13 +255,11 @@ REQUEST_STATUSES = {
     "DENIED": "차단",
 }
 PAGES = {
-    "overview": "현황",
     "logs": "호출 로그",
     "approvals": "승인 대기",
     "servers": "MCP 서버",
     "server_add": "MCP 서버 추가",
     "policy": "정책 · 경계",
-    "audit": "감사 기록",
     "runs": "대화",
     "results": "결과 · 실행 활동",
     "settings": "설정",
