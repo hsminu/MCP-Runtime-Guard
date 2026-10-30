@@ -6,11 +6,18 @@ import ast
 import io
 import os
 import re
+import sys
 import tokenize
 from contextlib import contextmanager
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if sys.platform == "win32":
+    # Offscreen Qt finds no fonts without this (CI sets none), so layout checks measured
+    # fallback glyphs (#114 A review). Use the Windows fonts the app runs with.
+    os.environ.setdefault(
+        "QT_QPA_FONTDIR", str(Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts")
+    )
 
 import pytest
 from PySide6.QtCore import QSize, Qt

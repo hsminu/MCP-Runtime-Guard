@@ -265,6 +265,7 @@
 - [x] A213 채팅 답변 머리글에서 "(검증되지 않은 내용)" 제거("Guard · 모델 답변"·"… 작성 중"), 중단 머리글·일반 텍스트 렌더링은 유지 · [기록](archive/a/A213-answer-label.md)
 - [x] A214 C2.11-2 후속: `product_assembly`의 파일 서버 인정을 C `trusted_file_server_root` 호출로 바꾸고 A 쪽 `_file_server_root`·`sys`·`Path` 제거, A199 회귀 시험 유지 · [기록](archive/a/A214-trusted-file-server-root.md)
 - [x] A215 GitHub Actions 결제 막힘으로 CI 단계를 로컬 실행: 정적 검사·lock·bandit·계약 시험 통과, 단위 시험 1 실패(A212 이동 뒤 직접 적용 경로에서 대상 미선택) 수정, Semgrep은 근사 검사만(0건, 예외 위치 일치) · [기록](archive/a/A215-local-ci-run.md)
+- [x] A216 CI처럼 `QT_QPA_FONTDIR` 없이 돌리면 offscreen Qt가 글꼴 0개라 A 화면 시험 4건 실패(#114 B 보고 3건 포함): 공용 시험 모듈에서 Windows 글꼴 폴더를 기본값으로 지정, Qt 시험 54개 파일 1130 통과, A215 로컬 CI 환경 정정 · [기록](archive/a/A216-offscreen-fonts.md)
 
 ## 통합·패키징
 
