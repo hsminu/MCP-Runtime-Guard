@@ -37,13 +37,26 @@ from guard_app.ui.servers import ServerListPage
 from guard_app.ui.widgets import ConfirmDialog
 
 from .test_a105_activation import assert_guard_closed, harness
-from .test_registry_store import NOW, RAW, SELECT_ROWS, activate, add, report, rows, run, tool
+from .test_registry_store import (
+    NOW,
+    RAW,
+    SELECT_ROWS,
+    activate,
+    add,
+    registration,
+    report,
+    rows,
+    run,
+    tool,
+)
 from .test_registry_store import store as store
 from .test_server_registry import listing, settings
 from .test_sqlite_store import (
     test_initial_migration_creates_only_design_tables_and_tags as verify_schema,
 )
 from .test_store_queries import _seed, call_query
+from .test_store_recovery import _close
+from .test_store_run_activation import _recovered
 
 
 @pytest.mark.parametrize("status", [RegStatus.PENDING, RegStatus.ACTIVE, RegStatus.BLOCKED])
@@ -150,6 +163,27 @@ def test_store_delete_rolls_back_all_rows_when_audit_fails(store):
         )
     assert rows(store) == before
     verify_schema(store)
+
+
+@pytest.mark.asyncio
+async def test_store_refuses_delete_until_the_run_is_active(tmp_path):
+    # #113 B review: deletion only comes from the server list after activate_run, so a
+    # recovered Store (REC-01) keeps it closed instead of listing it as a bootstrap write.
+    store = await _recovered(tmp_path / "recovered.db", tmp_path)
+    try:
+        entry = await store.register_server(registration(), at_utc=NOW)
+        entry = await store.block_server(
+            "server-1", expected_row_revision=entry.registration.row_revision, at_utc=NOW
+        )
+        revision = entry.registration.row_revision
+        with pytest.raises(StoreError):
+            await store.delete_server("server-1", expected_row_revision=revision, at_utc=NOW)
+        assert await store.load_registration("server-1") is not None
+        await store.activate_run()
+        await store.delete_server("server-1", expected_row_revision=revision, at_utc=NOW)
+        assert await store.load_registration("server-1") is None
+    finally:
+        await _close(store)
 
 
 @pytest.mark.asyncio

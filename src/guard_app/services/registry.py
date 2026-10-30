@@ -343,7 +343,7 @@ class ServerRegistry:
             )
 
     async def delete(self, server_id: str, *, expected_row_revision: int) -> None:
-        """Delete a BLOCKED registration; uncertain writes leave the cache stale."""
+        """BLOCKED 등록을 지운다(A208). 저장 결과가 불명이면 캐시를 stale로 둔다."""
         async with self._lock:
             await self._reread_if_stale(server_id)
             written = False

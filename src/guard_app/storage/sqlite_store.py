@@ -160,7 +160,6 @@ _RECOVERED_WRITES = frozenset(
         "record_fingerprint_change",
         "record_settings_change",
         "block_server",
-        "delete_server",
         "request_review",
         "save_reviewed_descriptions",
     }

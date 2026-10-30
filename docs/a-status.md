@@ -266,6 +266,7 @@
 - [x] A214 C2.11-2 후속: `product_assembly`의 파일 서버 인정을 C `trusted_file_server_root` 호출로 바꾸고 A 쪽 `_file_server_root`·`sys`·`Path` 제거, A199 회귀 시험 유지 · [기록](archive/a/A214-trusted-file-server-root.md)
 - [x] A215 GitHub Actions 결제 막힘으로 CI 단계를 로컬 실행: 정적 검사·lock·bandit·계약 시험 통과, 단위 시험 1 실패(A212 이동 뒤 직접 적용 경로에서 대상 미선택) 수정, Semgrep은 근사 검사만(0건, 예외 위치 일치) · [기록](archive/a/A215-local-ci-run.md)
 - [x] A216 CI처럼 `QT_QPA_FONTDIR` 없이 돌리면 offscreen Qt가 글꼴 0개라 A 화면 시험 4건 실패(#114 B 보고 3건 포함): 공용 시험 모듈에서 Windows 글꼴 폴더를 기본값으로 지정, Qt 시험 54개 파일 1130 통과, A215 로컬 CI 환경 정정 · [기록](archive/a/A216-offscreen-fonts.md)
+- [x] A217 #113 B·C 리뷰 후속: RECOVERED 단계 삭제 허용 제거와 시험(B 2번), Registry `delete` 설명 한국어(C), 재등록 revision 경계는 계약 초안에(B 3번), 320px 서버 목록은 실제 글꼴 최소 폭 215로 화면 유지(C 1번) · [기록](archive/a/A217-pr113-review.md)
 
 ## 통합·패키징
 
