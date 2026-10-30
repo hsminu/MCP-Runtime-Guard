@@ -86,6 +86,8 @@ from guard_app.services.policy_view import PolicyDestination as PolicyDestinatio
 from guard_app.services.policy_view import PolicyServer as PolicyServer  # UI re-export
 from guard_app.services.policy_view import PolicyTool as PolicyTool  # UI re-export
 from guard_app.services.policy_view import PolicyView as PolicyView  # UI re-export
+from guard_app.services.scan_categories import ScanCategory as ScanCategory
+from guard_app.services.scan_categories import scan_category as scan_category
 from guard_app.services.session_preparation import L2_FAILURE_CODES as L2_FAILURE_CODES
 
 

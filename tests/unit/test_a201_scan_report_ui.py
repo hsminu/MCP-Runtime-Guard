@@ -164,6 +164,9 @@ def test_report_plain_text_analyzers_risks_and_summary_cleanup(roots):
     )
     summaries = panel.findChildren(UntrustedTextView)
     assert len(summaries) == 2
+    # Model summaries live behind the folded details (C4.22); opened, they keep the notice.
+    assert not any(view.isVisibleTo(panel) for view in summaries)
+    panel.details_toggle.setChecked(True)
     for view in summaries:
         assert view.body.toPlainText() == untrusted_display_text(SUMMARY, max_chars=300)[0]
         assert view.notice.isVisibleTo(panel)
@@ -177,6 +180,101 @@ def test_report_plain_text_analyzers_risks_and_summary_cleanup(roots):
     panel.clear()
     assert all(view.body.toPlainText() == "" for view in summaries)
     assert not panel.findChildren(QLabel)
+
+
+def visible_text(widget, root):
+    return "\n".join(
+        label.text() for label in widget.findChildren(QLabel) if label.isVisibleTo(root)
+    )
+
+
+def cisco_report(findings, *, completed=("LLM", "YARA")):
+    return ScanReport(
+        server_id="docs",
+        fingerprint_set=("a" * 64,),
+        analyzers_required=("LLM", "YARA"),
+        analyzers_completed=completed,
+        analyzers_failed=tuple(a for a in ("LLM", "YARA") if a not in completed),
+        analyzers_skipped=(),
+        analyzer_diagnostics=tuple(
+            AnalyzerDiagnostic(analyzer=a, code=ScanErrorCode[f"SCAN_{a}_TIMEOUT"])
+            for a in ("LLM", "YARA")
+            if a not in completed
+        ),
+        max_severity="HIGH" if findings else "UNKNOWN",
+        findings=findings,
+        scanned_at_utc=datetime(2026, 10, 30, tzinfo=UTC),
+        scanner_version="unit-1",
+    )
+
+
+def test_plain_layer_shows_categories_and_folds_codes(roots):
+    """C4.22: one headline and C's plain categories up front; codes and model text folded."""
+    findings = (
+        Finding(analyzer="YARA", severity="MEDIUM", code="PROMPT INJECTION", tool_name="read"),
+        Finding(
+            analyzer="LLM",
+            severity="HIGH",
+            code="PROMPT_INJECTION",
+            tool_name="read",
+            overall_risk="HIGH",
+            threat_summary=SUMMARY,
+        ),
+        Finding(analyzer="YARA", severity="HIGH", code="DATA EXFILTRATION", tool_name="second"),
+        Finding(analyzer="YARA", severity="LOW", code="NEW_SDK_NAME", tool_name="second"),
+    )
+    panel = ScanReportPanel()
+    roots.append(panel)
+    panel.set_state(state(report=cisco_report(findings)))
+    panel.show()
+    shown = visible_text(panel, panel)
+    assert "주의할 점 3개 · read, second" in shown
+    # LLM and YARA flag the same category once, with the higher risk.
+    assert shown.count("모델 조종 · 위험도") == 1
+    assert "모델 조종 · 위험도 높음" in shown
+    assert "도구 설명에 모델에게 내리는 지시문이 들어 있음" in shown
+    assert "권장: 설명을 직접 읽어 보고, 지시문이 있으면 이 도구를 끄세요" in shown
+    assert "정보 유출 · 위험도 높음" in shown
+    assert "기타 위험 신호 · 위험도 낮음" in shown
+    for folded in ("PROMPT INJECTION", "NEW_SDK_NAME", "LLM 자체 평가", "LLM: 완료", "YARA"):
+        assert folded not in shown
+    assert not any(view.isVisibleTo(panel) for view in panel.findChildren(UntrustedTextView))
+    assert "안전" not in text(panel)
+    panel.details_toggle.setChecked(True)
+    opened = visible_text(panel, panel)
+    assert "코드 PROMPT INJECTION" in opened
+    assert "코드 NEW_SDK_NAME" in opened
+    assert "LLM: 완료" in opened
+    assert panel.details_toggle.accessibleName() == "검사 자세히 접기"
+    assert_qt_owned(roots)
+
+
+def test_headline_without_findings_never_claims_safety(roots):
+    panel = ScanReportPanel()
+    roots.append(panel)
+    panel.set_state(state(report=cisco_report((), completed=("YARA",))))
+    panel.show()
+    shown = visible_text(panel, panel)
+    assert "보고된 위험 없음 · 위험이 없다는 보장은 아님" in shown
+    assert "끝내지 못한 검사가 있어 결과가 일부만 있음" in shown
+    assert "안전" not in text(panel)
+
+
+def test_approval_warning_shows_meaning_without_tool_actions(roots):
+    findings = (
+        Finding(analyzer="YARA", severity="HIGH", code="CREDENTIAL HARVESTING", tool_name="read"),
+    )
+    panel = ToolScanWarningPanel()
+    roots.append(panel)
+    panel.set_review(state(report=cisco_report(findings)), "read")
+    shown = visible_text(panel, panel)
+    assert "이 도구의 Scanner 경고 1개 · 승인을 막지 않음" in shown
+    assert "인증정보 요구 · 위험도 높음" in shown
+    assert "키·비밀번호·토큰을 요구하거나 빼내려는 표현이 있음" in shown
+    assert "권장:" not in shown
+    assert "CREDENTIAL HARVESTING" not in shown
+    panel.details_toggle.setChecked(True)
+    assert "코드 CREDENTIAL HARVESTING" in visible_text(panel, panel)
 
 
 @pytest.mark.parametrize("code", [*SERVICE_ERRORS, "REG_LISTING_INVALID", "SCAN_OTHER"])
