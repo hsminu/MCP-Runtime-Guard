@@ -1285,9 +1285,16 @@ stateDiagram-v2
     ACTIVE --> BLOCKED: 사용자 차단
     PENDING --> BLOCKED: 사용자 차단
     BLOCKED --> PENDING: 사용자 재검토 요청
+    BLOCKED --> [*]: 사용자 삭제
 ```
 
 검사 결과만으로 ACTIVE가 되거나 막히지 않는다. 사용자가 경고를 보고 확인해야 ACTIVE가 된다. 반대로 ACTIVE에서 지문이 바뀌면 사람 개입 없이 즉시 PENDING으로 내려간다. 올라가는 건 느리고, 내려가는 건 즉시다.
+
+서버 삭제(2026-10-30 결정, A208):
+
+- **순서:** PENDING·ACTIVE면 먼저 차단해 권한을 회수한다. 그다음 설정 파일에서 서버 기록과 Profile 선택·출처·접근 규칙을 지우고(Task 정지), Registry에서 지운 뒤 앱 재시작을 안내한다. 쓰기 뒤 실패는 다시 시도하지 않는다.
+- **저장:** Store `delete_server`는 BLOCKED만 받고 revision을 CAS로 확인한다. 등록·도구·검사 행을 한 트랜잭션에서 지우고, 원문 없는 `REGISTRY_DELETED` 감사(서버 ID·revision·도구 수)를 남긴다. 호출·요청·승인·감사 행은 남긴다. Store가 실행을 시작하기 전(RECOVERED)에는 받지 않는다.
+- **재등록:** 같은 ID로 다시 등록할 수 있고 revision은 새 등록처럼 1부터다. 그래서 `REGISTRY_*` 감사는 `REGISTRY_DELETED`를 경계로 등록 생애를 나눠 읽는다.
 
 ### 10.2 Cisco MCP Scanner 어댑터 〔C〕
 
