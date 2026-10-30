@@ -12,7 +12,7 @@ from guard_app.domain.errors import StoreError
 from guard_app.domain.queries import ApprovalListLane
 from guard_app.domain.reasons import Reason
 from guard_app.services.approvals import ApprovalConfigError, PendingResultError
-from guard_app.services.guard import GuardService
+from guard_app.services.guard import GuardService, durable_failure_audit
 from guard_app.storage import SQLiteStore
 from tests.unit.test_guard import _call, _Harness
 from tests.unit.test_pending_notifications import _Clock, _turns
@@ -968,5 +968,326 @@ def test_interrupt_does_not_wait_for_prior_lock_waiter_after_dispatch_starts(tmp
             assert (await handle.wait()).cause == "executed"
             if interrupt is not None and not interrupt.done():
                 await asyncio.wait_for(interrupt, 3)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("kind", "label"),
+    [("read", Label.PUBLIC), ("send", Label.PUBLIC), ("send", Label.INTERNAL)],
+    ids=["read-allow", "send-allow", "send-ask"],
+)
+def test_queued_submission_is_denied_and_later_submission_is_unchanged(tmp_path, kind, label):
+    async def run():
+        async with _real_guard(tmp_path, label=label, source_label=label) as (guard, store, h):
+            entered, release = asyncio.Event(), asyncio.Event()
+            original_call = h.transport.call
+            original_reserve = store.reserve_dispatch
+            original_open = store.open_approval
+            host_calls, reservations, approvals = [], [], []
+
+            async def call(req):
+                host_calls.append(req.request_id)
+                if len(host_calls) == 1:
+                    entered.set()
+                    await release.wait()
+                return await original_call(req)
+
+            async def reserve(request_id, **kwargs):
+                reservations.append(request_id)
+                return await original_reserve(request_id, **kwargs)
+
+            async def open_approval(*args, **kwargs):
+                approvals.append(args[0].approval_id)
+                return await original_open(*args, **kwargs)
+
+            guard._failure_audit = durable_failure_audit(store)
+            h.transport.call = call
+            store.reserve_dispatch = reserve
+            store.open_approval = open_approval
+            first = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+            second = third = None
+            try:
+                await asyncio.wait_for(entered.wait(), 3)
+                second = asyncio.create_task(guard.submit("task", _call(kind), expected_epoch=1))
+                await _turns()
+                assert not second.done()
+                assert len(guard._turn_instances) == 2
+                interrupted = await asyncio.wait_for(
+                    guard.interrupt_turn("task", expected_epoch=1), 3
+                )
+                assert interrupted.outcome is TurnInterruptOutcome.CALL_COMPLETING
+                assert interrupted.call_in_progress
+                assert interrupted.cancelled_approvals == 0
+                third = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+                await _turns()
+                assert not third.done()
+            finally:
+                release.set()
+            assert isinstance(await asyncio.wait_for(first, 3), Released)
+            denied = await asyncio.wait_for(second, 3)
+            assert isinstance(denied, Denied)
+            assert denied.request_id is None
+            assert denied.reasons == (Reason.TURN_INTERRUPTED,)
+            assert isinstance(await asyncio.wait_for(third, 3), Released)
+            assert len(host_calls) == len(h.transport.calls) == 2
+            assert len(reservations) == 2
+            assert not approvals
+            assert (await store.load_task("task")).status is TaskStatus.RUNNING
+            requests = await store._run_on_writer_async(
+                lambda c: c.execute(
+                    "SELECT request_id,status FROM requests ORDER BY rowid"
+                ).fetchall()
+            )
+            assert len(requests) == 2
+            assert all(row[1] == "SUCCEEDED" for row in requests)
+            assert (await _rows(store))[2] == ()
+            audit = await store._run_on_writer_async(
+                lambda c: c.execute(
+                    "SELECT request_id,task_id,event_type,reason_code,detail "
+                    "FROM audit_events WHERE event_type='FAILURE_BEFORE_DISPATCH'"
+                ).fetchall()
+            )
+            assert len(audit) == 1
+            assert tuple(audit[0][:4]) == (
+                None,
+                "task",
+                "FAILURE_BEFORE_DISPATCH",
+                "TURN_INTERRUPTED",
+            )
+            assert "RAW_SECRET_MARKER" not in repr(denied) + repr(await _rows(store))
+
+    asyncio.run(run())
+
+
+def test_wrong_epoch_interrupt_does_not_deny_a_queued_submission(tmp_path):
+    async def run():
+        async with _real_guard(tmp_path, label=Label.PUBLIC, source_label=Label.PUBLIC) as (
+            guard,
+            store,
+            h,
+        ):
+            entered, release = asyncio.Event(), asyncio.Event()
+            original = h.transport.call
+            calls = 0
+
+            async def blocked(req):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    entered.set()
+                    await release.wait()
+                return await original(req)
+
+            h.transport.call = blocked
+            first = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+            try:
+                await asyncio.wait_for(entered.wait(), 3)
+                second = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+                await _turns()
+                assert not second.done()
+                result = await asyncio.wait_for(guard.interrupt_turn("task", expected_epoch=2), 3)
+                assert result.outcome is TurnInterruptOutcome.NOTHING_IN_FLIGHT
+            finally:
+                release.set()
+            assert isinstance(await asyncio.wait_for(first, 3), Released)
+            assert isinstance(await asyncio.wait_for(second, 3), Released)
+            assert len(h.transport.calls) == 2
+            assert (await store.load_task("task")).status is TaskStatus.RUNNING
+            assert h.audit == []
+
+    asyncio.run(run())
+
+
+def test_submit_arriving_during_interrupt_lookup_is_not_in_the_snapshot(tmp_path):
+    async def run():
+        async with _real_guard(tmp_path, label=Label.PUBLIC, source_label=Label.PUBLIC) as (
+            guard,
+            store,
+            h,
+        ):
+            active, release = asyncio.Event(), asyncio.Event()
+            lookup, continue_lookup = asyncio.Event(), asyncio.Event()
+            original_call = h.transport.call
+            original_load = store.load_task
+            interrupt = None
+            calls = 0
+
+            async def blocked_call(req):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    active.set()
+                    await release.wait()
+                return await original_call(req)
+
+            async def blocked_load(task_id):
+                if asyncio.current_task() is interrupt:
+                    lookup.set()
+                    await continue_lookup.wait()
+                return await original_load(task_id)
+
+            h.transport.call = blocked_call
+            store.load_task = blocked_load
+            first = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+            second = None
+            try:
+                await asyncio.wait_for(active.wait(), 3)
+                interrupt = asyncio.create_task(guard.interrupt_turn("task", expected_epoch=1))
+                await asyncio.wait_for(lookup.wait(), 3)
+                second = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+                await _turns()
+                assert not second.done()
+                continue_lookup.set()
+                result = await asyncio.wait_for(interrupt, 3)
+                assert result.outcome is TurnInterruptOutcome.CALL_COMPLETING
+            finally:
+                continue_lookup.set()
+                release.set()
+            assert isinstance(await asyncio.wait_for(first, 3), Released)
+            assert isinstance(await asyncio.wait_for(second, 3), Released)
+            assert len(h.transport.calls) == 2
+            assert h.audit == []
+            assert (await store.load_task("task")).status is TaskStatus.RUNNING
+
+    asyncio.run(run())
+
+
+def test_multiple_interrupts_deny_a_matching_waiter_once(tmp_path):
+    async def run():
+        async with _real_guard(tmp_path, label=Label.PUBLIC, source_label=Label.PUBLIC) as (
+            guard,
+            store,
+            h,
+        ):
+            entered, release = asyncio.Event(), asyncio.Event()
+            original = h.transport.call
+
+            async def blocked(req):
+                entered.set()
+                await release.wait()
+                return await original(req)
+
+            h.transport.call = blocked
+            first = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+            second = None
+            try:
+                await asyncio.wait_for(entered.wait(), 3)
+                second = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+                await _turns()
+                assert not second.done()
+                wrong, right, again = await asyncio.gather(
+                    guard.interrupt_turn("task", expected_epoch=2),
+                    guard.interrupt_turn("task", expected_epoch=1),
+                    guard.interrupt_turn("task", expected_epoch=1),
+                )
+                assert wrong.outcome is TurnInterruptOutcome.NOTHING_IN_FLIGHT
+                assert right.outcome is TurnInterruptOutcome.CALL_COMPLETING
+                assert again.outcome is TurnInterruptOutcome.CALL_COMPLETING
+            finally:
+                release.set()
+            assert isinstance(await asyncio.wait_for(first, 3), Released)
+            result = await asyncio.wait_for(second, 3)
+            assert isinstance(result, Denied)
+            assert result.request_id is None
+            assert result.reasons == (Reason.TURN_INTERRUPTED,)
+            assert len(h.audit) == 1
+            assert h.audit[0].reason is Reason.TURN_INTERRUPTED
+            assert h.audit[0].request_id is None
+            assert len(h.transport.calls) == 1
+            assert (await store.load_task("task")).status is TaskStatus.RUNNING
+
+    asyncio.run(run())
+
+
+def test_interrupted_waiter_audit_failure_halts_globally_without_raw_exception(tmp_path):
+    async def run():
+        async with _real_guard(tmp_path, label=Label.PUBLIC, source_label=Label.PUBLIC) as (
+            guard,
+            store,
+            h,
+        ):
+            entered, release = asyncio.Event(), asyncio.Event()
+            original = h.transport.call
+
+            async def blocked(req):
+                entered.set()
+                await release.wait()
+                return await original(req)
+
+            h.transport.call = blocked
+            h.audit_error = RuntimeError("RAW_SECRET_MARKER")
+            first = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+            second = None
+            try:
+                await asyncio.wait_for(entered.wait(), 3)
+                second = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+                await _turns()
+                await guard.interrupt_turn("task", expected_epoch=1)
+            finally:
+                release.set()
+            assert isinstance(await asyncio.wait_for(first, 3), Released)
+            result = await asyncio.wait_for(second, 3)
+            assert isinstance(result, Denied)
+            assert result.reasons == (Reason.INTERNAL_ERROR,)
+            assert guard._global_halt
+            assert len(h.transport.calls) == 1
+            assert "RAW_SECRET_MARKER" not in repr(result)
+            assert "RAW_SECRET_MARKER" not in repr(await _rows(store))
+            assert isinstance(await guard.submit("task", _call("read"), expected_epoch=1), Denied)
+            assert len(h.transport.calls) == 1
+
+    asyncio.run(run())
+
+
+def test_cancelled_interrupt_validation_releases_queued_submission(tmp_path):
+    async def run():
+        async with _real_guard(tmp_path, label=Label.PUBLIC, source_label=Label.PUBLIC) as (
+            guard,
+            store,
+            h,
+        ):
+            entered, release = asyncio.Event(), asyncio.Event()
+            checking = asyncio.Event()
+            original_call = h.transport.call
+            original_load = store.load_task
+            interrupted = None
+            calls = 0
+
+            async def blocked_call(req):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    entered.set()
+                    await release.wait()
+                return await original_call(req)
+
+            async def blocked_load(task_id):
+                if asyncio.current_task() is interrupted:
+                    checking.set()
+                    await asyncio.Event().wait()
+                return await original_load(task_id)
+
+            h.transport.call = blocked_call
+            store.load_task = blocked_load
+            first = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+            second = None
+            try:
+                await asyncio.wait_for(entered.wait(), 3)
+                second = asyncio.create_task(guard.submit("task", _call("read"), expected_epoch=1))
+                await _turns()
+                interrupted = asyncio.create_task(guard.interrupt_turn("task", expected_epoch=1))
+                await asyncio.wait_for(checking.wait(), 3)
+                interrupted.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await interrupted
+            finally:
+                release.set()
+            assert isinstance(await asyncio.wait_for(first, 3), Released)
+            assert isinstance(await asyncio.wait_for(second, 3), Released)
+            assert not guard._global_halt
+            assert h.audit == []
+            assert len(h.transport.calls) == 2
+            assert (await store.load_task("task")).status is TaskStatus.RUNNING
 
     asyncio.run(run())

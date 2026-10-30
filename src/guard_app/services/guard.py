@@ -133,6 +133,7 @@ class _TurnIntent:
     epoch: int
     confirmed: bool | None = None
     cancelled_approvals: int = 0
+    cancel_waiting_submit: bool = False
 
 
 @dataclass(eq=False, slots=True)
@@ -142,6 +143,7 @@ class _TurnSubmission:
     task_id: str
     expected_epoch: int | None
     actual_epoch: int | None = None
+    waiting_for_task_lock: bool = False
     intents: list[_TurnIntent] = field(default_factory=list)
     intent_changed: asyncio.Event = field(default_factory=asyncio.Event)
     opening: bool = False
@@ -496,7 +498,11 @@ class GuardService:
                     await asyncio.gather(*tasks, return_exceptions=True)
 
     async def interrupt_turn(self, task_id: str, *, expected_epoch: int) -> TurnInterrupt:
-        """진행 호출은 끝까지 두고 이 생애의 대기 승인만 취소한다."""
+        """대기 제출과 승인을 취소하고 이미 lock을 얻은 호출은 진행시킨다.
+
+        CALL_COMPLETING은 포착된 제출이 아직 처리 중이라는 뜻이며, lock 대기
+        중이던 제출은 이후 전송하지 않고 TURN_INTERRUPTED로 거부할 수 있다.
+        """
         if (
             type(task_id) is not str
             or not task_id
@@ -520,7 +526,10 @@ class GuardService:
             and (submission.expected_epoch is None or submission.expected_epoch == expected_epoch)
         )
         opening = tuple(submission for submission in targets if submission.opening)
-        intents = tuple(_TurnIntent(expected_epoch) for _ in targets)
+        intents = tuple(
+            _TurnIntent(expected_epoch, cancel_waiting_submit=submission.waiting_for_task_lock)
+            for submission in targets
+        )
         for submission, intent in zip(targets, intents, strict=True):
             submission.intents.append(intent)
             if submission.actual_epoch is not None:
@@ -841,28 +850,36 @@ class GuardService:
             return Denied(request_id=None, reasons=(Reason.INTERNAL_ERROR,))
         while True:
             await self._policy_ready.wait()
-            async with self._task_lock(task_id):
-                if not self._policy_ready.is_set():
-                    continue
-                key = (task_id, expected_epoch)
-                try:
-                    decided = await fail_closed(
-                        lambda: self._decide(
-                            task_id,
-                            call,
-                            expected_epoch=expected_epoch,
-                            turn_submission=turn_submission,
-                        ),
-                        lambda exc: self._pre_dispatch_failure(
-                            task_id, exc, expected_epoch=expected_epoch
-                        ),
-                        on_containment_error=self._pre_failure_fallback,
-                    )
-                    if not isinstance(decided, _Allowed):
-                        return decided
-                    return await self._dispatch_reserved(decided.request, decided.state)
-                finally:
-                    self._turn_executing.pop(key, None)
+            if turn_submission is not None:
+                turn_submission.waiting_for_task_lock = True
+            try:
+                async with self._task_lock(task_id):
+                    if turn_submission is not None:
+                        turn_submission.waiting_for_task_lock = False
+                    if not self._policy_ready.is_set():
+                        continue
+                    key = (task_id, expected_epoch)
+                    try:
+                        decided = await fail_closed(
+                            lambda: self._decide(
+                                task_id,
+                                call,
+                                expected_epoch=expected_epoch,
+                                turn_submission=turn_submission,
+                            ),
+                            lambda exc: self._pre_dispatch_failure(
+                                task_id, exc, expected_epoch=expected_epoch
+                            ),
+                            on_containment_error=self._pre_failure_fallback,
+                        )
+                        if not isinstance(decided, _Allowed):
+                            return decided
+                        return await self._dispatch_reserved(decided.request, decided.state)
+                    finally:
+                        self._turn_executing.pop(key, None)
+            finally:
+                if turn_submission is not None:
+                    turn_submission.waiting_for_task_lock = False
 
     def _task_lock(self, task_id: str) -> asyncio.Lock:
         lock = self._locks.get(task_id)
@@ -932,6 +949,26 @@ class GuardService:
             and state.policy_version == self._policy_version
         )
 
+    @staticmethod
+    async def _turn_waiting_submit_interrupted(
+        submission: _TurnSubmission | None, epoch: int
+    ) -> bool:
+        """lock 대기 때 포착된 생애만 판정 전에 거부한다."""
+        if submission is None:
+            return False
+        while True:
+            relevant = tuple(
+                intent
+                for intent in submission.intents
+                if intent.cancel_waiting_submit and intent.epoch == epoch
+            )
+            if any(intent.confirmed is True for intent in relevant):
+                return True
+            if all(intent.confirmed is not None for intent in relevant):
+                return False
+            submission.intent_changed.clear()
+            await submission.intent_changed.wait()
+
     async def _decide(
         self,
         task_id: str,
@@ -989,6 +1026,8 @@ class GuardService:
             return Denied(request_id=None, reasons=(Reason.TASK_UNCLASSIFIED,))
         if state.status is not TaskStatus.RUNNING:
             return Denied(request_id=None, reasons=(Reason.TASK_NOT_RUNNING,))
+        if await self._turn_waiting_submit_interrupted(turn_submission, state.epoch):
+            raise ResolutionError(Reason.TURN_INTERRUPTED)
         self._turn_executing[(task_id, expected_epoch)] = 1
         if turn_submission is not None:
             turn_submission.actual_epoch = state.epoch
