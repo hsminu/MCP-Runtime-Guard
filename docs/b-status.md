@@ -1,6 +1,6 @@
 # B 현황
 
-갱신: 2026-10-30 · 확인한 main `4d8c7a6`(#110·#111 병합) · 완료 91/96, 남음 5 · [#106 결정 기록](archive/b/B-106-agreement-closure.md) · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
+갱신: 2026-10-30 · 확인한 main `4d8c7a6`(#110·#111 병합) · 완료 92/96, 남음 4 · [#106 결정 기록](archive/b/B-106-agreement-closure.md) · 이전 상세: [2026-10-15까지의 B 현황](archive/status/b-status-2026-10-15.md)
 
 완료 기록(archive)의 시험 이름은 작성 당시 기준이다. 이후 #100(시험 정리)·AGT 제거 등으로 이름이 바뀐 것이 있다. 확인한 현재 대응 시험은 [B 최종 점검](archive/b/B-final-check.md)에 정리했다.
 
@@ -99,7 +99,7 @@
 - [x] B6.5 UTC 만료·쓰기 중 만료·ACK 유실, 원문·인자·비밀값 비기록과 고정 오류 코드 · [기록](archive/b6-sqlite-lifecycle.md)
 - [x] B6.6 영속 순번·시작 복구 설계와 검증 시나리오 50개 · [설계](archive/b6-sequence-recovery-design.md) · [시나리오](archive/b6-sequence-recovery-validation.md)
 - [x] B6.7 읽기 전용 시작 사전 점검기 · [기록](archive/b6-startup-preflight.md)
-- [ ] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — B 구현·A 제품 연결 [#83](https://github.com/hsminu/MCP-Runtime-Guard/pull/83), C 재시작·변조 [#103](https://github.com/hsminu/MCP-Runtime-Guard/pull/103)·강제 종료 60회 복구 [#104](https://github.com/hsminu/MCP-Runtime-Guard/pull/104) 확인 · 후속: C의 영속 순번 배정·허용 실패 감사 연산 자체 독립 확인 · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
+- [x] B6.8 영속 call_seq·시작 복구·허용된 실패 감사·재시작 정리 — B 구현·A 제품 연결 [#83](https://github.com/hsminu/MCP-Runtime-Guard/pull/83), C 재시작·변조 [#103](https://github.com/hsminu/MCP-Runtime-Guard/pull/103)·강제 종료 60회 [#104](https://github.com/hsminu/MCP-Runtime-Guard/pull/104) 확인. 영속 순번·실패 감사는 C 독립 확인 대신 B 자체 검증(사용자 결정 2026-10-30, [#112](https://github.com/hsminu/MCP-Runtime-Guard/issues/112)) · [검증 기록](archive/b/B6.8-4-self-verification.md) · 시험 `tests/unit/test_b68_call_seq_durability.py`·`tests/unit/test_b68_failure_audit_durability.py` · [1단계](archive/b/B6.8-1-call-seq-v3.md) · [2a 기록](archive/b/B6.8-2a-prepare-schema.md) · [2b 기록](archive/b/B6.8-2b-recover-and-activate.md) · [병합 뒤 수정](archive/b/B6.8-3-post-merge-fixes.md)
   - #65(C2.7) 후속으로 명시 모드 기본 감사 ID 출처를 `security.ids`로 옮기고 B 모듈의 직접 생성 금지 정적 검사를 추가했다.
 - [x] B6.9 승인 생성·종결 원자화 · #89 병합, A·C 동의(C 독립 결함 주입 인수는 B7.6·B7.8) · [기록](archive/b/B6.9-atomic-approvals.md)
 - [x] B6.10 요청 epoch/kind/revision 확장·승인/요청/Task 결속 · [기록](archive/b/B6.10-B6.12-unblocked.md)
