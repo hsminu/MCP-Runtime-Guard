@@ -291,7 +291,7 @@ class RegistrationCommands:
                     server_id=request.server_id,
                 )
         if request.action == "tool_settings_save":
-            await self.policy.save_tool_settings(
+            reconnected = await self.policy.save_tool_settings(
                 request.server_id,
                 request.expected_row_revision,
                 request.tool_settings,
@@ -300,7 +300,7 @@ class RegistrationCommands:
                 self._review_unknown,
             )
             return RegistrationView(
-                "REG_TOOLS_RESTART_REQUIRED",
+                "REG_TOOLS_RECONNECTED" if reconnected else "REG_TOOLS_RESTART_REQUIRED",
                 rows=await self._rows(),
                 current_policy=self.policy.registration_policy_view(),
             )
@@ -352,7 +352,7 @@ class RegistrationCommands:
             if self._pending is not None and self._pending[1].id == request.server_id:
                 self._pending = None
             try:
-                await self.policy.delete_server(
+                reconnected = await self.policy.delete_server(
                     request.server_id,
                     request.expected_row_revision,
                     self.registry,
@@ -372,7 +372,9 @@ class RegistrationCommands:
             except (RegistryError, StoreError):
                 return RegistrationView("REG_DELETE_UNKNOWN", server_id=request.server_id)
             return RegistrationView(
-                "REG_DELETED", server_id=request.server_id, rows=await self._rows()
+                "REG_DELETE_RECONNECTED" if reconnected else "REG_DELETED",
+                server_id=request.server_id,
+                rows=await self._rows(),
             )
         if request.action in ("activate", "block"):
             if (
@@ -392,7 +394,7 @@ class RegistrationCommands:
                 )
             ):
                 return RegistrationView("REG_ACTIVATION_STALE")
-            await self.policy.set_server_active(
+            reconnected = await self.policy.set_server_active(
                 request.server_id,
                 request.expected_row_revision,
                 request.allowed,
@@ -404,7 +406,7 @@ class RegistrationCommands:
                 reviewed_scan_id=request.reviewed_scan_id,
             )
             return RegistrationView(
-                "REG_ACTIVATION_RESTART_REQUIRED",
+                "REG_ACTIVATION_RECONNECTED" if reconnected else "REG_ACTIVATION_RESTART_REQUIRED",
                 rows=await self._rows(),
                 current_policy=self.policy.registration_policy_view(),
             )
@@ -549,10 +551,13 @@ class RegistrationCommands:
                 finally:
                     if not written:
                         self._unknown = True
-        await self.policy.save_registration(
+        reconnected = await self.policy.save_registration(
             server, self.registry, self.stop_sessions, updating=updating, sources=sources
         )
-        codes = {"recheck": "REG_PIN_SAVED", "restore": "REG_SETTINGS_RESTORED"}
+        codes = {
+            "recheck": "REG_PIN_RECONNECTED" if reconnected else "REG_PIN_SAVED",
+            "restore": "REG_SETTINGS_RESTORED",
+        }
         scan = (
             self.scans.start(server, listing) if self.scans is not None and not updating else None
         )

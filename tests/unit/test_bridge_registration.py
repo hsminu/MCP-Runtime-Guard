@@ -606,7 +606,8 @@ def test_form_confirmation_ignores_stale_reply_and_clears_on_edit():
         assert not form._registration_token
 
 
-def test_pin_recheck_is_not_shown_as_a_duplicate_registration(monkeypatch):
+@pytest.mark.parametrize("saved_code", ["REG_PIN_SAVED", "REG_PIN_RECONNECTED"])
+def test_pin_recheck_is_not_shown_as_a_duplicate_registration(monkeypatch, saved_code):
     """A128 real-run follow-up: rechecking a listed server's executable is not a
     new registration, so the duplicate hint and the register wording stay away."""
     sent = []
@@ -644,8 +645,10 @@ def test_pin_recheck_is_not_shown_as_a_duplicate_registration(monkeypatch):
         form.confirm_button.click()
         request, kw = sent[-1]
         assert request.action == "confirm"
-        form._registration_result(RegistrationView("REG_PIN_SAVED", command_id=kw["command_id"]))
+        form._registration_result(RegistrationView(saved_code, command_id=kw["command_id"]))
         assert form.status.text().startswith("실행 파일 지문 저장 완료")
+        if saved_code == "REG_PIN_RECONNECTED":
+            assert form.status.text() == "실행 파일 지문 저장 완료 · 다시 연결함."
         assert form.preview.toPlainText().startswith("기존 서버의 실행 파일 지문만")
         assert error.isHidden()
         # Editing the ID ends the recheck; the same ID is a duplicate again.

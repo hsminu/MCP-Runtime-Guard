@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from guard_app.services.approvals import HumanControl
-from guard_app.services.bridge_types import BackendBindings, BackendCleanupError
+from guard_app.services.bridge_types import BackendBindings, BackendCleanupError, GuardBindings
 
 
 def usable(bindings: BackendBindings) -> bool:
@@ -47,6 +47,15 @@ class BindingsOwner:
             return False
         self._current = bindings
         return True
+
+    def change_guard(self, guard: GuardBindings) -> None:
+        """Validate the replacement exactly as at startup; keep every other binding."""
+        if self._current is None or type(guard) is not GuardBindings:
+            raise ValueError("GUARD_BINDINGS_UNAVAILABLE")
+        updated = guard.apply(self._current)
+        if not usable(updated):
+            raise ValueError("GUARD_BINDINGS_INVALID")
+        self._current = updated
 
     async def discard(self, boot: asyncio.Task[BackendBindings]) -> bool:
         """Reclaim a late success within the bounded startup cleanup window."""

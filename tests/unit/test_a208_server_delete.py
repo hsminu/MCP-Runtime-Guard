@@ -560,6 +560,19 @@ def test_delete_ui_confirmation_safe_focus_cancel_and_exactly_one_request(monkey
     [
         ("REG_DELETED", "서버를 삭제함. 앱을 다시 시작하세요."),
         (
+            "REG_DELETE_RECONNECTED",
+            "서버를 삭제하고 다시 연결함. 진행 중이던 Task는 정지됨.",
+        ),
+        (
+            "REG_ACTIVATION_RECONNECTED",
+            "서버 설정 저장 완료 · 다시 연결함. 진행 중이던 Task는 정지됨.",
+        ),
+        (
+            "REG_TOOLS_RECONNECTED",
+            "도구 설정 저장 완료 · 다시 연결함. 진행 중이던 Task는 정지됨. "
+            "서버 목록에서 활성화하세요.",
+        ),
+        (
             "REG_DELETE_UNKNOWN",
             "삭제가 끝났는지 확인하지 못함. 앱을 다시 시작한 뒤 서버 목록을 확인하세요.",
         ),

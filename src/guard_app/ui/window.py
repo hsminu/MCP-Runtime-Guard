@@ -732,7 +732,12 @@ class GuardWindow(QMainWindow):
         self.overview.set_snapshot(snapshot)
 
     def _registration_rows(self, view: RegistrationView) -> None:
-        if view.code in ("REG_REGISTERED", "REG_PIN_SAVED", "REG_SETTINGS_RESTORED"):
+        if view.code in (
+            "REG_REGISTERED",
+            "REG_PIN_SAVED",
+            "REG_PIN_RECONNECTED",
+            "REG_SETTINGS_RESTORED",
+        ):
             self.set_settings_status("SETTINGS_REGISTRATION_SAVED")
         if view.rows is None:
             return

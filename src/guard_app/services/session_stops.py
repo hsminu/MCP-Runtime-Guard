@@ -54,6 +54,10 @@ class StopChannel:
         self._admission = admission
         self._work = work
 
+    def replace_system(self, system: SystemControl | None) -> None:
+        """Only after the previous channel's stop records have settled."""
+        self._system = system
+
     async def halt_row(self, task_id: str) -> None:
         """Write HALTED to the Store row; only where Guard does not stop the Task."""
         state = await self._store.load_task(task_id)

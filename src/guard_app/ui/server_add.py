@@ -1179,6 +1179,7 @@ class ServerAddForm(QWidget):
             "REG_REGISTERED": (
                 "Registry 등록·설정 저장 완료 · PENDING. 검사·활성화 전에는 실행되지 않음."
             ),
+            "REG_PIN_RECONNECTED": "실행 파일 지문 저장 완료 · 다시 연결함.",
             "REG_PIN_SAVED": "실행 파일 지문 저장 완료 · 다시 연결하려면 앱을 재시작하세요.",
             "REG_SERVER_EXISTS": (
                 "이미 등록된 ID임. 새 ID를 입력하거나 기존 실행 파일을 다시 확인하세요."
