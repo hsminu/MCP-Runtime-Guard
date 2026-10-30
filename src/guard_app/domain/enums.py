@@ -54,6 +54,14 @@ class TaskStatus(StrEnum):
     CLOSED = "closed"
 
 
+class TurnInterruptOutcome(StrEnum):
+    """합의 전 제안: Task를 유지하는 턴 중단의 결과."""
+
+    NOTHING_IN_FLIGHT = "NOTHING_IN_FLIGHT"
+    APPROVAL_CANCELLED = "APPROVAL_CANCELLED"
+    CALL_COMPLETING = "CALL_COMPLETING"
+
+
 class SystemStopReason(StrEnum):
     """STOP-01 합의 전 제안. 신뢰 세션 관리자가 고르는 정지 사유."""
 

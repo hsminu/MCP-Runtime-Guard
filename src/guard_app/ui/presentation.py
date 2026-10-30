@@ -94,6 +94,7 @@ REASONS = {
     "APPROVAL_STALE": "승인 요청 상태 변경",
     "APPROVAL_RACE": "승인 요청 중복 처리",
     "GUARD_CLOSED": "Guard 정상 종료로 실행하지 않음",
+    "TURN_INTERRUPTED": "턴 중단으로 승인 요청이 취소됨",
 }
 DECISIONS = {"ALLOW": "허용", "ASK": "승인 필요", "DENY": "차단"}
 

@@ -40,3 +40,5 @@ class Reason(StrEnum):
     SESSION_PROTOCOL_FAILED = "SESSION_PROTOCOL_FAILED"
     # 합의 전 제안: Guard 정상 종료로 이 회차의 실행 권한을 닫음. 결함 아님.
     GUARD_CLOSED = "GUARD_CLOSED"
+    # 합의 전 제안: Task를 정지하지 않는 턴 중단.
+    TURN_INTERRUPTED = "TURN_INTERRUPTED"
