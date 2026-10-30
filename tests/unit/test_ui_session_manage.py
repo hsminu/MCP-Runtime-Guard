@@ -22,7 +22,7 @@ from guard_app.services.bridge import (
     LifecycleEvent,
     SessionCreated,
 )
-from guard_app.ui.session_list import _ROW_ROLE, _SessionRowDelegate
+from guard_app.ui.session_list import _ROW_ROLE, _ActivityRow, _SessionRow, _SessionRowDelegate
 from guard_app.ui.untrusted_text import conversation_display_text, untrusted_display_text
 from guard_app.ui.widgets import ConfirmDialog, plain_tooltip
 
@@ -85,7 +85,9 @@ def test_rename_preserves_scope_and_refreshes_all_titles(window, monkeypatch):
     assert panel._commands == {"in-flight": "message"}
     assert calls == []
     shell.sessions.search.setText("바꾼 이름")
-    assert shell.sessions.list.count() == 1
+    rows = [shell.sessions.list.item(i).data(_ROW_ROLE) for i in range(shell.sessions.list.count())]
+    assert sum(isinstance(row, _SessionRow) for row in rows) == 1
+    assert rows[1:] == [_ActivityRow(active=True)]
 
 
 def test_empty_rename_disabled_and_manual_draft_survives_adoption(window, monkeypatch):

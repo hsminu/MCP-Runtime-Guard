@@ -366,6 +366,17 @@ class RegistryStore(Protocol):
         self, server_id: str, *, expected_row_revision: int, at_utc: datetime
     ) -> RegistryEntry: ...
 
+    async def delete_server(
+        self, server_id: str, *, expected_row_revision: int, at_utc: datetime
+    ) -> None:
+        """BLOCKED만 삭제한다(2026-10-30 사용자 결정, A208).
+
+        revision CAS로 등록·도구·검사 행을 한 트랜잭션에서 지우고,
+        원문 없는 REGISTRY_DELETED 감사를 같은 트랜잭션에 쓴다.
+        기존 호출·요청·승인·감사 행은 남긴다.
+        """
+        ...
+
     async def request_review(
         self, server_id: str, *, expected_row_revision: int, at_utc: datetime
     ) -> RegistryEntry: ...

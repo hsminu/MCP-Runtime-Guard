@@ -117,6 +117,20 @@ class RegistrationScans:
         task = self._tasks.get(server_id)
         return task is not None and not task.done()
 
+    async def forget(self, server_id: str) -> None:
+        """Settle the server's scan before deletion; no late callback restores its state."""
+        task = self._tasks.get(server_id)
+        if task is not None:
+            task.cancel()
+            # wait does not propagate the child's cancellation. Caller cancellation
+            # still propagates; deletion must not proceed before the job settles.
+            await asyncio.wait((task,))
+            if not task.cancelled():
+                task.exception()  # Consume failure without exposing its text or type.
+            self._tasks.pop(server_id, None)
+        self._runs.pop(server_id, None)
+        self._descriptions.pop(server_id, None)
+
     def start(self, server: ServerSettings, listing: ToolListingView | None = None) -> ScanState:
         if self._closed:
             self._set(server.id, "failed", "SCAN_SERVICE_CLOSED")

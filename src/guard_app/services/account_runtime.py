@@ -28,6 +28,7 @@ from guard_app.services.codex_account import (
     CodexAccountClient,
 )
 from guard_app.services.codex_session import CodexPipes
+from guard_app.services.session_preparation import CODEX_INSTALL_CODES
 
 LOGOUT_SESSIONS_RUNNING = "LOGOUT_SESSIONS_RUNNING"
 LOGOUT_EXIT_UNCONFIRMED = "LOGOUT_EXIT_UNCONFIRMED"
@@ -36,6 +37,10 @@ LOGOUT_CLEANUP_FAILED = "LOGOUT_CLEANUP_FAILED"
 
 class AccountUnavailableError(AccountError):
     """Startup refused Codex this run (no pinned codex.exe or CODEX_HOME): nothing to launch."""
+
+    def __init__(self, code: str | None = None) -> None:
+        self.code = code
+        super().__init__()
 
 
 class AccountProcess(Protocol):
@@ -118,14 +123,16 @@ class ProductAccount:
             if self._sessions_alive():
                 try:
                     view = await (await self._connect()).read()
-                except AccountUnavailableError:
-                    return AccountView("UNAVAILABLE")
+                except AccountUnavailableError as error:
+                    notice = error.code if error.code in CODEX_INSTALL_CODES else None
+                    return AccountView("UNAVAILABLE", notice=notice)
                 return replace(view, notice=LOGOUT_SESSIONS_RUNNING)
             self._signing_out = True
             try:
                 return await self._sign_out()
-            except AccountUnavailableError:
-                return AccountView("UNAVAILABLE")
+            except AccountUnavailableError as error:
+                notice = error.code if error.code in CODEX_INSTALL_CODES else None
+                return AccountView("UNAVAILABLE", notice=notice)
             finally:
                 self._signing_out = False
 
@@ -141,8 +148,9 @@ class ProductAccount:
         async with self._lock:
             try:
                 client = await self._connect()
-            except AccountUnavailableError:
-                return AccountView("UNAVAILABLE")
+            except AccountUnavailableError as error:
+                notice = error.code if error.code in CODEX_INSTALL_CODES else None
+                return AccountView("UNAVAILABLE", notice=notice)
             known = False
             try:
                 view = await call(client)

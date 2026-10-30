@@ -62,7 +62,6 @@ def test_picker_preserves_case_and_invalidates_confirmation(tmp_path, monkeypatc
         )
         folders.root.browse.click()
         folders.root.label.setCurrentIndex(folders.root.label.findData("PUBLIC"))
-        folders.list_root.label.setCurrentIndex(folders.list_root.label.findData("INTERNAL"))
         row = folders.add_rule()
         chosen += "/SecretCase"
         row.browse.click()
@@ -71,7 +70,7 @@ def test_picker_preserves_case_and_invalidates_confirmation(tmp_path, monkeypatc
         assert row.path.isReadOnly()
         assert not form.command.isVisibleTo(form)
         assert not form.fill_button.isEnabled()
-        assert "폴더 이름은 상위 폴더 등급으로 보임" in folders.notice.text()
+        assert "공유 폴더를 고르고 등급을 정하세요." in folders.notice.text()
         form.prepare_button.click()
         req, kw = sent[-1]
         assert BackendBridge.request_registration(bridge, req)
@@ -79,7 +78,8 @@ def test_picker_preserves_case_and_invalidates_confirmation(tmp_path, monkeypatc
         assert req.command is None
         assert req.folder_labels == ((chosen, "CONFIDENTIAL"),)
         assert req.root_label == "PUBLIC"
-        assert req.list_root_label == "INTERNAL"
+        assert req.list_root_label == req.root_label
+        assert req.server_id == "local-files"
         assert req.file_root == str(tmp_path / "MixedRoot")
         form._registration_result(
             RegistrationView(

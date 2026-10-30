@@ -17,7 +17,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QHideEvent
-from PySide6.QtWidgets import QBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QBoxLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from guard_app.services.bridge import (
     CODEX_MODEL_ID,
@@ -26,11 +26,14 @@ from guard_app.services.bridge import (
     CommandStage,
 )
 
+from .answer_widgets import CopyButton
 from .presentation import (
     ACCOUNT_REQUEST_REFUSED,
+    CODEX_INSTALL_COMMAND,
     CODEX_LOGIN_NOTICES,
     CODEX_LOGIN_TEXT,
     COMMAND_REFUSALS,
+    codex_install_notice,
 )
 from .widgets import (
     Disclosure,
@@ -169,6 +172,17 @@ class CodexLoginInfo(SectionCard):
         layout.addWidget(self.login_methods)
         self.status = plain_label(UNAVAILABLE, name="runtimeMessage")
         layout.addWidget(self.status)
+        self.install_row = QWidget()
+        layout.addWidget(self.install_row)
+        install_layout = QHBoxLayout(self.install_row)
+        install_layout.setContentsMargins(0, 0, 0, 0)
+        self.install_command = plain_label(CODEX_INSTALL_COMMAND, name="mono")
+        self.install_command.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.install_copy = CopyButton(lambda: CODEX_INSTALL_COMMAND)
+        self.install_copy.setAccessibleName("설치 명령 복사")
+        self.install_copy.setToolTip("설치 명령 복사")
+        install_layout.addWidget(self.install_command, 1)
+        install_layout.addWidget(self.install_copy)
         self.device = plain_label("", name="mono")
         self.device.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.device)
@@ -236,6 +250,14 @@ class CodexLoginInfo(SectionCard):
             text = notice
         elif notice is not None:
             text = f"{text}\n{notice}"
+        install_notice = (
+            codex_install_notice(view.notice)
+            if view.state == "UNAVAILABLE" and view.notice is not None
+            else ""
+        )
+        if install_notice:
+            text = install_notice
+        self.install_row.setVisible(bool(install_notice))
         self.status.setText(text)
         self.status.setVisible(view.state not in ("UNKNOWN", "SIGNED_OUT") or notice is not None)
         pending = view.state in ("PENDING_DEVICE", "PENDING_BROWSER")

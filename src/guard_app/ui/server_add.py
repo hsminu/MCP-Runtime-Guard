@@ -396,6 +396,10 @@ class ServerAddForm(QWidget):
         self._prepared = False
         self._boundary_adjusted = False
         self._id_from_name = False
+        self._local_file_mode = False
+        self._local_server_id = ""
+        self._manual_server_id = ""
+        self._field_rows: dict[str, tuple[QLabel, QWidget, QWidget]] = {}
         self._errors: dict[str, QLabel] = {}
         self._forms: list[QFormLayout] = []
         self._compact_form: bool | None = None
@@ -570,7 +574,10 @@ class ServerAddForm(QWidget):
         """Optional local duplicate hint; backend uniqueness remains authoritative."""
 
         self._known_ids = frozenset(ids)
-        if self._registration_bridge is None:
+        if self._local_file_mode:
+            self._set_local_defaults()
+            self._input_changed()
+        elif self._registration_bridge is None:
             self._input_changed()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -624,11 +631,11 @@ class ServerAddForm(QWidget):
         self._touch.keys.update(
             ("command", "args", "env_allow") if pasted.transport == "stdio" else ("url",)
         )
+        self.transport.setCurrentIndex(self.transport.findData(pasted.transport))
         if pasted.server_id:
             self._touch.keys.add("server_id")
             self.server_id.setText(pasted.server_id)
             self._id_from_name = False
-        self.transport.setCurrentIndex(self.transport.findData(pasted.transport))
         if pasted.transport == "stdio":
             self.command.setText(pasted.command)
             self.args_json.setPlainText(join_command_line(pasted.args))
@@ -650,7 +657,7 @@ class ServerAddForm(QWidget):
 
     def _name_edited(self, name: str) -> None:
         """Follow the display name with an ID until the ID is typed by hand."""
-        if self.server_id.text() and not self._id_from_name:
+        if self._local_file_mode or (self.server_id.text() and not self._id_from_name):
             return
         suggestion = suggested_server_id(name)
         self._id_from_name = bool(suggestion)
@@ -720,7 +727,9 @@ class ServerAddForm(QWidget):
         error.setAccessibleName(f"{title} 입력 오류")
         layout.addWidget(error)
         self._errors[key] = error
-        form.addRow(_form_label(title), wrapper)
+        label = _form_label(title)
+        self._field_rows[key] = (label, wrapper, control)
+        form.addRow(label, wrapper)
 
     def _input_changed(self, *_args: object) -> None:
         self._registration_id = ""
@@ -733,9 +742,53 @@ class ServerAddForm(QWidget):
     def _transport_changed(self, *_args: object) -> None:
         self.transport_fields.setCurrentIndex(self.transport.currentIndex())
         local = self.transport.currentData() == "local_file"
+        if local and not self._local_file_mode:
+            self._manual_server_id = self.server_id.text() if not self._id_from_name else ""
+        elif not local and self._local_file_mode:
+            if not (self._restoring() or self._rechecking()):
+                self.server_id.blockSignals(True)
+                self.server_id.setText(self._manual_server_id)
+                self.server_id.blockSignals(False)
+                self._id_from_name = False
+                if not self._manual_server_id:
+                    self._touch.keys.discard("server_id")
+            if not self._restoring():
+                for box, key in ((self.tier, "tier"), (self.max_label, "max_label")):
+                    box.blockSignals(True)
+                    box.setCurrentIndex(0)
+                    box.blockSignals(False)
+                    self._touch.keys.discard(key)
+        self._local_file_mode = local
+        if local:
+            self._set_local_defaults()
+        for key in ("server_id", "tier", "max_label"):
+            for widget in self._field_rows[key]:
+                widget.setVisible(not local)
         self.quick_input.setEnabled(not local)
         self.fill_button.setEnabled(not local)
         self._input_changed()
+
+    def _set_local_defaults(self) -> None:
+        restoring = self._restoring()
+        if not (restoring or self._rechecking()):
+            known = {_id_key(value) for value in self._known_ids}
+            candidate = "local-files"
+            suffix = 2
+            while _id_key(candidate) in known:
+                candidate = f"local-files-{suffix}"
+                suffix += 1
+            self._local_server_id = candidate
+            self.server_id.blockSignals(True)
+            self.server_id.setText(candidate)
+            self.server_id.blockSignals(False)
+            self._id_from_name = False
+        if restoring:
+            return  # a restore keeps the boundary the Registry row shows
+        for box, value in ((self.tier, "internal"), (self.max_label, "CONFIDENTIAL")):
+            box.blockSignals(True)
+            box.setCurrentIndex(box.findData(value))
+            box.blockSignals(False)
+        self._boundary_adjusted = False
 
     def _tier_changed(self, *_args: object) -> None:
         if self.tier.currentData() not in (
@@ -760,7 +813,12 @@ class ServerAddForm(QWidget):
 
     def _build_draft(self) -> tuple[LocalServerDraft | None, dict[str, str]]:
         errors: dict[str, str] = {}
-        server_id = self.server_id.text().strip()
+        local = self.transport.currentData() == "local_file"
+        server_id = (
+            self._restore_id or self._recheck_id or self._local_server_id
+            if local
+            else self.server_id.text().strip()
+        )
         display_name = self.display_name.text().strip()
         # The listed ID of the registration being restored is not a new one.
         known = self._known_ids - {self._restore_id}
@@ -787,9 +845,13 @@ class ServerAddForm(QWidget):
             errors["display_name"] = f"표시 이름은 {_MAX_DISPLAY_NAME_CHARS}자 이하로 입력하세요."
         elif _has_hidden_char(display_name):
             errors["display_name"] = "표시 이름에 보이지 않는 문자나 제어 문자를 넣지 마세요."
-        if self.tier.currentData() is None:
+        tier, max_label = self.tier.currentData(), self.max_label.currentData()
+        if local and not (self._restoring() and tier and max_label):
+            # A new local file server has a fixed boundary; a restore sends the listed one.
+            tier, max_label = "internal", "CONFIDENTIAL"
+        if tier is None:
             errors["tier"] = "신뢰 경계를 선택하세요."
-        if self.max_label.currentData() is None:
+        if max_label is None:
             errors["max_label"] = "최대 수신 등급을 선택하세요."
 
         transport = str(self.transport.currentData())
@@ -799,7 +861,7 @@ class ServerAddForm(QWidget):
         url: str | None = None
         if transport == "local_file":
             if not self.file_folders.ready():
-                errors["command"] = "루트 폴더와 각 등급을 선택하세요."
+                errors["command"] = "공유 폴더와 각 등급을 선택하세요."
         elif transport == "stdio":
             command = self.command.text().strip()
             if not command:
@@ -842,8 +904,8 @@ class ServerAddForm(QWidget):
                 server_id=server_id,
                 display_name=display_name or server_id,
                 transport=transport,
-                tier=str(self.tier.currentData()),
-                max_label=str(self.max_label.currentData()),
+                tier=str(tier),
+                max_label=str(max_label),
                 command=command,
                 args=args,
                 env_allow=env_allow,
@@ -863,7 +925,6 @@ class ServerAddForm(QWidget):
         if draft.transport == "local_file":
             shown["root"] = "선택됨 · 값 미표시"
             shown["root_label"] = self.file_folders.root.label.currentData()
-            shown["list_root_label"] = self.file_folders.list_root.label.currentData()
             shown["folder_rules"] = len(self.file_folders.rows)
         elif draft.transport == "stdio":
             shown["command"] = "입력됨 · 값 미표시"
@@ -910,8 +971,18 @@ class ServerAddForm(QWidget):
         if rechecking and errors.get("server_id") == _DUPLICATE_ID:
             # The listed ID is the server being rechecked, not a new registration.
             del errors["server_id"]
+        local = self.transport.currentData() == "local_file"
+        folder_errors = [
+            message
+            for key, message in errors.items()
+            if key in ("server_id", "command") and self._touch.shows(key)
+        ]
+        self.file_folders.error.setText("\n".join(folder_errors) if local else "")
+        self.file_folders.error.setVisible(local and bool(folder_errors))
         for key, widget in self._errors.items():
             shown = key in errors and self._touch.shows(key)
+            if local and key in ("server_id", "tier", "max_label", "command"):
+                shown = False
             widget.setProperty("validationError", shown)
             widget.style().unpolish(widget)
             widget.style().polish(widget)
@@ -986,7 +1057,7 @@ class ServerAddForm(QWidget):
                     draft.url,
                     file_root=self.file_folders.root.path.text(),
                     root_label=str(self.file_folders.root.label.currentData()),
-                    list_root_label=str(self.file_folders.list_root.label.currentData()),
+                    list_root_label=str(self.file_folders.root.label.currentData()),
                     folder_labels=self.file_folders.folder_labels(),
                     restore=self._restoring(),
                 )
@@ -1102,7 +1173,8 @@ class ServerAddForm(QWidget):
             self._refresh()
         messages = {
             "REG_FOLDER_INVALID": (
-                "폴더 검증 거부. 존재하는 루트와 하위 폴더를 고르고 겹친 규칙·등급을 확인하세요."
+                "폴더 검증 거부. 존재하는 공유 폴더와 하위 폴더를 고르고 "
+                "겹친 규칙·등급을 확인하세요."
             ),
             "REG_REGISTERED": (
                 "Registry 등록·설정 저장 완료 · PENDING. 검사·활성화 전에는 실행되지 않음."
@@ -1166,7 +1238,7 @@ def _folder_error(root: str) -> str | None:
     if root[:2] in ("\\\\", "//", "\\/", "/\\"):
         return "네트워크 공유(UNC)·장치 경로는 쓸 수 없음. 이 PC의 로컬 폴더 경로를 입력하세요."
     if not Path(root).is_absolute():
-        return "루트 폴더는 절대 경로여야 함."
+        return "공유 폴더는 절대 경로여야 함."
     return None
 
 
@@ -1181,7 +1253,10 @@ def _prefix_parts(raw: str) -> tuple[tuple[str, ...] | None, str | None]:
         return None, "하위 폴더는 /로 구분하세요. 역슬래시는 쓰지 마세요."
     parts = tuple(raw.split("/"))
     if any(part in ("", ".", "..") for part in parts):
-        return None, "앞뒤의 /, 빈 이름, 점(.)·점 두 개(..) 없이 루트 기준 상대 경로로 입력하세요."
+        return (
+            None,
+            "앞뒤의 /, 빈 이름, 점(.)·점 두 개(..) 없이 공유 폴더 기준 상대 경로로 입력하세요.",
+        )
     return parts, None
 
 
@@ -1216,8 +1291,8 @@ class _FolderRuleRow(QWidget):
         row.setDirection(QBoxLayout.Direction.TopToBottom)
         self._row_actions = row
         self.prefix = QLineEdit()
-        self.prefix.setAccessibleName("루트 기준 하위 폴더, 비우면 루트 전체")
-        self.prefix.setPlaceholderText("예: personal/notes · 비우면 루트 전체")
+        self.prefix.setAccessibleName("공유 폴더 기준 하위 폴더, 비우면 공유 폴더 전체")
+        self.prefix.setPlaceholderText("예: personal/notes · 비우면 공유 폴더 전체")
         row.addWidget(self.prefix, 1)
         self.label = SelectionBox()
         self.label.setAccessibleName("이 폴더의 등급")
@@ -1269,19 +1344,18 @@ class LocalFolderRulesForm(QWidget):
         outer.setSpacing(12)
         outer.addWidget(
             plain_label(
-                "루트 폴더와 하위 폴더별 등급을 정하세요. 규칙이 겹치면 더 높은 등급이 적용되고, "
-                "어느 규칙에도 맞지 않는 파일을 읽으면 미분류로 작업이 멈춤. "
-                "여기서는 입력 형식만 확인하고, 실제 경로 검증은 등록 단계에서 다시 함.",
+                "공유 폴더를 고르고 등급을 정하세요. "
+                "더 높은 등급이 필요한 하위 폴더만 따로 추가하세요.",
                 name="secondary",
             )
         )
         self.root = QLineEdit()
         self.root.setObjectName("folderRootInput")
-        self.root.setAccessibleName("로컬 파일 서버 루트 폴더 절대 경로")
-        self.root.setPlaceholderText("루트 폴더의 절대 경로")
+        self.root.setAccessibleName("로컬 파일 서버 공유 폴더 절대 경로")
+        self.root.setPlaceholderText("공유 폴더의 절대 경로")
         outer.addWidget(self.root)
         self.root_error = plain_label(name="folderRootError")
-        self.root_error.setAccessibleName("루트 폴더 입력 오류")
+        self.root_error.setAccessibleName("공유 폴더 입력 오류")
         outer.addWidget(self.root_error)
         self._rows_layout = QVBoxLayout()
         self._rows_layout.setSpacing(8)
@@ -1341,7 +1415,7 @@ class LocalFolderRulesForm(QWidget):
     def _build_draft(self) -> LocalFolderDraft | None:
         root = self.root.text().strip()
         if not root:
-            root_error: str | None = "루트 폴더 절대 경로를 입력하세요."
+            root_error: str | None = "공유 폴더 절대 경로를 입력하세요."
         elif len(root) >= self.root.maxLength():
             root_error = "경로가 입력 칸 한도를 넘어 잘렸을 수 있음. 경로를 확인하세요."
         else:
@@ -1408,7 +1482,7 @@ class LocalFolderRulesForm(QWidget):
         self._prepared = True
         self._refresh()
         shown = [
-            {"folder": "/".join(rule.prefix) or "(루트 전체)", "label": rule.label}
+            {"folder": "/".join(rule.prefix) or "(공유 폴더 전체)", "label": rule.label}
             for rule in draft.rules
         ]
         text = json.dumps(

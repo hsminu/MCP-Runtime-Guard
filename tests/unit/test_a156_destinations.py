@@ -39,6 +39,7 @@ from guard_app.services.session_destinations import destination_document
 from guard_app.services.session_policy import TaskPolicy
 from guard_app.storage.sqlite_store import SQLiteStore
 from guard_app.ui.policy import CHANGE_RESULTS, STOP_WARNING, PolicyPage
+from guard_app.ui.widgets import LabelPill
 
 from .test_b28_integration import policy_product
 from .test_bridge import FakeControl, attach, close_bridge, pump_until
@@ -420,6 +421,7 @@ def test_ui_plain_id_choices_commands_and_fixed_results(app):
     label = page.destinations.cellWidget(0, 0)
     assert (label.textFormat(), label.text()) == (Qt.TextFormat.PlainText, row.destination_id)
     assert page.destinations.item(0, 1).text() == "내부"
+    assert page.destinations.cellWidget(0, 2).findChild(LabelPill).text() == "최대 수신 민감"
     assert page.destinations.item(0, 3).text() == "사용"
     edits = []
     page.destination_change_requested.connect(edits.append)

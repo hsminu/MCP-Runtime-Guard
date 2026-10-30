@@ -24,6 +24,7 @@ from guard_app.services.bridge import (
     BridgeState,
     CommandStage,
     LifecycleEvent,
+    QueryReply,
     RegistrationView,
     TaskProjection,
 )
@@ -117,6 +118,7 @@ class GuardWindow(QMainWindow):
             min(820, usable_height),
         )
         self._page = "overview"
+        self._navigation_target = ""
         self._nav_buttons: dict[str, QPushButton] = {}
         self._menu_actions: dict[str, QAction] = {}
         self._page_indices: dict[str, int] = {}
@@ -170,7 +172,8 @@ class GuardWindow(QMainWindow):
 
     def _assemble_sidebar(self, root: QHBoxLayout) -> None:
         # Sessions first (Codex, Claude Code, Conductor): new session, search,
-        # three views, the session list, then the management pages below it.
+        # two views, sessions with an activity subrow under the selected session,
+        # then the management pages below them.
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
         self.sidebar.setFixedWidth(224)
@@ -195,7 +198,7 @@ class GuardWindow(QMainWindow):
         side.addWidget(self.new_session_button)
         side.addWidget(self.sessions.search)
         side.addSpacing(2)
-        for page in ("runs", "results", "approvals"):
+        for page in ("runs", "approvals"):
             side.addWidget(self._nav_button(page))
         side.addSpacing(16)
         sessions_caption = plain_label("세션", name="navCaption")
@@ -295,7 +298,7 @@ class GuardWindow(QMainWindow):
     def _assemble_activity(self) -> None:
         # A session's results and activity are one block that moves between
         # two hosts: the chat header's 활동 docks it beside the conversation,
-        # and the sidebar's 결과 · 실행 활동 opens it as a page of its own (the
+        # and the selected session's 결과 · 실행 활동 subrow opens its page (the
         # compact shell's only form). Status, run controls and approval review
         # scroll; the stop controls stay pinned below them in both.
         self._activity = QWidget()
@@ -403,6 +406,7 @@ class GuardWindow(QMainWindow):
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
         self._update_shell_layout()
         self.sessions.results_requested.connect(self._toggle_activity)
+        self.sessions.activity_page_requested.connect(lambda: self.navigate("results"))
         self.sessions.approval_review_requested.connect(self._open_approval_review)
         self.sessions.selection_changed.connect(self._session_selected)
         self.sessions.titles_changed.connect(self._session_titles_changed)
@@ -550,6 +554,8 @@ class GuardWindow(QMainWindow):
         self.server_add_form.attach_registration(bridge)
         self.server_page.attach_activation(bridge)
         self.store_queries = StoreQueryLink(bridge, self.approval_page, self.log_page, self)
+        # Run after StoreQueryLink has applied the current response.
+        bridge.query_answered.connect(self._select_navigation_target)
         self.sessions.approval_lookup_requested.connect(self.store_queries.lookup_session_approval)
         self.store_queries.session_approval_ready.connect(self.sessions.set_session_approval)
         self.store_queries.session_approval_source_changed.connect(
@@ -780,10 +786,18 @@ class GuardWindow(QMainWindow):
     def set_approval_page(self, page: ApprovalPage) -> bool:
         """Accept only the current approval query response."""
 
-        return self.approval_page.set_page(page)
+        accepted = self.approval_page.set_page(page)
+        if accepted and self._page == "approvals" and self._navigation_target:
+            # The same pending selection as a bridge reply (A212).
+            target, self._navigation_target = self._navigation_target, ""
+            self.approval_page.select_approval(target)
+        return accepted
 
     def set_approval_error(self, query: ApprovalQuery) -> bool:
-        return self.approval_page.set_error(query)
+        failed = self.approval_page.set_error(query)
+        if failed and self._page == "approvals":
+            self._navigation_target = ""
+        return failed
 
     def set_call_log_snapshot(self, snapshot: Surface[tuple[PublicCallSummary, ...]]) -> None:
         self.log_page.set_calls(snapshot)
@@ -809,19 +823,44 @@ class GuardWindow(QMainWindow):
 
         self.task_status_card.set_status(status)
 
+    def _select_navigation_target(self, reply: object) -> None:
+        if not self._navigation_target or type(reply) is not QueryReply:
+            return
+        if self._page == "logs" and reply.kind == "calls":
+            query = self.log_page.current_query
+            token = None if query is None else query.token
+        elif self._page == "approvals" and reply.kind == "approvals":
+            approval_query = self.approval_page.current_query
+            token = None if approval_query is None else approval_query.token
+        else:
+            return
+        if token == reply.token:
+            target = self._navigation_target
+            self._navigation_target = ""
+            if not reply.failed:
+                if self._page == "logs":
+                    self.log_page.select_call(target)
+                else:
+                    self.approval_page.select_approval(target)
+
     def navigate(self, page: str, target_id: str = "") -> None:
         if page not in self._page_indices:
             return
         if self._page == "runs" and page != "runs":
             self.sessions.leaving_conversation()
         self._page = page
+        self._navigation_target = target_id if page in ("logs", "approvals") else ""
         self.stack.setCurrentIndex(self._page_indices[page])
         if page == "servers" and target_id:
             self.server_page.select_server(target_id)
-        elif page == "logs" and target_id:
-            self.log_page.select_call(target_id)
-        elif page == "approvals" and target_id:
-            self.approval_page.select_approval(target_id)
+        elif page == "logs":
+            self.log_page.refresh()
+            if target_id:
+                self.log_page.select_call(target_id)
+        elif page == "approvals":
+            self.approval_page.refresh()
+            if target_id:
+                self.approval_page.select_approval(target_id)
         self.breadcrumb.setText(PAGES[page])
         if page == "results":
             self.results_scope.setText(self.sessions.current.heading.text())
@@ -829,6 +868,7 @@ class GuardWindow(QMainWindow):
         self._place_activity()
         if page == "runs":
             self.sessions.return_to_conversation()
+        self.sessions.set_activity_page(page == "results")
         for key, button in self._nav_buttons.items():
             button.setProperty("selected", key == page)
             button.setIcon(

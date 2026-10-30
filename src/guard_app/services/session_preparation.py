@@ -21,6 +21,16 @@ from dataclasses import dataclass, field
 # C6.14 fixed diagnostics (C owns the set); unknown codes fail closed without echo.
 from guard_app.security.codex_l2 import L2_FAILURE_CODES as L2_FAILURE_CODES
 
+CODEX_INSTALL_CODES = frozenset({"CODEX_EXECUTABLE_MISSING", "CODEX_EXECUTABLE_MISMATCH"})
+
+
+class PreparationRefusedError(RuntimeError):
+    """Carry one fixed code only; never include paths or raw exception text."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
 
 @dataclass(frozen=True, slots=True)
 class ConfigurationReceipt:

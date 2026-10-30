@@ -638,7 +638,7 @@ def test_prepared_draft_keeps_segments_and_preview_hides_the_root(
     assert isinstance(preview, LocalDraftPreview)
     assert "private-root-marker" not in preview.text
     shown = json.loads(preview.text)
-    assert shown["rules"][0] == {"folder": "(루트 전체)", "label": "PUBLIC"}
+    assert shown["rules"][0] == {"folder": "(공유 폴더 전체)", "label": "PUBLIC"}
     assert shown["rules"][1] == {"folder": "personal/notes", "label": "INTERNAL"}
 
 

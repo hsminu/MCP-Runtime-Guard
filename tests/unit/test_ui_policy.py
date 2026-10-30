@@ -387,7 +387,7 @@ def test_destination_grade_shape_and_editor_hint(app):
     assert tag.property("tone") is None
     assert pill.property("tone") == "ok"
     assert pill.property("labelLevel") is None
-    assert tag.text() == "최대 수신 기밀"
+    assert tag.text() == "최대 수신 민감"
     dialog = page.open_destination_dialog()
     assert not dialog.save_button.isEnabled()
     assert dialog.input_hint.text() == "ID·경계 종류·최고 수신 등급을 입력하세요"

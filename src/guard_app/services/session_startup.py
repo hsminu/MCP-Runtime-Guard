@@ -2,8 +2,8 @@
 
 The app-wide startup receipt with its L2 evidence is taken once. Each Task then
 rechecks the configuration against it before anything is launched. A callback
-fault becomes CODEX_PREPARATION_FAILED without its text, and cancellation is
-never swallowed.
+fault keeps only allowlisted installation codes or CODEX_PREPARATION_FAILED.
+Cancellation is never swallowed.
 """
 
 from __future__ import annotations
@@ -14,8 +14,10 @@ from collections.abc import Awaitable, Callable
 from guard_app.services.bridge_types import BackendCleanupError
 from guard_app.services.session_admission import SessionAdmission, SessionRuntimeError
 from guard_app.services.session_preparation import (
+    CODEX_INSTALL_CODES,
     L2_FAILURE_CODES,
     ConfigurationReceipt,
+    PreparationRefusedError,
     SessionPreparation,
     StartupReceipt,
     TaskResources,
@@ -34,9 +36,20 @@ async def call_preparation[Result](action: Callable[[], Awaitable[Result]]) -> R
         return await operation
     finally:
         if operation.done() and not operation.cancelled() and operation.exception() is not None:
-            if isinstance(operation.exception(), BackendCleanupError):
-                raise BackendCleanupError from None
-            raise SessionRuntimeError("CODEX_PREPARATION_FAILED") from None
+            error = operation.exception()
+            failure: SessionRuntimeError | BackendCleanupError
+            if isinstance(error, PreparationRefusedError) and error.code in CODEX_INSTALL_CODES:
+                failure = SessionRuntimeError(error.code)
+            elif isinstance(error, BackendCleanupError):
+                failure = BackendCleanupError()
+            else:
+                failure = SessionRuntimeError("CODEX_PREPARATION_FAILED")
+            try:
+                raise failure from None
+            finally:
+                # `from None` hides the context but retains it. Drop the raw fault
+                # after raise attaches it, preserving the existing cancellation wait.
+                failure.__context__ = None
 
 
 def require_configuration(actual: object, expected: ConfigurationReceipt) -> None:
@@ -96,7 +109,11 @@ class StartupGate:
                 if self._attempted:
                     raise SessionRuntimeError(self._code)
                 self._attempted = True
-                receipt = await call_preparation(preparation.prepare_startup)
+                try:
+                    receipt = await call_preparation(preparation.prepare_startup)
+                except SessionRuntimeError as error:
+                    self._code = error.code
+                    raise
                 self._admission.check()
                 refusal = startup_refusal(receipt)
                 if refusal is not None:

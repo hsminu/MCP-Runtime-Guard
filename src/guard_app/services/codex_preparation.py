@@ -56,7 +56,9 @@ from guard_app.services.bridge_types import CODEX_MODEL_ID, BackendCleanupError
 from guard_app.services.codex_account import AccountError, BrowserLoginOpener
 from guard_app.services.codex_prompt import BASE_INSTRUCTIONS
 from guard_app.services.session_preparation import (
+    CODEX_INSTALL_CODES,
     ConfigurationReceipt,
+    PreparationRefusedError,
     SessionPreparation,
     StartupReceipt,
     TaskResources,
@@ -89,8 +91,8 @@ def l2_thread_params(tools: tuple[dict[str, object], ...]) -> dict[str, object]:
     )
 
 
-class CodexPreparationError(RuntimeError):
-    """Fixed code only; SessionRuntime reports it as CODEX_PREPARATION_FAILED."""
+class CodexPreparationError(PreparationRefusedError):
+    """Installation codes pass through; others become CODEX_PREPARATION_FAILED."""
 
     def __init__(self, code: str) -> None:
         self.code = code
@@ -170,6 +172,7 @@ class CodexProcessPreparation:
         self._configuration: ConfigurationReceipt | None = None
         self._tasks: dict[str, _TaskProcess] = {}
         self._started = False
+        self._startup_refusal: str | None = None
 
     def set_progress_listener(self, listener: Callable[[str], None]) -> None:
         self._on_progress = listener
@@ -237,7 +240,12 @@ class CodexProcessPreparation:
         executable = self._executable or (
             paths.codex_install(pins.codex_version) / pins.executable_file
         )
-        _check_executable(executable, pins)
+        try:
+            _check_executable(executable, pins)
+        except CodexPreparationError as error:
+            if error.code in CODEX_INSTALL_CODES:
+                self._startup_refusal = error.code
+            raise
         # A failure above leaves the lock held: the app keeps running on its DB.
         self._launcher = CodexLauncher(
             executable, paths.codex_home, home_digest, source_dir=self._source_dir
@@ -323,7 +331,7 @@ class CodexProcessPreparation:
             folders, launcher = self._ready()
         except CodexPreparationError:
             # Startup refused Codex; trying again in this run cannot help.
-            raise AccountUnavailableError() from None
+            raise AccountUnavailableError(self._startup_refusal) from None
         try:
             folder = folders.create_task_folder(new_id("account"))
         except AppPathError:

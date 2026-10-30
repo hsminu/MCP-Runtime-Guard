@@ -518,12 +518,12 @@ def test_approval_summary_separate_tokens_and_exact_id(window, monkeypatch, mode
                 "<tool>",
                 "server",
                 "destination",
-                "내부 자료의 외부 전송에 승인 필요",
+                "개인 자료의 외부 전송에 승인 필요",
                 "KST 10:23",
             )
         )
         assert "\u202e" not in text
-        assert "내부" in view.approval_grade.text()
+        assert "개인" in view.approval_grade.text()
         bridge.query_answered.emit(QueryReply("approvals", positive.token, None, failed=True))
         assert view.approval_summary.text() == text
         bridge.task_changed.emit(

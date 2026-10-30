@@ -27,8 +27,8 @@ from .widgets import KeyboardActionButton, plain_label
 
 TRANSCRIPT_BODY_MARK = "│ "
 USER_LABEL = "나"
-ANSWER_LABEL = "Guard · 모델 답변 (검증되지 않은 내용)"
-PARTIAL_ANSWER_LABEL = "Guard · 모델 답변 작성 중 (검증되지 않은 내용)"
+ANSWER_LABEL = "Guard · 모델 답변"
+PARTIAL_ANSWER_LABEL = "Guard · 모델 답변 작성 중"
 STOPPED_ANSWER_LABEL = "Guard · 모델 답변 중단됨 (완료되지 않은 내용)"
 _clock = time.monotonic
 

@@ -342,6 +342,23 @@ class ServerRegistry:
                 ),
             )
 
+    async def delete(self, server_id: str, *, expected_row_revision: int) -> None:
+        """BLOCKED 등록을 지운다(A208). 저장 결과가 불명이면 캐시를 stale로 둔다."""
+        async with self._lock:
+            await self._reread_if_stale(server_id)
+            written = False
+            try:
+                await self._store.delete_server(
+                    server_id, expected_row_revision=expected_row_revision, at_utc=self._clock()
+                )
+                written = True
+            finally:
+                if not written:
+                    self._stale.add(server_id)
+            self._entries.pop(server_id, None)
+            self._unrecorded.discard(server_id)
+            self._stale.discard(server_id)
+
     async def request_review(self, server_id: str, *, expected_row_revision: int) -> RegistryEntry:
         async with self._lock:
             await self._reread_if_stale(server_id)

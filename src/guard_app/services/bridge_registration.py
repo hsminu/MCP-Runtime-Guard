@@ -307,12 +307,12 @@ class RegistrationCommands:
         if request.action == "activation_preview":
             async with self.policy.lock:
                 self.policy.check_registration()
-                entry = self.registry.entry(request.server_id)
+                entry = await self.registry.refresh(request.server_id)
                 loaded = load_profile_settings(self.policy.registration_document(), self.registry)
                 server = next((s for s in loaded.servers if s.id == request.server_id), None)
-                if entry is None or server is None:
+                if entry is None:
                     return RegistrationView("REG_ACTIVATION_STALE")
-                configured = {t.name: t for t in server.tools}
+                configured = {t.name: t for t in server.tools} if server is not None else {}
                 tools = tuple(
                     PolicyTool(
                         t.tool_name,
@@ -335,10 +335,45 @@ class RegistrationCommands:
                         settings.taint_mode,
                         (),
                         (),
-                        (PolicyServer(server.id, tools),),
+                        (PolicyServer(request.server_id, tools),),
                         change_available=True,
                     ),
                 )
+        if request.action == "delete":
+            entry = self.registry.entry(request.server_id)
+            if (
+                entry is None
+                or type(request.expected_row_revision) is not int
+                or entry.registration.row_revision != request.expected_row_revision
+            ):
+                return RegistrationView("REG_ACTIVATION_STALE")
+            if self.scans is not None:
+                await self.scans.forget(request.server_id)
+            if self._pending is not None and self._pending[1].id == request.server_id:
+                self._pending = None
+            try:
+                await self.policy.delete_server(
+                    request.server_id,
+                    request.expected_row_revision,
+                    self.registry,
+                    self.stop_sessions,
+                    operator_id=self._operator_id,
+                )
+            except SessionRuntimeError as error:
+                # Only failures after a write are an unknown deletion; refusals
+                # before any write keep their own code.
+                if error.code not in (
+                    "POLICY_SAVE_FAILED",
+                    "POLICY_SAVE_UNKNOWN",
+                    "POLICY_SAVE_FILE_CHANGED",
+                ):
+                    raise
+                return RegistrationView("REG_DELETE_UNKNOWN", server_id=request.server_id)
+            except (RegistryError, StoreError):
+                return RegistrationView("REG_DELETE_UNKNOWN", server_id=request.server_id)
+            return RegistrationView(
+                "REG_DELETED", server_id=request.server_id, rows=await self._rows()
+            )
         if request.action in ("activate", "block"):
             if (
                 (request.reviewed_scan_id is not None and type(request.reviewed_scan_id) is not str)

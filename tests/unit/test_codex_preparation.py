@@ -333,7 +333,7 @@ def test_product_start_shows_why_sessions_are_refused(tmp_path, pin, subtests):
         assert list((tmp_path / "app" / "tasks").iterdir()) == []
 
     for index, (pinned_size, blocker) in enumerate(
-        [(None, "L2_TOOLS_UNEXPECTED"), (1, "CODEX_PREPARATION_FAILED")]
+        [(None, "L2_TOOLS_UNEXPECTED"), (1, "CODEX_EXECUTABLE_MISMATCH")]
     ):
         case_path = tmp_path / str(index)
         case_path.mkdir()

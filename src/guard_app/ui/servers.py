@@ -53,6 +53,7 @@ from .scan_report import (
 )
 from .tool_settings import ToolSettingsDialog
 from .widgets import (
+    ConfirmDialog,
     KeyboardActionButton,
     ResponsiveRow,
     SecurityLabel,
@@ -208,7 +209,7 @@ class ServerListPage(QWidget):
         self._activation_bridge: BackendBridge | None = None
         self._activation_command = ""
         self._activation_action = "activate"
-        self._activation_dialog: ToolAllowDialog | None = None
+        self._activation_dialog: ToolAllowDialog | ConfirmDialog | None = None
         self._scan_dialog: ScanReviewDialog | None = None
         self._tools_dialog: ToolSettingsDialog | None = None
         self._visible_servers: list[ServerSummary] = []
@@ -305,7 +306,14 @@ class ServerListPage(QWidget):
         layout.addWidget(self.activate_button)
         self.block_button = KeyboardActionButton("선택한 서버 차단")
         self.block_button.clicked.connect(lambda: self._preview_activation("block"))
-        layout.addWidget(self.block_button)
+        destructive = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        # A178: attach the row before its buttons so Qt alone owns them.
+        layout.addLayout(destructive)
+        destructive.addWidget(self.block_button)
+        self.delete_button = KeyboardActionButton("선택한 서버 삭제")
+        self.delete_button.set_visual(icon="trash", variant="danger")
+        self.delete_button.clicked.connect(lambda: self._preview_activation("delete"))
+        destructive.addWidget(self.delete_button)
         self.activation_notice = plain_label("", name="runtimeMessage")
         self.tools_button = KeyboardActionButton("선택한 서버 도구 설정")
         self.tools_button.clicked.connect(self._preview_tools)
@@ -477,6 +485,11 @@ class ServerListPage(QWidget):
         self.block_button.setEnabled(
             ready and selected is not None and selected.registry_status in ("pending", "active")
         )
+        self.delete_button.setEnabled(
+            ready
+            and selected is not None
+            and selected.registry_status in ("pending", "active", "blocked")
+        )
         self.tools_button.setEnabled(
             ready
             and configured
@@ -535,7 +548,14 @@ class ServerListPage(QWidget):
             CommandStage.REJECTED,
             CommandStage.UNCONFIRMED,
         ):
-            self._activation_result(RegistrationView("REG_ACTIVATION_UNKNOWN", event.command_id))
+            self._activation_result(
+                RegistrationView(
+                    "REG_DELETE_UNKNOWN"
+                    if self._activation_action == "delete"
+                    else "REG_ACTIVATION_UNKNOWN",
+                    event.command_id,
+                )
+            )
 
     def _activation_result(self, view: RegistrationView) -> None:
         if not self._activation_command or view.command_id != self._activation_command:
@@ -561,6 +581,28 @@ class ServerListPage(QWidget):
         if view.code == "REG_ACTIVATION_PREVIEW" and view.activation is not None:
             action = self._activation_action
             server = view.activation.servers[0]
+            if action == "delete":
+                deletion = ConfirmDialog(
+                    "서버 삭제 확인",
+                    f"{public_display_text(server.server_id)} 서버의 등록, 도구 정의, 검사 결과, "
+                    "설정 파일 기록을 지움. 호출·승인·감사 기록은 남음. "
+                    "실행 중인 Task는 정지되고, 삭제 뒤 앱을 다시 시작해야 함. "
+                    "같은 ID로 다시 등록할 수 있음.",
+                    "삭제 확인",
+                    dangerous=True,
+                    parent=self,
+                )
+                self._activation_dialog = deletion
+                deletion.accepted.connect(
+                    lambda: self._send_activation(
+                        RegistrationRequest(
+                            "delete", server.server_id, expected_row_revision=view.row_revision
+                        )
+                    )
+                )
+                deletion.open()
+                self.activation_notice.setText("삭제할 서버와 남는 기록을 확인하세요.")
+                return
             dialog = ToolAllowDialog(server, view.activation, self)
             self._activation_dialog = dialog
             dialog.setWindowTitle("서버 활성화 확인" if action == "activate" else "서버 차단 확인")
@@ -600,7 +642,21 @@ class ServerListPage(QWidget):
             dialog.open()
             self.activation_notice.setText("서버 설정을 확인하세요.")
             return
+        delete_unknown = (
+            "삭제가 끝났는지 확인하지 못함. 앱을 다시 시작한 뒤 서버 목록을 확인하세요."
+        )
+        if self._activation_action == "delete" and view.code in (
+            "POLICY_SAVE_UNKNOWN",
+            "POLICY_SAVE_FAILED",
+            "POLICY_SAVE_FILE_CHANGED",
+            "REG_STORE_UNKNOWN",
+            "REG_TIMEOUT",
+        ):
+            self.activation_notice.setText(delete_unknown)
+            return
         messages = {
+            "REG_DELETED": "서버를 삭제함. 앱을 다시 시작하세요.",
+            "REG_DELETE_UNKNOWN": delete_unknown,
             **CHANGE_RESULTS,
             "REG_TOOLS_RESTART_REQUIRED": (
                 "도구 설정 저장 완료 · Task 정지됨. 앱을 다시 시작한 뒤 서버 목록에서 활성화하세요."

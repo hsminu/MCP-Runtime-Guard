@@ -110,6 +110,7 @@ _METHOD_WRITES = {
     "record_fingerprint_change": True,
     "record_settings_change": True,
     "block_server": True,
+    "delete_server": True,
     "request_review": True,
     "save_reviewed_descriptions": True,
     "create_task": True,
@@ -1954,6 +1955,44 @@ class SQLiteStore:
             ),
             method="block_server",
         )
+
+    async def delete_server(
+        self, server_id: str, *, expected_row_revision: int, at_utc: datetime
+    ) -> None:
+        def write() -> None:
+            timestamp = _registry_input(
+                lambda: _registry_write_input(
+                    server_id, at_utc, expected_row_revision=expected_row_revision
+                )
+            )
+            with self._transaction(write=True) as connection:
+                current = self._require_registration_locked(connection, server_id)
+                _registry_cas(current, expected_row_revision)
+                if current.registration.status is not RegStatus.BLOCKED:
+                    raise StoreError(Reason.REG_NOT_ACTIVE)
+                connection.execute(
+                    "UPDATE registrations SET last_scan_id=NULL, reviewed_scan_id=NULL "
+                    "WHERE server_id=?",
+                    (server_id,),
+                )
+                connection.execute("DELETE FROM scan_reports WHERE server_id=?", (server_id,))
+                tool_count = connection.execute(
+                    "DELETE FROM registration_tools WHERE server_id=?", (server_id,)
+                ).rowcount
+                connection.execute("DELETE FROM registrations WHERE server_id=?", (server_id,))
+                self._insert_registry_audit(
+                    connection,
+                    server_id,
+                    _integer(current.registration.row_revision + 1),
+                    event="DELETED",
+                    reason=None,
+                    timestamp=timestamp,
+                    scan_id=None,
+                    tool_count=tool_count,
+                    changed_count=0,
+                )
+
+        await self._submit(write, method="delete_server")
 
     async def request_review(
         self, server_id: str, *, expected_row_revision: int, at_utc: datetime
