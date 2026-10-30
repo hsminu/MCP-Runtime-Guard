@@ -29,6 +29,7 @@ from guard_app.services.bridge_types import (
     CommandEvent,
     CommandStage,
     ConversationEvent,
+    GuardBindings,
     LifecycleEvent,
     QueryReply,
     QueryRequest,
@@ -363,6 +364,8 @@ class BackendHost:
         self._events.settings(status if type(status) is str else None)
         if bindings.scan_events is not None:
             bindings.scan_events(self._out.scan_changed)
+        if bindings.guard_changes is not None:
+            bindings.guard_changes(self._guard_changed)
         if bindings.task_events is not None:
             bindings.task_events(self._views.task_event)
         if bindings.answer_partials is not None:
@@ -370,6 +373,10 @@ class BackendHost:
         self._queries.open(bindings.queries)
         self._set_state(BridgeState.READY, "READY")
         self._events.query_source(bindings.queries is not None)
+
+    def _guard_changed(self, guard: GuardBindings) -> None:
+        self._bindings.change_guard(guard)
+        self._events.policy(guard.policy)
 
     def codex_progress(self, code: str) -> None:
         """Only the fixed startup phase crosses to Qt."""

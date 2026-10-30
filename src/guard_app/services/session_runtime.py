@@ -27,6 +27,7 @@ from guard_app.services.bridge_types import (
     BackendCleanupError,
     ControlAction,
     DestinationEdit,
+    GuardBindings,
     SessionOptions,
     TaskProjection,
 )
@@ -70,6 +71,12 @@ type CodexSessionFactory = Callable[
 ]
 
 
+type GuardRebuilder = Callable[
+    [Mapping[str, object]],
+    Awaitable[tuple[AssembledGuard, ApprovalOutcomes, CodexSessionFactory] | None],
+]
+
+
 @dataclass(slots=True)
 class _RunningTask:
     """An adopted Task: its runner, its options, and the connection code shown for it."""
@@ -92,6 +99,12 @@ class _TaskEvents:
         self._task_listener = listener
         if self._approvals is not None:
             self._approvals.set_listener(listener)
+
+    def replace_approvals(self, approvals: ApprovalOutcomes) -> None:
+        if self._approvals is not None:
+            self._approvals.set_listener(None)
+        self._approvals = approvals
+        approvals.set_listener(self._task_listener)
 
     def task_changed(self, task_id: str) -> None:
         if self._task_listener is not None:
@@ -223,9 +236,14 @@ class SessionRuntime:
         self._execution_stopped = False
         self._execution_watch_started = False
         self._assembled = assembled
+        self._guard_closing: asyncio.Task[bool] | None = None
+        self._rebuild: GuardRebuilder | None = None
+        self._guard_listener: Callable[[GuardBindings], None] | None = None
+        self._system_control_injected = system_control is not None
         self._settings_status = settings_status
         self._approvals = approvals
         self._session_factory = session_factory
+        self._guard_generation = 0
         self._limits = CleanupLimits() if cleanup_limits is None else cleanup_limits
         self._admission = SessionAdmission()
         self._startup = StartupGate(preparation, self._admission)
@@ -249,6 +267,7 @@ class SessionRuntime:
         # cleanup so shutdown waits for exactly them before the Store closes.
         self._records = BackgroundWork()
         self._stops_unconfirmed = False
+        self._record_failed = False
         self._store_unconfirmed = False
         self._cleanup = SessionCleanup(
             preparation,
@@ -285,6 +304,89 @@ class SessionRuntime:
     def connect_session_factory(self, factory: CodexSessionFactory) -> None:
         """Finish Codex composition before any Task is admitted."""
         self._session_factory = factory
+
+    def mark_cleanup_unconfirmed(self) -> None:
+        self._admission.mark_cleanup_unconfirmed()
+
+    def connect_guard_rebuilder(self, rebuild: GuardRebuilder) -> None:
+        """Product-only composition seam; an injected system channel stays on restart."""
+        if not self._system_control_injected:
+            self._rebuild = rebuild
+            self._policy.connect_reconnect(self._reconnect_guard)
+
+    def _listen_guard(self, listener: Callable[[GuardBindings], None]) -> None:
+        self._guard_listener = listener
+
+    async def _reconnect_guard(self, document: Mapping[str, object]) -> bool:
+        """Policy lock held: stop old sessions, close, then build and publish (I6/I10)."""
+        self._guard_generation += 1
+        previous = self._assembled
+        completed = False
+        try:
+            if self._rebuild is None or self._admission.refusal() is not None:
+                return False
+            for task_id in tuple(self._running):
+                state = await self.store.load_task(task_id)
+                if state.status in (TaskStatus.RUNNING, TaskStatus.WAITING_APPROVAL):
+                    await self._fail_session(task_id, "POLICY_CHANGED")
+                else:
+                    await self.close_policy_stopped((task_id,))
+            # Adopted sessions must exit before replacement. In-flight creators
+            # retain cleanup ownership and are refused at the generation check.
+            work_ended = await self._work.wait(self._limits.session_s)
+            recorded = await self._close_guard(replacing=True)
+            if (
+                not work_ended
+                or not recorded
+                or self._stops_unconfirmed
+                or self._record_failed
+                or any(not self._creations.owns(task_id) for task_id in self._cleanup.pending)
+                or self._admission.refusal() is not None
+                or not self.execution_allowed()
+            ):
+                return False
+            rebuilt = await self._rebuild(document)
+            if rebuilt is None:
+                return False
+            assembled, approvals, factory = rebuilt
+            # Transfer ownership before publishing; any later failure closes this Guard.
+            self._assembled = assembled
+            self._guard_generation += 1
+            self._guard_closing = None
+            self._approvals = approvals
+            self._events.replace_approvals(approvals)
+            self._tool_refs = build_dynamic_tools(assembled.tool_views).tool_refs
+            self._session_factory = factory
+            if not self._system_control_injected:
+                self._stops.replace_system(_system_control(self.store, assembled))
+            self._policy.adopt_guard(assembled)
+            if not self.execution_allowed() or self._admission.refusal() is not None:
+                return False
+            if self._guard_listener is not None:
+                self._guard_listener(self._guard_bindings())
+            completed = True
+            return True
+        except DispatchError:
+            self._admission.mark_cleanup_unconfirmed()
+            return False
+        except (StoreError, SessionRuntimeError, ValueError):
+            return False
+        finally:
+            # CancelledError propagates only after the owned assembly is closed.
+            # Shield/cache its close so cancellation cannot strand transport workers.
+            if not completed:
+                try:
+                    if not await self._close_guard():
+                        self._stops_unconfirmed = True
+                except DispatchError:
+                    self._admission.mark_cleanup_unconfirmed()
+                finally:
+                    # The first close may still be settling when cancellation arrives.
+                    # Release after it ends: B's global halt callback only runs once.
+                    if previous is not None:
+                        previous.release_held_halt()
+            elif previous is not None:
+                previous.discard_held_halt()
 
     def start_execution_watch(self) -> None:
         """Start the runtime-owned revision watch once; close cancels its timer."""
@@ -408,6 +510,7 @@ class SessionRuntime:
         if blocker is not None:
             raise SessionRuntimeError(blocker)
         factory = self._session_factory
+        generation = self._guard_generation
         if factory is None:
             raise SessionRuntimeError("CODEX_SESSION_UNAVAILABLE")
         state = self._policy.task_state(new_id("session"))
@@ -418,6 +521,8 @@ class SessionRuntime:
             # B3.12 (A105): the row takes the Profile in force when it is written.
             # The session only knows task_id and epoch, which stay the same.
             async with self._policy.lock:
+                if generation != self._guard_generation:
+                    raise SessionRuntimeError("SESSION_UNAVAILABLE")
                 self._admission.check()
                 self.check_execution()
                 state = self._policy.task_state(state.task_id)
@@ -530,6 +635,7 @@ class SessionRuntime:
 
         def settled(unconfirmed: bool) -> None:
             if unconfirmed:
+                self._record_failed = True
                 self._set_code(task_id, "SESSION_STOP_UNCONFIRMED")
             if not self._admission.closed:
                 self._events.task_changed(task_id)
@@ -637,7 +743,8 @@ class SessionRuntime:
         finally:
             self._running.clear()
             try:
-                self._stops_unconfirmed = not await self._close_guard()
+                recorded = await self._close_guard()
+                self._stops_unconfirmed |= not recorded
             except DispatchError:
                 # Transport owns launcher exit confirmation; retain refusal on repeated close.
                 self._admission.mark_cleanup_unconfirmed()
@@ -653,7 +760,17 @@ class SessionRuntime:
         if self._store_unconfirmed:
             raise SessionRuntimeError("STORE_CLOSE_UNCONFIRMED")
 
-    async def _close_guard(self) -> bool:
+    async def _close_guard(self, *, replacing: bool = False) -> bool:
+        if self._guard_closing is None:
+            self._guard_closing = asyncio.create_task(self._settle_guard(replacing=replacing))
+            self._guard_closing.add_done_callback(
+                lambda task: None if task.cancelled() else task.exception()
+            )
+        recorded = await asyncio.shield(self._guard_closing)
+        ended = await self._records.wait(self._limits.session_s)
+        return recorded and ended
+
+    async def _settle_guard(self, *, replacing: bool = False) -> bool:
         """Close Guard once the session stops it is recording have ended.
 
         Guard records a stop under the Task lock (STOP-01), in the background.
@@ -673,9 +790,8 @@ class SessionRuntime:
         if self._assembled is None:
             await settle()
         else:
-            await self._assembled.aclose(settle=settle)
-        ended = await self._records.wait(self._limits.session_s)
-        return recorded and ended
+            await self._assembled.aclose(settle=settle, replacing=replacing)
+        return recorded
 
     async def _close_store(self) -> bool:
         """Close the owned Store. False when its connection did not close in time.
@@ -695,24 +811,31 @@ class SessionRuntime:
         except TimeoutError:
             return False
 
-    def bindings(self) -> BackendBindings:
+    def _guard_bindings(self) -> GuardBindings:
         assembled = self._assembled
-        available = self._policy.available
-        return BackendBindings(
-            self.runner_for_task,
+        return GuardBindings(
             None if assembled is None else assembled.guard.human_control(assembled.operator_id),
-            close=self.close,
-            snapshot=self.snapshot,
-            discard_queued=None if assembled is None else assembled.transport.discard_queued,
-            create_session=self.create_session,
-            stop_session=self.stop_session,
-            session_blocker=self.creation_blocker,
-            policy=None if assembled is None else self._policy.registration_policy_view(),
-            task_events=self._events.set_task_listener,
-            answer_partials=self._events.set_partial_listener,
-            policy_access=self.change_server_access if available else None,
-            policy_destinations=self.destinations if assembled is not None else None,
-            settings_status=self._settings_status,
-            account=self._account,
-            queries=_store_queries(self.store),
+            None if assembled is None else assembled.transport.discard_queued,
+            None if assembled is None else self._policy.registration_policy_view(),
+            self.change_server_access if self._policy.available else None,
+            self.destinations if assembled is not None else None,
+        )
+
+    def bindings(self) -> BackendBindings:
+        return self._guard_bindings().apply(
+            BackendBindings(
+                self.runner_for_task,
+                None,
+                close=self.close,
+                snapshot=self.snapshot,
+                create_session=self.create_session,
+                stop_session=self.stop_session,
+                session_blocker=self.creation_blocker,
+                task_events=self._events.set_task_listener,
+                answer_partials=self._events.set_partial_listener,
+                guard_changes=self._listen_guard,
+                settings_status=self._settings_status,
+                account=self._account,
+                queries=_store_queries(self.store),
+            )
         )

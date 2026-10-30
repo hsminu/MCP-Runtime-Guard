@@ -7,7 +7,7 @@ imports them through ``services.bridge``.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from guard_app.adapters.codex_protocol import REASONING_EFFORTS
@@ -75,6 +75,27 @@ class CommandEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class GuardBindings:
+    """The five capabilities replaced together after a Guard reconnect."""
+
+    human_control: HumanControl | None
+    discard_queued: Callable[[str], int] | None
+    policy: PolicyView | None
+    policy_access: Callable[[str, tuple[str, ...], tuple[str, ...]], Awaitable[PolicyView]] | None
+    policy_destinations: Callable[[DestinationEdit | None], Awaitable[PolicyView]] | None
+
+    def apply(self, bindings: BackendBindings) -> BackendBindings:
+        return replace(
+            bindings,
+            human_control=self.human_control,
+            discard_queued=self.discard_queued,
+            policy=self.policy,
+            policy_access=self.policy_access,
+            policy_destinations=self.policy_destinations,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class BackendBindings:
     """Construct only in the backend thread from trusted app composition.
 
@@ -127,6 +148,7 @@ class BackendBindings:
     queries: StoreQueries | None = None
     scan_events: Callable[[Callable[[ScanState], None]], None] | None = None
     scan_for_review: Callable[[str], ScanState | None] | None = None
+    guard_changes: Callable[[Callable[[GuardBindings], None]], None] | None = None
 
 
 # A read-only Store query (B6-05) and its answer. `token` is the screen's own

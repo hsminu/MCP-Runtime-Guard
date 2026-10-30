@@ -376,7 +376,7 @@ class ServerListPage(QWidget):
         self.table_hint.setVisible(compact)
 
     def set_servers(self, surface: Surface[tuple[ServerSummary, ...]]) -> None:
-        """The bridge supplies the Registry result; overview rows are not reused."""
+        """The bridge supplies the public Registry query result."""
 
         if self._detail_dialog is not None:
             self._detail_dialog.close()
@@ -655,6 +655,14 @@ class ServerListPage(QWidget):
             self.activation_notice.setText(delete_unknown)
             return
         messages = {
+            "REG_ACTIVATION_RECONNECTED": (
+                "서버 설정 저장 완료 · 다시 연결함. 진행 중이던 Task는 정지됨."
+            ),
+            "REG_DELETE_RECONNECTED": "서버를 삭제하고 다시 연결함. 진행 중이던 Task는 정지됨.",
+            "REG_TOOLS_RECONNECTED": (
+                "도구 설정 저장 완료 · 다시 연결함. 진행 중이던 Task는 정지됨. "
+                "서버 목록에서 활성화하세요."
+            ),
             "REG_DELETED": "서버를 삭제함. 앱을 다시 시작하세요.",
             "REG_DELETE_UNKNOWN": delete_unknown,
             **CHANGE_RESULTS,

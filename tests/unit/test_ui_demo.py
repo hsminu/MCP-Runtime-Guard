@@ -61,7 +61,6 @@ def query(lane, *, page=1, search="", server_id="", sort=ApprovalSort.OLDEST):
 
 def test_demo_fills_every_management_page(app, demo) -> None:
     window, data = demo
-    assert window.overview.metric_rows[0].value.text() == "3건"
     assert window.server_page.table.rowCount() == len(ui_demo.SERVERS)
     assert window.log_page.table.rowCount() == len(data.calls)
     assert window.policy_page.rules.rowCount() > 0

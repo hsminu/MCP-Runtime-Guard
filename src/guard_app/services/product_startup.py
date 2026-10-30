@@ -9,7 +9,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from guard_app.domain.enums import StorePrepareStep
-from guard_app.domain.errors import StoreError
+from guard_app.domain.errors import DispatchError, StoreError
 from guard_app.domain.models import RecoveryItemPage
 from guard_app.security.ids import new_id
 from guard_app.security.paths import AppFolders
@@ -24,6 +24,7 @@ from guard_app.services.guard import durable_failure_audit
 from guard_app.services.guard_relay import ApprovalOutcomes
 from guard_app.services.product_assembly import (
     AssembledGuard,
+    ProductAssemblyError,
     ProductInputs,
     assemble_guard,
     collect_registration_listing,
@@ -35,7 +36,7 @@ from guard_app.services.product_settings import (
     load_settings_profile,
 )
 from guard_app.services.registration_scans import RegistrationScans
-from guard_app.services.registry import ServerRegistry, ToolListingView
+from guard_app.services.registry import RegistryError, ServerRegistry, ToolListingView
 from guard_app.services.scanner import ScanService, cisco_connector
 from guard_app.services.session_cleanup import BackgroundWork, CleanupLimits
 from guard_app.services.session_execution import ExecutionGate
@@ -46,7 +47,11 @@ from guard_app.services.session_preparation import (
 from guard_app.storage.sqlite_store import SQLiteStore
 
 if TYPE_CHECKING:
-    from guard_app.services.session_runtime import CodexSessionFactory
+    from guard_app.services.session_runtime import (
+        CodexSessionFactory,
+        GuardRebuilder,
+        SessionRuntime,
+    )
 
 
 async def _close_failed_start(store: SQLiteStore) -> None:
@@ -64,6 +69,54 @@ def _registration_scans(
     collect: Callable[[ServerSettings], Awaitable[ToolListingView]],
 ) -> RegistrationScans:
     return RegistrationScans(registry, ScanService(registry, cisco_connector()), collect)
+
+
+def _guard_rebuilder(
+    store: SQLiteStore, product: ProductInputs, runtime: SessionRuntime
+) -> GuardRebuilder:
+    async def rebuild(
+        document: Mapping[str, object],
+    ) -> tuple[AssembledGuard, ApprovalOutcomes, CodexSessionFactory] | None:
+        assembled: AssembledGuard | None = None
+        adopted = False
+        try:
+            if not isinstance(product.registry, ServerRegistry):
+                return None
+            await product.registry.load()
+            assembled = await assemble_guard(
+                store,
+                replace(
+                    product,
+                    profile_document=document,
+                    next_call_seq=store.allocate_call_seq,
+                    failure_audit=durable_failure_audit(store),
+                ),
+            )
+            approvals = ApprovalOutcomes()
+            factory = codex_session_factory(
+                assembled, approvals, execution_allowed=runtime.execution_allowed
+            )
+            adopted = True
+            return assembled, approvals, factory
+        except (ProductAssemblyError, RegistryError, StoreError):
+            return None
+        finally:
+            # The runtime cannot own a composition that never returned. Preserve
+            # cancellation, and propagate DispatchError so it marks cleanup unconfirmed.
+            if assembled is not None and not adopted:
+                await assembled.aclose()
+
+    async def confirmed_rebuild(
+        document: Mapping[str, object],
+    ) -> tuple[AssembledGuard, ApprovalOutcomes, CodexSessionFactory] | None:
+        try:
+            return await rebuild(document)
+        except DispatchError:
+            # Includes an unconfirmed close of a partially assembled transport.
+            runtime.mark_cleanup_unconfirmed()
+            return None
+
+    return confirmed_rebuild
 
 
 async def bootstrap_product(
@@ -172,6 +225,8 @@ async def bootstrap_product(
                     assembled, approvals, execution_allowed=runtime.execution_allowed
                 )
             )
+        if session_factory is None and product is not None:
+            runtime.connect_guard_rebuilder(_guard_rebuilder(store, product, runtime))
         after = first_page.next_after
 
         async def next_page() -> RecoveryItemPage:

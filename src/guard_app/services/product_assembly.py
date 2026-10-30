@@ -49,6 +49,7 @@ from guard_app.domain.enums import RegStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ToolSpec
+from guard_app.domain.reasons import Reason
 from guard_app.ports import Registry, Store
 from guard_app.security.digest import JcsCanonicalizationError, tool_fingerprint
 from guard_app.security.endpoints import EndpointError, normalize_endpoint
@@ -272,6 +273,29 @@ async def _record_listings(
     return frozenset(failed)
 
 
+class GlobalHaltRelay:
+    """Hold only the planned Guard close; every other halt keeps Store authority."""
+
+    def __init__(self, halt: Callable[[Reason], None]) -> None:
+        self._halt = halt
+        self.replacing = False
+        self._held = False
+
+    def __call__(self, reason: Reason) -> None:
+        if self.replacing and reason is Reason.GUARD_CLOSED:
+            self._held = True
+        else:
+            self._halt(reason)
+
+    def release_held_halt(self) -> None:
+        if self._held:
+            self._held = False
+            self._halt(Reason.GUARD_CLOSED)
+
+    def discard_held_halt(self) -> None:
+        self._held = False
+
+
 @dataclass(slots=True, repr=False)
 class AssembledGuard:
     loaded: LoadedProfile
@@ -283,6 +307,7 @@ class AssembledGuard:
     call_timeout_s: float = 30.0
 
     resource_resolver: ResourceResolver | None = None
+    halt_relay: GlobalHaltRelay | None = None
 
     @property
     def settings(self) -> GuardSettings:
@@ -302,7 +327,20 @@ class AssembledGuard:
 
         return tuple(view for view in self.tool_views if self.offers_tool(view.tool_ref))
 
-    async def aclose(self, *, settle: Callable[[], Awaitable[object]] | None = None) -> None:
+    def release_held_halt(self) -> None:
+        if self.halt_relay is not None:
+            self.halt_relay.release_held_halt()
+
+    def discard_held_halt(self) -> None:
+        if self.halt_relay is not None:
+            self.halt_relay.discard_held_halt()
+
+    async def aclose(
+        self,
+        *,
+        settle: Callable[[], Awaitable[object]] | None = None,
+        replacing: bool = False,
+    ) -> None:
         # NOTIFY-01: end transport work first so reserved calls settle, then Guard
         # refuses new approvals and drops unconsumed released text. `settle` runs
         # in between, while Guard still records (a session stop, STOP-01).
@@ -313,7 +351,14 @@ class AssembledGuard:
                 if settle is not None:
                     await settle()
             finally:
-                await self.guard.aclose()
+                relay = self.halt_relay
+                if relay is not None:
+                    relay.replacing = replacing
+                try:
+                    await self.guard.aclose()
+                finally:
+                    if relay is not None:
+                        relay.replacing = False
 
 
 def _server_streams(loaded: LoadedProfile, inputs: ProductInputs) -> Mapping[str, StreamFactory]:
@@ -422,6 +467,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
     global_halt = getattr(store, "halt_execution", None)
     if inputs.folders is not None and not callable(global_halt):
         raise ProductAssemblyError("GLOBAL_HALT_UNAVAILABLE")
+    halt_relay = None if global_halt is None else GlobalHaltRelay(global_halt)
     transport = McpTransport(
         {server_id: streams[server_id] for server_id in server_ids},
         call_timeout_s=inputs.call_timeout_s,
@@ -453,7 +499,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             approval_id_factory=lambda: new_id("approval"),
             next_call_seq=inputs.next_call_seq,
             failure_audit=inputs.failure_audit,
-            on_global_halt=global_halt,
+            on_global_halt=halt_relay,
             monotonic=time.monotonic,
             approval_ttl_seconds=settings.approval_ttl_seconds,
             taint_mode=settings.taint_mode,
@@ -474,6 +520,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
             inputs.operator_id,
             inputs.call_timeout_s,
             inputs.resource_resolver,
+            halt_relay,
         )
         adopted = True
         return assembled

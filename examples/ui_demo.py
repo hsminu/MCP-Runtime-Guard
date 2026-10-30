@@ -3,7 +3,7 @@
 The session's run, approval review and stop controls drive the real synthetic
 Guard backend (``examples.synthetic_app``). The read-only management screens
 have no backend query yet, so this demo answers them with fixed, clearly fake
-rows: overview, MCP servers and their scan status, call logs and their stages,
+rows: MCP servers and their scan status, call logs and their stages,
 the approval list, the policy rules and the Codex account state. Policy saves
 and account logins only change these fake rows. Nothing here reaches a real
 Registry, Store or Codex.
@@ -54,12 +54,7 @@ from guard_app.ui.call_logs import (
     PublicCallSummary,
 )
 from guard_app.ui.models import (
-    AttentionItem,
-    FlowBucket,
     LoadState,
-    OverviewSnapshot,
-    OverviewTotals,
-    RecentCall,
     ServerSummary,
     Surface,
 )
@@ -241,7 +236,7 @@ _POLICY_SERVERS = (
 
 def calls(now: datetime) -> tuple[PublicCallSummary, ...]:
     rows = []
-    # The tier column stays in _CALLS for the overview; the log shows none (#86).
+    # The log exposes no boundary tier (#86).
     for index, (server, tool, kind, _tier, decision, reason, approval, status, ago) in enumerate(
         _CALLS, 1
     ):
@@ -385,105 +380,6 @@ async def registration(request: RegistrationRequest) -> RegistrationView:
     )
 
 
-def overview(now: datetime, call_rows: tuple[PublicCallSummary, ...]) -> OverviewSnapshot:
-    pending = sum(1 for row in _APPROVALS if row[2] is ApprovalStatus.PENDING)
-    blocked = sum(1 for row in call_rows if row.current_status == "DENIED")
-    active = sum(1 for server in SERVERS if server.registry_status == "active")
-    attention = (
-        AttentionItem(
-            "attention-approval-1",
-            "approval",
-            "INTERNAL_TO_EXTERNAL",
-            "mail",
-            "task-demo-a",
-            "request-demo-01",
-            waiting_since=now - timedelta(minutes=9),
-            target_page="approvals",
-            target_id="approval-demo-01",
-            action_available=True,
-        ),
-        AttentionItem(
-            "attention-approval-2",
-            "approval",
-            "LABEL_EXCEEDS_BOUNDARY",
-            "drive",
-            "task-demo-a",
-            "request-demo-03",
-            waiting_since=now - timedelta(minutes=3),
-            target_page="approvals",
-            target_id="approval-demo-03",
-            action_available=True,
-        ),
-        AttentionItem(
-            "attention-unknown-1",
-            "outcome_unknown",
-            None,
-            "mail",
-            "task-demo-a",
-            "request-0009",
-            occurred_at=now - timedelta(minutes=83),
-            target_page="logs",
-            target_id="call-0009",
-        ),
-        AttentionItem(
-            "attention-blocked-1",
-            "blocked",
-            "REG_NOT_ACTIVE",
-            "crm",
-            "task-demo-b",
-            "request-0004",
-            occurred_at=now - timedelta(minutes=25),
-            target_page="logs",
-            target_id="call-0004",
-        ),
-        AttentionItem(
-            "attention-fingerprint-1",
-            "fingerprint_changed",
-            "TOOL_FINGERPRINT_CHANGED",
-            "crm",
-            occurred_at=now - timedelta(days=1),
-            target_page="servers",
-            target_id="crm",
-        ),
-        AttentionItem(
-            "attention-registration-1",
-            "registration",
-            None,
-            "drive",
-            occurred_at=now - timedelta(hours=3),
-            target_page="servers",
-            target_id="drive",
-        ),
-    )
-    recent = tuple(
-        RecentCall(
-            row.call_id,
-            row.server_id or "",
-            row.tool_name or "",
-            row.occurred_at,
-            row.initial_decision,
-            row.current_status,
-        )
-        for row in call_rows[:8]
-    )
-    hour = now.replace(minute=0, second=0, microsecond=0)
-    flow = tuple(
-        FlowBucket(hour - timedelta(hours=11 - index), amount)
-        for index, amount in enumerate((2, 0, 1, 4, 3, 6, 2, 5, 8, 3, 4, 2))
-    )
-    return OverviewSnapshot(
-        totals=Surface(
-            LoadState.READY,
-            OverviewTotals(active, pending, blocked, now - timedelta(hours=24), now),
-            now,
-        ),
-        servers=Surface(LoadState.READY, SERVERS, now),
-        attention=Surface(LoadState.READY, attention, now),
-        recent_calls=Surface(LoadState.READY, recent, now),
-        flow=Surface(LoadState.READY, flow, now),
-    )
-
-
 class DemoData:
     """Answers the window's read-only queries with the fake rows above."""
 
@@ -532,7 +428,6 @@ class DemoData:
     def fill(self) -> None:
         now = datetime.now(UTC)
         window = self.window
-        window.set_overview_snapshot(overview(now, self.calls))
         window.set_server_snapshot(Surface(LoadState.READY, SERVERS, now))
         window.set_call_log_snapshot(Surface(LoadState.READY, self.calls, now))
         window.policy_page.set_view(self.policy)

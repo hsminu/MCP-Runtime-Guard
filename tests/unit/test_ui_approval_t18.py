@@ -1,4 +1,4 @@
-"""T18: 승인 상세·목록·실행 검토·승인 알림의 표시 필드와 외부 열기 계수."""
+"""T18: 승인 상세·목록·실행 검토의 표시 필드와 외부 열기 계수."""
 
 import os
 from datetime import UTC, datetime
@@ -20,8 +20,6 @@ from guard_app.ui.approval_detail import (
     visible_review_text,
 )
 from guard_app.ui.approvals import ApprovalListPage, ApprovalPage, ApprovalSummary
-from guard_app.ui.models import AttentionItem
-from guard_app.ui.overview import AttentionRow
 from guard_app.ui.runtime import RuntimePanel
 
 from .test_approval_detail import start_http_probe
@@ -140,22 +138,6 @@ def test_all_approval_fields_are_literal_and_never_open_links(app, monkeypatch):
             assert sum(line.count(visible_review_text(payload)) for line in shown) == 5
             assert payload in panel.diagnostic_text.text()
             assert panel.diagnostic_text.textFormat() == Qt.TextFormat.PlainText
-            card = AttentionRow(
-                AttentionItem(
-                    "attention",
-                    "approval",
-                    server_id=payload,
-                    task_id=payload,
-                    request_id=payload,
-                    reason_code=payload,
-                    occurred_at=now,
-                    waiting_since=now,
-                )
-            )
-            widgets.append(card)
-            texts = [label.text() for label in card.findChildren(QLabel)]
-            assert any(text.count(payload) == 3 for text in texts)
-            assert "미확인" in texts  # 임의 reason_code 원문은 고정 사유 문구로 대체.
             detail.close()  # 모달 해제 뒤 각 표면을 별도로 클릭한다.
             for widget in widgets:
                 if widget is detail:

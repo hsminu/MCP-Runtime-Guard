@@ -9,13 +9,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton
 
-from guard_app.domain.enums import ApprovalStatus
+from guard_app.domain.enums import ApprovalStatus, TaskStatus
 from guard_app.services.bridge import RegistrationView, ScanState
 from guard_app.ui.approvals import ApprovalPage, ApprovalSummary
 from guard_app.ui.call_logs import PublicCallDetail, PublicCallSummary
-from guard_app.ui.models import LoadState, ServerSummary, Surface
+from guard_app.ui.models import LoadState, RuntimeIdentity, RuntimeMode, ServerSummary, Surface
+from guard_app.ui.presentation import format_kst
+from guard_app.ui.widgets import PlainDetailDialog
 from guard_app.ui.window import GuardWindow
 
 from .test_a201_scan_report_ui import bridge as bridge
@@ -211,3 +213,87 @@ def test_product_window_without_approval_source_never_waits_forever(app: QApplic
     assert page.state is LoadState.UNAVAILABLE
     assert page.current_query is None
     window.close()
+
+
+def test_runtime_mode_is_unconfigured_until_trusted_bootstrap_sets_it(app) -> None:
+    window = GuardWindow()
+    assert window.runtime_identity.text() == "모델: 미설정"
+    window.set_runtime_identity(RuntimeIdentity(model_mode=RuntimeMode.MOCK))
+    assert window.runtime_identity.text() == "모델: mock"
+    window.set_runtime_identity(RuntimeIdentity(model_mode=RuntimeMode.CODEX))
+    assert window.runtime_identity.text() == "모델: Codex"
+    window.navigate("runs")
+    assert "상태 미확인" in window.task_status_card.status_label.text()
+    window.set_task_status(TaskStatus.UNKNOWN_OUTCOME)
+    assert "결과 불명" in window.task_status_card.status_label.text()
+    assert "수신측" in window.task_status_card.detail_label.text()
+    assert window.task_status_card.findChildren(QPushButton) == []
+    window.navigate("server_add")
+    assert window.breadcrumb.text() == "MCP 서버 추가"
+    assert "Registry 등록은 아직 연결되지 않아" in window.server_add_form.status.text()
+    assert window.server_add_form.validated_draft is None
+
+
+def test_registry_list_uses_its_own_public_snapshot_and_filters(app) -> None:
+    window = GuardWindow()
+    public = ServerSummary(
+        "public-docs", "공개 문서", "PUBLIC", "general_external", "active", "connected", "stdio"
+    )
+    pending = ServerSummary(
+        "pending-send",
+        "외부 전송",
+        "INTERNAL",
+        "approved_external",
+        "pending",
+        "disconnected",
+        "streamable_http",
+    )
+    assert window.server_page.table.rowCount() == 0
+    assert "조회 기능 미연결" in window.server_page.state_message.message.text()
+    window.set_server_snapshot(Surface(LoadState.READY, (public, pending)))
+    assert window.server_page.table.rowCount() == 2
+    assert window.server_page.table.item(0, 3).text() == "공개"
+    assert window.server_page.table.item(0, 3).toolTip() == "PUBLIC"
+    assert window.server_page.table.item(1, 4).text() == "등록 검토 중"
+    assert window.server_page.table.item(1, 4).toolTip() == "PENDING"
+    assert window.server_page.table.item(1, 5).text() == "연결 안 됨"
+    assert window.server_page.table.item(0, 0).toolTip() == ""
+    window.server_page.search.setText("pending-send")
+    assert window.server_page.table.rowCount() == 1
+    window.server_page.transport_filter.setCurrentIndex(1)
+    assert window.server_page.table.rowCount() == 0
+    assert "일치하는 서버가 없음" in window.server_page.state_message.message.text()
+    window.server_page.transport_filter.setCurrentIndex(0)
+    window.navigate("servers", "pending-send")
+    assert window.server_page._selected_id() == "pending-send"
+
+
+def test_registry_detail_is_plain_text_and_stale_data_is_labeled(app) -> None:
+    window = GuardWindow()
+    server = ServerSummary(
+        "safe-id", '<img src="https://example.invalid/secret">', None, None, "active", None, "stdio"
+    )
+    window.set_server_snapshot(Surface(LoadState.STALE, (server,)))
+    assert window.server_page.state_message.isVisibleTo(window.server_page)
+    assert "이전 조회 결과" in window.server_page.state_message.message.text()
+    window.navigate("servers", "safe-id")
+    window.server_page.detail_button.click()
+    dialog = window.server_page._detail_dialog
+    assert dialog is not None
+    assert '<img src="https://example.invalid/secret">' in [
+        label.text() for label in dialog.findChildren(QLabel)
+    ]
+    assert "미지정 · 미제공" in [label.text() for label in dialog.findChildren(QLabel)]
+    dialog.close()
+
+
+def test_kst_needs_aware_timestamp_and_plain_detail_keeps_markup_literal(app) -> None:
+    assert format_kst(datetime(2026, 10, 11, 16, 30, tzinfo=UTC)) == (
+        "2026년 10월 12일 01:30:00 KST"
+    )
+    assert format_kst(datetime(2026, 10, 12, 1, 30)) == "미제공"
+    dialog = PlainDetailDialog()
+    marker = '<img src="https://example.invalid/secret">'
+    dialog.show_detail(title="합성 상세", text=marker)
+    assert dialog.body.toPlainText() == marker
+    dialog.close()

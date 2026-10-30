@@ -90,6 +90,31 @@ class TaskPolicy:
         self._applied_document = document
         self._saver = saver
         self._task_source = task_source
+        self._reconnect: Callable[[Mapping[str, object]], Awaitable[bool]] | None = None
+
+    def connect_reconnect(
+        self, reconnect: Callable[[Mapping[str, object]], Awaitable[bool]]
+    ) -> None:
+        self._reconnect = reconnect
+
+    def adopt_guard(self, assembled: AssembledGuard) -> None:
+        """Caller holds lock; no old Task or approval is adopted."""
+        self._assembled = assembled
+        self._settings = assembled.settings
+        self._applied_document = self._document
+
+    async def _finish_registration(self, code: str) -> bool:
+        """Completed writes only; failure/cancellation keeps the original restart code."""
+        reconnected = False
+        try:
+            if self._reconnect is not None:
+                reconnected = await self._reconnect(self.registration_document())
+            return reconnected
+        finally:
+            if not reconnected:
+                self._admission.require_restart(code)
+                if self._assembled is not None:
+                    await self._assembled.guard.aclose()
 
     @property
     def available(self) -> bool:
@@ -154,6 +179,9 @@ class TaskPolicy:
                 raise SessionRuntimeError(self._admission.restart_code)
             # Read under the lock: a change that waited here starts from the
             # document the change before it saved, not the one it replaced (A117).
+            assembled = self._assembled
+            if assembled is None:
+                raise SessionRuntimeError("POLICY_CHANGE_UNAVAILABLE")
             document = self._document
             change = _server_access_change(document, assembled, server_id, allowed, denied)
             await self._save_change(assembled, saver, task_source, change, stop_sessions)
@@ -246,14 +274,14 @@ class TaskPolicy:
         active: bool,
         operator_id: str,
         reviewed_scan_id: str | None = None,
-    ) -> None:
+    ) -> bool:
         """A105: serialize with policy edits and Task creation, including both writes.
 
         The scan ID was shown at activation; Scanner warnings never prevent activation.
         Activation saves/applies permissions while still PENDING, then activates.
         Blocking reverses the order: revoke Registry authority before saving.
         Any incomplete write sequence closes Guard; never retry it in this run.
-        Transport membership is fixed at assembly, so success also needs restart.
+        Transport membership is fixed at assembly; completed writes may reassemble it.
         """
         async with self.lock:
             self.check_registration()
@@ -339,10 +367,11 @@ class TaskPolicy:
                     )
                 completed = True
             finally:
-                code = "REG_ACTIVATION_RESTART_REQUIRED" if completed else "REG_ACTIVATION_UNKNOWN"
-                self._admission.require_restart(code)
-                if self._assembled is not None:
-                    await self._assembled.guard.aclose()
+                if not completed:
+                    self._admission.require_restart("REG_ACTIVATION_UNKNOWN")
+                    if self._assembled is not None:
+                        await self._assembled.guard.aclose()
+            return await self._finish_registration("REG_ACTIVATION_RESTART_REQUIRED")
 
     async def _apply_registration_change(
         self,
@@ -372,7 +401,7 @@ class TaskPolicy:
         stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
         *,
         operator_id: str,
-    ) -> None:
+    ) -> bool:
         """A208: revoke, save/apply removal, delete; never retry partial writes (I6/I8)."""
         async with self.lock:
             self.check_registration()
@@ -444,11 +473,11 @@ class TaskPolicy:
                 )
                 completed = True
             finally:
-                self._admission.require_restart(
-                    "REG_DELETE_RESTART_REQUIRED" if completed else "REG_DELETE_UNKNOWN"
-                )
-                if self._assembled is not None:
-                    await self._assembled.guard.aclose()
+                if not completed:
+                    self._admission.require_restart("REG_DELETE_UNKNOWN")
+                    if self._assembled is not None:
+                        await self._assembled.guard.aclose()
+            return await self._finish_registration("REG_DELETE_RESTART_REQUIRED")
 
     async def save_tool_settings(
         self,
@@ -458,8 +487,8 @@ class TaskPolicy:
         registry: ServerRegistry,
         stop_sessions: Callable[[tuple[str, ...]], Awaitable[None]],
         review_unknown: Callable[[], None],
-    ) -> None:
-        """Revoke authority, save, apply, close. Both writes require a restart."""
+    ) -> bool:
+        """Revoke authority, save, apply, then reconnect only after both writes."""
         async with self.lock:
             self.check_registration()
             current = self.registration_document()
@@ -526,14 +555,12 @@ class TaskPolicy:
             finally:
                 # Unknown writes/cancellation also block registration (A173, I6).
                 # Cancellation propagates after closing the Guard.
-                if not rejected:
-                    if not completed:
-                        review_unknown()
-                    self._admission.require_restart(
-                        "REG_TOOLS_RESTART_REQUIRED" if completed else "REG_TOOLS_UNKNOWN"
-                    )
+                if not rejected and not completed:
+                    review_unknown()
+                    self._admission.require_restart("REG_TOOLS_UNKNOWN")
                     if self._assembled is not None:
                         await self._assembled.guard.aclose()
+            return await self._finish_registration("REG_TOOLS_RESTART_REQUIRED")
 
     def registration_document(self) -> Mapping[str, object]:
         if isinstance(self._document, FrozenJsonObject):
@@ -553,7 +580,7 @@ class TaskPolicy:
         *,
         updating: bool,
         sources: tuple[dict[str, object], ...] = (),
-    ) -> None:
+    ) -> bool:
         async with self.lock:
             if self._saver is None or self._admission.closed:
                 raise SessionRuntimeError("REG_SETTINGS_UNAVAILABLE")
@@ -603,10 +630,6 @@ class TaskPolicy:
                     await stop_sessions(
                         await self._apply(self._assembled, change, self._task_source)
                     )
-                if updating:
-                    self._admission.require_restart("REG_PIN_RESTART_REQUIRED")
-                    if self._assembled is not None:
-                        await self._assembled.guard.aclose()
                 completed = True
             finally:
                 # Registry may already be PENDING. Never retry a partially saved
@@ -615,6 +638,10 @@ class TaskPolicy:
                     self._admission.require_restart("POLICY_SAVE_UNKNOWN")
                     if self._assembled is not None:
                         await self._assembled.guard.aclose()
+
+            return (
+                await self._finish_registration("REG_PIN_RESTART_REQUIRED") if updating else False
+            )
 
     async def _apply(
         self,
