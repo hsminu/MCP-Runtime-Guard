@@ -88,7 +88,7 @@
 - [x] B5.12 모델 고정 문구표 A 검토·세션 관리자 연결 · [#20 A 검토 댓글(2026-10-28)](https://github.com/hsminu/MCP-Runtime-Guard/issues/20#issuecomment-6464059746)
 - [x] B5.13 NOTIFY-01 계약·연결 [#28](https://github.com/hsminu/MCP-Runtime-Guard/pull/28)·[#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106): 완료 전 콜백 실패는 알림 0·전역 정지·재발행 0 · 후속: C6.10 독립 주입 검증
 - [x] B5.14 STOP-01 계약·A 연결·T41 확인([#106](https://github.com/hsminu/MCP-Runtime-Guard/issues/106)) · 후속: 실제 Codex T42 승인 대기·A watchdog 경로 확인
-- [x] B5.15 턴 단위 중단 B 구현·#20 A 동의, 진행 호출 유지·대상 ASK 취소와 최종 알림 · `TURN_INTERRUPTED`·`CANCELLED` 및 C 독립 계수 확인 대기 · [기록](archive/b/B5.15-interrupt-turn.md)
+- [x] B5.15 턴 단위 중단 B 구현·#20 A 동의, lock 대기 제출 사전 거절·진행 호출 유지·대상 ASK 취소와 최종 알림(#114 A 리뷰) · `TURN_INTERRUPTED`·`CANCELLED` 및 C 독립 계수 확인 대기 · [기록](archive/b/B5.15-interrupt-turn.md)
 
 ## B6 · SQLite 저장소
 
