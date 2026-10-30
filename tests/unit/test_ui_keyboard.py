@@ -35,7 +35,7 @@ def test_default_window_frame_fits_available_screen(app: QApplication) -> None:
     window.show()
     app.processEvents()
     assert window.screen().availableGeometry().contains(window.frameGeometry())
-    link = window.overview.metric_rows[0].findChild(QPushButton)
+    link = window._nav_buttons["servers"]
     assert link is not None
     link.setFocus()
     QTest.keyClick(link, Qt.Key.Key_Return)
@@ -408,3 +408,12 @@ def test_approval_detail_keyboard_traverses_both_plain_bodies_and_closes(app: QA
         assert host.focusWidget() is opener
         assert dialog.destination_body.toPlainText() == ""
         assert dialog.arguments_body.toPlainText() == ""
+
+
+def test_navigation_only_emits_a_read_only_target(app) -> None:
+    window = GuardWindow()
+    destinations: list[tuple[str, str]] = []
+    window.navigation_requested.connect(lambda page, key: destinations.append((page, key)))
+    window._nav_buttons["approvals"].click()
+    assert destinations == [("approvals", "")]
+    assert window.breadcrumb.text() == "승인 대기"

@@ -1,12 +1,7 @@
 """Qt presentation layer. Construct widgets on the Qt main thread."""
 
 from .models import (
-    AttentionItem,
-    FlowBucket,
     LoadState,
-    OverviewSnapshot,
-    OverviewTotals,
-    RecentCall,
     RuntimeIdentity,
     RuntimeMode,
     ServerSummary,
@@ -15,13 +10,8 @@ from .models import (
 from .window import GuardWindow
 
 __all__ = [
-    "AttentionItem",
-    "FlowBucket",
     "GuardWindow",
     "LoadState",
-    "OverviewSnapshot",
-    "OverviewTotals",
-    "RecentCall",
     "RuntimeIdentity",
     "RuntimeMode",
     "ServerSummary",

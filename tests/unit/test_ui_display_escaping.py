@@ -12,8 +12,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 from guard_app.domain.enums import ApprovalStatus
 from guard_app.ui.approvals import ApprovalListPage, ApprovalPage, ApprovalSummary
-from guard_app.ui.models import AttentionItem, LoadState, RecentCall, ServerSummary, Surface
-from guard_app.ui.overview import AttentionRow, RecentCallRow, ServerRow
+from guard_app.ui.models import LoadState, ServerSummary, Surface
 from guard_app.ui.presentation import public_display_text
 from guard_app.ui.servers import ServerDetailDialog, ServerListPage
 
@@ -43,26 +42,6 @@ def test_public_display_text_marks_hidden_and_blank_lookalike_chars() -> None:
     assert public_display_text("a\u3164b\u2800") == "a[U+3164]b[U+2800]"
     assert public_display_text("보고서_v2") == "보고서_v2"
     assert public_display_text("") == "미제공"
-
-
-def test_overview_rows_escape_ids_and_names(app: QApplication) -> None:
-    server = ServerRow(ServerSummary(_EVIL_ID, _EVIL_NAME))
-    attention = AttentionRow(
-        AttentionItem(
-            "item", "approval", server_id=_EVIL_ID, task_id="task\r1", request_id="r\u202e"
-        )
-    )
-    recent = RecentCallRow(RecentCall("call\n1", _EVIL_ID, "send\u200b\nmail"))
-    try:
-        for card in (server, attention, recent):
-            _assert_widget_texts_escaped(card)
-        labels = {label.text() for label in server.findChildren(QLabel)}
-        assert any(public_display_text(_EVIL_ID) in label for label in labels)
-        assert public_display_text(_EVIL_NAME) in labels
-        assert server.link.accessibleName().startswith(public_display_text(_EVIL_ID))
-    finally:
-        for card in (server, attention, recent):
-            card.deleteLater()
 
 
 def test_server_list_and_detail_escape_ids_and_names(app: QApplication) -> None:

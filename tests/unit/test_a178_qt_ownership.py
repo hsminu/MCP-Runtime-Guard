@@ -27,16 +27,8 @@ from guard_app.services.bridge import (
 from guard_app.ui.approval_detail import ApprovalDetailDialog, ApprovalDetailValue
 from guard_app.ui.destinations import DestinationDialog
 from guard_app.ui.models import (
-    AttentionItem,
-    LoadState,
-    OverviewSnapshot,
-    OverviewTotals,
-    RecentCall,
     ServerSummary,
-    Surface,
 )
-from guard_app.ui.overview import OverviewPage
-from guard_app.ui.overview_rows import AttentionRow, MetricRow, RecentCallRow, ServerRow
 from guard_app.ui.policy import PolicyPage, ToolAllowDialog
 from guard_app.ui.runtime import RuntimePanel
 from guard_app.ui.scan_report import ScanReportPanel
@@ -119,33 +111,6 @@ def test_detector_distinguishes_orphan_order_and_scopes_roots(roots):
 def test_window_without_backend(roots):
     roots.append(GuardWindow())
     assert_qt_owned(roots)
-
-
-def test_populated_overview(roots):
-    page = OverviewPage()
-    roots.append(page)
-    page.set_snapshot(
-        OverviewSnapshot(
-            totals=Surface(LoadState.READY, OverviewTotals(1, 1, 1)),
-            servers=Surface(
-                LoadState.READY,
-                (ServerSummary("server", "server", session_status="connected"),),
-            ),
-            attention=Surface(LoadState.READY, (AttentionItem("item", "approval"),)),
-            recent_calls=Surface(LoadState.READY, (RecentCall("call", "server", "tool"),)),
-        )
-    )
-    # Check ownership first: a Python itemAt() call re-runs PySide's layout
-    # ownership hook and could hide the defect. Never enumerate QObject children.
-    assert_qt_owned(roots)
-    assert len(page.metric_rows) == 3
-    assert all(isinstance(row, MetricRow) for row in page.metric_rows)
-    assert len(page._server_rows) == 1
-    assert isinstance(page._server_rows[0], ServerRow)
-    assert page.attention_layout.count() == 1
-    assert isinstance(page.attention_layout.itemAt(0).widget(), AttentionRow)
-    assert page.calls_layout.count() == 1
-    assert isinstance(page.calls_layout.itemAt(0).widget(), RecentCallRow)
 
 
 def test_server_and_folder_forms_with_rows(roots):
