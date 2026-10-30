@@ -85,7 +85,7 @@ def _settings_issue(server: ServerSummary) -> str:
     # B's fixed issue codes only; an unknown one is never echoed (#86).
     issue = server.settings_issue
     if issue is None:
-        return "확인된 문제 없음 · Profile에서 고른 서버만 확인함"
+        return "확인된 문제 없음"
     if issue.startswith("URL_"):
         return "저장된 URL을 쓸 수 없음. 이 서버는 연결하지 않음."
     if issue == "REG_SETTINGS_MISMATCH":

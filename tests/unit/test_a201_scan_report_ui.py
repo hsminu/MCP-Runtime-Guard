@@ -42,6 +42,7 @@ from guard_app.ui.scan_report import (
     ScanReviewDialog,
     ToolScanWarningPanel,
     activation_scan_text,
+    scan_headline,
 )
 from guard_app.ui.servers import ServerListPage
 from guard_app.ui.untrusted_text import UntrustedTextView, untrusted_display_text
@@ -255,7 +256,8 @@ def test_headline_without_findings_never_claims_safety(roots):
     panel.set_state(state(report=cisco_report((), completed=("YARA",))))
     panel.show()
     shown = visible_text(panel, panel)
-    assert "보고된 위험 없음 · 위험이 없다는 보장은 아님" in shown
+    assert scan_headline(()) == "보고된 위험 없음"
+    assert "보고된 위험 없음" in shown
     assert "끝내지 못한 검사가 있어 결과가 일부만 있음" in shown
     assert "안전" not in text(panel)
 

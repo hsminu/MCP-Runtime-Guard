@@ -80,7 +80,7 @@ KEY_MISSING_NOTICE = (
     "다음 검사부터 LLM도 검사함."
 )
 ADVISORY_NOTICE = "Scanner 경고는 활성화·승인을 막지 않음. 내용을 보고 직접 판단하세요."
-NO_FINDINGS = "보고된 위험 없음 · 위험이 없다는 보장은 아님"
+NO_FINDINGS = "보고된 위험 없음"
 INCOMPLETE_NOTICE = "끝내지 못한 검사가 있어 결과가 일부만 있음"
 SERVER_WIDE = "서버 전체"
 
