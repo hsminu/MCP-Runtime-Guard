@@ -2,9 +2,14 @@
 
 Keep service errors separate from report diagnostics. Model summaries are
 unverified plain text capped at 300 characters, without links or logging.
+A report reads top-down: one headline, then each tool's findings as C's plain
+categories (C4.22) with a meaning and an action. Analyzer names, raw codes,
+the model's self-assessment and summaries stay behind a folded details toggle.
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -25,8 +30,10 @@ from guard_app.services.bridge import (
     CommandStage,
     RegistrationRequest,
     RegistrationView,
+    ScanCategory,
     ScanState,
     new_command_id,
+    scan_category,
 )
 
 from .presentation import format_kst, public_display_text
@@ -73,6 +80,63 @@ KEY_MISSING_NOTICE = (
     "다음 검사부터 LLM도 검사함."
 )
 ADVISORY_NOTICE = "Scanner 경고는 활성화·승인을 막지 않음. 내용을 보고 직접 판단하세요."
+NO_FINDINGS = "보고된 위험 없음"
+INCOMPLETE_NOTICE = "끝내지 못한 검사가 있어 결과가 일부만 있음"
+SERVER_WIDE = "서버 전체"
+
+
+def _plain_findings(findings: Sequence[Finding]) -> list[tuple[ScanCategory, str]]:
+    """One line per category with its highest risk, highest first (LLM·YARA together)."""
+    highest: dict[str, tuple[ScanCategory, str]] = {}
+    for finding in findings:
+        category = scan_category(finding.code)
+        kept = highest.get(category.name)
+        if kept is None or RISK_ORDER.get(finding.severity, 0) > RISK_ORDER.get(kept[1], 0):
+            highest[category.name] = (category, finding.severity)
+    return sorted(highest.values(), key=lambda item: -RISK_ORDER.get(item[1], 0))
+
+
+def scan_headline(groups: Sequence[tuple[str, Sequence[Finding]]]) -> str:
+    """Count of plain lines and the tools they belong to; never says the server is safe."""
+    flagged = [(tool, len(_plain_findings(findings))) for tool, findings in groups if findings]
+    count = sum(lines for _, lines in flagged)
+    if not count:
+        return NO_FINDINGS
+    names = [public_display_text(tool) for tool, _ in flagged]
+    more = f" 외 {len(names) - 3}개" if len(names) > 3 else ""
+    return f"주의할 점 {count}개 · {', '.join(names[:3])}{more}"
+
+
+def _add_plain_finding(
+    layout: QVBoxLayout, category: ScanCategory, severity: str, *, action: bool = True
+) -> None:
+    layout.addWidget(plain_label(f"{category.name} · 위험도 {RISKS.get(severity, '알 수 없음')}"))
+    layout.addWidget(plain_label(category.meaning, name="secondary"))
+    if action:
+        layout.addWidget(plain_label(f"권장: {category.action}", name="secondary"))
+
+
+def _add_details(layout: QVBoxLayout) -> tuple[KeyboardActionButton, QVBoxLayout]:
+    """Raw codes, analyzers and model text, folded until the user opens them."""
+    toggle = KeyboardActionButton("자세히 ▸")
+    toggle.setObjectName("linkButton")
+    toggle.setCheckable(True)
+    toggle.setAutoDefault(False)
+    toggle.setAccessibleName("검사 자세히 펼치기")
+    frame = QFrame()
+    frame.setAccessibleName("검사 자세히")
+    layout.addWidget(toggle, 0, Qt.AlignmentFlag.AlignLeft)
+    layout.addWidget(frame)
+    details = QVBoxLayout(frame)
+    frame.setVisible(False)
+
+    def flip(opened: bool) -> None:
+        frame.setVisible(opened)
+        toggle.setText(f"자세히 {'▾' if opened else '▸'}")
+        toggle.setAccessibleName(f"검사 자세히 {'접기' if opened else '펼치기'}")
+
+    toggle.toggled.connect(flip)
+    return toggle, details
 
 
 def _diagnostic_text(diagnostic: AnalyzerDiagnostic) -> str:
@@ -189,7 +253,33 @@ class ScanReportPanel(QWidget):
 
     def _add_report(self, state: ScanState, report: ScanReport) -> None:
         layout = self._layout
-        layout.addWidget(
+        groups = [
+            (tool, tuple(f for f in report.findings if f.tool_name == tool)) for tool in state.tools
+        ]
+        unmatched = tuple(f for f in report.findings if f.tool_name not in state.tools)
+        if unmatched:
+            groups.append((SERVER_WIDE, unmatched))
+        layout.addWidget(plain_label(scan_headline(groups), name="sectionTitle"))
+        diagnostics = tuple(d for d in report.analyzer_diagnostics if d.tool_name is None)
+        if set(report.analyzers_required) - set(report.analyzers_completed):
+            layout.addWidget(plain_label(INCOMPLETE_NOTICE, name="runtimeMessage"))
+        if any(
+            d.analyzer == "LLM" and d.code == "SCAN_LLM_KEY_MISSING_OR_INVALID" for d in diagnostics
+        ):
+            layout.addWidget(plain_label(KEY_MISSING_NOTICE, name="runtimeMessage"))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(160)
+        scroll.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        body = QWidget()
+        cards = QVBoxLayout(body)
+        scroll.setWidget(body)
+        layout.addWidget(scroll)
+        for tool, findings in groups:
+            self._add_tool_card(cards, tool, findings, report, server_wide=tool is SERVER_WIDE)
+        cards.addStretch(1)
+        self.details_toggle, folded = _add_details(layout)
+        folded.addWidget(
             plain_label(
                 f"검사 시각 {format_kst(report.scanned_at_utc)} · "
                 f"Scanner {public_display_text(report.scanner_version)}",
@@ -199,8 +289,7 @@ class ScanReportPanel(QWidget):
         analyzers = QFrame()
         analyzers.setAccessibleName("분석기 결과")
         analyzer_layout = QVBoxLayout(analyzers)
-        layout.addWidget(analyzers)
-        diagnostics = tuple(d for d in report.analyzer_diagnostics if d.tool_name is None)
+        folded.addWidget(analyzers)
         for analyzer in report.analyzers_required:
             details = " · ".join(_diagnostic_text(d) for d in diagnostics if d.analyzer == analyzer)
             status = (
@@ -216,31 +305,25 @@ class ScanReportPanel(QWidget):
                     + (f" · {details}" if details else "")
                 )
             )
-        if any(
-            d.analyzer == "LLM" and d.code == "SCAN_LLM_KEY_MISSING_OR_INVALID" for d in diagnostics
-        ):
-            analyzer_layout.addWidget(plain_label(KEY_MISSING_NOTICE, name="runtimeMessage"))
         if report.overall_risk is not None:
-            layout.addWidget(
+            folded.addWidget(
                 plain_label(
                     f"서버 전체 LLM 자체 평가(참고): {public_display_text(report.overall_risk)}"
                 )
             )
-        _add_summary(layout, report.threat_summary, "모델 설명 · 서버 전체")
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(160)
-        scroll.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        body = QWidget()
-        cards = QVBoxLayout(body)
-        scroll.setWidget(body)
-        layout.addWidget(scroll)
-        for tool in state.tools:
-            findings = tuple(f for f in report.findings if f.tool_name == tool)
-            self._add_tool_card(cards, tool, findings, report)
-        unmatched = tuple(f for f in report.findings if f.tool_name not in state.tools)
-        if unmatched:
-            self._add_tool_card(cards, "서버 전체", unmatched, report, server_wide=True)
+        _add_summary(folded, report.threat_summary, "모델 설명 · 서버 전체")
+        for tool, findings in groups:
+            unfinished = (
+                ()
+                if tool is SERVER_WIDE
+                else tuple(d for d in report.analyzer_diagnostics if d.tool_name == tool)
+            )
+            if findings or unfinished:
+                folded.addWidget(plain_label(public_display_text(tool), name="sectionTitle"))
+            for diagnostic in unfinished:
+                _add_diagnostic(folded, diagnostic)
+            for finding in findings:
+                _add_finding(folded, finding, tool)
 
     @staticmethod
     def _add_tool_card(
@@ -255,18 +338,16 @@ class ScanReportPanel(QWidget):
         layout = QVBoxLayout(card)
         cards.addWidget(card)
         layout.addWidget(plain_label(public_display_text(tool), name="sectionTitle"))
-        highest = max(findings, key=lambda f: RISK_ORDER.get(f.severity, 0), default=None)
-        layout.addWidget(
-            plain_label(
-                f"최고 위험도: {_risk_text(highest.severity)}" if highest else "보고된 위험 없음"
+        plain = _plain_findings(findings)
+        for category, severity in plain:
+            _add_plain_finding(layout, category, severity)
+        if not plain:
+            unfinished = not server_wide and any(
+                d.tool_name == tool for d in report.analyzer_diagnostics
             )
-        )
-        if not server_wide:
-            for diagnostic in report.analyzer_diagnostics:
-                if diagnostic.tool_name == tool:
-                    _add_diagnostic(layout, diagnostic)
-        for finding in findings:
-            _add_finding(layout, finding, tool)
+            layout.addWidget(
+                plain_label("이 도구는 검사를 끝내지 못함" if unfinished else "보고된 위험 없음")
+            )
 
 
 def activation_scan_text(scan: ScanState | None) -> str:
@@ -327,21 +408,28 @@ class ToolScanWarningPanel(QFrame):
             diagnostics = tuple(
                 d for d in report.analyzer_diagnostics if d.tool_name in (None, tool_name)
             )
-            if findings:
+            plain = _plain_findings(findings)
+            if plain:
                 layout.addWidget(
                     plain_label(
-                        f"이 도구의 Scanner 경고 {len(findings)}개 · 승인을 막지 않음",
+                        f"이 도구의 Scanner 경고 {len(plain)}개 · 승인을 막지 않음",
                         name="sectionTitle",
                     )
                 )
+                for category, severity in plain:
+                    _add_plain_finding(layout, category, severity, action=False)
             elif not diagnostics:
                 layout.addWidget(plain_label("활성화 때 확인한 검사에서 이 도구의 경고 없음."))
             if "LLM" not in report.analyzers_completed:
                 layout.addWidget(plain_label("LLM 검사는 안 됨."))
-            for diagnostic in diagnostics:
-                _add_diagnostic(layout, diagnostic)
-            for finding in findings:
-                _add_finding(layout, finding, tool_name)
+            if diagnostics:
+                layout.addWidget(plain_label("끝내지 못한 검사가 있음."))
+            if diagnostics or findings:
+                self.details_toggle, folded = _add_details(layout)
+                for diagnostic in diagnostics:
+                    _add_diagnostic(folded, diagnostic)
+                for finding in findings:
+                    _add_finding(folded, finding, tool_name)
         else:
             layout.addWidget(plain_label("표시할 검사 결과 없음"))
         self.show()
