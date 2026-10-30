@@ -96,6 +96,15 @@ from guard_app.storage.startup_inventory import (
 
 SCHEMA_VERSION = 3
 APPLICATION_ID = 0x4D435047  # MCPG. 기존 다른 앱의 DB를 자동 채택하지 않는다.
+_APPROVAL_ROW_SELECT = """SELECT a.approval_id,r.task_id,r.server_id,r.tool_name,r.destination_id,
+    e.event_id AS reason_event_id,e.task_id AS reason_task_id,
+    e.at_utc AS reason_at_utc,e.reason_code AS approval_reason
+    FROM approvals AS a
+    LEFT JOIN requests AS r ON r.request_id=a.request_id
+    LEFT JOIN audit_events AS e ON e.event_id=(
+        SELECT event_id FROM audit_events
+        WHERE request_id=a.request_id AND event_type='APPROVAL_'||a.status
+        ORDER BY at_utc DESC,event_id DESC LIMIT 1)"""
 _MAX_SQLITE_INTEGER = (1 << 63) - 1
 _LEGACY_REASONS = MappingProxyType(
     {"AGT_DENY": Reason.ACCESS_DENY, "AGT_ERROR": Reason.ACCESS_ERROR}
@@ -126,6 +135,7 @@ _METHOD_WRITES = {
     "open_approval": True,
     "finish_approval": True,
     "get_approval": False,
+    "get_approval_row": False,
     "list_approvals": False,
     "list_calls": False,
     "get_call": False,
@@ -3208,16 +3218,8 @@ class SQLiteStore:
                     parameters,
                 ).fetchone()[0]
                 rows = connection.execute(
-                    """SELECT a.approval_id,r.task_id,r.server_id,r.tool_name,r.destination_id,
-                        e.event_id AS reason_event_id,e.task_id AS reason_task_id,
-                        e.at_utc AS reason_at_utc,e.reason_code AS approval_reason
-                    FROM approvals AS a
-                    LEFT JOIN requests AS r ON r.request_id=a.request_id
-                    LEFT JOIN audit_events AS e ON e.event_id=(
-                        SELECT event_id FROM audit_events
-                        WHERE request_id=a.request_id AND event_type='APPROVAL_'||a.status
-                        ORDER BY at_utc DESC,event_id DESC LIMIT 1)
-                    WHERE ((:pending=1 AND a.status='PENDING') OR
+                    _APPROVAL_ROW_SELECT
+                    + """ WHERE ((:pending=1 AND a.status='PENDING') OR
                            (:pending=0 AND a.status<>'PENDING'))
                       AND (:server_id IS NULL OR r.server_id=:server_id)
                       AND (:search='' OR substr(a.approval_id,1,:search_length)=:search
@@ -3230,47 +3232,59 @@ class SQLiteStore:
                     LIMIT :limit OFFSET :offset""",
                     parameters,
                 ).fetchall()
-                projected: list[ApprovalRow] = []
-                for row in rows:
-                    record = self._query_approval_locked(
-                        connection, _identifier(row["approval_id"])
-                    )
-                    if record is None:
-                        raise StoreError()
-                    task_id = _identifier(row["task_id"])
-                    reason = None
-                    if (
-                        record.status is not ApprovalStatus.PENDING
-                        and row["reason_event_id"] is not None
-                    ):
-                        _identifier(row["reason_event_id"])
-                        if _identifier(row["reason_task_id"]) != task_id:
-                            raise StoreError()
-                        _utc_value(row["reason_at_utc"])
-                        reason = _stored_reason(row["approval_reason"])
-                    projected.append(
-                        ApprovalRow(
-                            approval_id=record.approval_id,
-                            task_id=task_id,
-                            request_id=record.request_id,
-                            server_id=_identifier(row["server_id"]),
-                            tool_name=_identifier(row["tool_name"]),
-                            destination_id=None
-                            if row["destination_id"] is None
-                            else _identifier(row["destination_id"]),
-                            status=record.status,
-                            created_at_utc=record.created_at_utc,
-                            expires_at_utc=record.expires_at_utc,
-                            decided_at_utc=record.decided_at_utc,
-                            reason_code=reason,
-                            row_revision=record.row_revision,
-                        )
-                    )
                 return ApprovalListPage(
-                    rows=tuple(projected), total_count=_integer(total), as_of_utc=self._fresh_utc()
+                    rows=tuple(self._query_approval_row_locked(connection, row) for row in rows),
+                    total_count=_integer(total),
+                    as_of_utc=self._fresh_utc(),
                 )
 
         return await self._submit(read, method="list_approvals")
+
+    async def get_approval_row(self, approval_id: str) -> ApprovalRow | None:
+        """상태와 무관하게 원문 없는 승인 화면 행을 단일 읽기 트랜잭션에서 조회한다."""
+
+        def read() -> ApprovalRow | None:
+            _identifier(approval_id)
+            with self._transaction(write=False) as connection:
+                row = connection.execute(
+                    _APPROVAL_ROW_SELECT + " WHERE a.approval_id=?", (approval_id,)
+                ).fetchone()
+                if row is None:
+                    return None
+                return self._query_approval_row_locked(connection, row)
+
+        return await self._submit(read, method="get_approval_row")
+
+    def _query_approval_row_locked(
+        self, connection: sqlite3.Connection, row: sqlite3.Row
+    ) -> ApprovalRow:
+        record = self._query_approval_locked(connection, _identifier(row["approval_id"]))
+        if record is None:
+            raise StoreError()
+        task_id = _identifier(row["task_id"])
+        reason = None
+        if record.status is not ApprovalStatus.PENDING and row["reason_event_id"] is not None:
+            _identifier(row["reason_event_id"])
+            if _identifier(row["reason_task_id"]) != task_id:
+                raise StoreError()
+            _utc_value(row["reason_at_utc"])
+            reason = _stored_reason(row["approval_reason"])
+        return ApprovalRow(
+            approval_id=record.approval_id,
+            task_id=task_id,
+            request_id=record.request_id,
+            server_id=_identifier(row["server_id"]),
+            tool_name=_identifier(row["tool_name"]),
+            destination_id=None
+            if row["destination_id"] is None
+            else _identifier(row["destination_id"]),
+            status=record.status,
+            created_at_utc=record.created_at_utc,
+            expires_at_utc=record.expires_at_utc,
+            decided_at_utc=record.decided_at_utc,
+            reason_code=reason,
+            row_revision=record.row_revision,
+        )
 
     async def list_calls(self, query: CallListQuery) -> CallListPage:
         """단일 읽기 트랜잭션의 호출 목록과 전체 개수(B6-05 제안)."""
@@ -3569,6 +3583,11 @@ class SQLiteStore:
                         context.record.status is ApprovalStatus.PENDING
                         and status is ApprovalStatus.INVALIDATED
                         and reason is Reason.POLICY_CHANGED
+                    )
+                    and not (
+                        context.record.status is ApprovalStatus.APPROVED
+                        and status is ApprovalStatus.CANCELLED
+                        and reason is Reason.TURN_INTERRUPTED
                     )
                 )
             ):

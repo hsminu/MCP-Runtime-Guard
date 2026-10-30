@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal, Protocol
+from weakref import WeakValueDictionary
 
 from pydantic import ValidationError
 
@@ -224,6 +225,7 @@ class _OpeningOwner:
 class _PendingOwner(_OpeningOwner):
     approval_id: str
     handle: PendingResultHandle
+    turn_submission: object | None = None
 
 
 class ApprovalService:
@@ -272,6 +274,7 @@ class ApprovalService:
         self._channel_key = object()
         self._pending: dict[str, _PendingOwner] = {}
         self._opening: dict[str, _OpeningOwner] = {}
+        self._turn_approval_started: WeakValueDictionary[str, asyncio.Event] = WeakValueDictionary()
         self._results: dict[str, PendingResultHandle] = {}
         self._seen_requests: set[str] = set()
         self._causes: dict[str, PendingFinalCause] = {}
@@ -357,7 +360,12 @@ class ApprovalService:
                 )
 
     async def open(
-        self, req: ResolvedRequest, state: TaskState, decision: PolicyDecision
+        self,
+        req: ResolvedRequest,
+        state: TaskState,
+        decision: PolicyDecision,
+        *,
+        turn_submission: object | None = None,
     ) -> ApprovalRecord:
         """Task lock 안에서 생성 중 관계까지 종료·지문 변경 입구와 결속한다."""
         req = ResolvedRequest.model_validate(req)
@@ -367,12 +375,17 @@ class ApprovalService:
             req.task_id, req.epoch, req.request_id, req.tool.server_id, req.tool.tool_name
         )
         try:
-            return await self._open(req, state, decision)
+            return await self._open(req, state, decision, turn_submission=turn_submission)
         finally:
             self._opening.pop(req.request_id, None)
 
     async def _open(
-        self, req: ResolvedRequest, state: TaskState, decision: PolicyDecision
+        self,
+        req: ResolvedRequest,
+        state: TaskState,
+        decision: PolicyDecision,
+        *,
+        turn_submission: object | None = None,
     ) -> ApprovalRecord:
         """사본을 먼저 만들고 Store의 원자 대기 전이 ACK 뒤에 발행한다."""
         req = ResolvedRequest.model_validate(req)
@@ -429,7 +442,7 @@ class ApprovalService:
             raise _ApprovalRecordMismatchError()
         snapshot = replace(snapshot, state=waiting)
         self._memory_snapshots[approval.approval_id] = snapshot
-        self._register_pending(approval, snapshot)
+        self._register_pending(approval, snapshot, turn_submission=turn_submission)
         self._expiry_tasks[approval.approval_id] = asyncio.create_task(
             self._run_expiry(approval.approval_id)
         )
@@ -519,7 +532,13 @@ class ApprovalService:
             if owner.task_id == task_id and owner.epoch == epoch:
                 owner.handle._discard_released()
 
-    def _register_pending(self, record: ApprovalRecord, snapshot: ApprovalSnapshot) -> None:
+    def _register_pending(
+        self,
+        record: ApprovalRecord,
+        snapshot: ApprovalSnapshot,
+        *,
+        turn_submission: object | None = None,
+    ) -> None:
         def consumed() -> None:
             self._results.pop(record.request_id, None)
             self._pending.pop(record.approval_id, None)
@@ -534,6 +553,7 @@ class ApprovalService:
             server_id=snapshot.request.tool.server_id,
             tool_name=snapshot.request.tool.tool_name,
             handle=handle,
+            turn_submission=turn_submission,
         )
         self._results[record.request_id] = handle
         self._seen_requests.add(record.request_id)
@@ -747,6 +767,68 @@ class ApprovalService:
             )
         finally:
             lock.release()
+
+    def _turn_approval_event(self, task_id: str) -> asyncio.Event:
+        event = self._turn_approval_started.get(task_id)
+        if event is None:
+            event = asyncio.Event()
+            self._turn_approval_started[task_id] = event
+        return event
+
+    def _turn_owners(self, task_id: str, epoch: int) -> tuple[_PendingOwner, ...]:
+        return tuple(
+            owner
+            for owner in self._pending.values()
+            if owner.task_id == task_id and owner.epoch == epoch and not owner.handle._completed
+        )
+
+    async def _cancel_turn_locked(
+        self, task_id: str, epoch: int, *, approval_ids: frozenset[str]
+    ) -> int:
+        """이미 Task lock을 가진 Guard만 호출한다. 성공 시 단일 소비 알림을 낸다."""
+        cancelled = 0
+        for owner in self._turn_owners(task_id, epoch):
+            if owner.approval_id not in approval_ids:
+                continue
+            if owner.approval_id in self._inflight_tasks:
+                continue
+            snapshot = self._memory_snapshots.get(owner.approval_id)
+            record = await self._load_approval(owner.approval_id)
+            if snapshot is None or record is None:
+                raise _ApprovalTaskMismatchError()
+            if record.status not in _LIVE:
+                continue
+            if (
+                record.request_id != snapshot.request.request_id
+                or record.snapshot_hash != snapshot.hash
+                or record.approver_id != snapshot.approver_id
+                or record.expires_at_utc != snapshot.expires_at_utc
+            ):
+                raise _ApprovalRecordMismatchError()
+            state = await self._load_snapshot_task(snapshot)
+            if not self._host.policy_matches(state) or not self._task_matches(snapshot, state):
+                continue
+            self._discard_snapshot(record.approval_id)
+            try:
+                await self._finish_record(
+                    record,
+                    state,
+                    ApprovalStatus.CANCELLED,
+                    Reason.TURN_INTERRUPTED,
+                    TaskStatus.RUNNING,
+                    None,
+                )
+            except _ApprovalConflictError:
+                self._restore_snapshot_after_conflict(record.approval_id, snapshot)
+                raise
+            self._closing_approvals.pop(record.approval_id, None)
+            self._complete(
+                record.approval_id,
+                Denied(request_id=owner.request_id, reasons=(Reason.TURN_INTERRUPTED,)),
+                "cancelled",
+            )
+            cancelled += 1
+        return cancelled
 
     async def cancel_pending(self, task_id: str, *, expected_epoch: int) -> int:
         """세션 관리자 종료용. 일치하는 epoch의 Pending 관계가 있을 때만 정지한다."""
@@ -1063,6 +1145,9 @@ class ApprovalService:
             return self._denied(record, Reason.APPROVAL_RACE)
         # 예약 ACK 후에도 dispatch 위임까지 lock 소유 관계에 공백을 만들지 않는다.
         self._inflight_tasks[approval_id] = snapshot.task_id
+        started = self._turn_approval_started.pop(snapshot.task_id, None)
+        if started is not None:
+            started.set()
         self._cancel_expiry(approval_id)
         self._memory_snapshots.pop(approval_id, None)
         return _Reserved(req, state, snapshot.expires_at_utc, snapshot.monotonic_deadline)
