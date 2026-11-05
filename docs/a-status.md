@@ -299,6 +299,7 @@
 - [x] A221 Codex 보안 검토(daybreak, xhigh)의 A 단독 5건: MCP 메시지마다 8 MiB 수신 상한(수집 밖 포함), Codex 답변 보관 상한·답한 turn 정리, 도구 호출을 현재 turn에 결속, 답변 블록 500개 상한, 기기 로그인 URL·코드 검증([#118](https://github.com/hsminu/MCP-Runtime-Guard/pull/118)) · [기록](archive/a/A221-codex-security-review-fixes.md)
 - [ ] A221 D-03 turn 전체 기한 — 막힘: 시간 값 결정(사용자)
 - [ ] A221 D-04 모델용 schema의 비검토 주석 — 막힘: A·B 합의(DESC-01)
+- [x] A222 CI에서 설정 화면 key 줄 입력칸·버튼 위쪽이 1px 어긋남(354 대 355, 글꼴 metric 차이): 두 key 줄의 입력칸·버튼이 줄 높이를 채우게(`fill_row_height`), 글꼴을 강제로 바꾼 회귀 시험([#118](https://github.com/hsminu/MCP-Runtime-Guard/pull/118)) · [기록](archive/a/A222-key-row-height.md)
 
 ## 리팩터링(동작 유지)
 
