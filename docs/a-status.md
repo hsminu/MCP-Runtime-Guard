@@ -1,6 +1,6 @@
 # A 현황
 
-갱신: 2026-10-30 · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
+갱신: 2026-11-05 · 이전 상세: [2026-10-15까지의 A 현황](archive/status/a-status-2026-10-15.md)
 
 ## 막힌 것
 
@@ -13,6 +13,7 @@
 | CI pip-audit 단계(C6.24)·C 환경 재측정 | C | A41, A46 |
 | mcp 1.30.0 고정. main은 아직 1.29.0(`pyproject.toml`·`uv.lock`·`requirements.lock`). A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))는 main에 들어감 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
+| Sparrow 재검사로 04.01 2건 해소 확인 | 사용자 | A220 |
 
 **A가 막고 있는 것**: C6.20 설치판 리소스 위치(패키징). C4.13 경고 표시 화면은 A201([#110](https://github.com/hsminu/MCP-Runtime-Guard/pull/110)) 병합 대기.
 
@@ -269,6 +270,8 @@
 - [x] A217 #113 B·C 리뷰 후속: RECOVERED 단계 삭제 허용 제거와 시험(B 2번), Registry `delete` 설명 한국어(C), 재등록 revision 경계는 계약 초안에(B 3번), 320px 서버 목록은 실제 글꼴 최소 폭 215로 화면 유지(C 1번) · [기록](archive/a/A217-pr113-review.md)
 - [x] A218 서버 활성화·차단·삭제·도구 설정·지문 재확인을 저장하면 앱 재시작 없이 Guard를 다시 연결: 진행 중 Task 정지 뒤 transport·Guard·승인·Codex 팩토리·bridge 교체, 이전 Guard 종료의 `GUARD_CLOSED`만 저장소 정지 보류(실패·취소면 넘겨 재시작 필요), 교체와 겹친 세션 생성은 세대 검사로 거절 · [기록](archive/a/A218-guard-reconnect.md)
 - [x] A219 회의 결정으로 사이드바의 현황·감사 기록 화면 제거: 메뉴·스택·자리표시 화면, 현황 위젯·모델·아이콘·데모 스냅샷 삭제, 첫 화면은 대화 그대로, 없앤 화면 이동은 무시(감사 저장은 그대로) · [기록](archive/a/A219-remove-overview-audit.md)
+- [x] A220 Sparrow 04.01(오류 메시지 정보노출) 2건: 잠금·DB 시작 거부 문구(같은 모양인 설정 파일 거부 포함)를 `print` 대신 `guard_app.startup` 로거로 내고 stderr 안내·문구는 유지, 잡은 예외가 `print`에 닿지 않는 규칙 시험([#118](https://github.com/hsminu/MCP-Runtime-Guard/pull/118)) · [기록](archive/a/A220-sast-error-message-exposure.md)
+- [ ] A220 Sparrow 재검사로 해소 확인 — 막힘: 재검사(사용자)
 
 ## 통합·패키징
 
