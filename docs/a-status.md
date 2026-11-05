@@ -14,6 +14,8 @@
 | mcp 1.30.0 고정. main은 아직 1.29.0(`pyproject.toml`·`uv.lock`·`requirements.lock`). A145([#82](https://github.com/hsminu/MCP-Runtime-Guard/pull/82))는 main에 들어감 | C | A144 |
 | 공개 배포 전 "ChatGPT" 로그인 버튼 이름 재검토(C-CODEX-05, [#82 C 리뷰](https://github.com/hsminu/MCP-Runtime-Guard/pull/82)) | C | A148 |
 | Sparrow 재검사로 04.01 2건 해소 확인 | 사용자 | A220 |
+| Codex turn 전체 기한 값(D-03, 설계에는 호출별 감시 상한만 있음) | 사용자 | A221 |
+| 모델에 보내는 도구 schema의 비검토 주석 정리(D-04, DESC-01과 함께) | A·B | A221 |
 
 **A가 막고 있는 것**: C6.20 설치판 리소스 위치(패키징). C4.13 경고 표시 화면은 A201([#110](https://github.com/hsminu/MCP-Runtime-Guard/pull/110)) 병합 대기.
 
@@ -294,6 +296,9 @@
 - [x] A62 HTTP ResourceWarning 재현·스트림 생성 위치 추적 · [기록](archive/a/A62-http-stream-warning-investigation.md)
 - [x] A46 첫 연결의 `httpcore` 최초 import 정지를 모듈 import로 이동 · [기록](archive/a/A46-httpcore-preload.md)
 - [ ] A46 이전 a-status의 "C 측정 210–280ms" 재측정 — 막힘: C 환경(출처 기록 미확인)
+- [x] A221 Codex 보안 검토(daybreak, xhigh)의 A 단독 5건: MCP 메시지마다 8 MiB 수신 상한(수집 밖 포함), Codex 답변 보관 상한·답한 turn 정리, 도구 호출을 현재 turn에 결속, 답변 블록 500개 상한, 기기 로그인 URL·코드 검증([#118](https://github.com/hsminu/MCP-Runtime-Guard/pull/118)) · [기록](archive/a/A221-codex-security-review-fixes.md)
+- [ ] A221 D-03 turn 전체 기한 — 막힘: 시간 값 결정(사용자)
+- [ ] A221 D-04 모델용 schema의 비검토 주석 — 막힘: A·B 합의(DESC-01)
 
 ## 리팩터링(동작 유지)
 
