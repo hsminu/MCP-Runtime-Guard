@@ -42,6 +42,7 @@ from .widgets import (
     SecretLineEdit,
     SectionCard,
     StatusPill,
+    fill_row_height,
     plain_label,
 )
 
@@ -152,6 +153,7 @@ class CodexLoginInfo(SectionCard):
         self.api_key_button.clicked.connect(self._send_api_key)
         self.key_row.add_widget(self.api_key_input, 1)
         self.key_row.add_widget(self.api_key_button)
+        fill_row_height(self.api_key_input, self.api_key_button)
         layout.addWidget(self.key_row)
         self.input_status = plain_label("", name="secondary")
         layout.addWidget(self.input_status)

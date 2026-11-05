@@ -23,6 +23,7 @@ from .widgets import (
     SecretLineEdit,
     SectionCard,
     StatusPill,
+    fill_row_height,
     plain_label,
 )
 
@@ -86,6 +87,7 @@ class ScannerKeyForm(SectionCard):
         self.key_row.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.key_row.add_widget(self.key_input, 1)
         self.key_row.add_widget(self.save_button)
+        fill_row_height(self.key_input, self.save_button)
         self.add_widget(self.key_row)
         self.status = plain_label("", name="secondary")
         self.add_widget(self.status)
