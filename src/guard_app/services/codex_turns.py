@@ -12,6 +12,11 @@ from collections.abc import Callable
 from guard_app.services.runner import CodexAuthenticationError, CodexSessionError
 
 MAX_ANSWER_CHARS = 65_536
+# A221 (D-02): text kept for turns not answered yet, whatever turn IDs the
+# app-server reports. An honest turn keeps its deltas and its finished messages,
+# each within MAX_ANSWER_CHARS; past these bounds the session stops.
+MAX_RETAINED_CHARS = 4 * MAX_ANSWER_CHARS
+MAX_TRACKED_TURNS = 8
 _USAGE_LIMITS = frozenset({"usageLimitExceeded", "rateLimitExceeded"})
 
 
@@ -29,14 +34,31 @@ class TurnAnswers:
         self._piece_items: dict[str, str] = {}
         self._streamed: dict[str, int] = {}
         self._answer_chars: dict[str, int] = {}
+        self._tracked: set[str] = set()
+        self._retained = 0
+        # Set once a bound above is passed; the session then stops (A221).
+        self.overflowed = False
 
     def set_partial_handler(self, handler: Callable[[str], None] | None) -> None:
         self._on_partial = handler
+
+    def _admit(self, turn_id: str, chars: int) -> bool:
+        """Count what a turn keeps; False, and nothing more kept, past the bounds."""
+        if turn_id not in self._tracked:
+            if len(self._tracked) >= MAX_TRACKED_TURNS:
+                self.overflowed = True
+            self._tracked.add(turn_id)
+        self._retained += chars
+        if self._retained > MAX_RETAINED_CHARS:
+            self.overflowed = True
+        return not self.overflowed
 
     def message_completed(self, turn_id: object, item: dict[str, object]) -> None:
         """A finished agentMessage; `final_answer` messages make up the answer when present."""
         answer = item.get("text")
         if type(turn_id) is str and type(answer) is str:
+            if not self._admit(turn_id, len(answer)):
+                return
             self._texts.setdefault(turn_id, []).append(answer)
             if item.get("phase") == "final_answer":
                 self._finals.setdefault(turn_id, []).append(answer)
@@ -51,6 +73,8 @@ class TurnAnswers:
         """
         if type(turn_id) is not str or type(delta) is not str:
             return True
+        if not self._admit(turn_id, len(delta)):
+            return False
         total = self._answer_chars.get(turn_id, 0) + len(delta)
         self._answer_chars[turn_id] = total
         if total > MAX_ANSWER_CHARS:
@@ -72,7 +96,12 @@ class TurnAnswers:
         turn_id = turn.get("id") if type(turn) is dict else None
         if type(turn) is not dict or type(turn_id) is not str:
             return False
-        self._turns[turn_id] = turn
+        if not self._admit(turn_id, 0):
+            return False
+        # Only what answer() reads; the report's items and messages are not kept.
+        error = turn.get("error")
+        info = error.get("codexErrorInfo") if type(error) is dict else None
+        self._turns[turn_id] = {"status": turn.get("status"), "error": {"codexErrorInfo": info}}
         return True
 
     def completed(self, turn_id: str) -> bool:
@@ -88,7 +117,31 @@ class TurnAnswers:
         self._streamed[turn_id] = len(pieces)
 
     def answer(self, turn_id: str) -> str:
-        """A completed turn's answer, or the fixed failure of a turn that did not complete."""
+        """A completed turn's answer, or the fixed failure of a turn that did not complete.
+
+        Afterwards only this turn's completion is kept (A221): its text and every
+        other turn's state are dropped, so a long session does not accumulate.
+        """
+        try:
+            return self._answer(turn_id)
+        finally:
+            turn = self._turns[turn_id]
+            for kept in (
+                self._turns,
+                self._texts,
+                self._finals,
+                self._deltas,
+                self._pieces,
+                self._piece_items,
+                self._streamed,
+                self._answer_chars,
+            ):
+                kept.clear()
+            self._turns[turn_id] = turn
+            self._tracked = {turn_id}
+            self._retained = 0
+
+    def _answer(self, turn_id: str) -> str:
         turn = self._turns[turn_id]
         status = turn.get("status")
         if status == "completed":

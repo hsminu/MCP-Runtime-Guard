@@ -9,7 +9,10 @@ Only exact responses to registered tools/list integer IDs debit the total.
 Request IDs increase across collections, so late old pages cannot charge a new
 collection. Admission and SDK delivery are separated by backpressure, so the
 SDK-facing stream re-checks each response at delivery (check_delivery).
-Outside collection these limits do not change ordinary tool results.
+Outside collection the listing limits do not apply. A221: every message, in
+or out of collection, is also capped at MAX_MESSAGE_BYTES before it is
+decoded or parsed, so a tools/call result cannot grow the receive buffer or
+the SDK's parse without bound.
 All failures are sticky and contain fixed codes, never source/payload text.
 """
 
@@ -19,6 +22,10 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from typing import NoReturn
+
+# A221: one MCP message (stdio frame, HTTP JSON body, SSE event) of any kind.
+# The largest configurable result copy budget (worker) and the Codex frame cap.
+MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 
 class IngressError(RuntimeError):
@@ -32,10 +39,13 @@ class IngressError(RuntimeError):
 class IngressGate:
     """One connection's listing scopes; used only on its owning event loop."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_message_bytes: int = MAX_MESSAGE_BYTES) -> None:
+        if type(max_message_bytes) is not int or max_message_bytes < 1:
+            raise ValueError("positive integer message limit required")
         self.active = False
         self.reason: str | None = None
         self.failed = asyncio.Event()
+        self._message_bytes = max_message_bytes
         self._page_bytes = 0
         self._remaining_bytes = 0
         self._pending: set[int] = set()
@@ -75,9 +85,15 @@ class IngressGate:
         self.failed.set()
         raise IngressError(self.reason) from None
 
-    def check_size(self, size: int) -> None:
+    def check_message(self, size: int) -> None:
+        """A221: the cap for any one message, also outside collection."""
         if self.reason is not None:
             raise IngressError(self.reason)
+        if size > self._message_bytes:
+            self.fail("MCP_MESSAGE_TOO_LARGE")
+
+    def check_size(self, size: int) -> None:
+        self.check_message(size)
         if not self.active:
             return
         if size > self._page_bytes:

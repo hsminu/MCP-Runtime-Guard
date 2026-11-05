@@ -186,11 +186,41 @@ def test_notifications_are_candidate_bounded_and_do_not_debit_total():
 
 
 @pytest.mark.asyncio
-async def test_no_collection_does_not_cap_ordinary_messages():
+async def test_listing_limits_do_not_apply_outside_collection():
     payload = b"x" * 10000
     source = _Source(payload + b"\n")
     gate = IngressGate()
     assert await PipeFrameReader(source.read, gate).receive() == payload
+
+
+@pytest.mark.asyncio
+async def test_every_frame_is_capped_before_parse_also_outside_collection(monkeypatch):
+    """A221 (D-01): an ordinary message over the cap stops before decode or JSON."""
+    parsed: list[object] = []
+    monkeypatch.setattr(mcp_ingress.json, "loads", lambda value: parsed.append(value))
+    exact = b"x" * 100
+    assert await PipeFrameReader(_Source(exact + b"\n").read, IngressGate(100)).receive() == exact
+
+    source = _Source(b"y" * 100_000 + b"\n")
+    gate = IngressGate(100)
+    with pytest.raises(IngressError, match=r"^MCP_MESSAGE_TOO_LARGE$"):
+        await PipeFrameReader(source.read, gate).receive()
+    assert gate.failed.is_set()
+    assert parsed == []
+    assert 100_001 - len(source.data) <= 100 + 4096  # read stops near the cap
+    with pytest.raises(IngressError, match=r"^MCP_MESSAGE_TOO_LARGE$"):
+        gate.check_message(0)  # sticky
+
+
+def test_message_cap_also_binds_during_collection_and_must_be_positive():
+    gate = IngressGate(50)
+    gate.begin(1000, 1000)
+    with pytest.raises(IngressError, match=r"^MCP_MESSAGE_TOO_LARGE$"):
+        gate.check_size(51)
+    for value in (0, -1, 1.5, True):
+        with pytest.raises(ValueError, match=r"^positive integer message limit required$"):
+            IngressGate(value)
+    assert mcp_ingress.MAX_MESSAGE_BYTES == 8 * 1024 * 1024
 
 
 @pytest.mark.asyncio
@@ -399,6 +429,46 @@ async def test_real_sdk_session_without_a_gate_is_never_ready_for_calls():
     assert listing is not None
     assert listing.reason == "TOOLS_LIST_INGRESS_REQUIRED"
     assert peer.list_requests == 0  # tools/list was never sent
+
+
+class _HugeResultPeer(_Peer):
+    """Answers tools/call with one result frame just over the message cap."""
+
+    def __init__(self) -> None:
+        super().__init__(lambda request_id, _number: _page(request_id), fragment=4096)
+        self.calls = 0
+
+    async def write(self, frame: bytes) -> None:
+        request = json.loads(frame)
+        if request.get("method") != "tools/call":
+            await super().write(frame)
+            return
+        self.writes += 1
+        self.calls += 1
+        envelope = {"jsonrpc": "2.0", "id": request["id"], "result": {"content": []}}
+        head = json.dumps(envelope).encode()
+        padding = mcp_ingress.MAX_MESSAGE_BYTES + 1 - len(head)
+        self.output.extend(head + b" " * padding + b"\n")  # JSON whitespace still counts
+        self.available.set()
+
+
+@pytest.mark.asyncio
+async def test_oversized_tool_result_ends_the_call_and_server_before_the_sdk_parses_it(
+    monkeypatch,
+):
+    """A221 (D-01): no listing scope, yet the result frame never reaches the SDK."""
+    peer = _HugeResultPeer()
+    parsed = _record_json(monkeypatch)
+    transport = _pipe_transport(peer)
+    async with _running(transport):
+        # After dispatch, so the Guard holds READ back and marks SEND unknown (T36).
+        with _dispatch_error("McpError"):
+            await transport.call(_request("unit", seq=1))
+        assert peer.calls == 1
+        assert all(len(frame) < 4096 for frame in parsed)  # only small protocol frames
+        with _dispatch_error("WorkerClosed"):
+            await transport.call(_request("unit", seq=2))
+        assert peer.calls == 1  # no retry and no second dispatch
 
 
 @pytest.mark.asyncio

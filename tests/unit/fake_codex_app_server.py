@@ -40,6 +40,13 @@ class FakeAppServer:
         self.eof = False
         self.account: dict[str, object] | None = None
         self.login_requests: list[dict[str, object]] = []
+        # The device login answer; the page is the pinned 0.162.1 one (A221).
+        self.device_login: dict[str, object] = {
+            "type": "chatgptDeviceCode",
+            "loginId": "login-1",
+            "verificationUrl": "https://auth.openai.com/codex/device",
+            "userCode": "ABCD-1234",
+        }
         self._ids = count(1000)
         self._turns = count(1)
         self._waiters: dict[int, asyncio.Future[dict[str, object]]] = {}
@@ -200,13 +207,7 @@ class FakeAppServer:
                 self.account = {"type": "apiKey"}
                 self.emit({"id": request_id, "result": {"type": "apiKey"}})
             else:
-                device = {
-                    "type": "chatgptDeviceCode",
-                    "loginId": "login-1",
-                    "verificationUrl": "https://auth.example/device",
-                    "userCode": "ABCD-1234",
-                }
-                self.emit({"id": request_id, "result": device})
+                self.emit({"id": request_id, "result": self.device_login})
         elif method == "account/login/cancel":
             self.emit({"id": request_id, "result": {"status": "canceled"}})
         elif method == "account/logout":

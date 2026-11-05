@@ -489,6 +489,18 @@ class Disclosure(QWidget):
         return self.button.isChecked()
 
 
+def fill_row_height(*widgets: QWidget) -> None:
+    """A222: side by side, these take the row's full height instead of centering.
+
+    A field and its button differ in height by the font's metrics. Centered, an
+    even difference of 2px or more moves one of them down (CI: 354 vs 355).
+    """
+    for widget in widgets:
+        policy = widget.sizePolicy()
+        policy.setVerticalPolicy(QSizePolicy.Policy.Preferred)
+        widget.setSizePolicy(policy)
+
+
 class ResponsiveRow(QWidget):
     """Reflow the same widgets without rebuilding them or moving their focus."""
 

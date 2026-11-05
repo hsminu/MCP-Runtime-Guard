@@ -808,8 +808,11 @@ def test_old_approval_controls_preserve_restart_rows(tmp_path, observed, monkeyp
         ("C:\\Users\\someone\\secret", "앱 폴더를 준비하지 못해 시작하지 않는다\n"),
     ],
 )
-def test_cli_product_does_not_start_without_the_app_lock(monkeypatch, capsys, code, shown):
-    """A102: a refused claim ends with exit 1 before the DB, the backend and the window."""
+def test_cli_product_does_not_start_without_the_app_lock(monkeypatch, capsys, caplog, code, shown):
+    """A102: a refused claim ends with exit 1 before the DB, the backend and the window.
+
+    A220: the refusal is a `guard_app.startup` record, shown on stderr, never `print`.
+    """
     from guard_app.security.paths import AppPathError
     from guard_app.services.codex_preparation import CodexProcessPreparation
 
@@ -822,10 +825,14 @@ def test_cli_product_does_not_start_without_the_app_lock(monkeypatch, capsys, co
     monkeypatch.setattr(CodexProcessPreparation, "claim", refuse)
     monkeypatch.setattr(bridge_module, "BackendBridge", no_bridge)
     monkeypatch.setattr(sys, "argv", ["guard-app"])
+    monkeypatch.setattr("builtins.print", lambda *_args, **_kwargs: pytest.fail("print"))
     assert main() == 1
     error = capsys.readouterr().err
     assert shown in error
     assert "someone" not in error
+    (record,) = [record for record in caplog.records if record.name == "guard_app.startup"]
+    assert record.levelname == "ERROR"
+    assert f"{record.getMessage()}\n" == error
 
 
 def test_cli_demo_without_examples_package_fails_without_traceback(monkeypatch, capsys):

@@ -26,8 +26,8 @@ from guard_app.services.bridge import (
     ConversationEvent,
     QueryReply,
 )
-from guard_app.ui.answer_blocks import parse_blocks
-from guard_app.ui.answer_widgets import CodeText, CopyButton
+from guard_app.ui.answer_blocks import MAX_BLOCKS, parse_blocks
+from guard_app.ui.answer_widgets import AnswerBody, CodeText, CopyButton
 from guard_app.ui.composer import ATTACHMENT_NOTICE
 from guard_app.ui.session_projection import session_display
 from guard_app.ui.session_transcript import (
@@ -206,6 +206,22 @@ def test_code_height_limit_horizontal_scroll_and_wheel(app):
         for edit in (short, twenty, long):
             edit.close()
             edit.deleteLater()
+
+
+def test_block_count_is_bounded_and_the_rest_stays_one_plain_paragraph(app):
+    """A221 (D-06): short repeated blocks cannot make thousands of widgets."""
+    text = "# x\n- y\n>\n" * 10_000
+    blocks = parse_blocks(text)
+    assert len(blocks) == MAX_BLOCKS
+    assert blocks[-1].kind == "paragraph"
+    shown = sum(len(block.text) for block in blocks)
+    assert shown >= len(text) - 2 * 3 * MAX_BLOCKS  # nothing beyond the markers is dropped
+    assert blocks[-1].text.endswith("# x\n- y\n>\n")  # the tail is kept as written
+    fits = "# x\n" * (MAX_BLOCKS - 1)  # the last slot is kept for the rest
+    assert [block.kind for block in parse_blocks(fits)] == ["heading"] * (MAX_BLOCKS - 1)
+    body = AnswerBody(text)
+    assert len(body._widgets) == MAX_BLOCKS
+    body.deleteLater()
 
 
 def test_plain_render_copy_and_stream_prefix_reuse(window, app):

@@ -3,7 +3,9 @@
 Limits apply during tools/list collection. SSE framing is always tracked because
 a session GET may already be waiting when collection starts. Content decoding is
 owned here for gzip/deflate, so compressed input cannot expand inside HTTPX before
-the listing gate sees it. Ordinary tool results have no listing size limit.
+the listing gate sees it. Ordinary tool results have no listing size limit, but
+A221's per-message cap (MAX_MESSAGE_BYTES) applies to every JSON body, SSE event
+and other response body, decoded, before the SDK reads it.
 """
 
 from __future__ import annotations
@@ -157,6 +159,7 @@ class _SseFramer:
             # itself is excluded even for a one-byte candidate budget.
             partial_data_field = b"data:".startswith(self._line)
             metadata = self._metadata_size + (0 if partial_data_field else len(self._line))
+        self._gate.check_message(metadata)
         if self._gate.active and metadata > self._gate.candidate_limit:
             self._gate.fail("TOOLS_LIST_FRAMING_TOO_LARGE")
 
@@ -169,6 +172,7 @@ class _SseFramer:
             value_size = size - 5 - int(prefix[5:6] == b" ")
             self._gate.check_size(self._data_size + bool(self._data) + value_size)
         elif not b"data:".startswith(prefix):
+            self._gate.check_message(self._metadata_size + size)
             if self._gate.active and self._metadata_size + size > self._gate.candidate_limit:
                 self._gate.fail("TOOLS_LIST_FRAMING_TOO_LARGE")
         self._line.extend(part)
@@ -295,11 +299,16 @@ class _BoundedHttpStream(httpx.AsyncByteStream):
             source_stream = self._source.stream
             if not isinstance(source_stream, httpx.AsyncByteStream):
                 raise TypeError("asynchronous HTTP response stream required")
+            # A221: bodies passed through without JSON or SSE framing (other
+            # media, other encodings) count as one message for the cap.
+            passed = 0
             async for raw in source_stream:
                 check_representation()
                 if self._encoding not in {"identity", "gzip", "deflate"}:
                     if self._gate.active:
                         self._gate.fail("TOOLS_LIST_INGRESS_INVALID")
+                    passed += len(raw)
+                    self._gate.check_message(passed)
                     yield raw
                     continue
                 blocks = decoder.decode(raw) if decoder is not None else _chunks(raw)
@@ -320,6 +329,8 @@ class _BoundedHttpStream(httpx.AsyncByteStream):
                         self._gate.check_size(len(json_body) + len(block))
                         json_body.extend(block)
                     else:
+                        passed += len(block)
+                        self._gate.check_message(passed)
                         yield block
             if decoder is not None:
                 decoder.finish()

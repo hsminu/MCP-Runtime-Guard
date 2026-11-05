@@ -326,3 +326,29 @@ def test_three_cards_width_reflow_and_no_initial_validation_errors(app):
             assert (
                 button.mapTo(page, QPoint()).y() >= field.mapTo(page, QPoint(0, field.height())).y()
             )
+
+
+@pytest.mark.parametrize("smaller", ["button", "field"])
+def test_key_rows_keep_field_and_button_one_height_whatever_the_font(app, smaller):
+    """A222: CI's fonts made the button 2px shorter, so it sat 1px lower (354 vs 355)."""
+    window = GuardWindow(scanner_key_saver=lambda _: True)
+    page = window.settings_page
+    window.codex_login_info.set_api_key_sender(lambda _: None)
+    window.codex_login_info.set_view(AccountView("SIGNED_OUT", browser_available=True))
+    window.navigate("settings")
+    rows = [
+        (window.codex_login_info.api_key_input, window.codex_login_info.api_key_button),
+        (window.scanner_key_form.key_input, window.scanner_key_form.save_button),
+    ]
+    for field, button in rows:
+        # Another font's metrics, forced: one control becomes a few pixels shorter.
+        (button if smaller == "button" else field).setStyleSheet("font-size: 8px; padding: 1px;")
+    window.resize(1260, 850)
+    window.show()
+    with closing_widgets(window):
+        for _ in range(3):
+            app.processEvents()
+        for field, button in rows:
+            assert abs(field.sizeHint().height() - button.sizeHint().height()) >= 2
+            assert field.mapTo(page, QPoint()).y() == button.mapTo(page, QPoint()).y()
+            assert field.height() == button.height()
