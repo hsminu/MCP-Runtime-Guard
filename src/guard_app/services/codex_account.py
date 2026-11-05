@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Protocol
@@ -22,6 +23,11 @@ from guard_app.adapters.jsonrpc_client import JsonRpcClient, JsonRpcError, JsonR
 from guard_app.services.codex_session import REMOTE_CONTROL_STATUS, CodexPipes
 
 _PLAN_MAX = 40
+# A221 (D-07): the device login shows these as sign-in instructions. Pinned
+# Codex 0.162.1 builds the page as issuer + "/codex/device" on auth.openai.com
+# (the same host C allows for browser login); the code is short plain ASCII.
+_DEVICE_PAGE = re.compile(r"https://auth\.openai\.com/[A-Za-z0-9/._~-]{1,200}")
+_USER_CODE = re.compile(r"[A-Za-z0-9-]{4,32}")
 
 # C must validate the pinned Codex authorization URL and open the default
 # browser. False means validation/opening failed; no URL or exception text
@@ -137,6 +143,11 @@ class CodexAccountClient:
             result.get(key) for key in ("loginId", "verificationUrl", "userCode")
         )
         if not all(type(value) is str and value for value in (login_id, url, code)):
+            return AccountView("FAILED", browser_available=self._open_browser is not None)
+        if not (_DEVICE_PAGE.fullmatch(str(url)) and _USER_CODE.fullmatch(str(code))):
+            # Never shown: another page, line breaks or hidden characters could
+            # pose as the sign-in step. The started login is released.
+            await self.cancel_login(str(login_id))
             return AccountView("FAILED", browser_available=self._open_browser is not None)
         return AccountView(
             "PENDING_DEVICE",

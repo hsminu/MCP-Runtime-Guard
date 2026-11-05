@@ -136,6 +136,8 @@ class CodexAppServerSession:
         )
         self._thread_id: str | None = None
         self._turn_id: str | None = None
+        # Set once this send's turn ID is known or the send ended (A221, D-05).
+        self._turn_started = asyncio.Event()
         self._changed = asyncio.Event()
         # Stops decided while answering, applied after that method's reply.
         self._deferred_stops: dict[str, str] = {}
@@ -193,6 +195,7 @@ class CodexAppServerSession:
             return await self._send(text, effort)
         finally:
             self._sending = False
+            self._turn_started.set()
 
     async def _send(self, text: str, effort: str | None) -> str:
         if not self._execution_permitted():
@@ -202,6 +205,8 @@ class CodexAppServerSession:
             params = turn_start_params(thread_id, text, effort)
         except CodexProtocolError:
             raise CodexSessionError("CODEX_INPUT_INVALID") from None
+        self._turn_id = None  # the previous turn is no longer the one calls belong to
+        self._turn_started.clear()
         try:
             result = await self._client.request("turn/start", params)
         except JsonRpcRemoteError:
@@ -212,6 +217,7 @@ class CodexAppServerSession:
         if turn_id is None:
             raise CodexSessionError("CODEX_TURN_FAILED")
         self._turn_id = turn_id
+        self._turn_started.set()
         self._answers.stream(turn_id)  # deltas may arrive before turn/start's answer
         while not self._answers.completed(turn_id):
             if self.stop_code is not None:
@@ -278,6 +284,9 @@ class CodexAppServerSession:
         elif method == REMOTE_CONTROL_STATUS and body.get("status") != "disabled":
             # A remote client would bypass Guard's tools and this L3 (C-CODEX-07).
             self._stop("CODEX_L3_VIOLATION")
+        if self._answers.overflowed:
+            # A221 (D-02): more turns or text than one answered turn keeps.
+            self._stop("CODEX_ANSWER_TOO_LARGE")
 
     def _item_event(self, method: str, body: dict[str, object]) -> None:
         """L3: only allowed item types; a finished agent message is part of the answer."""
@@ -312,6 +321,19 @@ class CodexAppServerSession:
             self._defer_stop("item/tool/call", "CODEX_TOOL_CALL_INVALID")
             return stopped
         if call.thread_id != self._thread_id or self.stop_code is not None:
+            self._defer_stop("item/tool/call", "CODEX_TOOL_CALL_INVALID")
+            return stopped
+        # A221 (D-05): a call belongs to the turn send() waits for. Refused while
+        # idle, for a finished turn, or for another turn than turn/start returned.
+        # A call read before turn/start's answer waits for it in its own task;
+        # the send ending (answer, failure, close) also wakes it.
+        if self._sending and self._turn_id is None:
+            await self._turn_started.wait()
+        if (
+            not self._sending
+            or call.turn_id != self._turn_id
+            or self._answers.completed(call.turn_id)
+        ):
             self._defer_stop("item/tool/call", "CODEX_TOOL_CALL_INVALID")
             return stopped
         try:

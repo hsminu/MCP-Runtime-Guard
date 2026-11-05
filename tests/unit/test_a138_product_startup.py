@@ -363,6 +363,8 @@ async def test_tool_response_and_turn_check_store_authority(tmp_path):
         fake = FakeAppServer()
         session = await started(fake, HaltingGuard())
         session._execution_allowed = gate.allowed
+        # A221 (D-05): a call reaches Guard only inside the turn send() waits for.
+        session._sending, session._turn_id = True, "turn"
         try:
             reply = await session._tool_call(
                 {
@@ -376,6 +378,7 @@ async def test_tool_response_and_turn_check_store_authority(tmp_path):
             )
             assert reply["success"] is False
             assert "private-result" not in repr(reply)
+            session._sending = False
             with pytest.raises(CodexSessionError, match="CODEX_STORE_HALTED"):
                 await session.send("new turn")
             assert "turn/start" not in fake.methods()

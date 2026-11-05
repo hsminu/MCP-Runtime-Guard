@@ -5,6 +5,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# A221 (D-06): each block becomes a widget. Past this many, the rest of the
+# answer is one plain paragraph, so model text cannot make the window build
+# thousands of widgets within MAX_ANSWER_CHARS.
+MAX_BLOCKS = 500
+
 
 @dataclass(frozen=True, slots=True)
 class Block:
@@ -32,6 +37,11 @@ def parse_blocks(text: str) -> tuple[Block, ...]:
             paragraph.clear()
 
     while index < len(lines):
+        if len(blocks) >= MAX_BLOCKS - 1:
+            rest = lines[index:]
+            if any(line.strip() for line in rest):
+                paragraph.extend(rest)
+            break
         line = lines[index]
         stripped = line.strip()
         fence = re.fullmatch(r"(`{3,}|~{3,})(.*)", stripped)
