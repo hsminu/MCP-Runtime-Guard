@@ -276,6 +276,34 @@ def test_module_security_rules() -> None:
     assert not failures, failures
 
 
+def test_a_caught_error_never_reaches_print() -> None:
+    """A220: Sparrow 04.01 (오류 메시지 정보노출) found `print` of text built from a caught error.
+
+    Only the entry point prints (the rule above). Its start refusals go through the
+    `guard_app.startup` logger, so a name bound by `except ... as` never reaches `print`.
+    """
+    printed = []
+    for handler in ast.walk(_tree(SRC / "__main__.py")):
+        if not isinstance(handler, ast.ExceptHandler) or handler.name is None:
+            continue
+        for node in ast.walk(handler):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "print"
+            ):
+                arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
+                names = {
+                    name.id
+                    for argument in arguments
+                    for name in ast.walk(argument)
+                    if isinstance(name, ast.Name)
+                }
+                if handler.name in names:
+                    printed.append(node.lineno)
+    assert not printed, printed
+
+
 def test_product_stdio_spawn_is_confined_to_c_launcher() -> None:
     """A09 / I1 / EXE-01: SDK process creation belongs only to the demo factory."""
     for module, path in a_modules():
