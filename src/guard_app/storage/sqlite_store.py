@@ -51,7 +51,12 @@ from guard_app.domain.enums import (
     ToolKind,
     TrustTier,
 )
-from guard_app.domain.errors import StoreError, StoreIntegrityError, StorePrepareError
+from guard_app.domain.errors import (
+    NOT_DISPATCHED,
+    StoreError,
+    StoreIntegrityError,
+    StorePrepareError,
+)
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import (
     MAX_SAFE_SEQUENCE,
@@ -4128,7 +4133,15 @@ class SQLiteStore:
             },
             ToolKind.SEND: {(RequestStatus.UNKNOWN_OUTCOME, TaskStatus.UNKNOWN_OUTCOME)},
         }
-        if (request_status, task_status) not in allowed_pairs.get(req.tool.kind, set()):
+        allowed = allowed_pairs.get(req.tool.kind, set())
+        if (
+            req.tool.kind is ToolKind.SEND
+            and exception_type == NOT_DISPATCHED
+            and reason is Reason.REG_NOT_ACTIVE
+        ):
+            # #120: worker가 보내기 전에 거절한 SEND만 "보내지 않음 확정"으로 끝낼 수 있다.
+            allowed = allowed | {(RequestStatus.FAILED, TaskStatus.RUNNING)}
+        if (request_status, task_status) not in allowed:
             raise StoreError(Reason.STATE_COMMIT_FAILED)
         with self._transaction(write=True) as connection:
             dispatched, current = self._dispatched_locked(connection, req)

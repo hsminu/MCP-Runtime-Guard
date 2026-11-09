@@ -126,6 +126,7 @@
 - [x] C6.25 C 독립 검증 현황 요약(인수 기준 5 일부): C 담당 T/S 41개의 완료·부분·미실행, 완료 근거, 다른 담당 작업의 C 리뷰 프로브, 미실행·검증 불가 항목, 측정 원자료와 재현 명령 · [기록](archive/c/C6.25-verification-summary.md) · [갱신(main `b14c181`)](archive/c/C6.25-2-verification-summary.md)
 - [x] C6.26 L2 실패 코드 상수 `codex_l2.L2_FAILURE_CODES`(28개): 모듈이 실제로 쓰는 코드와 AST로 대조하는 시험, A151 사본과 같음 확인. A 사본 교체는 A · [기록](archive/c/C6.26-l2-failure-codes.md). C6.14-2(#98)에서 `L2_PROBE_CALLS_OVERLAP`을 더해 29개. A 사본 교체는 A174(#99)가 먼저 병합했고 #98 충돌은 A 쪽 파일로 해소(C6.14-2 기록의 "이 PR에서 바꿨다"는 #99 병합 전 기준) · [기록](archive/c/C6.14-2-l2-real-runs.md)
 - [x] C6.27 B7.7 B 리뷰(#102) 반영: 파일 서버 READ마다 CRT fd가 남던 것(B77-D1, `ReadFile`로 읽고 핸들 주인 하나, 예상 밖 OSError도 고정 코드), L2가 모든 모델 요청의 도구 목록을 대조(B77-D2), Semgrep 예외 검사를 규칙·파일·함수로(B77-N1), 계수 하니스 대역 범위 명시(B77-N2) · [기록](archive/c/C6.27-b77-review-fixes.md)
+- [x] C6.29 목록 변경 알림 뒤 대기 중 호출 차단(#120, B6.19): Guard 마지막 확인 뒤 worker 대기열에 있던 호출이 알림으로 PENDING이 된 뒤에도 서버까지 가던 것(정지 장치 없이 stdio·HTTP 10/10 재현). worker가 `_execute` 직전에 `LiveCheckedRegistry.allows_dispatch`(ACTIVE·지문 일치)를 보고 안 보내면 `NOT_DISPATCHED`, Guard는 이 종류만 요청 FAILED·Task RUNNING·`Denied(REG_NOT_ACTIVE)`로 확정(B 리뷰 필요). C5.4 하니스에 알림 표지 `notify`·`notify-slow` · [기록](archive/c/C6.29-list-changed-race.md)
 
 ## 인수 기준
 

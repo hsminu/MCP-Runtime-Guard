@@ -40,7 +40,13 @@ from guard_app.domain.enums import (
     ToolKind,
     TurnInterruptOutcome,
 )
-from guard_app.domain.errors import DispatchError, ResolutionError, StoreError, StoreIntegrityError
+from guard_app.domain.errors import (
+    NOT_DISPATCHED,
+    DispatchError,
+    ResolutionError,
+    StoreError,
+    StoreIntegrityError,
+)
 from guard_app.domain.models import (
     AccessResult,
     FailureAuditRecord,
@@ -1345,6 +1351,8 @@ class GuardService:
     async def _contain_post_dispatch(
         self, req: ResolvedRequest, exc: BaseException, *, expected_state: TaskState
     ) -> Outcome:
+        if isinstance(exc, DispatchError) and exc.exception_type == NOT_DISPATCHED:
+            return await self._settle_not_dispatched(req, expected_state=expected_state)
         is_send = req.tool.kind is ToolKind.SEND
         reason = (
             exc.reason
@@ -1388,6 +1396,46 @@ class GuardService:
         if is_send:
             return OutcomeUnknown(request_id=req.request_id, reasons=(reason,))
         return Withheld(request_id=req.request_id, reasons=(reason,))
+
+    async def _settle_not_dispatched(
+        self, req: ResolvedRequest, *, expected_state: TaskState
+    ) -> Outcome:
+        """#120: 예약 뒤지만 worker가 보내기 전에 거절했다(정의 변경). 보내지 않음이 확정이다.
+
+        결과 불명(SEND)·미공개 정지(READ) 대신 요청 FAILED·Task RUNNING으로 끝낸다. 이미 소비한
+        승인은 되돌리지 않는다. 등급은 바뀌지 않는다(읽은 자료가 없다).
+        """
+        reason = Reason.REG_NOT_ACTIVE
+        settled = checked_task(
+            await self._store.commit_request_failure(
+                req,
+                request_status=RequestStatus.FAILED,
+                task_status=TaskStatus.RUNNING,
+                reason=reason,
+                at_utc=self._utc_now(),
+                exception_type=NOT_DISPATCHED,
+            ),
+            task_id=req.task_id,
+            epoch=req.epoch,
+        )
+        preserve_task_context(settled, expected_state, allow_last_read_change=False)
+        if (
+            settled.task_id != req.task_id
+            or settled.epoch != req.epoch
+            or settled.status is not TaskStatus.RUNNING
+        ):
+            raise StoreError(Reason.STATE_COMMIT_FAILED)
+        await self._failure_audit(
+            FailureEvent(
+                req.task_id,
+                req.request_id,
+                "after_dispatch",
+                reason,
+                NOT_DISPATCHED,
+                at_utc=self._utc_now(),
+            )
+        )
+        return Denied(request_id=req.request_id, reasons=(reason,))
 
     def _post_failure_fallback(self, req: ResolvedRequest, exc: BaseException) -> Outcome:
         self._halt_globally(exc.reason if isinstance(exc, StoreError) else Reason.INTERNAL_ERROR)

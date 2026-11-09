@@ -14,7 +14,7 @@ from mcp.types import CONNECTION_CLOSED, CallToolResult, ErrorData, ResourceLink
 from guard_app.adapters import mcp_transport
 from guard_app.adapters.mcp_transport import McpTransport, result_budget, sdk_session
 from guard_app.domain.enums import Label, ToolKind, TrustTier
-from guard_app.domain.errors import DispatchError
+from guard_app.domain.errors import NOT_DISPATCHED, DispatchError
 from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.models import Boundary, ResolvedRequest, ToolSpec
 
@@ -834,6 +834,35 @@ async def test_close_start_failure_and_a_contained_timeout_report_no_server_fail
         await not_started.start()
     await not_started.close()
     assert failed == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_gate_refuses_a_queued_call_before_any_byte(monkeypatch):
+    """#120: 대기 중 서버 정의가 바뀌면 그 호출은 call_tool 없이 NOT_DISPATCHED로 끝난다."""
+    session = _Session(blocked=True)
+    refused: set[str] = set()
+    transport = _transport(
+        monkeypatch, session, dispatch_gate=lambda req: req.request_id not in refused
+    )
+    async with _running(transport):
+        first = asyncio.create_task(transport.call(_request(seq=1)))
+        await session.first_call.wait()
+        second = asyncio.create_task(transport.call(_request(seq=2)))
+        await asyncio.sleep(0)
+        refused.add("request-2")  # 두 번째가 줄 서 있는 동안 정의가 바뀐다
+        session.release_first.set()
+        assert (await first).payload is not None
+        with pytest.raises(DispatchError) as raised:
+            await second
+        assert raised.value.exception_type == NOT_DISPATCHED
+        third = await transport.call(_request(seq=3))  # worker는 계속 동작한다
+        assert third.payload is not None
+    assert [arguments["value"] for _, arguments in session.calls] == [1, 3]
+
+
+def test_dispatch_gate_must_be_callable():
+    with pytest.raises(TypeError, match="dispatch gate"):
+        McpTransport({"server": _streams([])}, dispatch_gate=object())  # type: ignore[arg-type]
 
 
 def test_server_failure_callbacks_must_be_callable():

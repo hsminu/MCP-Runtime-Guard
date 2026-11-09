@@ -48,7 +48,7 @@ from guard_app.domain.contracts import RegisteredServer, ToolView
 from guard_app.domain.enums import RegStatus
 from guard_app.domain.errors import StoreError
 from guard_app.domain.json_types import FrozenJsonObject
-from guard_app.domain.models import ToolSpec
+from guard_app.domain.models import ResolvedRequest, ToolSpec
 from guard_app.domain.reasons import Reason
 from guard_app.ports import Registry, Store
 from guard_app.security.digest import JcsCanonicalizationError, tool_fingerprint
@@ -181,6 +181,17 @@ class LiveCheckedRegistry:
         ):
             return RegStatus.PENDING
         return self._registry.status(server_id)
+
+    def allows_dispatch(self, req: ResolvedRequest) -> bool:
+        """#120: worker가 보내기 직전, 서버가 이번 실행에서 아직 ACTIVE이고 지문이 같은가.
+
+        Guard의 마지막 확인(`catalog.aresolve`) 뒤 worker 대기열에 있는 동안 목록 변경
+        알림·서버 실패가 오면 False다. 동기이고 await가 없다.
+        """
+        return (
+            self.status(req.tool.server_id) is RegStatus.ACTIVE
+            and self.fingerprint(req.tool) == req.tool.fingerprint
+        )
 
     def fingerprint(self, tool: ToolSpec) -> str | None:
         if not self._sealed:
@@ -476,6 +487,7 @@ async def assemble_guard(store: Store, inputs: ProductInputs) -> AssembledGuard:
         on_server_failed=registry.server_failed,
         on_listing_received=registry.listing_received,
         isolate_start_failures=inputs.folders is not None,
+        dispatch_gate=registry.allows_dispatch,
     )
     adopted = False
     try:
