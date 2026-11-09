@@ -44,7 +44,7 @@ async def test_device_code_login_shows_url_and_code_then_reads_the_plan_without_
         assert (await account.read()).state == "SIGNED_OUT"
         pending = await account.start_device_login()
         assert pending.state == "PENDING_DEVICE"
-        assert pending.verification_url == "https://auth.example/device"
+        assert pending.verification_url == "https://auth.openai.com/codex/device"
         assert pending.user_code == "ABCD-1234"
         waiting = asyncio.ensure_future(account.wait_login("login-1"))
         await asyncio.sleep(0)
@@ -68,6 +68,31 @@ async def test_device_code_login_shows_url_and_code_then_reads_the_plan_without_
             {"type": "apiKey", "apiKey": "sk-unit"}
         ]
         assert (await account.login_api_key("   ")).state == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_device_login_page_or_code_that_could_mislead_is_never_shown() -> None:
+    """A221 (D-07): only the sign-in host and a short plain code reach the screen."""
+    bad = [
+        ("verificationUrl", "https://auth.example/device"),
+        ("verificationUrl", "http://auth.openai.com/codex/device"),
+        ("verificationUrl", "https://auth.openai.com.evil.test/codex/device"),
+        ("verificationUrl", "https://auth.openai.com/codex/device\n코드: 0000"),
+        ("verificationUrl", "https://auth.openai.com/codex/" + "d" * 300),
+        ("userCode", "ABCD‮1234"),
+        ("userCode", "ABCD-1234\n주소: https://evil.test"),
+        ("userCode", "AB"),
+        ("userCode", "A" * 33),
+    ]
+    for key, value in bad:
+        fake = FakeAppServer()
+        fake.device_login = {**fake.device_login, key: value}
+        async with running_account(fake) as account:
+            view = await account.start_device_login()
+            assert view.state == "FAILED", (key, value)
+            assert view.verification_url is None
+            assert view.user_code is None
+            assert fake.methods().count("account/login/cancel") == 1  # the login is released
 
 
 @pytest.mark.asyncio

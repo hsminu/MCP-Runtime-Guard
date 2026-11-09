@@ -27,11 +27,15 @@ from guard_app.domain.enums import Label
 from guard_app.domain.reasons import Reason
 from guard_app.services.codex_prompt import BASE_INSTRUCTIONS
 from guard_app.services.codex_session import CodexAppServerSession, SessionLimits
-from guard_app.services.codex_turns import MAX_ANSWER_CHARS
+from guard_app.services.codex_turns import (
+    MAX_ANSWER_CHARS,
+    MAX_RETAINED_CHARS,
+    MAX_TRACKED_TURNS,
+)
 from guard_app.services.guard_relay import ApprovalOutcomes, GuardToolRelay, TrustedTask
 from guard_app.services.runner import CodexAuthenticationError, CodexSessionError
 
-from .fake_codex_app_server import THREAD_ID, FakeAppServer
+from .fake_codex_app_server import THREAD_ID, FakeAppServer, answer_only
 from .test_jsonrpc_client import raises_code
 
 pytestmark = pytest.mark.asyncio
@@ -659,6 +663,115 @@ async def test_streamed_pieces_of_another_turn_are_never_shown() -> None:
     async with running(FakeAppServer(script), partial=partial) as session:
         assert await asyncio.wait_for(session.send("go"), 2) == "own"
         assert partial == ["own"]
+
+
+async def test_messages_reported_for_many_turns_stop_the_session() -> None:
+    """A221 (D-02): arbitrary turn IDs cannot make the session keep more and more."""
+
+    async def script(server: FakeAppServer, turn_id: str, _text: str) -> None:
+        for number in range(MAX_TRACKED_TURNS + 1):
+            item = {"type": "agentMessage", "id": f"msg-{number}", "text": "x"}
+            server.notify(
+                "item/completed", {"item": item, "threadId": THREAD_ID, "turnId": f"t-{number}"}
+            )
+        await asyncio.Event().wait()
+
+    async with running(FakeAppServer(script)) as session:
+        with raises_code(CodexSessionError, "CODEX_ANSWER_TOO_LARGE"):
+            await asyncio.wait_for(session.send("go"), 2)
+
+
+async def test_text_kept_for_unanswered_turns_is_bounded() -> None:
+    """A221 (D-02): finished messages count, not only the current turn's deltas."""
+
+    async def script(server: FakeAppServer, _turn_id: str, _text: str) -> None:
+        item = {"type": "agentMessage", "id": "msg", "text": "x" * (MAX_RETAINED_CHARS + 1)}
+        server.notify("item/completed", {"item": item, "threadId": THREAD_ID, "turnId": "t-x"})
+        await asyncio.Event().wait()
+
+    async with running(FakeAppServer(script)) as session:
+        with raises_code(CodexSessionError, "CODEX_ANSWER_TOO_LARGE"):
+            await asyncio.wait_for(session.send("go"), 2)
+
+
+async def test_answered_turns_are_forgotten_so_long_sessions_keep_working() -> None:
+    """A221 (D-02): more turns than the bound, one at a time, each answered."""
+    async with running(FakeAppServer()) as session:
+        for number in range(MAX_TRACKED_TURNS * 3):
+            assert await asyncio.wait_for(session.send(f"m{number}"), 2) == f"echo:m{number}"
+        assert session.stop_code is None
+
+
+async def test_tool_call_for_another_or_finished_turn_never_reaches_guard() -> None:
+    """A221 (D-05): a call belongs to the turn send() waits for."""
+    for target in ("turn-1", "turn-other"):
+        guard = FakeGuard()
+
+        async def script(server: FakeAppServer, turn_id: str, _text: str, target=target) -> None:
+            if turn_id == "turn-1":
+                await answer_only(server, turn_id, "first")
+                return
+            server.last_reply = await server.tool_call(  # type: ignore[attr-defined]
+                target, "c1", "read", {}
+            )
+            await asyncio.Event().wait()
+
+        fake = FakeAppServer(script)
+        async with running(fake, guard) as session:
+            assert await asyncio.wait_for(session.send("first"), 2) == "echo:first"
+            with raises_code(CodexSessionError, "CODEX_TOOL_CALL_INVALID"):
+                await asyncio.wait_for(session.send("second"), 2)
+            assert guard.calls == []
+            assert session.observations.guard_submits == 0
+            text = reply_result(fake)["contentItems"][0]["text"]
+            assert text == "작업이 정지되었습니다"
+
+
+class CallBeforeTurnStartAnswer(FakeAppServer):
+    """Sends the turn's tool call before its turn/start answer."""
+
+    def _request(self, message: dict[str, object]) -> None:
+        if message["method"] != "turn/start":
+            super()._request(message)
+            return
+        turn_id = f"turn-{next(self._turns)}"
+
+        async def run() -> None:
+            call = asyncio.ensure_future(self.tool_call(turn_id, "c1", "read", {}))
+            await asyncio.sleep(0.05)
+            self.emit({"id": message["id"], "result": {"turn": {"id": turn_id}}})
+            self.last_reply = await call  # type: ignore[attr-defined]
+            await self.agent(turn_id, "done")
+            self.complete(turn_id)
+
+        self._scripts[turn_id] = asyncio.ensure_future(run())
+
+
+async def test_tool_call_read_before_turn_start_answer_waits_and_reaches_guard() -> None:
+    """A221 (D-05): the call is compared once turn/start's answer arrives, not refused."""
+    guard = FakeGuard(released())
+    fake = CallBeforeTurnStartAnswer()
+    async with running(fake, guard) as session:
+        assert await asyncio.wait_for(session.send("go"), 2) == "done"
+        assert len(guard.calls) == 1
+        assert session.stop_code is None
+        assert reply_result(fake)["success"] is True
+
+
+async def test_tool_call_while_no_turn_runs_stops_without_guard() -> None:
+    """A221 (D-05): between turns nothing may call a tool for the Task."""
+    guard = FakeGuard()
+    fake = FakeAppServer()
+    stops: list[str] = []
+    session = await started(fake, guard)
+    session.set_stop_handler(stops.append)
+    async with aclosing(session):
+        assert await asyncio.wait_for(session.send("go"), 2) == "echo:go"
+        reply = await asyncio.wait_for(fake.tool_call("turn-1", "c1", "read", {}), 2)
+        assert reply["result"]["contentItems"][0]["text"] == "작업이 정지되었습니다"
+        await wait_for_condition(lambda: stops)
+        assert stops == ["CODEX_TOOL_CALL_INVALID"]
+        assert guard.calls == []
 
 
 class EmptyIdAppServer(FakeAppServer):

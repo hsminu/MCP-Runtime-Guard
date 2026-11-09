@@ -31,6 +31,9 @@ _SETTINGS_FILE_REFUSALS = {
 # own shutdown bound before giving up on a confirmed cleanup (A110).
 CLOSE_OBSERVATION_S = 5.0
 EXIT_CLEANUP_UNCONFIRMED = 3
+# A220: start refusals built from a caught error go through this logger, not print
+# (Sparrow 04.01). A `guard_app` name keeps C's redaction from withholding the text.
+_NOTICE = logging.getLogger("guard_app.startup")
 
 
 def main() -> int:
@@ -52,7 +55,7 @@ def main() -> int:
         try:
             codex.claim()
         except AppPathError as error:
-            print(_claim_refusal(error), file=sys.stderr)
+            _notice(_claim_refusal(error))
             return 1
         # CFG-01: a settings file that cannot be read or parsed stops the start
         # and is left as it is. No file uses the default Profile without writing it.
@@ -60,7 +63,7 @@ def main() -> int:
             settings = read_settings(codex.folders)
         except SettingsStartError as error:
             codex.close()
-            print(_settings_refusal(error.code), file=sys.stderr)
+            _notice(_settings_refusal(error.code))
             return 1
         # A106: C's check of the product DB and its side files (C2.19) refuses a
         # link, an extra hard link or foreign permissions before the window opens.
@@ -68,7 +71,7 @@ def main() -> int:
             _ = codex.db_file
         except AppPathError as error:
             codex.close()
-            print(_claim_refusal(error), file=sys.stderr)
+            _notice(_claim_refusal(error))
             return 1
     from guard_app.services.bridge import BackendCleanupUnconfirmedError
 
@@ -198,6 +201,21 @@ def _outside_app_folder(db_path: str) -> bool:
         )
     except (AppPathError, OSError, ValueError):
         return False
+
+
+def _notice(text: str) -> None:
+    """Log a fixed start refusal and show it on the current stderr.
+
+    These refusals come before the app folder is claimed or checked, so there is
+    no log file to write to yet. The stderr handler lives for this record only.
+    """
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    _NOTICE.addHandler(handler)
+    try:
+        _NOTICE.error(text)
+    finally:
+        _NOTICE.removeHandler(handler)
 
 
 def _claim_refusal(error: Exception) -> str:

@@ -21,8 +21,9 @@ class ResultTooLarge(ValueError):  # noqa: N818
 async def check_result_budget(result: object, *, max_copy_bytes: int) -> None:
     """Walk an SDK result without first making its JSON or frozen copy.
 
-    The MCP SDK has already parsed and materialized the wire response. C's
-    stream ingress still needs an independent wire-size limit. This check
+    The MCP SDK has already parsed and materialized the wire response; the
+    gated ingress capped its wire size before that (A221, MAX_MESSAGE_BYTES;
+    the demo-only SDK-spawned stdio path has no gate). This check
     bounds the next synchronous conversion, including nested structured
     content and otherwise ignored metadata.
     """

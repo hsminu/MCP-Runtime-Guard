@@ -279,6 +279,44 @@ async def test_ordinary_call_body_is_not_capped():
 
 
 @pytest.mark.asyncio
+async def test_every_response_body_is_capped_outside_collection(monkeypatch):
+    """A221 (D-01): JSON, SSE data, SSE fields and pass-through bodies over the cap."""
+    real_loads = json.loads
+    parsed = []
+    monkeypatch.setattr(json, "loads", lambda value: parsed.append(value) or real_loads(value))
+    cases = [
+        ("application/json", "identity", [payload() + b" " * 300]),
+        ("application/json", "gzip", [gzip.compress(payload() + b" " * 100_000)]),
+        ("text/event-stream", "identity", [b"data: " + b"x" * 300 + b"\n\n"]),
+        ("text/event-stream", "identity", [b": " + b"k" * 300]),  # no data, no blank line
+        ("application/json-seq", "identity", [b"x" * 150, b"x" * 150]),
+        ("application/json", "br", [b"x" * 150, b"x" * 150]),
+    ]
+    for media, encoding, chunks in cases:
+        source = Source(chunks)
+        gate = IngressGate(256)
+        response, inner = await response_for(source, gate, media, encoding)
+        admitted: list[bytes] = []
+
+        async def receive(response=response, admitted=admitted):
+            async for block in response.aiter_raw():
+                admitted.append(block)
+
+        with pytest.raises(IngressError, match=r"^MCP_MESSAGE_TOO_LARGE$"):
+            await receive()
+        assert sum(map(len, admitted)) <= 256, (media, encoding)
+        assert gate.failed.is_set()
+        assert source.closed == inner.requests == 1
+    assert parsed == []
+
+    within = payload() + b" " * 100
+    gate = IngressGate(len(within))
+    response, _ = await response_for(Source([within]), gate)
+    assert await response.aread() == within
+    assert gate.reason is None
+
+
+@pytest.mark.asyncio
 async def test_compressed_json_decodes_once_even_when_fragmented():
     for encoding in ["gzip", "deflate", "raw-deflate"]:
         body = payload()
