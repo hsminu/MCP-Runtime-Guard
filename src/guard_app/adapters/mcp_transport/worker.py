@@ -173,6 +173,10 @@ def _session_broken(exc: Exception) -> bool:
 
 def _exception_name(exc: Exception) -> str:
     name = type(exc).__name__
+    if name == NOT_DISPATCHED:
+        # NOT_DISPATCHED는 보내기 전에 거절했다는 표지다. call_tool 안에서 난 예외는
+        # 이름이 같아도 이미 보냈을 수 있으므로 표지로 쓰지 않는다(I8, #122 A 리뷰).
+        return "Exception"
     return name if name.isascii() and name.isidentifier() and len(name) <= 64 else "Exception"
 
 
@@ -435,13 +439,15 @@ class ServerWorker:
                 return
             if not isinstance(item, _Command) or item.future.done():
                 continue
-            if self._dispatch_gate is not None and not self._dispatch_gate(item.req):
-                # #120: 줄 서 있는 동안 서버의 도구 정의가 바뀌었다(목록 변경 알림 등).
-                # Guard의 마지막 확인 뒤라도 한 바이트도 보내지 않고 끝낸다.
-                item.future.set_exception(DispatchError(NOT_DISPATCHED))
-                continue
             self._active = item
             try:
+                # 확인은 try 안에 둔다. 확인 함수가 예외를 내면 아래 finally가 이 호출을
+                # WorkerInterrupted로 끝내고, owner 종료로 남은 대기열도 끝난다(#122 A 리뷰).
+                if self._dispatch_gate is not None and not self._dispatch_gate(item.req):
+                    # #120: 줄 서 있는 동안 서버의 도구 정의가 바뀌었다(목록 변경 알림 등).
+                    # Guard의 마지막 확인 뒤라도 한 바이트도 보내지 않고 끝낸다.
+                    item.future.set_exception(DispatchError(NOT_DISPATCHED))
+                    continue
                 await self._execute(session, item)
             finally:
                 if not item.future.done():

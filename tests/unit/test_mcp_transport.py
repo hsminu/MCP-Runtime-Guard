@@ -860,6 +860,53 @@ async def test_dispatch_gate_refuses_a_queued_call_before_any_byte(monkeypatch):
     assert [arguments["value"] for _, arguments in session.calls] == [1, 3]
 
 
+@pytest.mark.asyncio
+async def test_a_failing_dispatch_gate_settles_every_waiter_without_sending(monkeypatch):
+    """#122 A 리뷰: 확인 함수가 예외를 내도 꺼낸 호출과 남은 호출이 끝나고, 보낸 것은 없다."""
+
+    def failing_gate(req: ResolvedRequest) -> bool:
+        if req.request_id == "request-2":
+            raise RuntimeError("gate failed")
+        return True
+
+    session = _Session(blocked=True)
+    failed: list[str] = []
+    transport = _transport(
+        monkeypatch, session, dispatch_gate=failing_gate, on_server_failed=failed.append
+    )
+    await transport.start()
+    first = asyncio.create_task(transport.call(_request(seq=1)))
+    await session.first_call.wait()
+    checked = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND, seq=2)))
+    queued = asyncio.create_task(transport.call(_request(seq=3)))
+    await asyncio.sleep(0)
+    session.release_first.set()
+    assert (await asyncio.wait_for(first, 1)).payload is not None
+    # 결과 불명 쪽으로 끝난다: SEND는 UNKNOWN_OUTCOME, READ는 미공개 정지(Guard).
+    with _dispatch_error("WorkerInterrupted"):
+        await asyncio.wait_for(checked, 1)
+    with _dispatch_error("WorkerClosed"):
+        await asyncio.wait_for(queued, 1)
+    with _dispatch_error("WorkerOwnerFailed"):
+        await transport.close()
+    assert [arguments["value"] for _, arguments in session.calls] == [1]
+    assert failed == ["server"]
+
+
+@pytest.mark.asyncio
+async def test_an_sdk_exception_named_like_the_not_dispatched_marker_is_not_the_marker(
+    monkeypatch,
+):
+    """#122 A 리뷰: call_tool 안에서 난 예외는 이름이 같아도 "보내지 않음 확정"이 아니다(I8)."""
+    lookalike = type(NOT_DISPATCHED, (Exception,), {})
+    session = _Session([lookalike("raised inside call_tool")])
+    transport = _transport(monkeypatch, session)
+    async with _running(transport):
+        with _dispatch_error("Exception"):
+            await transport.call(_request(kind=ToolKind.SEND, seq=1))
+    assert len(session.calls) == 1
+
+
 def test_dispatch_gate_must_be_callable():
     with pytest.raises(TypeError, match="dispatch gate"):
         McpTransport({"server": _streams([])}, dispatch_gate=object())  # type: ignore[arg-type]
