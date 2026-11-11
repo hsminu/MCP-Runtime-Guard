@@ -14,7 +14,7 @@ from mcp.types import CONNECTION_CLOSED, CallToolResult, ErrorData, ResourceLink
 from guard_app.adapters import mcp_transport
 from guard_app.adapters.mcp_transport import McpTransport, result_budget, sdk_session
 from guard_app.domain.enums import Label, ToolKind, TrustTier
-from guard_app.domain.errors import DispatchError
+from guard_app.domain.errors import NOT_DISPATCHED, DispatchError
 from guard_app.domain.json_types import Arguments, FrozenJsonObject
 from guard_app.domain.models import Boundary, ResolvedRequest, ToolSpec
 
@@ -834,6 +834,82 @@ async def test_close_start_failure_and_a_contained_timeout_report_no_server_fail
         await not_started.start()
     await not_started.close()
     assert failed == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_gate_refuses_a_queued_call_before_any_byte(monkeypatch):
+    """#120: 대기 중 서버 정의가 바뀌면 그 호출은 call_tool 없이 NOT_DISPATCHED로 끝난다."""
+    session = _Session(blocked=True)
+    refused: set[str] = set()
+    transport = _transport(
+        monkeypatch, session, dispatch_gate=lambda req: req.request_id not in refused
+    )
+    async with _running(transport):
+        first = asyncio.create_task(transport.call(_request(seq=1)))
+        await session.first_call.wait()
+        second = asyncio.create_task(transport.call(_request(seq=2)))
+        await asyncio.sleep(0)
+        refused.add("request-2")  # 두 번째가 줄 서 있는 동안 정의가 바뀐다
+        session.release_first.set()
+        assert (await first).payload is not None
+        with pytest.raises(DispatchError) as raised:
+            await second
+        assert raised.value.exception_type == NOT_DISPATCHED
+        third = await transport.call(_request(seq=3))  # worker는 계속 동작한다
+        assert third.payload is not None
+    assert [arguments["value"] for _, arguments in session.calls] == [1, 3]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_dispatch_gate_settles_every_waiter_without_sending(monkeypatch):
+    """#122 A 리뷰: 확인 함수가 예외를 내도 꺼낸 호출과 남은 호출이 끝나고, 보낸 것은 없다."""
+
+    def failing_gate(req: ResolvedRequest) -> bool:
+        if req.request_id == "request-2":
+            raise RuntimeError("gate failed")
+        return True
+
+    session = _Session(blocked=True)
+    failed: list[str] = []
+    transport = _transport(
+        monkeypatch, session, dispatch_gate=failing_gate, on_server_failed=failed.append
+    )
+    await transport.start()
+    first = asyncio.create_task(transport.call(_request(seq=1)))
+    await session.first_call.wait()
+    checked = asyncio.create_task(transport.call(_request(kind=ToolKind.SEND, seq=2)))
+    queued = asyncio.create_task(transport.call(_request(seq=3)))
+    await asyncio.sleep(0)
+    session.release_first.set()
+    assert (await asyncio.wait_for(first, 1)).payload is not None
+    # 결과 불명 쪽으로 끝난다: SEND는 UNKNOWN_OUTCOME, READ는 미공개 정지(Guard).
+    with _dispatch_error("WorkerInterrupted"):
+        await asyncio.wait_for(checked, 1)
+    with _dispatch_error("WorkerClosed"):
+        await asyncio.wait_for(queued, 1)
+    with _dispatch_error("WorkerOwnerFailed"):
+        await transport.close()
+    assert [arguments["value"] for _, arguments in session.calls] == [1]
+    assert failed == ["server"]
+
+
+@pytest.mark.asyncio
+async def test_an_sdk_exception_named_like_the_not_dispatched_marker_is_not_the_marker(
+    monkeypatch,
+):
+    """#122 A 리뷰: call_tool 안에서 난 예외는 이름이 같아도 "보내지 않음 확정"이 아니다(I8)."""
+    lookalike = type(NOT_DISPATCHED, (Exception,), {})
+    session = _Session([lookalike("raised inside call_tool")])
+    transport = _transport(monkeypatch, session)
+    async with _running(transport):
+        with _dispatch_error("Exception"):
+            await transport.call(_request(kind=ToolKind.SEND, seq=1))
+    assert len(session.calls) == 1
+
+
+def test_dispatch_gate_must_be_callable():
+    with pytest.raises(TypeError, match="dispatch gate"):
+        McpTransport({"server": _streams([])}, dispatch_gate=object())  # type: ignore[arg-type]
 
 
 def test_server_failure_callbacks_must_be_callable():

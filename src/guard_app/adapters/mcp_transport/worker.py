@@ -25,7 +25,7 @@ from guard_app.adapters.mcp_transport.tool_listing import (
     collect_tool_definitions,
 )
 from guard_app.domain.contracts import RawResult
-from guard_app.domain.errors import DispatchError
+from guard_app.domain.errors import NOT_DISPATCHED, DispatchError
 from guard_app.domain.json_types import FrozenJsonObject
 from guard_app.domain.models import ResolvedRequest
 
@@ -173,6 +173,10 @@ def _session_broken(exc: Exception) -> bool:
 
 def _exception_name(exc: Exception) -> str:
     name = type(exc).__name__
+    if name == NOT_DISPATCHED:
+        # NOT_DISPATCHED는 보내기 전에 거절했다는 표지다. call_tool 안에서 난 예외는
+        # 이름이 같아도 이미 보냈을 수 있으므로 표지로 쓰지 않는다(I8, #122 A 리뷰).
+        return "Exception"
     return name if name.isascii() and name.isidentifier() and len(name) <= 64 else "Exception"
 
 
@@ -201,11 +205,14 @@ class ServerWorker:
         on_dispatch: Callable[[str], None] | None = None,
         tool_list_limits: ToolListLimits | None = None,
         on_failed: Callable[[], None] | None = None,
+        dispatch_gate: Callable[[ResolvedRequest], bool] | None = None,
     ) -> None:
         if not callable(session_factory):
             raise TypeError("session factory required")
         if on_failed is not None and not callable(on_failed):
             raise TypeError("failure callback must be callable")
+        if dispatch_gate is not None and not callable(dispatch_gate):
+            raise TypeError("dispatch gate must be callable")
         if tool_list_limits is not None and type(tool_list_limits) is not ToolListLimits:
             raise TypeError("tools/list limits have invalid type")
         for timeout in (call_timeout_s, startup_timeout_s, close_timeout_s):
@@ -216,6 +223,7 @@ class ServerWorker:
         self._session_factory = session_factory
         self._on_dispatch = on_dispatch
         self._on_failed = on_failed
+        self._dispatch_gate = dispatch_gate
         self._failure_reported = False
         self._tool_list_limits = tool_list_limits
         self._tool_listing: ToolListing | None = None
@@ -433,6 +441,13 @@ class ServerWorker:
                 continue
             self._active = item
             try:
+                # 확인은 try 안에 둔다. 확인 함수가 예외를 내면 아래 finally가 이 호출을
+                # WorkerInterrupted로 끝내고, owner 종료로 남은 대기열도 끝난다(#122 A 리뷰).
+                if self._dispatch_gate is not None and not self._dispatch_gate(item.req):
+                    # #120: 줄 서 있는 동안 서버의 도구 정의가 바뀌었다(목록 변경 알림 등).
+                    # Guard의 마지막 확인 뒤라도 한 바이트도 보내지 않고 끝낸다.
+                    item.future.set_exception(DispatchError(NOT_DISPATCHED))
+                    continue
                 await self._execute(session, item)
             finally:
                 if not item.future.done():

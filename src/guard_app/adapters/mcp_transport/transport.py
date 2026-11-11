@@ -62,6 +62,7 @@ class McpTransport:
         on_server_failed: Callable[[str], None] | None = None,
         on_listing_received: Callable[[str], None] | None = None,
         isolate_start_failures: bool = False,
+        dispatch_gate: Callable[[ResolvedRequest], bool] | None = None,
     ) -> None:
         if not isinstance(server_streams, Mapping):
             raise TypeError("server stream mapping required")
@@ -71,6 +72,8 @@ class McpTransport:
             raise TypeError("server failed callback must be callable")
         if on_listing_received is not None and not callable(on_listing_received):
             raise TypeError("listing received callback must be callable")
+        if dispatch_gate is not None and not callable(dispatch_gate):
+            raise TypeError("dispatch gate must be callable")
         if any(type(server_id) is not str or not server_id for server_id in server_streams):
             raise ValueError("nonempty server IDs required")
         require_result_copy_budget(max_result_copy_bytes)
@@ -92,6 +95,7 @@ class McpTransport:
                 on_dispatch=on_dispatch,
                 tool_list_limits=tool_list_limits,
                 on_failed=_for_server(on_server_failed, server_id),
+                dispatch_gate=dispatch_gate,
             )
             for server_id, stream_factory in server_streams.items()
         }

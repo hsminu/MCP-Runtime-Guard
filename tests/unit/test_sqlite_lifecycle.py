@@ -23,7 +23,7 @@ from guard_app.domain.enums import (
     TaskStatus,
     ToolKind,
 )
-from guard_app.domain.errors import StoreError
+from guard_app.domain.errors import NOT_DISPATCHED, StoreError
 from guard_app.domain.models import ResolvedRequest, TaskState
 from guard_app.domain.reasons import Reason
 from guard_app.services.catalog import Catalog
@@ -840,6 +840,33 @@ def test_invalid_failure_pairs_are_rejected(
     with pytest.raises(StoreError):
         failure(store, req, req_status, target)
     assert full_snapshot(store) == before
+
+
+@pytest.mark.parametrize(
+    ("exception_type", "reason", "accepted"),
+    [
+        (NOT_DISPATCHED, Reason.REG_NOT_ACTIVE, True),
+        (NOT_DISPATCHED, Reason.INTERNAL_ERROR, False),
+        ("DispatchError", Reason.REG_NOT_ACTIVE, False),
+    ],
+)
+def test_send_refused_before_any_byte_finishes_as_failed_and_running(
+    runtime: tuple[SQLiteStore, Clock], exception_type: str, reason: Reason, accepted: bool
+) -> None:
+    """#120: worker가 보내기 전에 거절한 SEND만 결과 불명 대신 FAILED·RUNNING이다."""
+    store, _ = runtime
+    req = dispatched(store, ToolKind.SEND)
+    arguments = {"exception_type": exception_type, "reason": reason}
+    if not accepted:
+        before = full_snapshot(store)
+        with pytest.raises(StoreError):
+            failure(store, req, RequestStatus.FAILED, TaskStatus.RUNNING, **arguments)
+        assert full_snapshot(store) == before
+        return
+    result = failure(store, req, RequestStatus.FAILED, TaskStatus.RUNNING, **arguments)
+    assert result.status is TaskStatus.RUNNING
+    assert result == load(store)
+    assert request_status(store) == RequestStatus.FAILED.value
 
 
 @pytest.mark.parametrize(

@@ -45,6 +45,11 @@ class StorePrepareError(Exception):
         return self.code.value
 
 
+# 예약 뒤지만 worker가 한 바이트도 보내지 않고 거절했다는 뜻의 DispatchError 종류(#120).
+# 이 종류만 Guard가 결과 불명 대신 "보내지 않음 확정"으로 기록한다.
+NOT_DISPATCHED = "NotDispatched"
+
+
 class DispatchError(GuardError):
     """예약 후 오류. 원문 대신 예외 타입 이름만 별도 메타데이터로 가진다."""
 
