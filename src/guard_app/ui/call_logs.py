@@ -77,6 +77,7 @@ from .widgets import (
     StateMessage,
     StatusPill,
     plain_label,
+    plain_tooltip,
 )
 
 _KST = timezone(timedelta(hours=9), name="KST")
@@ -1093,7 +1094,8 @@ class CallLogPage(QWidget):
             self.table.insertRow(index)
             for column, value in enumerate(_cell_texts(row)):
                 item = QTableWidgetItem(value)
-                item.setToolTip(value)
+                # 도구 이름은 MCP 서버가 정한다. 태그로 보이는 이름도 서식 없이 보인다.
+                item.setToolTip(plain_tooltip(value))
                 self.table.setItem(index, column, item)
             for column, mapping, code in (
                 (2, DECISION_PILLS, row.initial_decision),

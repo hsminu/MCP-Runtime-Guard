@@ -1,5 +1,7 @@
 """SCHEMA-01: 기존 검증 의미와 순수 준비/검증 연산의 동등성."""
 
+import time
+
 import pytest
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
@@ -22,12 +24,6 @@ from guard_app.services.schema_jobs import (
     ("schema", "accepted", "rejected"),
     [
         ({"type": "object", "properties": {"v": {"type": "integer"}}}, {"v": 1}, {"v": "1"}),
-        ({"type": "object", "properties": {"v": {"pattern": "^ab"}}}, {"v": "abc"}, {"v": "x"}),
-        (
-            {"type": "object", "patternProperties": {"^x_": {"type": "integer"}}},
-            {"x_a": 1},
-            {"x_a": "x"},
-        ),
         (
             {"type": "object", "propertyNames": {"pattern": "^[a-z]+$"}, "properties": {"abc": {}}},
             {"abc": 1},
@@ -160,7 +156,7 @@ def test_validation_error_type_and_original_exception_are_preserved(monkeypatch,
         def validate(self, _arguments):
             raise error
 
-    monkeypatch.setattr(schema_jobs, "Draft202012Validator", FailingValidator)
+    monkeypatch.setattr(schema_jobs, "_ArgumentValidator", FailingValidator)
     expected = ResolutionError if isinstance(error, ValidationError) else CatalogConfigError
     with pytest.raises(expected) as caught:
         compiled.validate(Arguments({}))
@@ -207,3 +203,42 @@ def test_original_and_prevents_oneof_weakening():
     with pytest.raises(ResolutionError):
         ArgumentSchema(registered).validate(Arguments(arguments))
     assert registered.to_dict() == original
+
+
+def test_server_patterns_never_run_on_arguments():
+    """2026-10-30 C 점검(ReDoS, CWE-1333): 서버 정규식은 인자에 실행하지 않는다.
+
+    고치기 전에는 `^(a+)+$`에 27자 인자가 2초였고 두 글자마다 4배로 늘었다.
+    """
+    schema = FrozenJsonObject(
+        {"type": "object", "properties": {"q": {"type": "string", "pattern": "^(a+)+$"}}}
+    )
+    prepared = prepare(schema)
+    assert isinstance(prepared, PreparedSchema)
+    compiled = ArgumentSchema(schema)
+    assert compiled.schema == prepared.schema  # 모델에 보이는 스키마에는 그대로 남는다
+    slow = Arguments({"q": "a" * 64 + "!"})
+    started = time.perf_counter()
+    assert validate(prepared.schema, slow) is SchemaJobResult.OK
+    assert compiled.validate(slow) is None
+    assert time.perf_counter() - started < 1.0
+    # pattern만 빠지고 나머지 검증은 그대로다.
+    assert validate(prepared.schema, Arguments({"q": 1})) is SchemaJobResult.INVALID_ARGUMENTS
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "object", "patternProperties": {"^x_": {"type": "integer"}}},
+        {
+            "type": "object",
+            "properties": {"nested": {"type": "object", "patternProperties": {"^(a+)+$": {}}}},
+        },
+    ],
+)
+def test_pattern_properties_are_unsupported(schema):
+    original = FrozenJsonObject(schema)
+    assert prepare(original) is SchemaJobFailure.PATTERN_PROPERTIES
+    with pytest.raises(CatalogConfigError) as error:
+        ArgumentSchema(original)
+    assert str(error.value) == "patternProperties 스키마는 지원하지 않는다"
