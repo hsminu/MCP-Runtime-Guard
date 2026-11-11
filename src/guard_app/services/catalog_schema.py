@@ -160,6 +160,7 @@ _PREPARATION_MESSAGES = MappingProxyType(
         SchemaJobFailure.MAP: "유효하지 않은 스키마 속성 목록이다",
         SchemaJobFailure.LIST: "유효하지 않은 스키마 조합 목록이다",
         SchemaJobFailure.PATTERN: "유효하지 않은 스키마 정규식이다",
+        SchemaJobFailure.PATTERN_PROPERTIES: "patternProperties 스키마는 지원하지 않는다",
         SchemaJobFailure.DEPTH: "검증 스키마가 지원하는 JSON 구조 범위를 초과했다",
     }
 )

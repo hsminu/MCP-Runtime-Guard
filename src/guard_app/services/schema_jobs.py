@@ -1,6 +1,17 @@
 """SCHEMA-01 합의 전 제안: 등록 스키마 준비와 인자 검증의 순수 연산.
 
 정규식 등 실제 검증은 동기 연산이다. 제한된 프로세스 실행은 C 연결 이후에 맡는다.
+
+등록 스키마의 정규식은 MCP 서버가 준 값이고 인자는 모델이 정한다. 같은 프로세스에서 시간
+제한 없이 실행하면 백트래킹이 폭발하는 정규식(`^(a+)+$` 등)이 Guard를 멈춘다(ReDoS,
+CWE-1333, 2026-10-30 C 점검: 27자 인자 2초, 두 글자마다 4배). 그래서 검증은 서버 정규식을
+실행하지 않는다.
+
+- `pattern`: 검증하지 않는다. 모델에 보이는 스키마에는 그대로 남고, 값 형식은 MCP 서버가
+  검사한다. Guard 판정(목적지 정확 일치, 자원 해석)은 이 값에 기대지 않는다.
+- `patternProperties`: 지원하지 않는다(`PATTERN_PROPERTIES`). 속성 이름 정규식은 추가 속성
+  판정(`additionalProperties`·`unevaluatedProperties`)에서도 실행되기 때문이다.
+- 스키마의 정규식 컴파일 검사는 그대로 둔다(컴파일은 인자를 받지 않는다).
 """
 
 from __future__ import annotations
@@ -12,7 +23,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import cast
 
-from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema import Draft202012Validator, FormatChecker, validators
 from jsonschema.exceptions import SchemaError, UnknownType, ValidationError
 from pydantic import ValidationError as ModelValidationError
 from referencing import Registry
@@ -62,7 +73,18 @@ class SchemaJobFailure(StrEnum):
     MAP = "MAP"
     LIST = "LIST"
     PATTERN = "PATTERN"
+    PATTERN_PROPERTIES = "PATTERN_PROPERTIES"
     DEPTH = "DEPTH"
+
+
+def _skip_server_pattern(*_args: object) -> None:
+    """서버가 준 `pattern`은 인자에 실행하지 않는다(모듈 설명, ReDoS)."""
+
+
+# 준비 단계가 `patternProperties`를 거부하므로, 남은 정규식 실행 지점은 `pattern` 하나다.
+_ArgumentValidator: type[Draft202012Validator] = validators.extend(  # type: ignore[no-untyped-call]
+    Draft202012Validator, {"pattern": _skip_server_pattern}
+)
 
 
 class SchemaJobResult(StrEnum):
@@ -119,7 +141,7 @@ def validate(prepared: FrozenJsonObject, arguments: Arguments) -> SchemaJobResul
         document = prepared.to_dict()
         _CHECK_PREPARED_SCHEMA(document)
         _check_prepared_supported(document)
-        validator = Draft202012Validator(
+        validator = _ArgumentValidator(
             document, format_checker=FormatChecker(formats=_FORMATS), registry=Registry()
         )
         validator.validate(arguments.to_dict())
@@ -169,10 +191,8 @@ def _prepare_schema(value: object, *, in_all_of: bool = False, close_objects: bo
     pattern = schema.get("pattern")
     if isinstance(pattern, str):
         _check_pattern(pattern)
-    patterns = schema.get("patternProperties")
-    if isinstance(patterns, dict):
-        for pattern in patterns:
-            _check_pattern(pattern)
+    if "patternProperties" in schema:
+        raise _PreparationError(SchemaJobFailure.PATTERN_PROPERTIES)
 
     for keyword in _SCHEMA_MAPS:
         if keyword in schema:
@@ -229,10 +249,8 @@ def _check_prepared_supported(value: object) -> None:
         raise _PreparationError(SchemaJobFailure.FORMAT)
     if isinstance(schema.get("pattern"), str):
         _check_pattern(cast("str", schema["pattern"]))
-    patterns = schema.get("patternProperties")
-    if isinstance(patterns, dict):
-        for pattern in patterns:
-            _check_pattern(pattern)
+    if "patternProperties" in schema:
+        raise _PreparationError(SchemaJobFailure.PATTERN_PROPERTIES)
     for keyword in _SCHEMA_MAPS:
         if keyword in schema:
             children = cast("dict[str, object]", schema[keyword])

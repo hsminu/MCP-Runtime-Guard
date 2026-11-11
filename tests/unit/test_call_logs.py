@@ -325,6 +325,23 @@ def test_csv_button_copies_only_visible_query_rows(app) -> None:
     assert not page.csv_button.isEnabled()
 
 
+def test_server_chosen_names_in_cell_tooltips_are_not_rich_text(app) -> None:
+    """2026-10-30 C 점검: Qt는 툴팁 문자열의 태그를 서식으로 그린다(KISA 크로스사이트 스크립트)."""
+    row = PublicCallSummary(
+        "call-tag",
+        server_id="server-a",
+        tool_name='<b>approved</b><img src="x">',
+        occurred_at=datetime(2026, 10, 30, tzinfo=UTC),
+    )
+    page = CallLogPage()
+    ready_calls(page, row)
+    tip = page.table.item(0, 1).toolTip()
+    assert tip.startswith("<qt>")
+    assert "<b>" not in tip
+    assert "<img" not in tip
+    assert "&lt;b&gt;approved&lt;/b&gt;" in tip
+
+
 def test_narrow_medium_and_full_viewports_keep_important_columns(app) -> None:
     page = CallLogPage()
     ready_calls(
