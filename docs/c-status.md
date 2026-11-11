@@ -128,6 +128,7 @@
 - [x] C6.27 B7.7 B 리뷰(#102) 반영: 파일 서버 READ마다 CRT fd가 남던 것(B77-D1, `ReadFile`로 읽고 핸들 주인 하나, 예상 밖 OSError도 고정 코드), L2가 모든 모델 요청의 도구 목록을 대조(B77-D2), Semgrep 예외 검사를 규칙·파일·함수로(B77-N1), 계수 하니스 대역 범위 명시(B77-N2) · [기록](archive/c/C6.27-b77-review-fixes.md)
 - [x] C6.28 KISA 소프트웨어 보안약점 49개 점검(본선 기준, main `1bc1f06`): 발견 2건 조치. C-SCHEMA-01 서버 `pattern` 정규식이 같은 프로세스에서 시간 제한 없이 인자에 실행돼 Guard 정지(ReDoS, 27자 2초·두 글자마다 4배) → 인자 검증에서 `pattern` 미실행, `patternProperties` 미지원. C-UI-01 호출 로그 툴팁이 서버 도구 이름을 서식 글자로 그림 → `plain_tooltip`. 나머지 47개는 대응됨·해당 없음, `src` 자동 검사 Bandit 전 등급 오탐 7·Semgrep 0. 제출본에서 `tools/ci/semgrep.py`·`ui-preview/` 제외 · [기록](archive/c/C6.28-kisa-49-check.md)
 - [x] C6.29 목록 변경 알림 뒤 대기 중 호출 차단(#120, B6.19): Guard 마지막 확인 뒤 worker 대기열에 있던 호출이 알림으로 PENDING이 된 뒤에도 서버까지 가던 것(정지 장치 없이 stdio·HTTP 10/10 재현). worker가 `_execute` 직전에 `LiveCheckedRegistry.allows_dispatch`(ACTIVE·지문 일치)를 보고 안 보내면 `NOT_DISPATCHED`, Guard는 이 종류만 요청 FAILED·Task RUNNING·`Denied(REG_NOT_ACTIVE)`로 확정(B 리뷰 필요). C5.4 하니스에 알림 표지 `notify`·`notify-slow` · [기록](archive/c/C6.29-list-changed-race.md)
+- [x] C6.30 #124 C 몫: Codex 설치 스크립트(`tools/install_codex.py`) 실패 출력은 잡은 오류를 print하지 않고 고정 코드만 로거로 냄(A220과 같은 방식, Sparrow 04.01 모양). 내려받기는 npm 레지스트리 https 주소로만, 리다이렉트도 같은 레지스트리로만, 크기 1 GiB 상한(부분 파일 삭제). 관리대장 C-CODEX-02·03을 L1·L2와 실제 L2 통과 근거로 조치·재검사 완료로 갱신, C-INST-01 추가 · [기록](archive/c/C6.30-install-codex-hardening.md)
 
 ## 인수 기준
 
