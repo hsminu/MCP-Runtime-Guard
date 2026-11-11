@@ -8,6 +8,9 @@ SHA-256·크기를 대조해 버전별 폴더에 둔다. code mode 호스트·�
 
 --dest 기본값: %LOCALAPPDATA%\\MCPRuntimeGuard\\codex\\<codex_version>
 --tarball: 미리 받은 tarball을 쓴다. 같은 무결성 검사를 거친다.
+
+내려받기는 npm 레지스트리 https 주소로만 가고 리다이렉트도 같은 레지스트리로만 따른다. 받는 크기는
+`_MAX_TARBALL_BYTES`로 묶는다. 내용은 그와 별개로 sha512 무결성이 지킨다(#124).
 """
 
 from __future__ import annotations
@@ -15,18 +18,30 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import logging
 import os
+import re
 import shutil
 import sys
 import tarfile
 import tempfile
+import urllib.parse
 import urllib.request
 import uuid
+from http.client import HTTPMessage
 from pathlib import Path
+from typing import IO, BinaryIO
 
 from guard_app.security.codex_home import CodexConfigError, CodexPins, load_codex_pins
 
 _CHUNK = 1 << 20
+_REGISTRY_HOST = "registry.npmjs.org"
+# codex.exe 자체가 약 318 MiB이고 tarball은 그 압축본이다.
+# 정상 설치를 막지 않는 디스크 사용 상한이다.
+_MAX_TARBALL_BYTES = 1 << 30
+_FIXED_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+# #124·A220: 잡은 오류는 print로 내보내지 않고 고정 코드만 이 로거로 stderr에 낸다(Sparrow 04.01).
+_NOTICE = logging.getLogger("guard_app.install_codex")
 
 
 class InstallError(RuntimeError):
@@ -40,17 +55,74 @@ def default_dest(pins: CodexPins) -> Path:
     return Path(base) / "MCPRuntimeGuard" / "codex" / pins.codex_version
 
 
-def download(url: str, target: Path) -> None:
-    if not url.startswith("https://registry.npmjs.org/"):
+def is_registry_url(url: str) -> bool:
+    """npm 레지스트리의 https 주소인가. 사용자 정보·다른 포트·비슷한 호스트 이름은 아니다."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return False
+    return (
+        parts.scheme == "https"
+        and parts.hostname == _REGISTRY_HOST
+        and parts.netloc == _REGISTRY_HOST
+        and port is None
+        and url.startswith(f"https://{_REGISTRY_HOST}/")
+    )
+
+
+class _RegistryOnlyRedirect(urllib.request.HTTPRedirectHandler):
+    """리다이렉트는 같은 npm 레지스트리 https 주소로만 따른다(#124)."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        if not is_registry_url(newurl):
+            raise InstallError("CODEX_INSTALL_REDIRECT_REJECTED")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def download(url: str, target: Path, *, max_bytes: int = _MAX_TARBALL_BYTES) -> None:
+    if not is_registry_url(url):
         raise InstallError("CODEX_INSTALL_URL_REJECTED")
     # URL은 위에서 고정값 파일의 npm 레지스트리 https 주소로 제한했다.
     request = urllib.request.Request(url, headers={"User-Agent": "mcp-runtime-guard-install"})  # noqa: S310
+    opener = urllib.request.build_opener(_RegistryOnlyRedirect)
+    created = False
     try:
-        response = urllib.request.urlopen(request, timeout=600)  # noqa: S310
-        with response, target.open("xb") as out:
-            shutil.copyfileobj(response, out, _CHUNK)
+        with opener.open(request, timeout=600) as response:
+            _check_declared_size(response.headers.get("Content-Length"), max_bytes)
+            with target.open("xb") as out:
+                created = True
+                _copy_bounded(response, out, max_bytes)
+    except InstallError:
+        if created:
+            target.unlink(missing_ok=True)
+        raise
     except OSError:
+        if created:
+            target.unlink(missing_ok=True)
         raise InstallError("CODEX_INSTALL_DOWNLOAD_FAILED") from None
+
+
+def _check_declared_size(declared: str | None, max_bytes: int) -> None:
+    if declared is not None and declared.isdigit() and int(declared) > max_bytes:
+        raise InstallError("CODEX_INSTALL_TOO_LARGE")
+
+
+def _copy_bounded(source: BinaryIO, out: BinaryIO, max_bytes: int) -> None:
+    total = 0
+    while chunk := source.read(_CHUNK):
+        total += len(chunk)
+        if total > max_bytes:
+            raise InstallError("CODEX_INSTALL_TOO_LARGE")
+        out.write(chunk)
 
 
 def verify_integrity(tarball: Path, integrity: str) -> None:
@@ -126,10 +198,29 @@ def main(argv: list[str] | None = None) -> int:
                 download(pins.package_tarball, tarball)
                 target = install_executable(tarball, pins, dest)
     except (CodexConfigError, InstallError) as error:
-        print(f"설치 실패: {error}", file=sys.stderr)
+        _notice(f"설치 실패: {failure_code(error)}")
         return 1
     print(f"codex {pins.codex_version} 설치 확인: {target}")
     return 0
+
+
+def failure_code(error: Exception) -> str:
+    """고정 오류 코드만 돌려준다. 코드 모양이 아닌 글은 내보내지 않는다."""
+    code = error.args[0] if len(error.args) == 1 else None
+    if isinstance(code, str) and _FIXED_CODE.fullmatch(code):
+        return code
+    return "CODEX_INSTALL_FAILED"
+
+
+def _notice(text: str) -> None:
+    """고정 실패 문구 한 줄을 지금의 stderr에 낸다. 처리기는 이 한 줄 동안만 둔다."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    _NOTICE.addHandler(handler)
+    try:
+        _NOTICE.error(text)
+    finally:
+        _NOTICE.removeHandler(handler)
 
 
 if __name__ == "__main__":
