@@ -2,10 +2,11 @@
 
 MCP 에이전트가 읽은 자료의 기밀성 등급을 작업 단위로 누적하고, 다음 도구 호출의 **MCP 서버 경계와 최종 목적지 경계**를 검사하는 런타임 보안 게이트다. 각 호출을 `ALLOW`, `ASK`, `DENY`로 판정하고, 사람 승인과 실제 전송을 연결한다.
 
-`main`에는 보안 코어(B), transport·Runner·Qt 앱(A), Cisco Scanner 어댑터(C)가 들어 있고 **합성 자료로 처음부터 끝까지 실행**할 수 있다.
-실제 stdio·로컬 HTTP MCP 서버와 자체 접근 규칙 판정을 연결했다.
-Store는 기본 메모리 대역 또는 SQLiteStore를 선택하고, Registry는 단위 대역이며 모델은 mock이다. Scanner는 아직 앱에 연결하지 않았다.
-SQLite는 새 Task 실행만 연결했다. 시작 복구·launcher/endpoint 검증·실제 모델·독립 인수는 남아 있다. 담당별 남은 일은 현황 문서에 있다.
+`main`에는 보안 코어(B), transport·Codex 세션 관리자·Qt 앱(A), 위험 연산 모듈·Registry·Cisco Scanner(C)가 들어 있고, **제품 실행**과 **합성 시연** 두 가지로 시작한다.
+제품 실행(Windows)은 앱 폴더의 고정 SQLite DB와 설정 파일, Registry에 등록한 실제 stdio·HTTP MCP 서버, 자체 접근 규칙 판정을 쓰고, 모델은 고정 버전 Codex(`codex.exe` 0.162.1)를 하네스로 쓴다.
+등록한 서버는 사용자가 활성화해야 실행되고, 등록하면 Scanner 검사가 돌아 결과를 경고로 보여준다(경고는 활성화를 막지 않는다). 시작할 때 이전 실행에서 끝나지 않은 Task를 정리하며, 이전 승인은 복원하지 않고 결과 불명 SEND를 재전송하지 않는다.
+합성 시연(`--demo`)은 합성 자료·합성 서버·mock 모델로 처음부터 끝까지 실행한다.
+남은 것은 독립 인수 일부, 설치 패키지(C6.20), `tools/list_changed`와 전송의 동시 경쟁(B6.19), 의존성 취약점 정리(C6.24)다. 담당별 남은 일은 현황 문서에 있다.
 
 ## 설치와 실행
 
@@ -14,6 +15,8 @@ uv가 `.python-version`의 3.12를 설치한다.
 
 ```powershell
 uv sync --locked
+uv run python tools/install_codex.py
+uv run python -m guard_app
 uv run python -m guard_app --demo
 uv run python -m guard_app --demo --mcp-transport http
 uv run python -m guard_app --demo --scenario deny
@@ -23,10 +26,14 @@ uv run python -m examples.verify_http_spike
 uv run pytest -q
 ```
 
-SQLite의 부모 디렉터리는 미리 있어야 한다. 같은 DB에 새 Task만 생성하며 이전 실행·승인·결과 불명 SEND 복구와 영속 call_seq는 미지원이다.
+저장소 루트에서 실행한다. `--demo` 없는 실행이 제품 실행이고 Windows에서만 동작한다.
+제품 실행은 단일 실행 잠금을 잡고 앱 폴더(`%LOCALAPPDATA%\MCPRuntimeGuard`)의 고정 DB(`data\guard.sqlite3`)만 연다.
+`tools/install_codex.py`가 고정 버전 `codex.exe`를 앱 폴더에 설치하며, 다른 위치의 같은 파일은 `--codex-exe <절대 경로>`로 지정한다.
+`--scenario`·`--mcp-transport`·`--store`·`--db-path`는 시연 전용이라 `--demo`와 함께만 쓴다.
 
-저장소 루트에서 실행한다. `--demo` 없는 제품 시작은 아직 제공하지 않는다.
-실행 탭에서 실행 → 승인 사본 확인 → 승인 → 다음 모델 단계를 누른다.
+시연의 `--db-path`는 제품 앱 폴더 밖이어야 하고 부모 디렉터리는 미리 있어야 한다. 시연은 같은 DB에 새 Task만 생성하며 이전 실행·승인·결과 불명 SEND 복구와 영속 call_seq를 쓰지 않는다.
+
+시연은 실행 탭에서 실행 → 승인 사본 확인 → 승인 → 다음 모델 단계를 누른다.
 합성 INTERNAL 읽기 후 ASK, 승인 뒤 SEND 한 번이 기본 경로다.
 `--scenario allow`는 PUBLIC, `--scenario deny`는 CONFIDENTIAL 읽기를 사용한다.
 실제 외부 목적지로 보내지 않고 합성 서버 내부 계수만 올린다.
@@ -34,8 +41,9 @@ SQLite의 부모 디렉터리는 미리 있어야 한다. 같은 DB에 새 Task�
 `--mcp-transport http`는 앱이 띄운 `127.0.0.1` 합성 서버와 실제 TCP로 통신한다.
 기본값은 `stdio`다. HTTP는 JSON·SSE 응답을 지원하고 redirect·자동 인증·POST 재시도를
 사용하지 않는다. 응답 유실·timeout 뒤 SEND는 결과 불명으로 처리한다.
-현재 CLI는 임의 외부 서버 URL·인증정보를 받지 않는다. 제품 endpoint 검증·등록 연결은
-C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/archive/tasks/a-http-integration.md)을 따른다.
+CLI는 임의 외부 서버 URL·인증정보를 받지 않는다. 제품은 서버 등록 화면에서 URL을 받아
+endpoint 검증(URL-01)을 거치고, HTTP 서버 인증은 지원하지 않는다.
+지원 범위와 계수는 [HTTP 연결 기록](docs/archive/tasks/a-http-integration.md)을 따른다.
 
 접근 규칙은 신뢰 설정의 서버·도구 정확 일치 허용/거부 목록을 사용한다. 기본은 거부이고 거부가 우선이다.
 접근 허용은 사람 승인을 대체하거나 Guard의 ASK·DENY를 완화하지 않는다.
@@ -44,7 +52,7 @@ C 후속이며, 지원 범위와 계수는 [HTTP 연결 기록](docs/archive/tas
 외부 판정기 AGT는 2026-10-15 결정으로 제거했다. 이전 선정·연결 기록은 [docs/archive/tasks](docs/archive/tasks/)에 있다.
 
 환경은 `uv.lock` 하나로 관리하고 `requirements.lock`은 거기서 생성한다.
-CI(Windows)는 locked 설치 → `requirements.lock` 일치 → Ruff → 포맷 → mypy → 단위 테스트 순서로 돈다.
+CI의 Windows 작업은 locked 설치 → `requirements.lock` 일치 → Ruff → 포맷 → mypy → import 계약 → Bandit → 단위 테스트 → contract 테스트 순서로 돌고, Semgrep은 Linux 작업에서 따로 돈다. pip-audit 단계는 아직 없다(C6.24).
 Ruff·포맷·mypy의 A 기준선과 명령은 `pyproject.toml` 주석과 [A+B 통합 기록](docs/archive/integration-a-b.md)에 있다.
 
 ## 개발 문서
@@ -53,7 +61,7 @@ Ruff·포맷·mypy의 A 기준선과 명령은 `pyproject.toml` 주석과 [A+B �
 
 | 문서 | 용도 |
 | --- | --- |
-| [기술 설계 및 개발 문서](docs/technical-design.md) | 제공받은 개발문서 원본 사본. 상세 설계, 테스트 T01–T38·S01–S05, ADR 기준 |
+| [기술 설계 및 개발 문서](docs/technical-design.md) | 제공받은 개발문서 원본 사본. 상세 설계, 테스트 T01–T46·S01–S05, ADR 기준 |
 | [3인 협업 규칙](docs/team-workflow.md) | 모듈 소유권, 리뷰 담당, 개발 순서, 브랜치 사용법 |
 | [공통 계약](docs/contracts.md) | 사용자 결정, 합의할 계약과 체크리스트, 미결 요청 |
 | [보안약점 관리대장](docs/weakness_register.md) | 검사 실행 기록, 발견 항목과 조치, 규칙 예외 |
@@ -146,6 +154,7 @@ flowchart LR
 | I8 | 결과 불명의 쓰기는 자동 재전송하지 않는다. |
 | I9 | 원문·인증정보·전체 인자를 기본 로그에 기록하지 않는다. |
 | I10 | 도구 정의 변경 시 서버를 PENDING으로 돌리고 기존 승인을 무효화한다. |
+| I11 | 모델이 쓸 수 있는 도구는 Guard 도구뿐이다. Codex 자체 도구가 꺼졌음을 확인하지 못하면 Task를 시작하지 않는다. |
 
 `DISPATCHING` 예약 전의 예외는 `Denied`로 처리한다. 예약 후의 예상하지 못한 예외는 READ의 결과 미공개·Task 정지, SEND의 결과 불명으로 처리한다. 실제로 나갔을 수 있는 요청을 차단된 것으로 보고하지 않는다.
 
